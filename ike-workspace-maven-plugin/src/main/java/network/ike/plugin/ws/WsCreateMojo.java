@@ -138,6 +138,14 @@ public class WsCreateMojo implements Mojo {
             writeFile(wsDir.resolve("workspace.yaml"), generateManifest());
             writeFile(wsDir.resolve(".gitignore"), generateGitignore());
             writeFile(wsDir.resolve(".mvn/maven.config"), "-T 1C\n");
+            // .mvn/jvm.config is parsed as raw JVM args, one token per line,
+            // with NO comment syntax. A `#` at column 0 is passed to the JVM
+            // as a main-class name and fails with ClassNotFoundException: #.
+            // Seed a single standard flag so downstream hand-edits start
+            // from a correct baseline. The flag suppresses sun.misc.Unsafe
+            // deprecation warnings from JRuby/AsciidoctorJ on JDK 24+.
+            writeFile(wsDir.resolve(".mvn/jvm.config"),
+                    "--sun-misc-unsafe-memory-access=allow\n");
             writeFile(wsDir.resolve("README.adoc"), generateReadme());
             installMavenWrapper(wsDir);
 
@@ -145,6 +153,7 @@ public class WsCreateMojo implements Mojo {
             getLog().info(Ansi.green("  ✓ ") + "workspace.yaml");
             getLog().info(Ansi.green("  ✓ ") + ".gitignore");
             getLog().info(Ansi.green("  ✓ ") + ".mvn/maven.config");
+            getLog().info(Ansi.green("  ✓ ") + ".mvn/jvm.config");
             getLog().info(Ansi.green("  ✓ ") + "README.adoc");
             getLog().info(Ansi.green("  ✓ ") + "mvnw (Maven " + mavenVersion + ")");
 
@@ -214,7 +223,7 @@ public class WsCreateMojo implements Mojo {
         xml.append("    </parent>\n\n");
         xml.append("    <groupId>local.aggregate</groupId>\n");
         xml.append("    <artifactId>").append(name).append("</artifactId>\n");
-        xml.append("    <version>1.0.0-SNAPSHOT</version>\n");
+        xml.append("    <version>1-SNAPSHOT</version>\n");
         xml.append("    <packaging>pom</packaging>\n\n");
         xml.append("    <name>").append(description).append("</name>\n\n");
         xml.append("    <build>\n");

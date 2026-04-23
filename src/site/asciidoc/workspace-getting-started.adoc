@@ -1,0 +1,302 @@
+= Workspace Developer Getting Started
+:icons: font
+:source-highlighter: coderay
+:toc:
+
+This guide walks you through setting up an IKE workspace and
+working on tinkar/komet components day to day.
+For conventions and architecture rationale,
+see the link:workspace-conventions.html[Workspace Conventions] reference.
+
+== Prerequisites
+
+Java 25::
+Download from https://jdk.java.net/25/.
+The workspace builds with `--enable-preview` across all modules.
+
+Maven 4.0.0-rc-5 or later::
+Download from https://maven.apache.org/download.cgi.
+All POMs use model version `4.1.0`.
+
+Git::
+Any recent version. SSH access to `github.com/ikmdev` and `github.com/IKE-Community` orgs.
+
+Maven settings — IKE plugin groups::
+Add to `~/.m2/settings.xml` so that `ike:`, `ws:`, and `idoc:` prefix
+goals resolve:
++
+[source,xml]
+----
+<settings>
+  <pluginGroups>
+    <pluginGroup>network.ike.tooling</pluginGroup>
+    <pluginGroup>network.ike.docs</pluginGroup>
+    <pluginGroup>network.ike.platform</pluginGroup>
+  </pluginGroups>
+</settings>
+----
+
+== First-Time Workspace Setup
+
+=== Clone the workspace repository
+
+[source,bash]
+----
+git clone git@github.com:IKE-Community/ike-workspace.git
+cd ike-workspace
+----
+
+The workspace repo contains `pom.xml`, `workspace.yaml`, and
+file-activated profiles for every component.
+
+=== Initialize components
+
+Clone all components declared in `workspace.yaml`:
+
+[source,bash]
+----
+mvn ws:init
+----
+
+This clones every component into a subdirectory matching its `name` field
+in the manifest.
+Each clone lands on the branch declared in `workspace.yaml` (default: `main`).
+
+For a smaller initial checkout, use a group:
+
+[source,bash]
+----
+mvn ws:init -Dgroup=core
+----
+
+This clones only `ike-platform` and `tinkar-core` — enough to build the
+foundation and start working.
+
+=== Open in IntelliJ
+
+Open the workspace `pom.xml` as a project.
+File-activated profiles automatically include only the components you
+have checked out.
+Missing components are silently skipped — no red underlines, no broken reactor.
+
+== Daily Workflow
+
+=== Sync all repositories
+
+[source,bash]
+----
+mvn ws:pull
+----
+
+Runs `git pull --rebase` in every checked-out component.
+
+=== Check status
+
+[source,bash]
+----
+mvn ws:status
+----
+
+Shows branch, uncommitted/clean state, and branch mismatch detection
+across all checked-out repos.
+
+=== Full overview
+
+[source,bash]
+----
+mvn ws:dashboard
+----
+
+Composite goal: runs `ws:verify` (manifest consistency),
+`ws:status` (git state), and cascade analysis for release-pending components.
+
+== Starting a Feature
+
+=== Create the feature branch
+
+[source,bash]
+----
+mvn ws:feature-start -Dfeature=my-feature
+----
+
+This creates a `feature/my-feature` branch in every checked-out component and
+sets branch-qualified POM versions (e.g., `24-my-feature-SNAPSHOT`).
+
+To scope the feature to a group:
+
+[source,bash]
+----
+mvn ws:feature-start -Dfeature=my-feature -Dgroup=core
+----
+
+=== Work and commit
+
+Work across repos, commit normally with `git add` / `git commit`.
+Branch-qualified versions are already set — no manual POM edits needed.
+
+=== Save a checkpoint
+
+[source,bash]
+----
+mvn ws:checkpoint -Dname=progress
+----
+
+Records SHAs, versions, and uncommitted-change flags for every component into
+`checkpoints/checkpoint-progress.yaml`.
+Useful before risky operations or as a team-visible progress marker.
+
+=== Preview the merge
+
+[source,bash]
+----
+mvn ws:feature-finish -Dfeature=my-feature -DdryRun=true
+----
+
+Shows what would happen: which branches merge, version changes, tag names.
+
+=== Finish the feature
+
+[source,bash]
+----
+mvn ws:feature-finish -Dfeature=my-feature -Dpush=true
+----
+
+Merges `feature/my-feature` to `main` with `--no-ff` in every affected component,
+strips the branch qualifier from POM versions, tags the merge commit,
+and pushes to origin.
+
+== Releasing
+
+=== Preview the release plan
+
+[source,bash]
+----
+mvn ws:release -DdryRun=true
+----
+
+Output shows which components are release-pending, their version transitions, and
+the topological release order:
+
+----
+[INFO] === Workspace Release Plan (DRY RUN) ===
+[INFO] Release-pending components (topo order):
+[INFO]   1. ike-platform       1-SNAPSHOT → 1 → 2-SNAPSHOT
+[INFO]   2. tinkar-core         1.80.0-SNAPSHOT → 1.80.0 → 1.81.0-SNAPSHOT
+[INFO] Cross-reference updates:
+[INFO]   tinkar-core: ike-platform parent 1-SNAPSHOT → 1
+[INFO] === No changes made (dry run) ===
+----
+
+=== Execute the release
+
+[source,bash]
+----
+mvn ws:release -Dpush=true
+----
+
+For each release-pending component in dependency order:
+
+. Strips `-SNAPSHOT` from the version
+. Builds and verifies
+. Tags the release commit
+. Pushes to origin
+. Bumps to next SNAPSHOT version
+. Updates cross-references in downstream POMs
+
+A pre-release checkpoint is created automatically.
+
+== Multi-Machine Development (Syncthing)
+
+Syncthing keeps working trees in sync between machines.
+Git state, build output, and IDE config are per-machine.
+
+=== Generate ignore patterns
+
+[source,bash]
+----
+mvn ws:stignore
+----
+
+Writes `.stignore` files that exclude `target/`, `.git/`, `.idea/`,
+`.DS_Store`, `.claude/worktrees/`, and `.mvn/local-repo/`.
+
+=== Resume on another machine
+
+Walk away from machine A.
+Syncthing propagates source files to machine B.
+On machine B:
+
+[source,bash]
+----
+cd ike-workspace
+mvn ws:pull
+----
+
+This syncs Git history for all components.
+`ws:init` is Syncthing-aware: if a directory already exists
+(synced files, but no `.git`), it runs `git init` + `git reset`
+instead of `git clone`.
+
+== Troubleshooting
+
+=== `ws-release` fails mid-cascade
+
+The pre-release checkpoint file records the state of each component
+before the release started.
+Re-running `mvn ws:release` skips components that were already
+tagged and released — it picks up where it left off.
+
+=== Merge conflict during `feature-finish`
+
+Resolve the conflict manually in the affected repository,
+commit the merge resolution, then re-run:
+
+[source,bash]
+----
+mvn ws:feature-finish -Dfeature=my-feature -Dpush=true
+----
+
+The goal detects already-merged components and skips them.
+
+=== `ws:init` on a Syncthing directory
+
+Handled automatically.
+When a component directory already exists but has no `.git` directory,
+`ws:init` runs `git init` followed by `git reset` to the manifest branch
+instead of cloning.
+
+=== Plugin not found: `ike:*` goals fail
+
+Verify that `~/.m2/settings.xml` declares the IKE plugin groups:
+
+[source,xml]
+----
+<pluginGroups>
+  <pluginGroup>network.ike.tooling</pluginGroup>
+  <pluginGroup>network.ike.docs</pluginGroup>
+  <pluginGroup>network.ike.platform</pluginGroup>
+</pluginGroups>
+----
+
+Also confirm that `ike-maven-plugin` is declared in the workspace `pom.xml`.
+
+=== Updating the parent version after an ike-platform release
+
+After a new ike-platform release, update the workspace to use the new
+parent version:
+
+[source,bash]
+----
+mvn ws:set-parent-draft -Dparent.version=94    # preview changes
+mvn ws:set-parent-publish -Dparent.version=94   # apply to all POMs
+----
+
+This updates the root POM and all component POMs in one pass.
+If you omit `-Dparent.version`, the goal prompts interactively.
+
+=== Build warnings about BOM imports
+
+There should be zero warnings about BOM imports.
+If you see them, check for stale `ike-bom` references in dependent POMs.
+The BOM is auto-generated from `ike-parent` — manual version references
+can drift after a release.

@@ -1,0 +1,339 @@
+= IKE Documentation Pipeline
+:author: IKE Community
+:revnumber: 1.1.0-SNAPSHOT
+:icons: font
+:source-highlighter: coderay
+:toc:
+:toclevels: 3
+
+The IKE Documentation Pipeline is a Maven 4 reactor that
+provides a multi-renderer AsciiDoc-to-PDF/HTML pipeline for IKE
+Community projects.
+It supports six PDF rendering backends,
+custom AsciiDoc extensions for clinical knowledge markup,
+and a semantic linebreak tool for version-control-friendly prose.
+
+== Module Architecture
+
+The reactor contains eleven modules organized into four
+functional groups:
+infrastructure artifacts that are consumed as Maven dependencies,
+parent POMs that establish the inheritance chain,
+tools that extend the authoring workflow,
+and example projects that exercise the full pipeline.
+
+[plantuml,module-architecture,svg]
+----
+@startuml
+!theme plain
+skinparam linetype ortho
+skinparam nodesep 60
+skinparam ranksep 40
+skinparam packageStyle rectangle
+skinparam defaultFontSize 11
+
+skinparam rectangle {
+    BackgroundColor<<infra>> #E3F2FD
+    BorderColor<<infra>> #1565C0
+    BackgroundColor<<parent>> #E8F5E9
+    BorderColor<<parent>> #2E7D32
+    BackgroundColor<<tool>> #FFF3E0
+    BorderColor<<tool>> #E65100
+    BackgroundColor<<example>> #F3E5F5
+    BorderColor<<example>> #6A1B9A
+}
+
+together {
+    rectangle "ike-build-standards\n//Claude instruction files//" <<infra>> as BS
+    rectangle "ike-build-tools\n//Scripts + release automation//" <<infra>> as BT
+    rectangle "ike-doc-resources\n//Themes, configs, assembly//" <<infra>> as DR
+    rectangle "minimal-fonts\n//Noto font subset//" <<infra>> as MF
+    rectangle "docbook-xsl\n//DocBook XSL 1.79.2 + IKE FO//" <<infra>> as DX
+}
+
+rectangle "koncept-asciidoc-extension\n//k:Name[] macro + glossary//" <<tool>> as KE
+rectangle "semantic-linebreak\n//CLI sentence-per-line tool//" <<tool>> as SL
+
+rectangle "ike-parent\n//AsciiDoc toolchain POM//" <<parent>> as IP
+rectangle "java-parent\n//Java 25 compiler POM//" <<parent>> as JP
+
+rectangle "doc-example\n//Doc-only demo project//" <<example>> as DE
+rectangle "example-project\n//Java + docs demo//" <<example>> as EP
+
+' Parent chain
+JP -up-|> IP : extends
+DE -up-|> IP : extends
+EP -up-|> JP : extends
+SL -up-|> JP : extends
+
+' Artifact consumption (dashed)
+IP ..> DR : unpacks
+IP ..> MF : unpacks fonts
+IP ..> DX : unpacks XSL
+IP ..> KE : plugin dep
+IP ..> BS : unpacks standards
+IP ..> BT : unpacks scripts
+
+legend right
+  | Color | Role |
+  |<#E3F2FD>| Infrastructure artifact |
+  |<#E8F5E9>| Parent POM |
+  |<#FFF3E0>| Tool |
+  |<#F3E5F5>| Example project |
+endlegend
+
+@enduml
+----
+
+== Rendering Pipelines
+
+All renderers start from the same AsciiDoc source.
+The pipeline splits into three families based on how
+intermediate formats reach the final PDF.
+
+[plantuml,renderer-pipelines,svg]
+----
+@startuml
+!theme plain
+skinparam activityBackgroundColor #FFFFFF
+skinparam activityBorderColor #333333
+skinparam arrowColor #555555
+skinparam defaultFontSize 11
+
+start
+
+:AsciiDoc Source\n(.adoc files);
+
+fork
+    :AsciidoctorJ\nHTML5 backend;
+    :HTML5 output;
+    note right: Browsable, TOC sidebar\nKoncept glossary appended
+    stop
+
+fork again
+    :AsciidoctorJ\nPDF backend (Prawn);
+    :PDF;
+    note right: Built-in, free\nJRuby + Prawn
+    stop
+
+fork again
+    :AsciidoctorJ\nHTML5 backend;
+    :Print-ready HTML;
+    fork
+        :Prince XML;
+        :PDF;
+        note right: CSS Paged Media\nPDF/UA-1, $495+
+        stop
+    fork again
+        :Antenna House;
+        :PDF;
+        note right: CSS mode\nPDF/UA-1, $560+
+        stop
+    fork again
+        :WeasyPrint;
+        :PDF;
+        note right: Open source\nPython, free
+        stop
+    end fork
+
+fork again
+    :AsciidoctorJ\nDocBook 5 backend;
+    :DocBook XML;
+    :Saxon-HE + DocBook XSL;
+    :XSL-FO;
+    fork
+        :RenderX XEP;
+        :PDF;
+        note right: Free personal license
+        stop
+    fork again
+        :Apache FOP;
+        :PDF;
+        note right: Apache 2.0, free\nPure Java
+        stop
+    end fork
+
+end fork
+
+@enduml
+----
+
+== Artifact Distribution Pattern
+
+IKE projects share build infrastructure through Maven artifacts
+rather than checked-in files.
+Three infrastructure modules are packaged and deployed to Nexus,
+then unpacked at build time into each consuming module's
+`target/` directory.
+
+[plantuml,artifact-distribution,svg]
+----
+@startuml
+!theme plain
+skinparam packageStyle rectangle
+skinparam defaultFontSize 11
+skinparam nodesep 50
+skinparam ranksep 35
+
+skinparam rectangle {
+    BackgroundColor<<artifact>> #E3F2FD
+    BorderColor<<artifact>> #1565C0
+    BackgroundColor<<target>> #FFF8E1
+    BorderColor<<target>> #F57F17
+    BackgroundColor<<consumer>> #F3E5F5
+    BorderColor<<consumer>> #6A1B9A
+}
+
+rectangle "ike-build-standards" <<artifact>> as BS {
+    file "MAVEN.md" as M1
+    file "IKE-MAVEN.md" as M2
+    file "JAVA.md" as M3
+    file "IKE-JAVA.md" as M4
+}
+
+rectangle "ike-build-tools" <<artifact>> as BT {
+    file "fix-inline-svg.sh" as S1
+    file "scan-renderer-logs.sh" as S2
+    file "copy-docs-to-site.sh" as S3
+}
+
+rectangle "ike-doc-resources" <<artifact>> as DR {
+    file "ike-default-theme.yml" as T1
+    file "ike-print.css" as T2
+    file "assembly descriptors" as T3
+    file "shared docinfo" as T4
+}
+
+rectangle "Any IKE Project" <<consumer>> as PROJ {
+    rectangle "target/" <<target>> as TGT {
+        folder ".claude/standards/" as CS
+        folder "build-tools/scripts/" as TS
+        folder "ike-doc-resources/" as TD
+    }
+}
+
+BS -down-> CS : "mvn validate\nunpack zip"
+BT -down-> TS : "mvn initialize\nunpack zip"
+DR -down-> TD : "mvn initialize\nunpack jar"
+
+note bottom of PROJ
+  maven-dependency-plugin
+  unpacks at validate/initialize phase.
+  Files are ephemeral — regenerated each build.
+end note
+
+@enduml
+----
+
+== Quick Start
+
+Build the entire reactor with HTML output (default):
+
+[source,bash]
+----
+mvn clean verify
+----
+
+Build with Prawn PDF:
+
+[source,bash]
+----
+mvn clean verify -Dike.pdf.prawn
+----
+
+Build a single module with a specific renderer:
+
+[source,bash]
+----
+mvn clean verify -pl example-project -Dike.pdf.prince
+----
+
+== Module Inventory
+
+[cols="2,4,1",options="header"]
+|===
+| Module | Purpose | Packaging
+
+| `ike-build-standards`
+| Versioned Claude instruction files (MAVEN.md, JAVA.md, etc.)
+| POM + ZIP
+
+| `ike-build-tools`
+| Shared build scripts and release automation
+| POM + ZIP
+
+| `ike-doc-resources`
+| Shared doc build resources: themes, CSS, assembly descriptors
+| JAR
+
+| `minimal-fonts`
+| Noto font subset for consistent PDF rendering
+| JAR
+
+| `docbook-xsl`
+| DocBook XSL 1.79.2 + IKE FO customization layer
+| JAR
+
+| `koncept-asciidoc-extension`
+| AsciidoctorJ `k:Name[]` inline macro + auto-generated glossary
+| JAR
+
+| `ike-parent`
+| Parent POM: AsciiDoc toolchain, renderer profiles
+| POM
+
+| `java-parent`
+| Parent POM: Java 25 compiler, JPMS, test frameworks
+| POM
+
+| `semantic-linebreak`
+| CLI tool: AsciiDoc semantic linefeed reformatter
+| JAR
+
+| `doc-example`
+| Documentation-only project exercising all pipeline features
+| JAR (empty)
+
+| `ike-maven-plugin`
+| Maven plugin: release orchestration (`ike:release`), BOM generation (`ike:generate-bom`), site deployment, AsciiDoc utilities
+| maven-plugin
+
+| `ike-bom`
+| Auto-generated BOM — centralized dependency versions from `ike-parent` (zero maintenance)
+| POM
+
+| `example-project`
+| Java + docs integration demo
+| JAR + docs
+|===
+
+== Key Design Decisions
+
+Property-driven build::
+All renderer logic lives in the main `<build>` section of `ike-parent`.
+Profiles are thin toggles that flip `ike.skip.*` properties from `true` to `false`.
+This keeps the POM maintainable and makes renderers composable:
+activate multiple renderers with `-Dike.pdf.prawn -Dike.pdf.prince`.
+
+Artifact-based resource sharing::
+Infrastructure modules (`ike-build-standards`, `ike-build-tools`, `ike-doc-resources`)
+are packaged as Maven artifacts and unpacked at build time.
+No files are committed to consuming projects — everything is ephemeral
+and regenerated on each build.
+This ensures all IKE projects use the same version of themes, scripts, and standards.
+
+Koncept markup::
+The `k:ConceptName[]` inline macro renders as an SVG badge linking to an
+auto-generated glossary section.
+Koncept definitions are sourced from YAML files and include natural language
+definitions, description logic axioms, SNOMED CT identifiers, and OWL IRIs.
+
+Semantic linebreaks::
+The `semantic-linebreak` tool reformats AsciiDoc prose to one-sentence-per-line.
+This produces cleaner `git diff` output and makes sentence-level review practical.
+
+== License
+
+Copyright 2025 IKE Community.
+Licensed under the Apache License,
+Version 2.0.

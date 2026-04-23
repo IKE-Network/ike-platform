@@ -96,8 +96,7 @@ public class OverviewWorkspaceMojo extends AbstractWorkspaceMojo {
 
             getLog().info(String.format("  %2d. %-24s → %s",
                     i + 1, name, deps));
-            graphRows.add(new String[]{String.valueOf(i + 1), name,
-                    sub.type().yamlName(), deps});
+            graphRows.add(new String[]{String.valueOf(i + 1), name, deps});
         }
 
         // ── Section 3: Subproject Status ─────────────────────────────
@@ -299,13 +298,12 @@ public class OverviewWorkspaceMojo extends AbstractWorkspaceMojo {
 
         // Graph table
         sb.append("### Dependency Graph\n\n");
-        sb.append("| # | Subproject | Type | Dependencies |\n");
-        sb.append("|---|-----------|------|--------------|\n");
+        sb.append("| # | Subproject | Dependencies |\n");
+        sb.append("|---|-----------|--------------|\n");
         for (String[] row : graphRows) {
             sb.append("| ").append(row[0])
               .append(" | ").append(row[1])
               .append(" | ").append(row[2])
-              .append(" | ").append(row[3])
               .append(" |\n");
         }
 
@@ -395,8 +393,8 @@ public class OverviewWorkspaceMojo extends AbstractWorkspaceMojo {
     private void printDot(WorkspaceGraph graph) {
         String dot = GraphWorkspaceMojo.buildDotGraph("workspace",
                 graph.manifest().subprojects().values().stream()
-                        .collect(Collectors.toMap(Subproject::name,
-                                c -> c.type().yamlName())),
+                        .map(Subproject::name)
+                        .toList(),
                 graph.manifest().subprojects().values().stream()
                         .filter(c -> !c.dependsOn().isEmpty())
                         .collect(Collectors.toMap(Subproject::name,

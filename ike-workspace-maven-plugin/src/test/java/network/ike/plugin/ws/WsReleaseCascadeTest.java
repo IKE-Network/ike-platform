@@ -5,7 +5,6 @@ import network.ike.workspace.Dependency;
 import network.ike.workspace.IdeSettings;
 import network.ike.workspace.Manifest;
 import network.ike.workspace.Subproject;
-import network.ike.workspace.SubprojectType;
 import network.ike.workspace.WorkspaceGraph;
 import org.junit.jupiter.api.Test;
 
@@ -221,7 +220,6 @@ class WsReleaseCascadeTest {
                     .toList();
             Subproject sub = new Subproject(
                     spec.name,
-                    SubprojectType.SOFTWARE,
                     spec.name + " (test)",
                     "https://example.com/" + spec.name + ".git",
                     "main",

@@ -78,14 +78,6 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
     private String subproject;
 
     /**
-     * Subproject type. Must match a value in
-     * {@link network.ike.workspace.SubprojectType} (e.g.
-     * {@code software}, {@code infrastructure}, {@code document}).
-     */
-    @Parameter(property = "type", defaultValue = "software")
-    private String type;
-
-    /**
      * Short description of the subproject.
      */
     @Parameter(property = "description")
@@ -226,7 +218,6 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
         getLog().info("══════════════════════════════════════════════════════════════");
         getLog().info("  Subproject: " + subproject);
         getLog().info("  Repo:       " + repo);
-        getLog().info("  Type:       " + type);
         if (branch != null) {
             getLog().info("  Branch:     " + branch);
         }
@@ -331,7 +322,6 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
         writeReport(WsGoal.ADD, "Added subproject **" + subproject + "**\n\n"
                 + "| Field | Value |\n|-------|-------|\n"
                 + "| Repo | " + repo + " |\n"
-                + "| Type | " + type + " |\n"
                 + "| Cloned | " + (cloned ? "yes" : "no — run ws:init") + " |\n");
     }
 
@@ -344,7 +334,6 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
 
         StringBuilder entry = new StringBuilder();
         entry.append("\n  ").append(subproject).append(":\n");
-        entry.append("    type: ").append(type).append("\n");
         entry.append("    description: >\n");
         entry.append("      ").append(description).append("\n");
         entry.append("    repo: ").append(repo).append("\n");

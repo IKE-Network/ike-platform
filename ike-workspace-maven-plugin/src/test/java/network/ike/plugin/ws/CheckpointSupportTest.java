@@ -30,8 +30,7 @@ class CheckpointSupportTest {
     void buildCheckpointYaml_singleSubproject() {
         SubprojectSnapshot snap = new SubprojectSnapshot(
                 "ike-platform", "abc123def456", "abc123d",
-                "main", "20-SNAPSHOT", false,
-                "infrastructure", false);
+                "main", "20-SNAPSHOT", false);
 
         String yaml = WsCheckpointDraftMojo.buildCheckpointYaml(
                 "test", "2026-01-01T00:00:00Z", "ci", "1.0",
@@ -42,9 +41,9 @@ class CheckpointSupportTest {
                 .contains("      sha: \"abc123def456\"")
                 .contains("      short-sha: \"abc123d\"")
                 .contains("      branch: \"main\"")
-                .contains("      type: infrastructure")
                 .contains("      version: \"20-SNAPSHOT\"")
-                .doesNotContain("dirty: true");
+                .doesNotContain("dirty: true")
+                .doesNotContain("type:");
     }
 
     @Test
@@ -53,8 +52,7 @@ class CheckpointSupportTest {
         // SubprojectSnapshot is informational only and is not written to YAML.
         SubprojectSnapshot snap = new SubprojectSnapshot(
                 "ike-docs", "aaa", "aaa",
-                "feature/docs", "1.0-SNAPSHOT", true,
-                "document", false);
+                "feature/docs", "1.0-SNAPSHOT", true);
 
         String yaml = WsCheckpointDraftMojo.buildCheckpointYaml(
                 "test", "2026-01-01T00:00:00Z", "ci", "1.0",
@@ -64,21 +62,6 @@ class CheckpointSupportTest {
                 .contains("    ike-docs:")
                 .contains("      sha: \"aaa\"")
                 .doesNotContain("dirty:");
-    }
-
-    @Test
-    void buildCheckpointYaml_compositeSubproject_hasTodoComment() {
-        SubprojectSnapshot snap = new SubprojectSnapshot(
-                "tinkar-data", "bbb", "bbb",
-                "main", "1.0", false,
-                "knowledge-source", true);
-
-        String yaml = WsCheckpointDraftMojo.buildCheckpointYaml(
-                "test", "2026-01-01T00:00:00Z", "ci", "1.0",
-                List.of(snap), List.of());
-
-        assertThat(yaml)
-                .contains("# TODO: add view-coordinate from Tinkar runtime");
     }
 
     @Test
@@ -96,8 +79,7 @@ class CheckpointSupportTest {
     void buildCheckpointYaml_nullVersion_omitted() {
         SubprojectSnapshot snap = new SubprojectSnapshot(
                 "no-pom", "ccc", "ccc",
-                "main", null, false,
-                "software", false);
+                "main", null, false);
 
         String yaml = WsCheckpointDraftMojo.buildCheckpointYaml(
                 "test", "2026-01-01T00:00:00Z", "ci", "1.0",
@@ -125,8 +107,8 @@ class CheckpointSupportTest {
     @Test
     void buildCheckpointYaml_multipleSubprojects_allPresent() {
         List<SubprojectSnapshot> snaps = List.of(
-                new SubprojectSnapshot("alpha", "a1", "a1", "main", "1.0", false, "software", false),
-                new SubprojectSnapshot("beta", "b2", "b2", "main", "2.0", false, "document", false));
+                new SubprojectSnapshot("alpha", "a1", "a1", "main", "1.0", false),
+                new SubprojectSnapshot("beta", "b2", "b2", "main", "2.0", false));
 
         String yaml = WsCheckpointDraftMojo.buildCheckpointYaml(
                 "multi", "2026-01-01T00:00:00Z", "ci", "1.0",

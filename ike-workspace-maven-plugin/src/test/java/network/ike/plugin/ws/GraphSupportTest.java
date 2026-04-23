@@ -9,55 +9,20 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Tests for the pure functions extracted from {@link GraphWorkspaceMojo}:
- * {@code componentColor()} and {@code buildDotGraph()}.
+ * Tests for {@link GraphWorkspaceMojo#buildDotGraph}.
+ *
+ * <p>The mojo no longer type-colors nodes (subprojects are all Maven
+ * projects — there is no type distinction). These tests exercise the
+ * pure DOT-emission function against subproject names and edges only.
  */
 class GraphSupportTest {
-
-    // ── componentColor ───────────────────────────────────────────────
-
-    @Test
-    void componentColor_infrastructure() {
-        assertThat(GraphWorkspaceMojo.componentColor("infrastructure"))
-                .isEqualTo("#e8d5b7");
-    }
-
-    @Test
-    void componentColor_software() {
-        assertThat(GraphWorkspaceMojo.componentColor("software"))
-                .isEqualTo("#b7d5e8");
-    }
-
-    @Test
-    void componentColor_document() {
-        assertThat(GraphWorkspaceMojo.componentColor("document"))
-                .isEqualTo("#b7e8c4");
-    }
-
-    @Test
-    void componentColor_knowledgeSource() {
-        assertThat(GraphWorkspaceMojo.componentColor("knowledge-source"))
-                .isEqualTo("#e8b7d5");
-    }
-
-    @Test
-    void componentColor_template() {
-        assertThat(GraphWorkspaceMojo.componentColor("template"))
-                .isEqualTo("#d5d5d5");
-    }
-
-    @Test
-    void componentColor_unknown_white() {
-        assertThat(GraphWorkspaceMojo.componentColor("something-else"))
-                .isEqualTo("#ffffff");
-    }
 
     // ── buildDotGraph ────────────────────────────────────────────────
 
     @Test
     void buildDotGraph_emptyGraph() {
         String dot = GraphWorkspaceMojo.buildDotGraph(
-                "test", Map.of(), Map.of());
+                "test", List.of(), Map.of());
 
         assertThat(dot)
                 .startsWith("digraph test {")
@@ -68,26 +33,23 @@ class GraphSupportTest {
 
     @Test
     void buildDotGraph_singleNode_noEdges() {
-        Map<String, String> types = Map.of("ike-platform", "infrastructure");
+        List<String> names = List.of("ike-platform");
 
         String dot = GraphWorkspaceMojo.buildDotGraph(
-                "ws", types, Map.of());
+                "ws", names, Map.of());
 
         assertThat(dot)
-                .contains("\"ike-platform\" [fillcolor=\"#e8d5b7\"")
-                .contains("style=\"rounded,filled\"");
+                .contains("\"ike-platform\"");
     }
 
     @Test
     void buildDotGraph_edgesPresent() {
-        Map<String, String> types = new LinkedHashMap<>();
-        types.put("app", "software");
-        types.put("lib", "software");
+        List<String> names = List.of("app", "lib");
 
         Map<String, List<String[]>> edges = Map.of(
                 "app", List.<String[]>of(new String[]{"lib", "build"}));
 
-        String dot = GraphWorkspaceMojo.buildDotGraph("ws", types, edges);
+        String dot = GraphWorkspaceMojo.buildDotGraph("ws", names, edges);
 
         assertThat(dot)
                 .contains("\"app\" -> \"lib\"");
@@ -95,14 +57,12 @@ class GraphSupportTest {
 
     @Test
     void buildDotGraph_contentRelationship_dashed() {
-        Map<String, String> types = new LinkedHashMap<>();
-        types.put("guide", "document");
-        types.put("topics", "document");
+        List<String> names = List.of("guide", "topics");
 
         Map<String, List<String[]>> edges = Map.of(
                 "guide", List.<String[]>of(new String[]{"topics", "content"}));
 
-        String dot = GraphWorkspaceMojo.buildDotGraph("ws", types, edges);
+        String dot = GraphWorkspaceMojo.buildDotGraph("ws", names, edges);
 
         assertThat(dot)
                 .contains("\"guide\" -> \"topics\" [style=dashed]");
@@ -110,14 +70,12 @@ class GraphSupportTest {
 
     @Test
     void buildDotGraph_buildRelationship_noStyle() {
-        Map<String, String> types = new LinkedHashMap<>();
-        types.put("a", "software");
-        types.put("b", "software");
+        List<String> names = List.of("a", "b");
 
         Map<String, List<String[]>> edges = Map.of(
                 "a", List.<String[]>of(new String[]{"b", "build"}));
 
-        String dot = GraphWorkspaceMojo.buildDotGraph("ws", types, edges);
+        String dot = GraphWorkspaceMojo.buildDotGraph("ws", names, edges);
 
         // Edge should not have [style=dashed]
         assertThat(dot)
@@ -127,17 +85,14 @@ class GraphSupportTest {
 
     @Test
     void buildDotGraph_multipleEdgesFromOneNode() {
-        Map<String, String> types = new LinkedHashMap<>();
-        types.put("app", "software");
-        types.put("lib1", "software");
-        types.put("lib2", "software");
+        List<String> names = List.of("app", "lib1", "lib2");
 
-        Map<String, List<String[]>> edges = Map.of(
-                "app", List.of(
-                        new String[]{"lib1", "build"},
-                        new String[]{"lib2", "content"}));
+        Map<String, List<String[]>> edges = new LinkedHashMap<>();
+        edges.put("app", List.of(
+                new String[]{"lib1", "build"},
+                new String[]{"lib2", "content"}));
 
-        String dot = GraphWorkspaceMojo.buildDotGraph("ws", types, edges);
+        String dot = GraphWorkspaceMojo.buildDotGraph("ws", names, edges);
 
         assertThat(dot)
                 .contains("\"app\" -> \"lib1\"")

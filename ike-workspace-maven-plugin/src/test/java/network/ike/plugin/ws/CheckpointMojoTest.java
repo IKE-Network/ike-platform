@@ -111,7 +111,7 @@ class CheckpointMojoTest {
         var snapshots = java.util.List.of(
                 new SubprojectSnapshot(
                         "tinkar-core", "abc123full", "abc123", "main",
-                        "1.0.0-SNAPSHOT", false, "software", false));
+                        "1.0.0-SNAPSHOT", false));
 
         String yaml = WsCheckpointDraftMojo.buildCheckpointYaml(
                 "test", "2026-04-08T00:00:00Z", "tester", "1.0",

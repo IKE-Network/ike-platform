@@ -698,20 +698,21 @@ public class FeatureStartDraftMojo extends AbstractWorkspaceMojo {
                     }
                 } catch (Exception _) { /* skip */ }
             }
-            // Also check workspace-internal BOMs that manage the upstream's
-            // artifacts — if a BOM subproject has the property, the cascade
-            // path exists through the BOM import chain.
-            for (String bomName : graph.manifest().subprojects().keySet()) {
-                Subproject bomComp = graph.manifest().subprojects().get(bomName);
-                if (bomComp.type() != network.ike.workspace.SubprojectType.INFRASTRUCTURE) continue;
-                java.nio.file.Path bomPom = root.toPath()
-                        .resolve(bomName).resolve("pom.xml");
-                if (java.nio.file.Files.exists(bomPom)) {
+            // Also check any workspace subproject's root POM for the
+            // convention property — a BOM subproject that manages the
+            // upstream's artifacts indicates the cascade path exists
+            // through the BOM import chain. We scan all root POMs since
+            // the per-subproject type distinction was removed.
+            for (String otherName : graph.manifest().subprojects().keySet()) {
+                if (otherName.equals(issue.subprojectName())) continue;
+                java.nio.file.Path otherPom = root.toPath()
+                        .resolve(otherName).resolve("pom.xml");
+                if (java.nio.file.Files.exists(otherPom)) {
                     try {
                         String content = java.nio.file.Files.readString(
-                                bomPom, java.nio.charset.StandardCharsets.UTF_8);
+                                otherPom, java.nio.charset.StandardCharsets.UTF_8);
                         if (content.contains("<" + propertyName + ">")) {
-                            return true; // BOM has the convention property
+                            return true; // Another subproject has the convention property
                         }
                     } catch (java.io.IOException _) { /* skip */ }
                 }

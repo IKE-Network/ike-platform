@@ -60,8 +60,7 @@ public class GraphWorkspaceMojo extends AbstractWorkspaceMojo {
             String name = sorted.get(i);
             Subproject sub = graph.manifest().subprojects().get(name);
 
-            getLog().info(String.format("  %2d. %-28s [%s]",
-                    i + 1, name, sub.type().yamlName()));
+            getLog().info(String.format("  %2d. %s", i + 1, name));
 
             if (!sub.dependsOn().isEmpty()) {
                 for (int j = 0; j < sub.dependsOn().size(); j++) {
@@ -117,10 +116,10 @@ public class GraphWorkspaceMojo extends AbstractWorkspaceMojo {
 
     private void printDot(WorkspaceGraph graph) {
         // Build data structures for the pure function
-        Map<String, String> componentTypes = new LinkedHashMap<>();
-        for (Subproject sub : graph.manifest().subprojects().values()) {
-            componentTypes.put(sub.name(), sub.type().yamlName());
-        }
+        List<String> subprojectNames = graph.manifest().subprojects()
+                .values().stream()
+                .map(Subproject::name)
+                .toList();
 
         Map<String, List<String[]>> edges = new LinkedHashMap<>();
         for (Subproject sub : graph.manifest().subprojects().values()) {
@@ -132,7 +131,7 @@ public class GraphWorkspaceMojo extends AbstractWorkspaceMojo {
             }
         }
 
-        String dot = buildDotGraph("workspace", componentTypes, edges);
+        String dot = buildDotGraph("workspace", subprojectNames, edges);
         for (String line : dot.split("\n")) {
             getLog().info(line);
         }
@@ -147,7 +146,6 @@ public class GraphWorkspaceMojo extends AbstractWorkspaceMojo {
         sb.append("```mermaid\ngraph TD\n");
 
         for (String name : sorted) {
-            Subproject sub = graph.manifest().subprojects().get(name);
             String id = mermaidId(name);
             sb.append("    ").append(id)
               .append("[\"").append(name).append("\"]\n");
@@ -181,36 +179,19 @@ public class GraphWorkspaceMojo extends AbstractWorkspaceMojo {
     // ── DOT generation (pure, static, testable) ─────────────────────
 
     /**
-     * Return the fill color for a subproject type name.
-     *
-     * @param typeName subproject type (e.g., "infrastructure", "software")
-     * @return hex color string
-     */
-    public static String componentColor(String typeName) {
-        return switch (typeName) {
-            case "infrastructure"   -> "#e8d5b7";
-            case "software"         -> "#b7d5e8";
-            case "document"         -> "#b7e8c4";
-            case "knowledge-source" -> "#e8b7d5";
-            case "template"         -> "#d5d5d5";
-            default                 -> "#ffffff";
-        };
-    }
-
-    /**
-     * Build a Graphviz DOT graph from subproject types and edges.
+     * Build a Graphviz DOT graph from subproject names and edges.
      *
      * <p>This is a pure function with no workspace-model dependencies,
      * suitable for direct unit testing.
      *
-     * @param title          graph name used in {@code digraph <title>}
-     * @param componentTypes map of subproject name to type name
-     * @param edges          map of source subproject to list of
-     *                       {@code [target, relationship]} pairs
+     * @param title           graph name used in {@code digraph <title>}
+     * @param subprojectNames names of subprojects to include as nodes
+     * @param edges           map of source subproject to list of
+     *                        {@code [target, relationship]} pairs
      * @return complete DOT source
      */
     public static String buildDotGraph(String title,
-                                        Map<String, String> componentTypes,
+                                        List<String> subprojectNames,
                                         Map<String, List<String[]>> edges) {
         StringBuilder dot = new StringBuilder(1024);
         dot.append("digraph ").append(title).append(" {\n");
@@ -218,13 +199,9 @@ public class GraphWorkspaceMojo extends AbstractWorkspaceMojo {
         dot.append("    node [shape=box, style=rounded, fontname=\"Helvetica\"];\n");
         dot.append("\n");
 
-        // Node declarations with colors
-        for (var entry : componentTypes.entrySet()) {
-            String subName = entry.getKey();
-            String color = componentColor(entry.getValue());
-            dot.append("    \"").append(subName)
-               .append("\" [fillcolor=\"").append(color)
-               .append("\", style=\"rounded,filled\"];\n");
+        // Node declarations
+        for (String subName : subprojectNames) {
+            dot.append("    \"").append(subName).append("\";\n");
         }
 
         dot.append("\n");

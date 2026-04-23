@@ -7,9 +7,7 @@ import network.ike.plugin.ws.preflight.PreflightCondition;
 import network.ike.plugin.ws.preflight.PreflightContext;
 import network.ike.plugin.ws.preflight.PreflightResult;
 
-import network.ike.workspace.Subproject;
 import network.ike.workspace.ManifestWriter;
-import network.ike.workspace.SubprojectType;
 import network.ike.workspace.WorkspaceGraph;
 import network.ike.plugin.ws.vcs.VcsOperations;
 import network.ike.plugin.ws.vcs.VcsState;
@@ -144,7 +142,6 @@ public class WsCheckpointDraftMojo extends AbstractWorkspaceMojo {
                 new LinkedHashSet<>(graph.manifest().subprojects().keySet()));
 
         for (String subName : ordered) {
-            Subproject subproject = graph.manifest().subprojects().get(subName);
             File dir = new File(root, subName);
             File gitDir = new File(dir, ".git");
 
@@ -159,24 +156,19 @@ public class WsCheckpointDraftMojo extends AbstractWorkspaceMojo {
             String shortSha = gitShortSha(dir);
             String version  = readVersion(dir);
 
-            boolean composite = subproject.type().checkpointMechanism()
-                    == SubprojectType.CheckpointMechanism.COMPOSITE;
-
             if (draft) {
                 getLog().info(Ansi.green("  ✓ ") + subName
                         + " [" + shortSha + "] " + branch
                         + " (" + version + ")");
                 CheckpointSupport.preview(dir, wsTagName, getLog());
                 snapshots.add(new SubprojectSnapshot(
-                        subName, sha, shortSha, branch,
-                        version, false, subproject.type().yamlName(), composite));
+                        subName, sha, shortSha, branch, version, false));
             } else {
                 CheckpointSupport.checkpoint(dir, wsTagName, getLog());
                 getLog().info(Ansi.green("  ✓ ") + subName
                         + " [" + shortSha + "] → " + wsTagName);
                 snapshots.add(new SubprojectSnapshot(
-                        subName, sha, shortSha, branch,
-                        version, false, subproject.type().yamlName(), composite));
+                        subName, sha, shortSha, branch, version, false));
             }
         }
 
@@ -361,10 +353,6 @@ public class WsCheckpointDraftMojo extends AbstractWorkspaceMojo {
             yaml.add("      sha: \"" + snap.sha() + "\"");
             yaml.add("      short-sha: \"" + snap.shortSha() + "\"");
             yaml.add("      branch: \"" + snap.branch() + "\"");
-            yaml.add("      type: " + snap.type());
-            if (snap.compositeCheckpoint()) {
-                yaml.add("      # TODO: add view-coordinate from Tinkar runtime");
-            }
         }
 
         return String.join("\n", yaml) + "\n";

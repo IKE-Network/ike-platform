@@ -119,6 +119,29 @@ mvn install -DskipTests
 - All subprojects are versionless — root version is the single source
   of truth.
 
+## `.mvn/jvm.config` constraints
+
+Maven's `.mvn/jvm.config` is parsed as raw JVM arguments — one token
+per line, NO comment syntax. A `#` at column 0 is passed to the JVM
+as if it were a main-class name, and IntelliJ will show:
+
+```
+Error: Could not find or load main class #
+Caused by: java.lang.ClassNotFoundException: #
+```
+
+Do NOT add `#`-prefixed comments to `.mvn/jvm.config`. The current
+file contains exactly one argument:
+
+- `--sun-misc-unsafe-memory-access=allow` — suppresses the JFFI
+  `sun.misc.Unsafe` deprecation warnings emitted by
+  JRuby/AsciidoctorJ on Java 24+.
+
+Also do NOT set `-Denv.PATH` or PATH-related options here or in
+`MAVEN_OPTS`: PATH entries containing spaces (e.g. JetBrains
+Toolbox) cause the JVM launcher to bail with the same
+"Could not find or load main class" error for an unrelated reason.
+
 ## Workspace Tooling
 
 `ike-workspace-maven-plugin` (prefix `ws:`) is built in this repo.

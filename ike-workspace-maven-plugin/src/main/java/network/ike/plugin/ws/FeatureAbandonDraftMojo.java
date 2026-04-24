@@ -46,7 +46,7 @@ import java.util.TreeSet;
  *
  * @see FeatureStartDraftMojo for creating feature branches
  */
-@Mojo(name = "feature-abandon-draft", projectRequired = false)
+@Mojo(name = "feature-abandon-draft", projectRequired = false, aggregator = true)
 public class FeatureAbandonDraftMojo extends AbstractWorkspaceMojo {
 
     @Parameter(property = "feature")

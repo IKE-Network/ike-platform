@@ -24,7 +24,7 @@ import java.util.Set;
  * mvn ws:push
  * }</pre>
  */
-@Mojo(name = "push", projectRequired = false)
+@Mojo(name = "push", projectRequired = false, aggregator = true)
 public class PushMojo extends AbstractWorkspaceMojo {
 
     /** Creates this goal instance. */

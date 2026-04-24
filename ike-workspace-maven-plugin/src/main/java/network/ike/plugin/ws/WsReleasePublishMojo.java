@@ -26,7 +26,7 @@ import org.apache.maven.api.plugin.annotations.Mojo;
  *
  * @see WsReleaseDraftMojo
  */
-@Mojo(name = "release-publish", projectRequired = false)
+@Mojo(name = "release-publish", projectRequired = false, aggregator = true)
 public class WsReleasePublishMojo extends WsReleaseDraftMojo {
 
     /** Creates this goal instance. */

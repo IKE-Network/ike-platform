@@ -32,7 +32,7 @@ import java.util.regex.Pattern;
  *
  * <pre>{@code mvn ws:fix}</pre>
  */
-@Mojo(name = "fix", projectRequired = false)
+@Mojo(name = "fix", projectRequired = false, aggregator = true)
 public class WsFixMojo extends AbstractWorkspaceMojo {
 
     private static final Pattern GROUP_ID_PATTERN =

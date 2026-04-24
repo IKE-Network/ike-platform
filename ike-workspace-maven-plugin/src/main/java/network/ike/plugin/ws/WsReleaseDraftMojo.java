@@ -109,7 +109,7 @@ import java.util.stream.Collectors;
  * mvn ws:release-publish                     # release all release-pending components
  * }</pre>
  */
-@Mojo(name = "release-draft", projectRequired = false)
+@Mojo(name = "release-draft", projectRequired = false, aggregator = true)
 public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
 
     private static final DateTimeFormatter ISO_UTC =

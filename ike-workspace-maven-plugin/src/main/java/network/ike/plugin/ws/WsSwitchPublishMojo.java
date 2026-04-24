@@ -16,7 +16,7 @@ import org.apache.maven.api.plugin.annotations.Mojo;
  *
  * @see WsSwitchDraftMojo for the preview (draft) variant
  */
-@Mojo(name = "switch-publish", projectRequired = false)
+@Mojo(name = "switch-publish", projectRequired = false, aggregator = true)
 public class WsSwitchPublishMojo extends WsSwitchDraftMojo {
 
     /** Creates this goal instance. */

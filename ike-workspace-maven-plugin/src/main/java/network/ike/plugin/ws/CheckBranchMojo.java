@@ -27,7 +27,7 @@ import java.nio.file.Path;
  *
  * <p>Never blocks — warnings only. Always exits 0.
  */
-@Mojo(name = "check-branch", projectRequired = false)
+@Mojo(name = "check-branch", projectRequired = false, aggregator = true)
 public class CheckBranchMojo extends AbstractWorkspaceMojo {
 
     /** Creates this goal instance. */

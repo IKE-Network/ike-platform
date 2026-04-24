@@ -30,7 +30,7 @@ import java.util.TreeSet;
  * mvn ws:cleanup -DtargetBranch=develop   # check against develop
  * }</pre>
  */
-@Mojo(name = "cleanup-draft", projectRequired = false)
+@Mojo(name = "cleanup-draft", projectRequired = false, aggregator = true)
 public class CleanupWorkspaceMojo extends AbstractWorkspaceMojo {
 
     /** Creates this goal instance. */

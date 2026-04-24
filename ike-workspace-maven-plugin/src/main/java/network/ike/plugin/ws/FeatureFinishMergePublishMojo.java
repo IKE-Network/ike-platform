@@ -13,7 +13,7 @@ import org.apache.maven.api.plugin.annotations.Mojo;
  *
  * @see FeatureFinishMergeDraftMojo
  */
-@Mojo(name = "feature-finish-merge-publish", projectRequired = false)
+@Mojo(name = "feature-finish-merge-publish", projectRequired = false, aggregator = true)
 public class FeatureFinishMergePublishMojo extends FeatureFinishMergeDraftMojo {
 
     /** Creates this goal instance. */

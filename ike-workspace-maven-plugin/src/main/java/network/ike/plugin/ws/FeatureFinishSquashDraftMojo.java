@@ -36,7 +36,7 @@ import java.util.List;
  *
  * @see FeatureFinishMergeDraftMojo for long-lived branches
  */
-@Mojo(name = "feature-finish-squash-draft", projectRequired = false)
+@Mojo(name = "feature-finish-squash-draft", projectRequired = false, aggregator = true)
 public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
 
     /** Creates this goal instance. */

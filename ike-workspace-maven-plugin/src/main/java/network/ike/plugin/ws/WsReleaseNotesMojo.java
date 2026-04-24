@@ -26,7 +26,7 @@ import java.nio.file.Path;
  * mvn ws:release-notes -Dmilestone="ike-tooling v57" -Doutput=release-notes.md
  * }</pre>
  */
-@Mojo(name = "release-notes", projectRequired = false)
+@Mojo(name = "release-notes", projectRequired = false, aggregator = true)
 public class WsReleaseNotesMojo extends AbstractWorkspaceMojo {
 
     /**

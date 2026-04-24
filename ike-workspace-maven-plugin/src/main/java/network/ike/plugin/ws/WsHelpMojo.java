@@ -35,7 +35,7 @@ import java.util.Map;
  *
  * @see <a href="https://github.com/IKE-Network/ike-platform">IKE Platform</a>
  */
-@org.apache.maven.api.plugin.annotations.Mojo(name = "help", projectRequired = false)
+@org.apache.maven.api.plugin.annotations.Mojo(name = "help", projectRequired = false, aggregator = true)
 public class WsHelpMojo implements Mojo {
 
     /** Maven logger, injected by the Maven 4 DI container. */

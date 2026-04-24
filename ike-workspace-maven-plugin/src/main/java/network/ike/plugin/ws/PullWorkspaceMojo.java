@@ -29,7 +29,7 @@ import java.util.Set;
  * mvn ws:pull
  * }</pre>
  */
-@Mojo(name = "pull", projectRequired = false)
+@Mojo(name = "pull", projectRequired = false, aggregator = true)
 public class PullWorkspaceMojo extends AbstractWorkspaceMojo {
 
     /** Creates this goal instance. */

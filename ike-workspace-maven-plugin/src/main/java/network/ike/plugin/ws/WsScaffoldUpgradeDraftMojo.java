@@ -90,7 +90,7 @@ import java.util.regex.Pattern;
  *
  * @see WsCreateMojo for creating a new workspace
  */
-@Mojo(name = "scaffold-upgrade-draft", projectRequired = false)
+@Mojo(name = "scaffold-upgrade-draft", projectRequired = false, aggregator = true)
 public class WsScaffoldUpgradeDraftMojo extends AbstractWorkspaceMojo {
 
     /**

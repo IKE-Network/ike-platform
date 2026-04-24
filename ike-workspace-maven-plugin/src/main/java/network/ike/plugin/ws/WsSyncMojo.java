@@ -19,7 +19,7 @@ import org.apache.maven.api.plugin.annotations.Mojo;
  * }</pre>
  */
 @Deprecated
-@Mojo(name = "sync", projectRequired = false)
+@Mojo(name = "sync", projectRequired = false, aggregator = true)
 public class WsSyncMojo extends WsAlignDraftMojo {
 
     /** Creates this goal instance. */

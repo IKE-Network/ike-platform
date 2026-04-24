@@ -45,7 +45,7 @@ import java.util.TreeSet;
  *
  * @see VerifyWorkspaceMojo for general workspace verification
  */
-@Mojo(name = "verify-convergence", projectRequired = false)
+@Mojo(name = "verify-convergence", projectRequired = false, aggregator = true)
 public class VerifyConvergenceMojo extends AbstractWorkspaceMojo {
 
     /**

@@ -41,7 +41,7 @@ import java.util.Map;
  * @see WsSetParentPublishMojo
  * @see WsAlignDraftMojo
  */
-@Mojo(name = "set-parent-draft", projectRequired = false)
+@Mojo(name = "set-parent-draft", projectRequired = false, aggregator = true)
 public class WsSetParentDraftMojo extends AbstractWorkspaceMojo {
 
     /**

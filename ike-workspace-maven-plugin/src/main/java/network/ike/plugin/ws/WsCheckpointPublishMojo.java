@@ -18,7 +18,7 @@ import java.io.File;
  *
  * @see WsCheckpointDraftMojo
  */
-@Mojo(name = "checkpoint-publish", projectRequired = false)
+@Mojo(name = "checkpoint-publish", projectRequired = false, aggregator = true)
 public class WsCheckpointPublishMojo extends WsCheckpointDraftMojo {
 
     /** Creates this goal instance. */

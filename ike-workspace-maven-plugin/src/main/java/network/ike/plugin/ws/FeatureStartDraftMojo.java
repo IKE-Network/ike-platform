@@ -56,7 +56,7 @@ import java.util.Set;
  * mvn ike:feature-start -Dfeature=doc-refresh -DskipVersion=true
  * }</pre>
  */
-@Mojo(name = "feature-start-draft", projectRequired = false)
+@Mojo(name = "feature-start-draft", projectRequired = false, aggregator = true)
 public class FeatureStartDraftMojo extends AbstractWorkspaceMojo {
 
     /** Feature name. Branch will be {@code feature/<name>}. Prompted if omitted. */

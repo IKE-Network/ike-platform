@@ -23,7 +23,7 @@ import java.util.List;
  * mvn ws:commit -Dmessage="my commit message" -DaddAll=true
  * }</pre>
  */
-@Mojo(name = "commit", projectRequired = false)
+@Mojo(name = "commit", projectRequired = false, aggregator = true)
 public class CommitMojo extends AbstractWorkspaceMojo {
 
     /** Creates this goal instance. */

@@ -42,7 +42,7 @@ import java.time.LocalDate;
  * @see WsAddMojo for adding subprojects to an existing workspace
  * @see WsScaffoldUpgradeDraftMojo for upgrading workspace scaffold conventions
  */
-@org.apache.maven.api.plugin.annotations.Mojo(name = "create", projectRequired = false)
+@org.apache.maven.api.plugin.annotations.Mojo(name = "create", projectRequired = false, aggregator = true)
 public class WsCreateMojo implements Mojo {
 
     /** Maven logger, injected by the Maven 4 DI container. */

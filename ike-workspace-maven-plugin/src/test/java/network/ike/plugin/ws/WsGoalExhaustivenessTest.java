@@ -54,6 +54,40 @@ class WsGoalExhaustivenessTest {
         }
     }
 
+    /**
+     * Regression guard for issue #237.
+     *
+     * <p>Every {@code ws:*} goal is workspace-level — it operates on
+     * the root workspace POM, not per reactor subproject. Without
+     * {@code aggregator = true}, Maven re-resolves the {@code ws:}
+     * plugin prefix inside each subproject's effective plugin list.
+     * In a reactor that mixes a {@code network.ike.platform:ike-parent}
+     * root with subprojects still inheriting from the pre-split
+     * {@code network.ike.pipeline:ike-parent}, this causes {@code ws:}
+     * to bind to the OLD {@code network.ike.pipeline:ike-workspace-maven-plugin}
+     * on subprojects — which then fails to resolve any goal renamed
+     * in the new plugin (e.g. {@code scaffold-upgrade-publish}).
+     *
+     * <p>Marking every ws mojo as aggregator pins execution to the
+     * reactor root, where {@code ws:} resolves to this plugin.
+     */
+    @Test
+    void every_ws_mojo_is_aggregator() {
+        for (WsGoal goal : WsGoal.values()) {
+            Mojo annotation = goal.mojoClass().getAnnotation(Mojo.class);
+            assertThat(annotation)
+                    .withFailMessage("WsGoal.%s mojoClass %s has no @Mojo annotation",
+                            goal.name(), goal.mojoClass().getSimpleName())
+                    .isNotNull();
+            assertThat(annotation.aggregator())
+                    .withFailMessage("WsGoal.%s (%s) must be aggregator = true"
+                                    + " — ws: goals are workspace-level and must"
+                                    + " run at the reactor root only (see #237)",
+                            goal.name(), goal.mojoClass().getSimpleName())
+                    .isTrue();
+        }
+    }
+
     @Test
     void enum_names_cover_every_mojo_in_source() throws IOException {
         Set<String> fromSource = scanMojoNamesInSource();

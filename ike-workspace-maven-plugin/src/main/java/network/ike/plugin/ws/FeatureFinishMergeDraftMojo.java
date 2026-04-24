@@ -34,7 +34,7 @@ import java.util.List;
  *
  * @see FeatureFinishSquashDraftMojo for clean single-commit merges (default)
  */
-@Mojo(name = "feature-finish-merge-draft", projectRequired = false)
+@Mojo(name = "feature-finish-merge-draft", projectRequired = false, aggregator = true)
 public class FeatureFinishMergeDraftMojo extends AbstractWorkspaceMojo {
 
     /** Creates this goal instance. */

@@ -34,7 +34,7 @@ import java.util.List;
  *
  * <pre>{@code mvn ike:stignore}</pre>
  */
-@Mojo(name = "stignore", projectRequired = false)
+@Mojo(name = "stignore", projectRequired = false, aggregator = true)
 public class StignoreWorkspaceMojo extends AbstractWorkspaceMojo {
 
     /** Standard patterns that should never be synced. */

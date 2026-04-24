@@ -61,7 +61,7 @@ import java.util.stream.Collectors;
  * @see WsCreateMojo for creating a new workspace
  * @see InitWorkspaceMojo for cloning all subprojects
  */
-@Mojo(name = "add", projectRequired = false)
+@Mojo(name = "add", projectRequired = false, aggregator = true)
 public class WsAddMojo extends AbstractWorkspaceMojo {
 
     /**

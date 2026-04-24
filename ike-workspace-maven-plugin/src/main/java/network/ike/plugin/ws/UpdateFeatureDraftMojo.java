@@ -40,7 +40,7 @@ import java.util.Set;
  * @see FeatureStartDraftMojo for creating feature branches
  * @see FeatureFinishSquashDraftMojo for merging back to main
  */
-@Mojo(name = "update-feature-draft", projectRequired = false)
+@Mojo(name = "update-feature-draft", projectRequired = false, aggregator = true)
 public class UpdateFeatureDraftMojo extends AbstractWorkspaceMojo {
 
     /** Creates this goal instance. */

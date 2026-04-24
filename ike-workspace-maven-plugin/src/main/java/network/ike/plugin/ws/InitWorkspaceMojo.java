@@ -40,7 +40,7 @@ import java.util.Set;
  * mvn ike:init
  * }</pre>
  */
-@Mojo(name = "init", projectRequired = false)
+@Mojo(name = "init", projectRequired = false, aggregator = true)
 public class InitWorkspaceMojo extends AbstractWorkspaceMojo {
 
     /** Creates this goal instance. */

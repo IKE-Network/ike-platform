@@ -16,7 +16,7 @@ import org.apache.maven.api.plugin.annotations.Mojo;
  *
  * @see WsSetParentDraftMojo
  */
-@Mojo(name = "set-parent-publish", projectRequired = false)
+@Mojo(name = "set-parent-publish", projectRequired = false, aggregator = true)
 public class WsSetParentPublishMojo extends WsSetParentDraftMojo {
 
     /** Creates this goal instance. */

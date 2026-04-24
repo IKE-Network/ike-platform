@@ -18,7 +18,7 @@ import org.apache.maven.api.plugin.annotations.Mojo;
  *
  * @see FeatureAbandonDraftMojo for the preview (draft) variant
  */
-@Mojo(name = "feature-abandon-publish", projectRequired = false)
+@Mojo(name = "feature-abandon-publish", projectRequired = false, aggregator = true)
 public class FeatureAbandonPublishMojo extends FeatureAbandonDraftMojo {
 
     /** Creates this goal instance. */

@@ -34,7 +34,7 @@ import java.util.Map;
  * mvn ike:post-release -DnextVersion=4-SNAPSHOT
  * }</pre>
  */
-@Mojo(name = "post-release", projectRequired = false)
+@Mojo(name = "post-release", projectRequired = false, aggregator = true)
 public class WsPostReleaseMojo extends AbstractWorkspaceMojo {
 
     /**

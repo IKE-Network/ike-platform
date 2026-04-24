@@ -13,7 +13,7 @@ import org.apache.maven.api.plugin.annotations.Mojo;
  *
  * @see WsScaffoldUpgradeDraftMojo
  */
-@Mojo(name = "scaffold-upgrade-publish", projectRequired = false)
+@Mojo(name = "scaffold-upgrade-publish", projectRequired = false, aggregator = true)
 public class WsScaffoldUpgradePublishMojo extends WsScaffoldUpgradeDraftMojo {
 
     /** Creates this goal instance. */

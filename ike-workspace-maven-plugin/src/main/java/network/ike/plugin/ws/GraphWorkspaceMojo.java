@@ -22,7 +22,7 @@ import java.util.Map;
  * mvn ike:graph -Dformat=dot
  * }</pre>
  */
-@Mojo(name = "graph", projectRequired = false)
+@Mojo(name = "graph", projectRequired = false, aggregator = true)
 public class GraphWorkspaceMojo extends AbstractWorkspaceMojo {
 
     /**

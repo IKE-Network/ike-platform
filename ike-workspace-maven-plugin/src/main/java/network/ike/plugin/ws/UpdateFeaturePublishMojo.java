@@ -16,7 +16,7 @@ import org.apache.maven.api.plugin.annotations.Mojo;
  *
  * @see UpdateFeatureDraftMojo for the preview (draft) variant
  */
-@Mojo(name = "update-feature-publish", projectRequired = false)
+@Mojo(name = "update-feature-publish", projectRequired = false, aggregator = true)
 public class UpdateFeaturePublishMojo extends UpdateFeatureDraftMojo {
 
     /** Creates this goal instance. */

@@ -13,7 +13,7 @@ import org.apache.maven.api.plugin.annotations.Mojo;
  *
  * @see CleanupWorkspaceMojo
  */
-@Mojo(name = "cleanup-publish", projectRequired = false)
+@Mojo(name = "cleanup-publish", projectRequired = false, aggregator = true)
 public class CleanupWorkspacePublishMojo extends CleanupWorkspaceMojo {
 
     /** Creates this goal instance. */

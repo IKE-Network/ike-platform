@@ -44,7 +44,7 @@ import java.util.Properties;
  *
  * <pre>{@code mvn ike:verify}</pre>
  */
-@Mojo(name = "verify", projectRequired = false)
+@Mojo(name = "verify", projectRequired = false, aggregator = true)
 public class VerifyWorkspaceMojo extends AbstractWorkspaceMojo {
 
     /**

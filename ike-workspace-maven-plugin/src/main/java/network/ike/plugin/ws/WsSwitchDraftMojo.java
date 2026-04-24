@@ -57,7 +57,7 @@ import java.util.TreeSet;
  *
  * @see FeatureStartDraftMojo for creating feature branches
  */
-@Mojo(name = "switch-draft", projectRequired = false)
+@Mojo(name = "switch-draft", projectRequired = false, aggregator = true)
 public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
 
     /** Full ref prefix for auto-stash refs (see #153). */

@@ -13,7 +13,7 @@ import org.apache.maven.api.plugin.annotations.Mojo;
  *
  * @see FeatureFinishSquashDraftMojo
  */
-@Mojo(name = "feature-finish-squash-publish", projectRequired = false)
+@Mojo(name = "feature-finish-squash-publish", projectRequired = false, aggregator = true)
 public class FeatureFinishSquashPublishMojo extends FeatureFinishSquashDraftMojo {
 
     /** Creates this goal instance. */

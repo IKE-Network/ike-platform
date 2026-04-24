@@ -19,7 +19,7 @@ import java.io.File;
  *
  * @see FeatureStartDraftMojo
  */
-@Mojo(name = "feature-start-publish", projectRequired = false)
+@Mojo(name = "feature-start-publish", projectRequired = false, aggregator = true)
 public class FeatureStartPublishMojo extends FeatureStartDraftMojo {
 
     /** Creates this goal instance. */

@@ -50,7 +50,7 @@ import java.util.LinkedHashSet;
  *
  * @see CheckpointSupport the per-subproject tagging engine
  */
-@Mojo(name = "checkpoint-draft", projectRequired = false)
+@Mojo(name = "checkpoint-draft", projectRequired = false, aggregator = true)
 public class WsCheckpointDraftMojo extends AbstractWorkspaceMojo {
 
     private static final DateTimeFormatter ISO_UTC =

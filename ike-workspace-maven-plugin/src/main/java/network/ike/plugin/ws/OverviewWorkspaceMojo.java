@@ -38,7 +38,7 @@ import java.util.stream.Collectors;
  * mvn ws:overview -Dformat=dot
  * }</pre>
  */
-@Mojo(name = "overview", projectRequired = false)
+@Mojo(name = "overview", projectRequired = false, aggregator = true)
 public class OverviewWorkspaceMojo extends AbstractWorkspaceMojo {
 
     /** Creates this goal instance. */

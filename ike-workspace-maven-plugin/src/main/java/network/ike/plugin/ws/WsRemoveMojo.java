@@ -37,7 +37,7 @@ import java.util.regex.Pattern;
  *
  * @see WsAddMojo for adding a subproject
  */
-@Mojo(name = "remove", projectRequired = false)
+@Mojo(name = "remove", projectRequired = false, aggregator = true)
 public class WsRemoveMojo extends AbstractWorkspaceMojo {
 
     /**

@@ -62,7 +62,7 @@ import java.util.Set;
  * mvn ws:align-publish -Dscope=branches -Dfrom=manifest  # switch repos
  * }</pre>
  */
-@Mojo(name = "align-draft", projectRequired = false)
+@Mojo(name = "align-draft", projectRequired = false, aggregator = true)
 public class WsAlignDraftMojo extends AbstractWorkspaceMojo {
 
     /**

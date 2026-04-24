@@ -48,7 +48,7 @@ import java.util.Set;
  * @see ReleaseStatusInspector
  * @see WsReleaseDraftMojo
  */
-@Mojo(name = "release-status", projectRequired = false)
+@Mojo(name = "release-status", projectRequired = false, aggregator = true)
 public class WsReleaseStatusMojo extends AbstractWorkspaceMojo {
 
     /** Creates this goal instance. */

@@ -13,7 +13,7 @@ import org.apache.maven.api.plugin.annotations.Mojo;
  *
  * @see WsAlignDraftMojo
  */
-@Mojo(name = "align-publish", projectRequired = false)
+@Mojo(name = "align-publish", projectRequired = false, aggregator = true)
 public class WsAlignPublishMojo extends WsAlignDraftMojo {
 
     /** Creates this goal instance. */

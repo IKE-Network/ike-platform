@@ -23,12 +23,20 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Upgrade workspace conventions to the current plugin version.
+ * Upgrade workspace scaffold conventions to the current plugin version.
  *
- * <p>As workspace conventions evolve across plugin releases, this goal
- * applies incremental upgrades to bring an existing workspace in line
- * with current standards. Each upgrade step is idempotent — running
- * the goal twice produces the same result.
+ * <p>As workspace scaffold conventions evolve across plugin releases,
+ * this goal applies incremental upgrades to bring an existing workspace
+ * in line with current standards. Each upgrade step is idempotent —
+ * running the goal twice produces the same result.
+ *
+ * <p>This goal addresses the <em>scaffold</em> layer only: gitignore,
+ * gitattributes, stignore-shared, Maven wrapper, IntelliJ language
+ * level, POM root attribute, {@code .mvn/maven.config}, and the
+ * {@code ike-tooling.version} property. It does not touch Maven-
+ * dependency versions or workspace alignment state; for workspace
+ * alignment transitions see {@code ws:promote} / {@code ws:demote}
+ * (IKE-Network/ike-issues#233).
  *
  * <h2>Current upgrade steps</h2>
  * <ul>
@@ -76,14 +84,14 @@ import java.util.regex.Pattern;
  * </ul>
  *
  * <pre>{@code
- * mvn ws:upgrade              # apply all upgrades
- * mvn ws:upgrade -DdryRun     # preview what would change
+ * mvn ws:scaffold-upgrade-draft     # preview what would change (default)
+ * mvn ws:scaffold-upgrade-publish   # apply the upgrades
  * }</pre>
  *
  * @see WsCreateMojo for creating a new workspace
  */
-@Mojo(name = "upgrade-draft", projectRequired = false)
-public class WsUpgradeDraftMojo extends AbstractWorkspaceMojo {
+@Mojo(name = "scaffold-upgrade-draft", projectRequired = false)
+public class WsScaffoldUpgradeDraftMojo extends AbstractWorkspaceMojo {
 
     /**
      * Show what would change without modifying any files.
@@ -92,7 +100,7 @@ public class WsUpgradeDraftMojo extends AbstractWorkspaceMojo {
     boolean publish;
 
     /** Creates this goal instance. */
-    public WsUpgradeDraftMojo() {}
+    public WsScaffoldUpgradeDraftMojo() {}
 
     @Override
     public void execute() throws MojoException {
@@ -104,7 +112,7 @@ public class WsUpgradeDraftMojo extends AbstractWorkspaceMojo {
         if (pluginVersion == null) pluginVersion = "49";
 
         getLog().info("");
-        getLog().info(header("Upgrade"));
+        getLog().info(header("Scaffold Upgrade"));
         getLog().info("══════════════════════════════════════════════════════════════");
         getLog().info("  Workspace: " + root.getName());
         getLog().info("  Plugin:    " + pluginVersion);
@@ -152,7 +160,7 @@ public class WsUpgradeDraftMojo extends AbstractWorkspaceMojo {
         }
         getLog().info("");
 
-        writeReport(publish ? WsGoal.UPGRADE_PUBLISH : WsGoal.UPGRADE_DRAFT,
+        writeReport(publish ? WsGoal.SCAFFOLD_UPGRADE_PUBLISH : WsGoal.SCAFFOLD_UPGRADE_DRAFT,
                 "**" + applied.size() + "** upgrade(s) applied, **"
                         + skipped.size() + "** already current."
                         + (draft && !applied.isEmpty() ? " (DRAFT)" : "") + "\n");
@@ -197,7 +205,7 @@ public class WsUpgradeDraftMojo extends AbstractWorkspaceMojo {
     /**
      * Required {@code .gitignore} entries grouped into named sections.
      * Order mirrors what {@link WsCreateMojo#generateGitignore()} emits
-     * so that output from {@code ws:create} and {@code ws:upgrade}
+     * so that output from {@code ws:create} and {@code ws:scaffold-upgrade-*}
      * remains visually consistent.
      */
     static final List<GitignoreSection> GITIGNORE_SECTIONS = List.of(
@@ -512,8 +520,8 @@ public class WsUpgradeDraftMojo extends AbstractWorkspaceMojo {
      * own explanatory preamble).
      */
     static final String GITATTRIBUTES_HEADER = """
-            # Line-ending policy — managed by ws:upgrade
-            # ────────────────────────────────────────────
+            # Line-ending policy — managed by ws:scaffold-upgrade-*
+            # ──────────────────────────────────────────────────────
             #
             # Windows batch files MUST be CRLF or cmd.exe chokes — symptoms range
             # from "The system cannot find the path specified" to silent failure.

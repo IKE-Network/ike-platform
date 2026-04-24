@@ -18,7 +18,7 @@ import java.util.Properties;
  * </ul>
  *
  * <p>Used by {@code ws:init} when scaffolding a new workspace, and by
- * {@code ws:upgrade}'s {@code mvnw-standard} step when any of the three
+ * {@code ws:scaffold-upgrade-*}'s {@code mvnw-standard} step when any of the three
  * files is missing from an existing workspace.
  *
  * <p>All methods are <b>file-level idempotent</b>: they unconditionally

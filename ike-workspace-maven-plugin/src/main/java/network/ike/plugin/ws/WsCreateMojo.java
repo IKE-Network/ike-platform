@@ -40,7 +40,7 @@ import java.time.LocalDate;
  * }</pre>
  *
  * @see WsAddMojo for adding subprojects to an existing workspace
- * @see WsUpgradeDraftMojo for upgrading workspace conventions
+ * @see WsScaffoldUpgradeDraftMojo for upgrading workspace scaffold conventions
  */
 @org.apache.maven.api.plugin.annotations.Mojo(name = "create", projectRequired = false)
 public class WsCreateMojo implements Mojo {
@@ -270,7 +270,7 @@ public class WsCreateMojo implements Mojo {
         yaml.append("subprojects:\n");
         yaml.append("  # Add subprojects with: mvn ws:add -Drepo=<git-url>\n\n");
         yaml.append("# Optional: IntelliJ project settings shared across collaborators.\n");
-        yaml.append("# Uncomment and set to have `ws:upgrade` enforce these values in\n");
+        yaml.append("# Uncomment and set to have `ws:scaffold-upgrade-*` enforce these values in\n");
         yaml.append("# .idea/misc.xml on every run. Useful when the project uses\n");
         yaml.append("# --enable-preview (set language-level to JDK_NN_PREVIEW).\n");
         yaml.append("# ide:\n");
@@ -364,7 +364,7 @@ public class WsCreateMojo implements Mojo {
         adoc.append("----\n");
         adoc.append("mvn ws:overview          # Workspace overview\n");
         adoc.append("mvn ws:add -Drepo=      # Add a subproject repo\n");
-        adoc.append("mvn ws:upgrade          # Upgrade workspace conventions\n");
+        adoc.append("mvn ws:scaffold-upgrade-draft   # Preview scaffold upgrades\n");
         adoc.append("----\n");
         return adoc.toString();
     }

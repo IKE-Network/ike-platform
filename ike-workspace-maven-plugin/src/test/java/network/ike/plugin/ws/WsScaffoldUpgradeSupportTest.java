@@ -7,17 +7,17 @@ import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Tests for pure functions extracted from {@link WsUpgradeDraftMojo}:
+ * Tests for pure functions extracted from {@link WsScaffoldUpgradeDraftMojo}:
  * sectioned {@code .gitignore} additions and {@code .idea/misc.xml}
  * attribute updates driven by {@link IdeSettings}.
  */
-class WsUpgradeSupportTest {
+class WsScaffoldUpgradeSupportTest {
 
     // ── computeGitignoreAdditions ──────────────────────────────────────
 
     @Test
     void gitignore_emptyInputGetsAllSectionsWithHeaders() {
-        String additions = WsUpgradeDraftMojo.computeGitignoreAdditions("");
+        String additions = WsScaffoldUpgradeDraftMojo.computeGitignoreAdditions("");
         assertThat(additions)
                 .contains("# ── Whitelist workspace-level files")
                 .contains("# ── Whitelist workspace-owned directories")
@@ -53,7 +53,7 @@ class WsUpgradeSupportTest {
                 !.idea/encodings.xml
                 !.idea/jarRepositories.xml
                 """;
-        assertThat(WsUpgradeDraftMojo.computeGitignoreAdditions(existing)).isEmpty();
+        assertThat(WsScaffoldUpgradeDraftMojo.computeGitignoreAdditions(existing)).isEmpty();
     }
 
     @Test
@@ -69,7 +69,7 @@ class WsUpgradeSupportTest {
                 !checkpoints/
                 !checkpoints/**
                 """;
-        String additions = WsUpgradeDraftMojo.computeGitignoreAdditions(existing);
+        String additions = WsScaffoldUpgradeDraftMojo.computeGitignoreAdditions(existing);
         assertThat(additions)
                 .contains("# ── IntelliJ project config (curated slice)")
                 .contains("!.idea/\n")
@@ -96,7 +96,7 @@ class WsUpgradeSupportTest {
                 !.idea/
                 !.idea/misc.xml
                 """;
-        String additions = WsUpgradeDraftMojo.computeGitignoreAdditions(existing);
+        String additions = WsScaffoldUpgradeDraftMojo.computeGitignoreAdditions(existing);
         assertThat(additions)
                 .doesNotContain("# ── IntelliJ project config")
                 .contains("!.idea/.gitignore\n")
@@ -120,7 +120,7 @@ class WsUpgradeSupportTest {
                 !checkpoints/
                 !checkpoints/**
                 """;
-        String additions = WsUpgradeDraftMojo.computeGitignoreAdditions(existing);
+        String additions = WsScaffoldUpgradeDraftMojo.computeGitignoreAdditions(existing);
         assertThat(additions).contains("!.mvn/\n");
     }
 
@@ -146,7 +146,7 @@ class WsUpgradeSupportTest {
                 !.idea/encodings.xml
                 !.idea/jarRepositories.xml
                 """;
-        String additions = WsUpgradeDraftMojo.computeGitignoreAdditions(existing);
+        String additions = WsScaffoldUpgradeDraftMojo.computeGitignoreAdditions(existing);
         assertThat(additions)
                 .contains("!.gitattributes\n")
                 .doesNotContain("# ── Whitelist workspace-level files");
@@ -156,7 +156,7 @@ class WsUpgradeSupportTest {
 
     @Test
     void gitattributes_emptyInputGetsHeaderAndAllRules() {
-        String additions = WsUpgradeDraftMojo.computeGitattributesAdditions("");
+        String additions = WsScaffoldUpgradeDraftMojo.computeGitattributesAdditions("");
         assertThat(additions)
                 .contains("# Line-ending policy")
                 .contains("*.cmd  text eol=crlf\n")
@@ -178,7 +178,7 @@ class WsUpgradeSupportTest {
                 mvnw   text eol=lf
                 * text=auto
                 """;
-        assertThat(WsUpgradeDraftMojo.computeGitattributesAdditions(existing)).isEmpty();
+        assertThat(WsScaffoldUpgradeDraftMojo.computeGitattributesAdditions(existing)).isEmpty();
     }
 
     @Test
@@ -191,7 +191,7 @@ class WsUpgradeSupportTest {
                 # user's own preamble
                 *.cmd text eol=crlf
                 """;
-        String additions = WsUpgradeDraftMojo.computeGitattributesAdditions(existing);
+        String additions = WsScaffoldUpgradeDraftMojo.computeGitattributesAdditions(existing);
         assertThat(additions)
                 .doesNotContain("# Line-ending policy")   // no duplicate header
                 .doesNotContain("*.cmd")                    // already present
@@ -213,7 +213,7 @@ class WsUpgradeSupportTest {
                 mvnw text eol=lf
                 * text=auto
                 """;
-        assertThat(WsUpgradeDraftMojo.computeGitattributesAdditions(existing)).isEmpty();
+        assertThat(WsScaffoldUpgradeDraftMojo.computeGitattributesAdditions(existing)).isEmpty();
     }
 
     @Test
@@ -228,7 +228,7 @@ class WsUpgradeSupportTest {
                 *.sh   text eol=lf
                 mvnw   text eol=lf
                 """;
-        String additions = WsUpgradeDraftMojo.computeGitattributesAdditions(existing);
+        String additions = WsScaffoldUpgradeDraftMojo.computeGitattributesAdditions(existing);
         assertThat(additions).contains("* text=auto\n");
     }
 
@@ -245,7 +245,7 @@ class WsUpgradeSupportTest {
     @Test
     void ideSettings_updatesLanguageLevelWhenDifferent() {
         IdeSettings ide = new IdeSettings("JDK_25_PREVIEW", null);
-        String updated = WsUpgradeDraftMojo.applyIdeSettings(MISC_XML_JDK_25, ide);
+        String updated = WsScaffoldUpgradeDraftMojo.applyIdeSettings(MISC_XML_JDK_25, ide);
         assertThat(updated).contains("languageLevel=\"JDK_25_PREVIEW\"");
         assertThat(updated).doesNotContain("languageLevel=\"JDK_25\"");
         // Other attributes untouched
@@ -255,14 +255,14 @@ class WsUpgradeSupportTest {
     @Test
     void ideSettings_idempotentWhenLanguageLevelMatches() {
         IdeSettings ide = new IdeSettings("JDK_25", null);
-        String updated = WsUpgradeDraftMojo.applyIdeSettings(MISC_XML_JDK_25, ide);
+        String updated = WsScaffoldUpgradeDraftMojo.applyIdeSettings(MISC_XML_JDK_25, ide);
         assertThat(updated).isEqualTo(MISC_XML_JDK_25);
     }
 
     @Test
     void ideSettings_updatesJdkNameWhenProvided() {
         IdeSettings ide = new IdeSettings(null, "corretto-25");
-        String updated = WsUpgradeDraftMojo.applyIdeSettings(MISC_XML_JDK_25, ide);
+        String updated = WsScaffoldUpgradeDraftMojo.applyIdeSettings(MISC_XML_JDK_25, ide);
         assertThat(updated).contains("project-jdk-name=\"corretto-25\"");
         assertThat(updated).doesNotContain("project-jdk-name=\"25\" ");
         // languageLevel untouched when only jdkName specified
@@ -272,14 +272,14 @@ class WsUpgradeSupportTest {
     @Test
     void ideSettings_updatesBothWhenBothProvided() {
         IdeSettings ide = new IdeSettings("JDK_21", "temurin-21");
-        String updated = WsUpgradeDraftMojo.applyIdeSettings(MISC_XML_JDK_25, ide);
+        String updated = WsScaffoldUpgradeDraftMojo.applyIdeSettings(MISC_XML_JDK_25, ide);
         assertThat(updated).contains("languageLevel=\"JDK_21\"");
         assertThat(updated).contains("project-jdk-name=\"temurin-21\"");
     }
 
     @Test
     void ideSettings_emptyIsNoOp() {
-        String updated = WsUpgradeDraftMojo.applyIdeSettings(MISC_XML_JDK_25, IdeSettings.EMPTY);
+        String updated = WsScaffoldUpgradeDraftMojo.applyIdeSettings(MISC_XML_JDK_25, IdeSettings.EMPTY);
         assertThat(updated).isEqualTo(MISC_XML_JDK_25);
     }
 
@@ -291,7 +291,7 @@ class WsUpgradeSupportTest {
                   <component name="SomethingElse" value="foo" />
                 </project>
                 """;
-        String updated = WsUpgradeDraftMojo.applyIdeSettings(
+        String updated = WsScaffoldUpgradeDraftMojo.applyIdeSettings(
                 other, new IdeSettings("JDK_25_PREVIEW", null));
         assertThat(updated).isEqualTo(other);
     }

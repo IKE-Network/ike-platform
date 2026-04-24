@@ -568,8 +568,8 @@ public class InitWorkspaceMojo extends AbstractWorkspaceMojo {
                 | `ws:fix` | Sync workspace.yaml versions from actual POMs |
                 | `ws:graph` | Print dependency graph (text or DOT format) |
                 | `ws:stignore` | Generate Syncthing ignore rules |
-                | `ws:upgrade-draft` | Preview workspace convention upgrades |
-                | `ws:upgrade-publish` | Apply convention upgrades |
+                | `ws:scaffold-upgrade-draft` | Preview workspace scaffold upgrades |
+                | `ws:scaffold-upgrade-publish` | Apply scaffold upgrades |
                 | `ws:remove` | Remove a subproject (prompts for name) |
                 | `ws:help` | List all ws: goals with descriptions |
 
@@ -729,7 +729,7 @@ public class InitWorkspaceMojo extends AbstractWorkspaceMojo {
                 | `ws:verify-convergence` | Full verify + transitive convergence |
                 | `ws:overview` | Dashboard: manifest, graph, status, cascade |
                 | `ws:fix` | Auto-fix issues found by verify |
-                | `ws:upgrade-draft` / `-publish` | Convention upgrades for new plugin version |
+                | `ws:scaffold-upgrade-draft` / `-publish` | Scaffold upgrades for new plugin version |
                 | `ws:pull` | Git pull --rebase across components |
 
                 ---

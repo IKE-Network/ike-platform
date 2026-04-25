@@ -51,9 +51,11 @@ import java.util.Map;
  * top-level check (intended for scripted recovery; the plan applier
  * still re-validates each {@code from-version} per entry).
  *
- * <p>The plan file is left in place after a successful publish so the
- * caller can re-run for documentation or incorporate it into a
- * release commit message. Pass {@code -DdeletePlan=true} to remove it.
+ * <p>On success the plan file is deleted — the goal completes its
+ * effect rather than leaving a transient artifact in the workspace
+ * root. Re-run {@code ws:versions-upgrade-draft} to regenerate it.
+ * The markdown report written via {@code writeReport(...)} is the
+ * durable record of what was applied.
  *
  * <p>Each subproject is edited in place but not committed — review
  * the changes per subproject and use {@code ws:commit} to land them
@@ -81,12 +83,6 @@ public class WsVersionsUpgradePublishMojo extends AbstractWorkspaceMojo {
      */
     @Parameter(property = "forceStale", defaultValue = "false")
     boolean forceStale;
-
-    /**
-     * If true, delete the plan file after a successful publish.
-     */
-    @Parameter(property = "deletePlan", defaultValue = "false")
-    boolean deletePlan;
 
     /** Creates this goal instance. */
     public WsVersionsUpgradePublishMojo() {}
@@ -122,14 +118,12 @@ public class WsVersionsUpgradePublishMojo extends AbstractWorkspaceMojo {
 
         List<NodeOutcome> outcomes = applyPlan(plan, nodePoms);
 
-        if (deletePlan) {
-            try {
-                Files.deleteIfExists(planPath);
-                getLog().info("Deleted plan: " + planPath);
-            } catch (IOException e) {
-                getLog().warn("Could not delete plan " + planPath
-                        + ": " + e.getMessage());
-            }
+        try {
+            Files.deleteIfExists(planPath);
+            getLog().info("Removed plan file: " + planPath);
+        } catch (IOException e) {
+            getLog().warn("Could not delete plan " + planPath
+                    + ": " + e.getMessage());
         }
 
         logSummary(outcomes, planPath);

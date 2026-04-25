@@ -109,7 +109,13 @@ public enum WsGoal {
     VERIFY("verify", VerifyWorkspaceMojo.class,
             "Verify workspace invariants (parent skew, qualifier drift)."),
     VERIFY_CONVERGENCE("verify-convergence", VerifyConvergenceMojo.class,
-            "Verify transitive dependency convergence across subprojects.");
+            "Verify transitive dependency convergence across subprojects."),
+    VERSIONS_UPGRADE_DRAFT("versions-upgrade-draft",
+            WsVersionsUpgradeDraftMojo.class,
+            "Preview version upgrades across the workspace against the configured ruleset."),
+    VERSIONS_UPGRADE_PUBLISH("versions-upgrade-publish",
+            WsVersionsUpgradePublishMojo.class,
+            "Apply the workspace version-upgrade plan across all subprojects.");
 
     /** Shared {@code ws:} prefix for all goals in this plugin. */
     public static final String PLUGIN_PREFIX = "ws";

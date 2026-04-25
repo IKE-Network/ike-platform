@@ -61,6 +61,12 @@ import java.util.Map;
  * the changes per subproject and use {@code ws:commit} to land them
  * in coordinated form.
  *
+ * <p><strong>Missing plan is a clean no-op.</strong> When the
+ * resolved {@code planFile} does not exist on disk, the goal logs
+ * {@code "no plan for <workspace>"} at info level and returns
+ * success. A missing plan is indistinguishable from "nothing to do"
+ * and should not fail the workflow.
+ *
  * @see WsVersionsUpgradeDraftMojo
  */
 @Mojo(name = "versions-upgrade-publish", projectRequired = false,
@@ -94,10 +100,9 @@ public class WsVersionsUpgradePublishMojo extends AbstractWorkspaceMojo {
         Path planPath = resolvePlanPath(workspaceRootPath);
 
         if (!Files.isRegularFile(planPath)) {
-            throw new MojoException(
-                    "Plan not found: " + planPath
-                            + "\n  Run ws:versions-upgrade-draft first,"
-                            + " or set -DplanFile=<path>.");
+            getLog().info("no plan for " + workspaceName()
+                    + " (" + planPath + ") — nothing to publish.");
+            return;
         }
 
         VersionUpgradePlan plan = readPlan(planPath);

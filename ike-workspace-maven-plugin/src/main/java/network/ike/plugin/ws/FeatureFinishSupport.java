@@ -711,14 +711,16 @@ class FeatureFinishSupport {
                     }
                 }
 
-                // Strip qualified parent version
+                // Strip qualified parent version (#241: match full GA)
                 var parent = model.parent();
                 if (parent != null
                         && containsBranchQualifier(parent.getVersion(), qualifier)) {
                     String base = stripQualifier(parent.getVersion(), qualifier);
                     updated = PomModel.updateParentVersion(
-                            updated, parent.getArtifactId(), base);
-                    log.debug("    parent " + parent.getArtifactId()
+                            updated, parent.getGroupId(),
+                            parent.getArtifactId(), base);
+                    log.debug("    parent " + parent.getGroupId() + ":"
+                            + parent.getArtifactId()
                             + ": " + parent.getVersion() + " → " + base
                             + " in " + pom.getName());
                 }

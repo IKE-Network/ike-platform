@@ -64,15 +64,23 @@ final class PomRewriter {
     }
 
     /**
-     * Update the parent version for a matching artifactId in the
-     * POM's {@code <parent>} block.
+     * Update the parent version for a matching
+     * {@code groupId:artifactId} in the POM's {@code <parent>} block.
+     *
+     * <p>Matching requires <strong>both</strong> groupId and
+     * artifactId to match. This prevents cross-coordinate mutation
+     * when the same artifactId lives under multiple groupIds
+     * (e.g. {@code network.ike.platform:ike-parent} vs.
+     * {@code network.ike.pipeline:ike-parent}) — see issue #241.
      *
      * @param pomContent       the raw POM text
-     * @param parentArtifactId the parent artifactId to match
+     * @param parentGroupId    the parent groupId to match (required)
+     * @param parentArtifactId the parent artifactId to match (required)
      * @param newVersion       the new version to set
      * @return updated POM text, or unchanged if no match
      */
     static String updateParentVersion(String pomContent,
+                                       String parentGroupId,
                                        String parentArtifactId,
                                        String newVersion) {
         Xml.Document doc = parse(pomContent);
@@ -84,8 +92,10 @@ final class PomRewriter {
                 Xml.Tag t = (Xml.Tag) super.visitTag(tag, ctx);
                 if (!"parent".equals(t.getName())) return t;
 
+                String gid = t.getChildValue("groupId").orElse(null);
                 String aid = t.getChildValue("artifactId").orElse(null);
-                if (parentArtifactId.equals(aid)) {
+                if (parentGroupId.equals(gid)
+                        && parentArtifactId.equals(aid)) {
                     return t.withChildValue("version", newVersion);
                 }
                 return t;

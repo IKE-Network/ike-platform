@@ -4,9 +4,6 @@ import org.apache.maven.api.di.Inject;
 import org.apache.maven.api.plugin.Log;
 import org.apache.maven.api.plugin.Mojo;
 import org.apache.maven.api.plugin.MojoException;
-import org.apache.maven.api.plugin.annotations.Parameter;
-import org.apache.maven.api.plugin.descriptor.MojoDescriptor;
-import org.apache.maven.api.plugin.descriptor.PluginDescriptor;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -15,13 +12,18 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Displays available ws: workspace goals, auto-discovered from the
- * Maven plugin descriptor.
+ * Displays available ws: workspace goals, enumerated from the
+ * compile-time {@link WsGoal} registry.
  *
- * <p>Goal names and descriptions are read from the
- * {@link PluginDescriptor} injected by Maven at runtime, so the help
- * output is always in sync with the actual plugin — no manual list to
- * maintain.
+ * <p>Goal names and descriptions come from the {@link WsGoal} enum,
+ * which is the single source of truth for every {@code ws:} goal in
+ * this plugin. The compiler enforces that every mojo has a matching
+ * enum entry, so the help output cannot drift from the actual plugin.
+ *
+ * <p>This used to read from the Maven {@code PluginDescriptor}, but
+ * Maven 4.0.0-rc-5 does not bind {@code PluginDescriptor} in the DI
+ * container, causing a startup crash. Iterating the enum is also
+ * type-safe — no string lookups, no runtime resolution.
  *
  * <p>Goals are categorized by prefix convention:
  * <ul>
@@ -41,10 +43,6 @@ public class WsHelpMojo implements Mojo {
     /** Maven logger, injected by the Maven 4 DI container. */
     @Inject
     private Log log;
-
-    /** The plugin descriptor, injected by Maven 4 DI. */
-    @Inject
-    PluginDescriptor pluginDescriptor;
 
     /** Creates this goal instance. */
     public WsHelpMojo() {}
@@ -83,58 +81,19 @@ public class WsHelpMojo implements Mojo {
     // ── Goal discovery ──────────────────────────────────────────
 
     /**
-     * Read goal names and descriptions from the Maven
-     * {@link PluginDescriptor} injected at runtime.
+     * Enumerate goal names and descriptions from the {@link WsGoal}
+     * registry. Each enum entry carries its own one-line description,
+     * so no parsing is required.
      *
      * @return list of discovered goals, sorted by name
      */
-    private List<GoalInfo> discoverGoals() {
+    private static List<GoalInfo> discoverGoals() {
         List<GoalInfo> goals = new ArrayList<>();
-
-        if (pluginDescriptor == null) {
-            getLog().warn("Plugin descriptor not available — "
-                    + "cannot discover goals");
-            return goals;
+        for (WsGoal goal : WsGoal.values()) {
+            goals.add(new GoalInfo(goal.goalName(), goal.description()));
         }
-
-        for (MojoDescriptor mojo : pluginDescriptor.getMojos()) {
-            String goal = mojo.getGoal();
-            if (goal == null || goal.isBlank()) continue;
-
-            String description = mojo.getDescription();
-            String summary = firstSentence(description);
-            goals.add(new GoalInfo(goal, summary));
-        }
-
         goals.sort(Comparator.comparing(g -> g.name));
         return goals;
-    }
-
-    /**
-     * Extract the first sentence from a description string.
-     * Trims at the first period followed by whitespace, or at 80 chars.
-     *
-     * @param description full description
-     * @return first sentence
-     */
-    private static String firstSentence(String description) {
-        if (description == null || description.isBlank()) {
-            return "";
-        }
-        // Collapse whitespace
-        String s = description.replaceAll("\\s+", " ").trim();
-
-        // Find first sentence break
-        int dot = s.indexOf(". ");
-        if (dot > 0 && dot < 80) {
-            return s.substring(0, dot + 1);
-        }
-
-        // Truncate if needed
-        if (s.length() > 80) {
-            return s.substring(0, 77) + "...";
-        }
-        return s;
     }
 
     // ── Categorization ──────────────────────────────────────────

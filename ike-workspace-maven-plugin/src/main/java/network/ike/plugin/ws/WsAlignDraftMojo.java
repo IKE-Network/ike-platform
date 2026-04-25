@@ -298,14 +298,17 @@ public class WsAlignDraftMojo extends AbstractWorkspaceMojo {
                     continue;
                 }
 
+                String parentGid = parentInfo.getGroupId();
                 String parentAid = parentInfo.getArtifactId();
                 if (draft) {
                     getLog().info("  " + name + ": parent " + parentAid
                             + " " + currentVersion + " → " + expectedVersion
                             + " (draft)");
                 } else {
+                    // #241: match full GA, not artifactId alone
                     String updated = PomModel.updateParentVersion(
-                            pom.content(), parentAid, expectedVersion);
+                            pom.content(), parentGid, parentAid,
+                            expectedVersion);
                     Files.writeString(pomPath, updated, StandardCharsets.UTF_8);
                     getLog().info("  " + name + ": parent " + parentAid
                             + " " + currentVersion + " → " + expectedVersion);
@@ -317,7 +320,8 @@ public class WsAlignDraftMojo extends AbstractWorkspaceMojo {
                         String subContent = Files.readString(
                                 subPom.toPath(), StandardCharsets.UTF_8);
                         String subUpdated = PomModel.updateParentVersion(
-                                subContent, parentAid, expectedVersion);
+                                subContent, parentGid, parentAid,
+                                expectedVersion);
                         if (!subUpdated.equals(subContent)) {
                             Files.writeString(subPom.toPath(), subUpdated,
                                     StandardCharsets.UTF_8);

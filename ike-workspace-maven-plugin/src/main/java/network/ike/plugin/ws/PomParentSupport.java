@@ -34,19 +34,25 @@ final class PomParentSupport {
     }
 
     /**
-     * Update the parent version for a matching artifactId.
-     * Delegates to {@link PomRewriter} for AST-aware manipulation.
+     * Update the parent version for a matching
+     * {@code groupId:artifactId}. Delegates to {@link PomRewriter}
+     * for AST-aware manipulation.
      *
-     * @param pomContent      POM XML as a string
+     * <p>Matching requires <strong>both</strong> groupId and
+     * artifactId to match — see issue #241.
+     *
+     * @param pomContent       POM XML as a string
+     * @param parentGroupId    the groupId to match in the parent block
      * @param parentArtifactId the artifactId to match in the parent block
-     * @param newVersion      the new version to set
+     * @param newVersion       the new version to set
      * @return updated POM content (unchanged if no match)
      */
     static String updateParentVersion(String pomContent,
+                                       String parentGroupId,
                                        String parentArtifactId,
                                        String newVersion) {
         return PomRewriter.updateParentVersion(
-                pomContent, parentArtifactId, newVersion);
+                pomContent, parentGroupId, parentArtifactId, newVersion);
     }
 
     /**

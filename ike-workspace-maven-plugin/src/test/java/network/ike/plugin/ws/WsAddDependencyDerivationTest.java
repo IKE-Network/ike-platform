@@ -187,6 +187,247 @@ class WsAddDependencyDerivationTest {
                 .contains("subproject: new-dep");
     }
 
+    // ── #239: BOM imports and plugin coords count as build edges ──
+
+    @Test
+    void forward_derivation_finds_dependency_via_bom_import() throws Exception {
+        // Register a BOM publisher (publishes com.example.bom:my-bom)
+        createSubprojectDir("my-bom", "com.example.bom", null, null);
+        addToManifest("my-bom", "com.example.bom");
+
+        // Create a consumer that imports my-bom inside dependencyManagement
+        Path consumerDir = tempDir.resolve("my-app");
+        Files.createDirectories(consumerDir);
+        writePom(consumerDir.resolve("pom.xml"), """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <project>
+                    <modelVersion>4.0.0</modelVersion>
+                    <groupId>com.example.app</groupId>
+                    <artifactId>my-app</artifactId>
+                    <version>1.0.0-SNAPSHOT</version>
+                    <dependencyManagement>
+                        <dependencies>
+                            <dependency>
+                                <groupId>com.example.bom</groupId>
+                                <artifactId>my-bom</artifactId>
+                                <version>1.0.0</version>
+                                <type>pom</type>
+                                <scope>import</scope>
+                            </dependency>
+                        </dependencies>
+                    </dependencyManagement>
+                </project>
+                """);
+
+        String derivedDeps = invokeDeriveForward(
+                tempDir, tempDir.resolve("workspace.yaml"),
+                consumerDir, "my-app");
+
+        assertThat(derivedDeps).isEqualTo("my-bom");
+    }
+
+    @Test
+    void forward_derivation_skips_plain_depMgmt_version_constraint() throws Exception {
+        // Register lib-x but consumer only declares it as a version constraint
+        // in dependencyManagement (no scope=import, no type=pom). This is just
+        // a version pin, not an edge — we should NOT match.
+        createSubprojectDir("lib-x", "com.example.lib", null, null);
+        addToManifest("lib-x", "com.example.lib");
+
+        Path consumerDir = tempDir.resolve("consumer");
+        Files.createDirectories(consumerDir);
+        writePom(consumerDir.resolve("pom.xml"), """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <project>
+                    <modelVersion>4.0.0</modelVersion>
+                    <groupId>com.example.app</groupId>
+                    <artifactId>consumer</artifactId>
+                    <version>1.0.0-SNAPSHOT</version>
+                    <dependencyManagement>
+                        <dependencies>
+                            <dependency>
+                                <groupId>com.example.lib</groupId>
+                                <artifactId>lib-x</artifactId>
+                                <version>1.0.0</version>
+                            </dependency>
+                        </dependencies>
+                    </dependencyManagement>
+                </project>
+                """);
+
+        String derivedDeps = invokeDeriveForward(
+                tempDir, tempDir.resolve("workspace.yaml"),
+                consumerDir, "consumer");
+
+        assertThat(derivedDeps).isNull();
+    }
+
+    @Test
+    void forward_derivation_finds_build_plugin_dependency() throws Exception {
+        // Register a plugin publisher
+        createSubprojectDir("my-build-plugin", "com.example.tooling", null, null);
+        addToManifest("my-build-plugin", "com.example.tooling");
+
+        Path consumerDir = tempDir.resolve("plugin-user");
+        Files.createDirectories(consumerDir);
+        writePom(consumerDir.resolve("pom.xml"), """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <project>
+                    <modelVersion>4.0.0</modelVersion>
+                    <groupId>com.example.app</groupId>
+                    <artifactId>plugin-user</artifactId>
+                    <version>1.0.0-SNAPSHOT</version>
+                    <build>
+                        <plugins>
+                            <plugin>
+                                <groupId>com.example.tooling</groupId>
+                                <artifactId>my-build-plugin</artifactId>
+                                <version>1.0.0</version>
+                            </plugin>
+                        </plugins>
+                    </build>
+                </project>
+                """);
+
+        String derivedDeps = invokeDeriveForward(
+                tempDir, tempDir.resolve("workspace.yaml"),
+                consumerDir, "plugin-user");
+
+        assertThat(derivedDeps).isEqualTo("my-build-plugin");
+    }
+
+    @Test
+    void forward_derivation_finds_dependency_inside_profile() throws Exception {
+        // Register lib-y; consumer references it only inside a profile.
+        createSubprojectDir("lib-y", "com.example.lib", null, null);
+        addToManifest("lib-y", "com.example.lib");
+
+        Path consumerDir = tempDir.resolve("profile-user");
+        Files.createDirectories(consumerDir);
+        writePom(consumerDir.resolve("pom.xml"), """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <project>
+                    <modelVersion>4.0.0</modelVersion>
+                    <groupId>com.example.app</groupId>
+                    <artifactId>profile-user</artifactId>
+                    <version>1.0.0-SNAPSHOT</version>
+                    <profiles>
+                        <profile>
+                            <id>extra</id>
+                            <dependencies>
+                                <dependency>
+                                    <groupId>com.example.lib</groupId>
+                                    <artifactId>lib-y</artifactId>
+                                </dependency>
+                            </dependencies>
+                        </profile>
+                    </profiles>
+                </project>
+                """);
+
+        String derivedDeps = invokeDeriveForward(
+                tempDir, tempDir.resolve("workspace.yaml"),
+                consumerDir, "profile-user");
+
+        assertThat(derivedDeps).isEqualTo("lib-y");
+    }
+
+    // ── #240: insertion point honours trailing top-level constructs ──
+
+    @Test
+    void insertionPoint_inserts_before_trailing_ide_comment_block() {
+        // The default ws:create template ends with a commented-out
+        // `# ide:` block. New subprojects must NOT be appended after
+        // that block (which would leave the comment trapped between
+        // entries and dangle the indented commented lines).
+        String yaml = """
+                schema-version: "1.0"
+
+                subprojects:
+                  # Add subprojects with: mvn ws:add -Drepo=<git-url>
+
+                # Optional: IntelliJ project settings shared across collaborators.
+                # ide:
+                #   language-level: JDK_25_PREVIEW
+                #   jdk-name: "25"
+                """;
+
+        int insertAt = WsAddMojo.findSubprojectsBlockInsertionPoint(yaml);
+
+        // Insertion point must land BEFORE the column-0 `# Optional` comment.
+        int optionalIdx = yaml.indexOf("# Optional");
+        assertThat(insertAt).isPositive().isLessThan(optionalIdx);
+
+        // Inserting an entry there preserves the trailing comment block intact.
+        String entry = "\n  newproj:\n    description: x\n    depends-on: []\n";
+        String updated = yaml.substring(0, insertAt) + entry
+                + yaml.substring(insertAt);
+
+        assertThat(updated)
+                .contains("newproj:")
+                .contains("# ide:")
+                .contains("#   language-level: JDK_25_PREVIEW");
+        // The new entry must appear before the # Optional block.
+        assertThat(updated.indexOf("newproj:"))
+                .isLessThan(updated.indexOf("# Optional"));
+    }
+
+    @Test
+    void insertionPoint_appends_after_existing_subprojects() {
+        String yaml = """
+                subprojects:
+                  # Add subprojects with: mvn ws:add -Drepo=<git-url>
+
+                  komet-bom:
+                    description: existing
+                    depends-on: []
+
+                # ide:
+                #   language-level: JDK_25_PREVIEW
+                """;
+
+        int insertAt = WsAddMojo.findSubprojectsBlockInsertionPoint(yaml);
+        String entry = "\n  newproj:\n    description: x\n    depends-on: []\n";
+        String updated = yaml.substring(0, insertAt) + entry
+                + yaml.substring(insertAt);
+
+        // The new entry sits after the existing komet-bom and before the
+        // trailing comment block.
+        int kometIdx = updated.indexOf("komet-bom:");
+        int newIdx = updated.indexOf("newproj:");
+        int ideIdx = updated.indexOf("# ide:");
+        assertThat(kometIdx).isLessThan(newIdx);
+        assertThat(newIdx).isLessThan(ideIdx);
+    }
+
+    @Test
+    void insertionPoint_handles_subprojects_at_eof() {
+        String yaml = """
+                schema-version: "1.0"
+
+                subprojects:
+                  # Add subprojects with: mvn ws:add -Drepo=<git-url>
+                """;
+
+        int insertAt = WsAddMojo.findSubprojectsBlockInsertionPoint(yaml);
+        // No trailing top-level construct — insertion point is end of
+        // the last non-blank line of the block (i.e. EOF here).
+        assertThat(insertAt).isEqualTo(yaml.length());
+    }
+
+    @Test
+    void insertionPoint_returns_negative_when_no_subprojects_key() {
+        String yaml = """
+                schema-version: "1.0"
+
+                defaults:
+                  branch: main
+                """;
+
+        assertThat(WsAddMojo.findSubprojectsBlockInsertionPoint(yaml))
+                .isEqualTo(-1);
+    }
+
     @Test
     void deriveSubprojectName_strips_git_suffix() {
         assertThat(WsAddMojo.deriveSubprojectName(

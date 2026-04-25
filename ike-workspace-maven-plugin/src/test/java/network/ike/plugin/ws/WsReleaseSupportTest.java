@@ -90,7 +90,7 @@ class WsReleaseSupportTest {
     // ── updateParentVersion ──────────────────────────────────────────
 
     @Test
-    void updateParentVersion_matchingArtifactId_updatesVersion() {
+    void updateParentVersion_matchingGa_updatesVersion() {
         String pom = """
                 <project>
                     <parent>
@@ -101,7 +101,8 @@ class WsReleaseSupportTest {
                     <artifactId>ike-platform</artifactId>
                 </project>
                 """;
-        String result = PomRewriter.updateParentVersion(pom, "ike-parent", "21-SNAPSHOT");
+        String result = PomRewriter.updateParentVersion(
+                pom, "network.ike", "ike-parent", "21-SNAPSHOT");
 
         assertThat(result)
                 .contains("<version>21-SNAPSHOT</version>")
@@ -119,9 +120,35 @@ class WsReleaseSupportTest {
                     </parent>
                 </project>
                 """;
-        String result = PomRewriter.updateParentVersion(pom, "other-parent", "21-SNAPSHOT");
+        String result = PomRewriter.updateParentVersion(
+                pom, "network.ike", "other-parent", "21-SNAPSHOT");
 
         assertThat(result).contains("<version>19-SNAPSHOT</version>");
+    }
+
+    /**
+     * Regression guard for issue #241. When two unrelated groupIds
+     * share an artifactId (e.g. {@code network.ike.platform:ike-parent}
+     * and {@code network.ike.pipeline:ike-parent}), targeting one
+     * must not mutate the other.
+     */
+    @Test
+    void updateParentVersion_matchingArtifactIdButDifferentGroupId_unchanged() {
+        String pom = """
+                <project>
+                    <parent>
+                        <groupId>network.ike.pipeline</groupId>
+                        <artifactId>ike-parent</artifactId>
+                        <version>111</version>
+                    </parent>
+                </project>
+                """;
+        // Target is the ike-platform parent — pipeline parent must stay put.
+        String result = PomRewriter.updateParentVersion(
+                pom, "network.ike.platform", "ike-parent", "2");
+
+        assertThat(result).contains("<version>111</version>")
+                .doesNotContain("<version>2</version>");
     }
 
     @Test
@@ -137,7 +164,8 @@ class WsReleaseSupportTest {
                     <version>1.0.0</version>
                 </project>
                 """;
-        String result = PomRewriter.updateParentVersion(pom, "ike-parent", "21-SNAPSHOT");
+        String result = PomRewriter.updateParentVersion(
+                pom, "network.ike", "ike-parent", "21-SNAPSHOT");
 
         assertThat(result)
                 .contains("<version>21-SNAPSHOT</version>")
@@ -155,7 +183,8 @@ class WsReleaseSupportTest {
                     </parent>
                 </project>
                 """;
-        String result = PomRewriter.updateParentVersion(pom, "ike-build-tools", "6-SNAPSHOT");
+        String result = PomRewriter.updateParentVersion(
+                pom, "network.ike", "ike-build-tools", "6-SNAPSHOT");
 
         assertThat(result).contains("<version>6-SNAPSHOT</version>");
     }
@@ -403,7 +432,8 @@ class WsReleaseSupportTest {
                     <version>1.0</version>
                 </project>
                 """;
-        String result = PomRewriter.updateParentVersion(pom, "ike-parent", "21-SNAPSHOT");
+        String result = PomRewriter.updateParentVersion(
+                pom, "network.ike", "ike-parent", "21-SNAPSHOT");
 
         // No parent block → no change
         assertThat(result).isEqualTo(pom);
@@ -414,6 +444,7 @@ class WsReleaseSupportTest {
         String pom = """
                 <project>
                     <parent>
+                        <groupId>network.ike</groupId>
                         <artifactId>ike-parent</artifactId>
                         <version>19</version>
                     </parent>
@@ -421,13 +452,15 @@ class WsReleaseSupportTest {
                     <version>1.0</version>
                     <dependencies>
                         <dependency>
+                            <groupId>network.ike</groupId>
                             <artifactId>ike-parent</artifactId>
                             <version>19</version>
                         </dependency>
                     </dependencies>
                 </project>
                 """;
-        String result = PomRewriter.updateParentVersion(pom, "ike-parent", "21");
+        String result = PomRewriter.updateParentVersion(
+                pom, "network.ike", "ike-parent", "21");
 
         // Parent version should be updated, but the dependency version should not
         // (updateParentVersion only modifies the parent block)

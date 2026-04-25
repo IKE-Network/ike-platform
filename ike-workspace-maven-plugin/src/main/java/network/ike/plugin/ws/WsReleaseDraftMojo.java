@@ -632,7 +632,8 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
                     if (!pomPath.startsWith(rcDir)) continue;
                     String before = pomContent.computeIfAbsent(pomPath, this::readPomContent);
                     String after = PomRewriter.updateParentVersion(
-                            before, ap.ga().artifactId(), ap.releaseValue());
+                            before, ap.ga().groupId(), ap.ga().artifactId(),
+                            ap.releaseValue());
                     if (!after.equals(before)) {
                         pomContent.put(pomPath, after);
                         getLog().info("    " + rc.name + " ("
@@ -644,10 +645,20 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
             }
 
             // ── 3. Out-of-cascade catch-up ──────────────────────────
+            // Read the RC's root <parent> block once so the catch-up
+            // match can require BOTH groupId and artifactId (#241).
             Set<String> inPlan = plan.artifacts().values().stream()
                     .map(ArtifactReleasePlan::producingSubproject)
                     .collect(Collectors.toSet());
             Path rootPom = rcDir.resolve("pom.xml");
+            PomParentSupport.ParentInfo rootPomParent;
+            try {
+                rootPomParent = PomParentSupport.readParent(rootPom);
+            } catch (IOException e) {
+                getLog().warn("    " + rc.name + ": cannot read root"
+                        + " <parent> for catch-up — " + e.getMessage());
+                rootPomParent = null;
+            }
             for (network.ike.workspace.Dependency dep : rc.subproject.dependsOn()) {
                 if (inPlan.contains(dep.subproject())) continue;
                 String target = upstreamTargetVersion(
@@ -658,17 +669,26 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
                     continue;
                 }
                 String before = pomContent.computeIfAbsent(rootPom, this::readPomContent);
-                String after = PomRewriter.updateParentVersion(
-                        before, dep.subproject(), target);
-                if (!after.equals(before)) {
-                    pomContent.put(rootPom, after);
-                    getLog().info("    " + rc.name + ": parent "
-                            + dep.subproject() + " → " + target
-                            + " (out-of-cascade catch-up)");
-                    before = after;
+                // Only update the root <parent> when the dep's
+                // subproject name matches the root parent's artifactId.
+                // The full GA is then used for the rewrite so unrelated
+                // groupIds with the same artifactId aren't touched (#241).
+                if (rootPomParent != null
+                        && dep.subproject().equals(rootPomParent.artifactId())) {
+                    String after = PomRewriter.updateParentVersion(
+                            before, rootPomParent.groupId(),
+                            rootPomParent.artifactId(), target);
+                    if (!after.equals(before)) {
+                        pomContent.put(rootPom, after);
+                        getLog().info("    " + rc.name + ": parent "
+                                + rootPomParent.groupId() + ":"
+                                + rootPomParent.artifactId() + " → "
+                                + target + " (out-of-cascade catch-up)");
+                        before = after;
+                    }
                 }
                 if (dep.versionProperty() != null) {
-                    after = PomRewriter.updateProperty(
+                    String after = PomRewriter.updateProperty(
                             before, dep.versionProperty(), target);
                     if (!after.equals(before)) {
                         pomContent.put(rootPom, after);

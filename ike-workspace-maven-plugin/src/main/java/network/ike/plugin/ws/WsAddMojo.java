@@ -362,12 +362,81 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
             entry.append("    depends-on: []\n");
         }
 
-        // Append at end of file — groups:/component-types: are no longer
-        // part of the schema (#167, #150), so there is no section to
-        // insert before.
-        yaml = yaml + entry;
+        // Insert at the end of the subprojects: block, before any
+        // trailing top-level constructs (e.g. the `# ide:` template
+        // comment, or a future `ide:` key). #240
+        int insertAt = findSubprojectsBlockInsertionPoint(yaml);
+        if (insertAt < 0) {
+            // No subprojects: key found — append at EOF as fallback.
+            yaml = yaml + entry;
+        } else {
+            yaml = yaml.substring(0, insertAt) + entry + yaml.substring(insertAt);
+        }
 
         Files.writeString(manifestPath, yaml, StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Locate the position inside {@code workspace.yaml} where a new
+     * subproject entry should be inserted. The entry belongs at the
+     * end of the {@code subprojects:} block — after any existing
+     * subproject entries (and the placeholder comment) — and before
+     * any subsequent top-level construct such as a comment block or
+     * a sibling top-level key (e.g. {@code ide:}).
+     *
+     * <p>Operationally: find the {@code subprojects:} line, scan
+     * forward through indented and blank lines (which belong to the
+     * block), and stop at the first column-0 non-blank line. The
+     * insertion point is the byte offset right after the last
+     * non-blank line of the block.
+     *
+     * @param yaml the current manifest text
+     * @return offset to insert before, or {@code -1} if no
+     *         {@code subprojects:} key was found
+     */
+    static int findSubprojectsBlockInsertionPoint(String yaml) {
+        // Locate the subprojects: line.
+        int subprojectsLineStart = -1;
+        int pos = 0;
+        while (pos < yaml.length()) {
+            int eol = yaml.indexOf('\n', pos);
+            if (eol < 0) eol = yaml.length();
+            String line = yaml.substring(pos, eol);
+            if (line.startsWith("subprojects:")) {
+                subprojectsLineStart = pos;
+                pos = (eol < yaml.length()) ? eol + 1 : eol;
+                break;
+            }
+            pos = (eol < yaml.length()) ? eol + 1 : eol;
+        }
+        if (subprojectsLineStart < 0) return -1;
+
+        // Walk forward: indented and blank lines belong to the block;
+        // a column-0 non-blank line ends it. Track the end-offset of
+        // the last non-blank line so the insertion point is just after it.
+        int lastNonBlankEnd = pos;
+        while (pos < yaml.length()) {
+            int eol = yaml.indexOf('\n', pos);
+            boolean hasNewline = eol >= 0;
+            if (eol < 0) eol = yaml.length();
+            String line = yaml.substring(pos, eol);
+            int nextStart = hasNewline ? eol + 1 : eol;
+
+            if (line.isBlank()) {
+                // Could be inside the block or trailing — keep scanning.
+            } else if (!Character.isWhitespace(line.charAt(0))) {
+                // Reached the next top-level construct — stop.
+                return lastNonBlankEnd;
+            } else {
+                // Indented content line — extend the block.
+                lastNonBlankEnd = nextStart;
+            }
+            pos = nextStart;
+            if (!hasNewline) break;
+        }
+
+        // Hit EOF before another top-level construct.
+        return lastNonBlankEnd;
     }
 
     /**
@@ -646,9 +715,14 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
      * resolves Maven property references ({@code ${property.name}})
      * from the POM's {@code <properties>} section.
      *
-     * <p>Scans {@code <parent>} and {@code <dependencies>} blocks,
-     * but excludes {@code <dependencyManagement>} (which contains
-     * BOM imports and version constraints, not build dependencies).
+     * <p>Scans {@code <parent>}, {@code <dependencies>}, BOM imports
+     * inside {@code <dependencyManagement>} (entries with both
+     * {@code <scope>import</scope>} and {@code <type>pom</type>}), and
+     * build {@code <plugins>} (including {@code <pluginManagement>}).
+     * Profile-scoped versions of these are scanned as well, since any
+     * profile activation makes those dependencies real. Plain
+     * version-constraint entries inside {@code <dependencyManagement>}
+     * are excluded — they aren't build edges by themselves. (#239)
      *
      * @return set of "groupId:artifactId" strings
      */
@@ -681,25 +755,15 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
         // Read <properties> for ${...} resolution
         Map<String, String> properties = readProperties(project);
 
-        // Extract parent groupId:artifactId
-        Element parentEl = firstChild(project, "parent");
-        if (parentEl != null) {
-            String gid = resolve(childText(parentEl, "groupId"), properties);
-            String aid = resolve(childText(parentEl, "artifactId"), properties);
-            if (gid != null && aid != null) {
-                artifacts.add(gid + ":" + aid);
-            }
-        }
+        // Scan the project root for parent/deps/BOMs/plugins.
+        collectArtifactsFromContainer(project, properties, artifacts);
 
-        // Extract dependency groupId:artifactId — skip dependencyManagement
-        Element depsEl = firstChild(project, "dependencies");
-        if (depsEl != null) {
-            for (Element dep : children(depsEl, "dependency")) {
-                String gid = resolve(childText(dep, "groupId"), properties);
-                String aid = resolve(childText(dep, "artifactId"), properties);
-                if (gid != null && aid != null) {
-                    artifacts.add(gid + ":" + aid);
-                }
+        // Scan each profile body — a profile's deps/plugins become real
+        // when it activates, so they're legitimate build edges.
+        Element profilesEl = firstChild(project, "profiles");
+        if (profilesEl != null) {
+            for (Element profile : children(profilesEl, "profile")) {
+                collectArtifactsFromContainer(profile, properties, artifacts);
             }
         }
 
@@ -720,6 +784,106 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
                 String name = mod.getTextContent().trim();
                 scanPomForArtifacts(pomDir.resolve(name).resolve("pom.xml"), artifacts);
             }
+        }
+    }
+
+    /**
+     * Pull groupId:artifactId pairs out of a container element — either
+     * a {@code <project>} root or a {@code <profile>} body. Reads:
+     * <ul>
+     *   <li>{@code <parent>}</li>
+     *   <li>{@code <dependencies><dependency>}</li>
+     *   <li>{@code <dependencyManagement><dependencies><dependency>} —
+     *       BOM imports only ({@code <scope>import</scope>} with
+     *       {@code <type>pom</type>})</li>
+     *   <li>{@code <build><plugins><plugin>}</li>
+     *   <li>{@code <build><pluginManagement><plugins><plugin>}</li>
+     * </ul>
+     *
+     * @param container  the {@code <project>} or {@code <profile>} element
+     * @param properties resolved {@code <properties>} for {@code ${...}} references
+     * @param artifacts  accumulator for discovered "groupId:artifactId" strings
+     */
+    static void collectArtifactsFromContainer(
+            Element container,
+            Map<String, String> properties,
+            Set<String> artifacts) {
+
+        // <parent> — present on project root; profiles don't allow it.
+        addArtifactCoords(firstChild(container, "parent"), properties, artifacts);
+
+        // Direct build dependencies.
+        Element depsEl = firstChild(container, "dependencies");
+        if (depsEl != null) {
+            for (Element dep : children(depsEl, "dependency")) {
+                addArtifactCoords(dep, properties, artifacts);
+            }
+        }
+
+        // BOM imports — entries declared with scope=import + type=pom.
+        // Plain version-constraint entries are skipped (they don't bind
+        // anything until something else declares the dep).
+        Element depMgmt = firstChild(container, "dependencyManagement");
+        if (depMgmt != null) {
+            Element dmDeps = firstChild(depMgmt, "dependencies");
+            if (dmDeps != null) {
+                for (Element dep : children(dmDeps, "dependency")) {
+                    String scope = resolve(childText(dep, "scope"), properties);
+                    String type = resolve(childText(dep, "type"), properties);
+                    if ("import".equals(scope) && "pom".equals(type)) {
+                        addArtifactCoords(dep, properties, artifacts);
+                    }
+                }
+            }
+        }
+
+        // Build plugins — both top-level <plugins> and <pluginManagement>.
+        Element build = firstChild(container, "build");
+        if (build != null) {
+            addPluginCoords(firstChild(build, "plugins"), properties, artifacts);
+            Element pluginMgmt = firstChild(build, "pluginManagement");
+            if (pluginMgmt != null) {
+                addPluginCoords(firstChild(pluginMgmt, "plugins"),
+                        properties, artifacts);
+            }
+        }
+    }
+
+    /**
+     * Add every {@code <plugin>} child of the given {@code <plugins>}
+     * element to the artifact accumulator. No-op if {@code pluginsEl}
+     * is null.
+     *
+     * @param pluginsEl  the {@code <plugins>} element, or null
+     * @param properties resolved {@code <properties>} for property substitution
+     * @param artifacts  accumulator
+     */
+    private static void addPluginCoords(Element pluginsEl,
+                                        Map<String, String> properties,
+                                        Set<String> artifacts) {
+        if (pluginsEl == null) return;
+        for (Element plugin : children(pluginsEl, "plugin")) {
+            addArtifactCoords(plugin, properties, artifacts);
+        }
+    }
+
+    /**
+     * Resolve an element's {@code <groupId>}/{@code <artifactId>} pair
+     * (with property substitution) and add it to the accumulator. No-op
+     * if {@code el} is null or either coord is missing.
+     *
+     * @param el         the element with groupId/artifactId children
+     * @param properties resolved {@code <properties>} for property substitution
+     * @param artifacts  accumulator
+     */
+    private static void addArtifactCoords(Element el,
+                                          Map<String, String> properties,
+                                          Set<String> artifacts) {
+        if (el == null) return;
+        String gid = resolve(childText(el, "groupId"), properties);
+        String aid = resolve(childText(el, "artifactId"), properties);
+        if (gid != null && aid != null) {
+            artifacts.add(gid + ":" + aid);
         }
     }
 

@@ -213,16 +213,21 @@ final class PomModel {
      * Update the parent version in a POM's {@code <parent>} block.
      * Uses OpenRewrite LST for element-order-tolerant matching.
      *
-     * @param pomContent      the raw POM text
+     * <p>Matching requires <strong>both</strong> groupId and
+     * artifactId to match — see issue #241.
+     *
+     * @param pomContent       the raw POM text
+     * @param parentGroupId    the parent groupId to match
      * @param parentArtifactId the parent artifactId to match
-     * @param newVersion      the new version to set
+     * @param newVersion       the new version to set
      * @return updated POM text, or unchanged if no match
      */
     static String updateParentVersion(String pomContent,
+                                       String parentGroupId,
                                        String parentArtifactId,
                                        String newVersion) {
         return PomRewriter.updateParentVersion(
-                pomContent, parentArtifactId, newVersion);
+                pomContent, parentGroupId, parentArtifactId, newVersion);
     }
 
     /**

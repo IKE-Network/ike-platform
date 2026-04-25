@@ -91,6 +91,7 @@ public class WsSetParentDraftMojo extends AbstractWorkspaceMojo {
                 "parent.version", "Target parent version");
         parentVersion = targetVersion;
 
+        String parentGroupId = rootParent.groupId();
         String parentArtifactId = rootParent.artifactId();
 
         // Preflight: all working trees must be clean (#132, #154)
@@ -120,7 +121,8 @@ public class WsSetParentDraftMojo extends AbstractWorkspaceMojo {
             changes.add(new ParentChange("(root)", "pom.xml",
                     rootCurrentVersion, targetVersion));
             if (!draft) {
-                updateParentInPom(rootPomPath, parentArtifactId, targetVersion);
+                updateParentInPom(rootPomPath, parentGroupId,
+                        parentArtifactId, targetVersion);
             }
         }
 
@@ -151,11 +153,19 @@ public class WsSetParentDraftMojo extends AbstractWorkspaceMojo {
                 continue;
             }
 
-            // Only update POMs that reference the same parent artifact
-            if (!parentArtifactId.equals(compParent.artifactId())) {
+            // Only update POMs whose parent GAV fully matches the
+            // workspace root's parent GAV. Both groupId AND artifactId
+            // must match — see issue #241. A heterogeneous workspace
+            // may bundle subprojects that inherit from unrelated
+            // parents (e.g. network.ike.pipeline:ike-parent) that
+            // happen to share an artifactId with the workspace parent.
+            if (!parentGroupId.equals(compParent.groupId())
+                    || !parentArtifactId.equals(compParent.artifactId())) {
                 getLog().debug("  " + name + ": parent is "
+                        + compParent.groupId() + ":"
                         + compParent.artifactId() + ", not "
-                        + parentArtifactId + " — skipping");
+                        + parentGroupId + ":" + parentArtifactId
+                        + " — skipping");
                 continue;
             }
 
@@ -168,8 +178,8 @@ public class WsSetParentDraftMojo extends AbstractWorkspaceMojo {
                     currentVersion, targetVersion));
 
             if (!draft) {
-                updateParentInPom(subprojectPom, parentArtifactId,
-                        targetVersion);
+                updateParentInPom(subprojectPom, parentGroupId,
+                        parentArtifactId, targetVersion);
 
                 // Also update submodule POMs referencing the same parent
                 List<File> subPoms;
@@ -188,8 +198,10 @@ public class WsSetParentDraftMojo extends AbstractWorkspaceMojo {
                     try {
                         String subContent = Files.readString(
                                 subPom.toPath(), StandardCharsets.UTF_8);
-                        String subUpdated = PomModel.updateParentVersion(
-                                subContent, parentArtifactId, targetVersion);
+                        String subUpdated =
+                                PomParentSupport.updateParentVersion(
+                                        subContent, parentGroupId,
+                                        parentArtifactId, targetVersion);
                         if (!subUpdated.equals(subContent)) {
                             Files.writeString(subPom.toPath(), subUpdated,
                                     StandardCharsets.UTF_8);
@@ -247,17 +259,19 @@ public class WsSetParentDraftMojo extends AbstractWorkspaceMojo {
      * Update the parent version in a single POM file.
      *
      * @param pomPath          path to the POM file
+     * @param parentGroupId    the parent groupId to match
      * @param parentArtifactId the parent artifactId to match
      * @param newVersion       the new parent version
      * @throws MojoException if the file cannot be read or written
      */
-    private void updateParentInPom(Path pomPath, String parentArtifactId,
+    private void updateParentInPom(Path pomPath, String parentGroupId,
+                                    String parentArtifactId,
                                     String newVersion)
             throws MojoException {
         try {
             String content = Files.readString(pomPath, StandardCharsets.UTF_8);
             String updated = PomParentSupport.updateParentVersion(
-                    content, parentArtifactId, newVersion);
+                    content, parentGroupId, parentArtifactId, newVersion);
             if (!updated.equals(content)) {
                 Files.writeString(pomPath, updated, StandardCharsets.UTF_8);
             }

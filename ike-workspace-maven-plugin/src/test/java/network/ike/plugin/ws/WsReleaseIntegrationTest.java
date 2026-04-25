@@ -193,7 +193,7 @@ class WsReleaseIntegrationTest {
     }
 
     @Test
-    void updateParentVersion_matchesArtifactId() {
+    void updateParentVersion_matchesGa() {
         String pom = """
                 <project>
                     <parent>
@@ -207,7 +207,7 @@ class WsReleaseIntegrationTest {
                 """;
 
         String updated = PomRewriter.updateParentVersion(
-                pom, "lib-a", "1.0.1-SNAPSHOT");
+                pom, "com.test", "lib-a", "1.0.1-SNAPSHOT");
 
         assertThat(updated).contains(
                 "<artifactId>lib-a</artifactId>\n        <version>1.0.1-SNAPSHOT</version>");
@@ -229,7 +229,29 @@ class WsReleaseIntegrationTest {
                 """;
 
         String updated = PomRewriter.updateParentVersion(
-                pom, "lib-a", "1.0.1-SNAPSHOT");
+                pom, "com.test", "lib-a", "1.0.1-SNAPSHOT");
+
+        assertThat(updated).isEqualTo(pom);
+    }
+
+    /**
+     * Regression guard for issue #241. Same artifactId, different
+     * groupId — mutation must be gated on the full GA.
+     */
+    @Test
+    void updateParentVersion_sameArtifactIdDifferentGroupId_noChange() {
+        String pom = """
+                <project>
+                    <parent>
+                        <groupId>network.ike.pipeline</groupId>
+                        <artifactId>ike-parent</artifactId>
+                        <version>111</version>
+                    </parent>
+                </project>
+                """;
+
+        String updated = PomRewriter.updateParentVersion(
+                pom, "network.ike.platform", "ike-parent", "2");
 
         assertThat(updated).isEqualTo(pom);
     }
@@ -442,7 +464,7 @@ class WsReleaseIntegrationTest {
                 """;
 
         String updated = PomRewriter.updateParentVersion(
-                pom, "any-parent", "2.0.0");
+                pom, "com.test", "any-parent", "2.0.0");
 
         assertThat(updated).isEqualTo(pom);
     }

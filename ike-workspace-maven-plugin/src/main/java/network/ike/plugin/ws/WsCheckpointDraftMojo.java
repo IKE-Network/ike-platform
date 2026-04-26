@@ -179,10 +179,17 @@ public class WsCheckpointDraftMojo extends AbstractWorkspaceMojo {
                 snapshots, absentComponents);
 
         // ── Append testing context from milestone ─────────────────────
-        String testingContextYaml = snapshotTestingContext(graph);
-        if (testingContextYaml != null) {
-            yamlContent = yamlContent + "\n" + testingContextYaml;
+        ReleaseNotesSupport.TestingContext testingContext = snapshotTestingContext(graph);
+        if (testingContext != null) {
+            yamlContent = yamlContent + "\n" + testingContext.toYaml("  ");
         }
+
+        File wsGitDir = new File(root, ".git");
+        boolean workspaceHasGit = wsGitDir.exists();
+
+        Path checkpointFile = null;
+        boolean manifestUpdated = false;
+        boolean tagPushed = false;
 
         if (draft) {
             getLog().info("");
@@ -193,81 +200,86 @@ public class WsCheckpointDraftMojo extends AbstractWorkspaceMojo {
             yamlContent.lines().forEach(line ->
                     getLog().info("[DRAFT]   " + line));
             getLog().info("");
-            return;
-        }
-
-        // ── Write subproject SHAs into workspace.yaml ────────────────
-        try {
-            java.util.Map<String, String> shaUpdates = new java.util.LinkedHashMap<>();
-            for (SubprojectSnapshot snap : snapshots) {
-                shaUpdates.put(snap.name(), snap.sha());
+        } else {
+            // ── Write subproject SHAs into workspace.yaml ────────────────
+            try {
+                java.util.Map<String, String> shaUpdates = new java.util.LinkedHashMap<>();
+                for (SubprojectSnapshot snap : snapshots) {
+                    shaUpdates.put(snap.name(), snap.sha());
+                }
+                ManifestWriter.updateShas(resolveManifest(), shaUpdates);
+                manifestUpdated = true;
+                getLog().info("  Updated workspace.yaml with subproject SHAs");
+            } catch (IOException e) {
+                getLog().warn("  Could not update workspace.yaml SHAs: " + e.getMessage());
             }
-            ManifestWriter.updateShas(resolveManifest(), shaUpdates);
-            getLog().info("  Updated workspace.yaml with subproject SHAs");
-        } catch (IOException e) {
-            getLog().warn("  Could not update workspace.yaml SHAs: " + e.getMessage());
-        }
 
-        // ── Write checkpoint file ──────────────────────────────────────
-        Path checkpointsDir = root.toPath().resolve("checkpoints");
-        try {
-            Files.createDirectories(checkpointsDir);
-        } catch (IOException e) {
-            throw new MojoException(
-                    "Cannot create checkpoints directory", e);
-        }
-        Path checkpointFile = checkpointsDir.resolve(checkpointFileName(name));
-        try {
-            Files.writeString(checkpointFile, yamlContent, StandardCharsets.UTF_8);
-        } catch (IOException e) {
-            throw new MojoException(
-                    "Failed to write " + checkpointFile, e);
-        }
+            // ── Write checkpoint file ──────────────────────────────────────
+            Path checkpointsDir = root.toPath().resolve("checkpoints");
+            try {
+                Files.createDirectories(checkpointsDir);
+            } catch (IOException e) {
+                throw new MojoException(
+                        "Cannot create checkpoints directory", e);
+            }
+            checkpointFile = checkpointsDir.resolve(checkpointFileName(name));
+            try {
+                Files.writeString(checkpointFile, yamlContent, StandardCharsets.UTF_8);
+            } catch (IOException e) {
+                throw new MojoException(
+                        "Failed to write " + checkpointFile, e);
+            }
 
-        // ── Tag and push workspace aggregator repo ──────────────────
-        File wsGitDir = new File(root, ".git");
-        if (wsGitDir.exists()) {
-            ReleaseSupport.exec(root, getLog(),
-                    "git", "add", "workspace.yaml",
-                    "checkpoints/" + checkpointFileName(name));
-            ReleaseSupport.exec(root, getLog(),
-                    "git", "commit", "-m",
-                    "checkpoint: " + name);
-            ReleaseSupport.exec(root, getLog(),
-                    "git", "tag", "-a", wsTagName,
-                    "-m", "Workspace checkpoint " + name);
-
-            boolean hasOrigin = ReleaseSupport.hasRemote(root, "origin");
-            if (hasOrigin) {
+            // ── Tag and push workspace aggregator repo ──────────────────
+            if (workspaceHasGit) {
                 ReleaseSupport.exec(root, getLog(),
-                        "git", "push", "origin", wsTagName);
+                        "git", "add", "workspace.yaml",
+                        "checkpoints/" + checkpointFileName(name));
                 ReleaseSupport.exec(root, getLog(),
-                        "git", "push", "origin",
-                        ReleaseSupport.currentBranch(root));
-                getLog().info("  Workspace tag pushed: " + wsTagName);
+                        "git", "commit", "-m",
+                        "checkpoint: " + name);
+                ReleaseSupport.exec(root, getLog(),
+                        "git", "tag", "-a", wsTagName,
+                        "-m", "Workspace checkpoint " + name);
+
+                boolean hasOrigin = ReleaseSupport.hasRemote(root, "origin");
+                if (hasOrigin) {
+                    ReleaseSupport.exec(root, getLog(),
+                            "git", "push", "origin", wsTagName);
+                    ReleaseSupport.exec(root, getLog(),
+                            "git", "push", "origin",
+                            ReleaseSupport.currentBranch(root));
+                    tagPushed = true;
+                    getLog().info("  Workspace tag pushed: " + wsTagName);
+                }
             }
-        }
 
-        // VCS bridge: write state file after checkpoint
-        for (var entry : graph.manifest().subprojects().entrySet()) {
-            File subDir = new File(root, entry.getKey());
-            if (new File(subDir, ".git").exists()
-                    && VcsState.isIkeManaged(subDir.toPath())) {
-                VcsOperations.writeVcsState(subDir, VcsState.Action.CHECKPOINT);
+            // VCS bridge: write state file after checkpoint
+            for (var entry : graph.manifest().subprojects().entrySet()) {
+                File subDir = new File(root, entry.getKey());
+                if (new File(subDir, ".git").exists()
+                        && VcsState.isIkeManaged(subDir.toPath())) {
+                    VcsOperations.writeVcsState(subDir, VcsState.Action.CHECKPOINT);
+                }
             }
-        }
-        if (VcsState.isIkeManaged(root.toPath())) {
-            VcsOperations.writeVcsState(root, VcsState.Action.CHECKPOINT);
+            if (VcsState.isIkeManaged(root.toPath())) {
+                VcsOperations.writeVcsState(root, VcsState.Action.CHECKPOINT);
+            }
+
+            getLog().info("");
+            getLog().info("  Checkpoint: " + checkpointFile);
+            getLog().info("  Components: " + snapshots.size()
+                    + " | Absent: " + absentComponents.size());
+            getLog().info("");
         }
 
-        getLog().info("");
-        getLog().info("  Checkpoint: " + checkpointFile);
-        getLog().info("  Components: " + snapshots.size()
-                + " | Absent: " + absentComponents.size());
-        getLog().info("");
-
+        var reportContext = new CheckpointReportContext(
+                name, wsTagName, timestamp, author, draft,
+                snapshots, absentComponents, yamlContent,
+                checkpointFile, workspaceHasGit, manifestUpdated, tagPushed,
+                testingContext);
         writeReport(publish ? WsGoal.CHECKPOINT_PUBLISH : WsGoal.CHECKPOINT_DRAFT,
-                buildCheckpointMarkdownReport(snapshots, absentComponents));
+                buildCheckpointMarkdownReport(reportContext));
     }
 
     // ── Per-subproject checkpoint (overridable for tests) ──────────────
@@ -287,27 +299,114 @@ public class WsCheckpointDraftMojo extends AbstractWorkspaceMojo {
 
     // ── Report ────────────────────────────────────────────────────────
 
-    private String buildCheckpointMarkdownReport(
-            List<SubprojectSnapshot> snapshots, List<String> absent) {
+    /**
+     * All inputs needed to render the checkpoint markdown report.
+     *
+     * @param name                the checkpoint name
+     * @param wsTagName           the workspace aggregator tag (e.g. {@code checkpoint/<name>})
+     * @param checkpointTimestamp ISO-UTC timestamp recorded in the checkpoint
+     * @param author              git user.name (or system user) at execution time
+     * @param draft               {@code true} for draft mode, {@code false} for publish
+     * @param snapshots           per-subproject HEAD snapshots in topological order
+     * @param absentComponents    component names declared in the manifest but not on disk
+     * @param yamlContent         the full checkpoint YAML body (for the draft preview)
+     * @param checkpointFile      path the YAML was written to (publish only; {@code null} in draft)
+     * @param workspaceHasGit     whether the workspace aggregator has its own {@code .git}
+     * @param manifestUpdated     whether the workspace.yaml SHA write succeeded (publish only)
+     * @param tagPushed           whether the workspace tag was pushed to {@code origin} (publish only)
+     * @param testingContext      milestone snapshot for testing context, or {@code null} when unavailable
+     */
+    private record CheckpointReportContext(
+            String name,
+            String wsTagName,
+            String checkpointTimestamp,
+            String author,
+            boolean draft,
+            List<SubprojectSnapshot> snapshots,
+            List<String> absentComponents,
+            String yamlContent,
+            Path checkpointFile,
+            boolean workspaceHasGit,
+            boolean manifestUpdated,
+            boolean tagPushed,
+            ReleaseNotesSupport.TestingContext testingContext) {}
+
+    private String buildCheckpointMarkdownReport(CheckpointReportContext ctx) {
         var sb = new StringBuilder();
-        sb.append(snapshots.size()).append(" subproject(s) checkpointed");
-        if (!absent.isEmpty()) {
-            sb.append(", ").append(absent.size()).append(" absent");
+
+        sb.append(ctx.snapshots().size()).append(" subproject(s) checkpointed");
+        if (!ctx.absentComponents().isEmpty()) {
+            sb.append(", ").append(ctx.absentComponents().size()).append(" absent");
         }
-        sb.append(!publish ? " (draft)" : "").append(".\n\n");
+        sb.append(ctx.draft() ? " (draft)" : "").append(".\n\n");
+
+        sb.append("## Checkpoint\n\n");
+        sb.append("- **Name:** ").append(ctx.name()).append('\n');
+        sb.append("- **Tag:** `").append(ctx.wsTagName()).append("`\n");
+        sb.append("- **Time:** ").append(ctx.checkpointTimestamp()).append('\n');
+        sb.append("- **Author:** ").append(ctx.author()).append('\n');
+        sb.append("- **Mode:** ")
+                .append(ctx.draft() ? "DRAFT — no tags, no files written" : "PUBLISH")
+                .append("\n\n");
+
+        sb.append("## Subprojects\n\n");
         sb.append("| Subproject | Version | SHA | Branch | Status |\n");
         sb.append("|-----------|---------|-----|--------|--------|\n");
-        for (var snap : snapshots) {
+        for (var snap : ctx.snapshots()) {
             sb.append("| ").append(snap.name())
                     .append(" | ").append(snap.version())
-                    .append(" | ").append(snap.shortSha())
+                    .append(" | `").append(snap.shortSha()).append('`')
                     .append(" | ").append(snap.branch())
                     .append(" | ✓ |\n");
         }
-        for (String name : absent) {
-            sb.append("| ").append(name)
+        for (String absentName : ctx.absentComponents()) {
+            sb.append("| ").append(absentName)
                     .append(" | — | — | — | not cloned |\n");
         }
+        sb.append('\n');
+
+        sb.append("## Outputs\n\n");
+        String checkpointPath = "checkpoints/" + checkpointFileName(ctx.name());
+        if (ctx.draft()) {
+            sb.append("- Checkpoint file `").append(checkpointPath)
+                    .append("` would be written.\n");
+            if (ctx.workspaceHasGit()) {
+                sb.append("- Workspace tag `").append(ctx.wsTagName())
+                        .append("` would be created.\n");
+            } else {
+                sb.append("- No `.git` at workspace root; tag/commit/push would be skipped.\n");
+            }
+            sb.append("- `workspace.yaml` subproject SHAs would be updated.\n");
+        } else {
+            sb.append("- Checkpoint file written: `").append(checkpointPath).append("`\n");
+            if (ctx.workspaceHasGit()) {
+                String tagOutcome = ctx.tagPushed()
+                        ? "pushed to `origin`."
+                        : "created locally (no `origin` remote — not pushed).";
+                sb.append("- Workspace tag `").append(ctx.wsTagName())
+                        .append("` ").append(tagOutcome).append('\n');
+            } else {
+                sb.append("- No `.git` at workspace root; tag/commit/push skipped.\n");
+            }
+            sb.append("- `workspace.yaml` subproject SHAs ")
+                    .append(ctx.manifestUpdated() ? "updated" : "**not updated** (write failed)")
+                    .append(".\n");
+        }
+        sb.append('\n');
+
+        if (ctx.testingContext() != null) {
+            sb.append(ctx.testingContext().toMarkdown().stripTrailing()).append("\n\n");
+        } else {
+            sb.append("## Testing context\n\nNo milestone found — skipping.\n\n");
+        }
+
+        if (ctx.draft()) {
+            sb.append("## Checkpoint YAML (preview)\n\n");
+            sb.append("```yaml\n")
+                    .append(ctx.yamlContent().stripTrailing())
+                    .append("\n```\n");
+        }
+
         return sb.toString();
     }
 
@@ -390,7 +489,7 @@ public class WsCheckpointDraftMojo extends AbstractWorkspaceMojo {
         }
     }
 
-    private String snapshotTestingContext(WorkspaceGraph graph)
+    private ReleaseNotesSupport.TestingContext snapshotTestingContext(WorkspaceGraph graph)
             throws MojoException {
         if (issueRepo == null || issueRepo.isBlank()) return null;
 
@@ -424,7 +523,7 @@ public class WsCheckpointDraftMojo extends AbstractWorkspaceMojo {
                 + context.readyToTest().size() + " ready, "
                 + context.inProgress().size() + " in progress");
 
-        return context.toYaml("  ");
+        return context;
     }
 
     private String deriveCheckpointName(File root) throws MojoException {

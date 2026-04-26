@@ -308,6 +308,75 @@ class WorkspaceMojoIntegrationTest {
         assertThat(content).contains("branch: \"");
     }
 
+    // Regression for ike-issues#266: draft mode must write its markdown
+    // report. A misplaced early `return` in the draft branch used to skip
+    // the writeReport(...) call at the bottom of execute().
+    @Test
+    void wsCheckpoint_draftWritesMarkdownReport() throws Exception {
+        WsCheckpointDraftMojo mojo = checkpointMojoWithSimulatedBuild();
+        mojo.manifest = helper.workspaceYaml().toFile();
+        mojo.name = "draft-cp";
+        mojo.publish = false;
+        mojo.issueRepo = "";  // skip GitHub milestone lookup
+
+        mojo.execute();
+
+        Path report = WorkspaceReport.reportPath(tempDir, "ws:checkpoint-draft");
+        assertThat(report).exists();
+
+        String body = Files.readString(report, StandardCharsets.UTF_8);
+        assertThat(body)
+                .contains("# ws:checkpoint-draft")
+                .contains("(draft)")
+                .contains("- **Name:** draft-cp")
+                .contains("- **Tag:** `checkpoint/draft-cp`")
+                .contains("- **Mode:** DRAFT")
+                .contains("## Subprojects")
+                .contains("lib-a")
+                .contains("lib-b")
+                .contains("app-c")
+                .contains("## Outputs")
+                .contains("would be written")
+                .contains("## Checkpoint YAML (preview)")
+                .contains("```yaml");
+
+        // Publish-only outputs must not leak into the draft report.
+        assertThat(body)
+                .doesNotContain("Checkpoint file written:")
+                .doesNotContain("pushed to `origin`");
+    }
+
+    @Test
+    void wsCheckpoint_publishWritesMarkdownReport() throws Exception {
+        WsCheckpointDraftMojo mojo = checkpointMojoWithSimulatedBuild();
+        mojo.manifest = helper.workspaceYaml().toFile();
+        mojo.name = "publish-cp";
+        mojo.publish = true;
+        mojo.issueRepo = "";
+
+        mojo.execute();
+
+        Path report = WorkspaceReport.reportPath(tempDir, "ws:checkpoint-publish");
+        assertThat(report).exists();
+
+        String body = Files.readString(report, StandardCharsets.UTF_8);
+        assertThat(body)
+                .contains("# ws:checkpoint-publish")
+                .contains("- **Name:** publish-cp")
+                .contains("- **Tag:** `checkpoint/publish-cp`")
+                .contains("- **Mode:** PUBLISH")
+                .contains("## Subprojects")
+                .contains("## Outputs")
+                .contains("Checkpoint file written:")
+                .contains("checkpoints/checkpoint-publish-cp.yaml");
+
+        // Draft-only sections must not leak into the publish report.
+        assertThat(body)
+                .doesNotContain("(draft)")
+                .doesNotContain("would be written")
+                .doesNotContain("Checkpoint YAML (preview)");
+    }
+
     // ── WsReleaseDraftMojo ───────────────────────────────────────────────
 
     @Test

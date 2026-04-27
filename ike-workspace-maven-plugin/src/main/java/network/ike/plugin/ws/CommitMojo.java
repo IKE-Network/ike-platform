@@ -143,6 +143,8 @@ public class CommitMojo extends AbstractWorkspaceMojo {
         }
 
         writeReport(WsGoal.COMMIT, summary + "\n");
+
+        IdeProfileSync.run(root, getLog());
     }
 
     /**

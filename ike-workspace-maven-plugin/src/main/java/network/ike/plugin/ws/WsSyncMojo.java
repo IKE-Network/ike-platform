@@ -94,5 +94,7 @@ public class WsSyncMojo extends AbstractWorkspaceMojo {
         summary.append(pullOnly ? "skipped push" : "pushed");
         summary.append(".\n");
         writeReport(WsGoal.SYNC, summary.toString());
+
+        IdeProfileSync.run(workspaceRoot(), getLog());
     }
 }

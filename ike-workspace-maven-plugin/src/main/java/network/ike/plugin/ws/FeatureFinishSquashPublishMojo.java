@@ -23,5 +23,6 @@ public class FeatureFinishSquashPublishMojo extends FeatureFinishSquashDraftMojo
     public void execute() throws MojoException {
         publish = true;
         super.execute();
+        IdeProfileSync.run(workspaceRoot(), getLog());
     }
 }

@@ -323,6 +323,8 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
                 + "| Field | Value |\n|-------|-------|\n"
                 + "| Repo | " + repo + " |\n"
                 + "| Cloned | " + (cloned ? "yes" : "no — run ws:init") + " |\n");
+
+        IdeProfileSync.run(workspaceRoot(), getLog());
     }
 
     // ── YAML generation ──────────────────────────────────────────

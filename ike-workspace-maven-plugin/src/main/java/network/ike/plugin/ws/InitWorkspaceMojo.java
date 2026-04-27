@@ -193,6 +193,8 @@ public class InitWorkspaceMojo extends AbstractWorkspaceMojo {
         // Structured markdown report (replaces console-log capture)
         writeReport(WsGoal.INIT, buildInitMarkdownReport(
                 rows, cloned, syncthing, updated, skipped, wrappers));
+
+        IdeProfileSync.run(root, getLog());
     }
 
     private String buildInitMarkdownReport(List<String[]> rows,

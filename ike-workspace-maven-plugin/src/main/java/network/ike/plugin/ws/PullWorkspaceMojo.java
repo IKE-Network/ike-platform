@@ -108,5 +108,7 @@ public class PullWorkspaceMojo extends AbstractWorkspaceMojo {
         // Structured markdown report
         writeReport(WsGoal.PULL, pulled + " pulled, " + skipped
                 + " skipped, " + failed + " failed.\n");
+
+        IdeProfileSync.run(root, getLog());
     }
 }

@@ -23,5 +23,6 @@ public class FeatureFinishMergePublishMojo extends FeatureFinishMergeDraftMojo {
     public void execute() throws MojoException {
         publish = true;
         super.execute();
+        IdeProfileSync.run(workspaceRoot(), getLog());
     }
 }

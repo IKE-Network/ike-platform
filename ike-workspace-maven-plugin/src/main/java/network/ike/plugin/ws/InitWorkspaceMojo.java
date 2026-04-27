@@ -582,15 +582,27 @@ public class InitWorkspaceMojo extends AbstractWorkspaceMojo {
                 | `ws:verify` | Check manifest, parents, BOM cascade, VCS state |
                 | `ws:verify-convergence` | Full verify + transitive dependency convergence (slow) |
                 | `ws:overview` | Workspace overview (manifest, graph, status, cascade) |
+                | `ws:check-branch` | Warn when a subproject branch deviates from workspace.yaml |
 
                 ## Version Alignment
 
                 | Goal | Description |
                 |------|-------------|
-                | `ws:align-draft` | Preview inter-subproject version changes |
-                | `ws:align-publish` | Apply version alignment to POMs |
-                | `ws:pull` | Git pull --rebase across all subprojects |
-                | `ws:sync` | Pull then push across the workspace |
+                | `ws:align-draft` | Preview inter-subproject POM/branch alignment |
+                | `ws:align-publish` | Apply alignment to POMs and/or branches |
+                | `ws:set-parent-draft` | Preview parent-POM version cascade |
+                | `ws:set-parent-publish` | Apply parent-POM version cascade (auto-commits) |
+                | `ws:versions-upgrade-draft` | Preview version upgrades against the configured ruleset |
+                | `ws:versions-upgrade-publish` | Apply the workspace version-upgrade plan |
+
+                ## Branch Coordination
+
+                | Goal | Description |
+                |------|-------------|
+                | `ws:switch-draft` | Preview switching subprojects to a coordinated branch |
+                | `ws:switch-publish` | Switch subprojects to a coordinated branch |
+                | `ws:update-feature-draft` | Preview rebasing a feature branch onto main |
+                | `ws:update-feature-publish` | Rebase a feature branch onto main |
 
                 ## Feature Branching
 
@@ -602,8 +614,6 @@ public class InitWorkspaceMojo extends AbstractWorkspaceMojo {
                 | `ws:feature-finish-merge-publish` | No-ff merge (preserves history) |
                 | `ws:feature-finish-squash-draft` | Preview squash merge |
                 | `ws:feature-finish-squash-publish` | Squash merge (single commit) |
-                | `ws:feature-finish-rebase-draft` | Preview rebase |
-                | `ws:feature-finish-rebase-publish` | Rebase + fast-forward (linear history) |
                 | `ws:feature-abandon-draft` | Preview abandoning a feature branch |
                 | `ws:feature-abandon-publish` | Delete feature branch across components |
 
@@ -613,6 +623,7 @@ public class InitWorkspaceMojo extends AbstractWorkspaceMojo {
                 |------|-------------|
                 | `ws:release-draft` | Preview what would be released |
                 | `ws:release-publish` | Execute workspace release |
+                | `ws:release-status` | Diagnose state of any in-flight workspace release |
                 | `ws:checkpoint-draft` | Preview checkpoint (tag all subprojects) |
                 | `ws:checkpoint-publish` | Execute checkpoint |
                 | `ws:post-release` | Bump to next development version |
@@ -623,8 +634,10 @@ public class InitWorkspaceMojo extends AbstractWorkspaceMojo {
                 | Goal | Description |
                 |------|-------------|
                 | `ws:sync` | Pull then push across the workspace (the daily sync op) |
-                | `ws:commit` | Commit across repos (`-Dpush=true`) |
+                | `ws:commit` | Commit across repos (stages all by default; `-DstagedOnly` to opt out) |
+                | `ws:pull` | Git pull --rebase across all subprojects |
                 | `ws:push` | Push all subprojects (warns about uncommitted changes) |
+                | `ws:report` | Aggregate ws:* goal reports into a single document |
 
                 ## Branch Cleanup
 

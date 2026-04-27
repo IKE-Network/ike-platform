@@ -154,6 +154,46 @@ public class VcsOperations {
     }
 
     /**
+     * Count tracked files with modifications (staged or unstaged), excluding
+     * untracked files. Use {@link #untrackedFiles(File)} for the new-file list.
+     *
+     * @param dir the repository root directory
+     * @return count of modified tracked files; zero if clean or on error
+     */
+    public static int modifiedTrackedCount(File dir) {
+        try {
+            String porcelain = capture(dir, "git", "status", "--porcelain");
+            if (porcelain.isEmpty()) return 0;
+            int count = 0;
+            for (String line : porcelain.split("\n")) {
+                if (line.length() < 2) continue;
+                // ?? = untracked, !! = ignored; everything else is tracked
+                if (!line.startsWith("??") && !line.startsWith("!!")) count++;
+            }
+            return count;
+        } catch (MojoException e) {
+            return 0;
+        }
+    }
+
+    /**
+     * List untracked, non-ignored files in the working tree.
+     *
+     * @param dir the repository root directory
+     * @return list of untracked file paths; empty if clean or on error
+     */
+    public static List<String> untrackedFiles(File dir) {
+        try {
+            String output = capture(dir, "git", "ls-files",
+                    "--others", "--exclude-standard");
+            if (output.isEmpty()) return List.of();
+            return List.of(output.split("\n"));
+        } catch (MojoException e) {
+            return List.of();
+        }
+    }
+
+    /**
      * List files with unresolved merge conflicts.
      *
      * @param dir the repository root directory

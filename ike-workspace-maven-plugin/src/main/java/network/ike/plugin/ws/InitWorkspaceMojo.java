@@ -621,7 +621,7 @@ public class InitWorkspaceMojo extends AbstractWorkspaceMojo {
                 | Goal | Description |
                 |------|-------------|
                 | `ws:sync` | Reconcile state after machine switch |
-                | `ws:commit` | Commit across repos (`-DaddAll=true -Dpush=true`) |
+                | `ws:commit` | Commit across repos (`-Dpush=true`) |
                 | `ws:push` | Push all subprojects (warns about uncommitted changes) |
 
                 ## Branch Cleanup
@@ -750,7 +750,7 @@ public class InitWorkspaceMojo extends AbstractWorkspaceMojo {
 
                 | Goal | Description |
                 |------|-------------|
-                | `ws:commit` | Commit across repos (`-DaddAll=true -Dpush=true -Dmessage="..."`) |
+                | `ws:commit` | Commit across repos (`-Dpush=true -Dmessage="..."`) |
                 | `ws:push` | Push all subprojects (warns about uncommitted changes) |
                 | `ws:sync` | Reconcile after machine switch |
                 | `ws:cleanup-draft` / `-publish` | List/delete merged feature branches |
@@ -779,11 +779,11 @@ public class InitWorkspaceMojo extends AbstractWorkspaceMojo {
 
                 ## Troubleshooting
 
-                **"Cannot X — uncommitted changes in:"** — Run `mvn ws:commit -DaddAll=true -Dmessage="..."` to commit all pending changes, then retry.
+                **"Cannot X — uncommitted changes in:"** — Run `mvn ws:commit -Dmessage="..."` to commit all pending changes, then retry.
 
                 **Maven discovers `.teamcity/pom.xml`** — Add `-pl !.teamcity` to `.mvn/maven.config`.
 
-                **Feature finish: "uncommitted changes"** — Run `mvn ws:commit -Dmessage="..." -DaddAll=true` first.
+                **Feature finish: "uncommitted changes"** — Run `mvn ws:commit -Dmessage="..."` first.
 
                 **Feature start: "already on feature branch"** — Finish/abandon the current feature first.
 

@@ -241,7 +241,7 @@ public class WsSetParentDraftMojo extends AbstractWorkspaceMojo {
                     + "Updated " + changes.size() + " POM(s) to "
                     + parentArtifactId + ":" + targetVersion);
             getLog().info("");
-            getLog().info("  Next: mvn ws:commit -DaddAll=true -Dpush=true"
+            getLog().info("  Next: mvn ws:commit -Dpush=true"
                     + " -Dmessage=\"build: bump " + parentArtifactId
                     + " → " + targetVersion + "\"");
         }

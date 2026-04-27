@@ -71,7 +71,7 @@ public enum PreflightCondition {
                   .append(files).append("\n");
             }
             sb.append("  To resolve:\n");
-            sb.append("    mvn ws:commit -DaddAll=true"
+            sb.append("    mvn ws:commit"
                     + " -Dmessage=\"<your message>\"\n");
             sb.append("  Or stash changes in each affected subproject.");
             return Optional.of(sb.toString());

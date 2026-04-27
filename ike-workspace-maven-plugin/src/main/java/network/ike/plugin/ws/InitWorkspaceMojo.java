@@ -590,7 +590,7 @@ public class InitWorkspaceMojo extends AbstractWorkspaceMojo {
                 | `ws:align-draft` | Preview inter-subproject version changes |
                 | `ws:align-publish` | Apply version alignment to POMs |
                 | `ws:pull` | Git pull --rebase across all subprojects |
-                | `ws:sync` | Reconcile git state after machine switch |
+                | `ws:sync` | Pull then push across the workspace |
 
                 ## Feature Branching
 
@@ -622,7 +622,7 @@ public class InitWorkspaceMojo extends AbstractWorkspaceMojo {
 
                 | Goal | Description |
                 |------|-------------|
-                | `ws:sync` | Reconcile state after machine switch |
+                | `ws:sync` | Pull then push across the workspace (the daily sync op) |
                 | `ws:commit` | Commit across repos (`-Dpush=true`) |
                 | `ws:push` | Push all subprojects (warns about uncommitted changes) |
 
@@ -754,7 +754,7 @@ public class InitWorkspaceMojo extends AbstractWorkspaceMojo {
                 |------|-------------|
                 | `ws:commit` | Commit across repos (`-Dpush=true -Dmessage="..."`) |
                 | `ws:push` | Push all subprojects (warns about uncommitted changes) |
-                | `ws:sync` | Reconcile after machine switch |
+                | `ws:sync` | Pull then push across the workspace |
                 | `ws:cleanup-draft` / `-publish` | List/delete merged feature branches |
 
                 ---

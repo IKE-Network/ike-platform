@@ -492,7 +492,8 @@ public class VerifyWorkspaceMojo extends AbstractWorkspaceMojo {
                 getLog().warn(indent + "               You are on '"
                         + localBranch + "'.");
                 getLog().warn(indent + "Action:        run 'mvnw ws:switch -Dbranch="
-                        + state.branch() + "' or 'mvnw ws:sync'");
+                        + state.branch() + "' or 'mvnw ws:align-publish"
+                        + " -Dscope=branches -Dfrom=manifest'");
             }
             case COMMIT, PUSH, RELEASE, CHECKPOINT -> {
                 getLog().warn(indent + "Status:        branch mismatch — local '"
@@ -548,7 +549,8 @@ public class VerifyWorkspaceMojo extends AbstractWorkspaceMojo {
             case SWITCH -> {
                 getLog().warn(indent + "Status:        switched on "
                         + state.machine() + " at " + state.timestamp());
-                getLog().warn(indent + "Action:        run 'mvnw ws:sync'");
+                getLog().warn(indent + "Action:        run 'mvnw ws:align-publish"
+                        + " -Dscope=branches -Dfrom=manifest'");
             }
             case FEATURE_START, FEATURE_FINISH -> {
                 getLog().warn(indent + "Status:        behind ("

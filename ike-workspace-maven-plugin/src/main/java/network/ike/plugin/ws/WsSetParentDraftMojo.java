@@ -58,6 +58,20 @@ public class WsSetParentDraftMojo extends AbstractWorkspaceMojo {
     @Parameter(property = "parent.version")
     String parentVersion;
 
+    /**
+     * Resolved parent artifactId from the root POM, populated during
+     * {@link #execute()}. Read by {@link WsSetParentPublishMojo} for
+     * the auto-commit default message.
+     */
+    String resolvedParentArtifactId;
+
+    /**
+     * Number of POMs that were (or would be) updated, populated during
+     * {@link #execute()}. Read by {@link WsSetParentPublishMojo} to
+     * skip the auto-commit when there is nothing to commit.
+     */
+    int resolvedChangeCount;
+
     /** Creates this goal instance. */
     public WsSetParentDraftMojo() {}
 
@@ -93,6 +107,7 @@ public class WsSetParentDraftMojo extends AbstractWorkspaceMojo {
 
         String parentGroupId = rootParent.groupId();
         String parentArtifactId = rootParent.artifactId();
+        this.resolvedParentArtifactId = parentArtifactId;
 
         // Preflight: all working trees must be clean (#132, #154)
         PreflightResult preflight = Preflight.of(
@@ -240,12 +255,10 @@ public class WsSetParentDraftMojo extends AbstractWorkspaceMojo {
             getLog().info("  " + Ansi.GREEN + "✓ " + Ansi.RESET
                     + "Updated " + changes.size() + " POM(s) to "
                     + parentArtifactId + ":" + targetVersion);
-            getLog().info("");
-            getLog().info("  Next: mvn ws:commit -Dpush=true"
-                    + " -Dmessage=\"build: bump " + parentArtifactId
-                    + " → " + targetVersion + "\"");
         }
         getLog().info("");
+
+        this.resolvedChangeCount = changes.size();
 
         // --- Report ---
         writeReport(publish ? WsGoal.SET_PARENT_PUBLISH : WsGoal.SET_PARENT_DRAFT,

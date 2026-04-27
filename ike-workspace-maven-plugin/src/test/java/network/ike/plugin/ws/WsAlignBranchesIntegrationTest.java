@@ -12,14 +12,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 
 /**
- * Integration tests for {@link WsSyncMojo} using real temp workspaces.
+ * Integration tests for {@link WsAlignDraftMojo} with {@code scope=branches},
+ * exercising real temp workspaces.
  *
  * <p>Each test creates a fresh workspace via {@link TestWorkspaceHelper},
- * modifies branch state in repos or workspace.yaml, then exercises
- * the sync logic in both directions (repos-to-manifest and
- * manifest-to-repos).
+ * modifies branch state in repos or workspace.yaml, then exercises the
+ * branch-alignment logic in both directions ({@code from=repos} updates
+ * the manifest from on-disk state; {@code from=manifest} switches repos
+ * to match the manifest).
  */
-class WsSyncIntegrationTest {
+class WsAlignBranchesIntegrationTest {
 
     @TempDir
     Path tempDir;
@@ -31,7 +33,7 @@ class WsSyncIntegrationTest {
         helper = new TestWorkspaceHelper(tempDir);
         helper.buildWorkspace();
 
-        // Make the workspace directory itself a git repo so sync can commit
+        // Make the workspace directory itself a git repo so align can commit
         exec(tempDir, "git", "init", "-b", "main");
         exec(tempDir, "git", "config", "user.email", "test@example.com");
         exec(tempDir, "git", "config", "user.name", "Test");
@@ -42,15 +44,16 @@ class WsSyncIntegrationTest {
         exec(tempDir, "git", "commit", "-m", "Initial workspace commit");
     }
 
-    // ── syncFromRepos (default: repos → manifest) ────────────────────
+    // ── from=repos (default: repos → manifest) ───────────────────────
 
     @Test
-    void syncFromRepos_updatesYaml() throws Exception {
+    void fromRepos_updatesYaml() throws Exception {
         // Switch lib-a to a feature branch
         exec(tempDir.resolve("lib-a"), "git", "checkout", "-b", "feature/test");
 
-        WsSyncMojo mojo = TestLog.createMojo(WsSyncMojo.class);
+        WsAlignDraftMojo mojo = TestLog.createMojo(WsAlignDraftMojo.class);
         mojo.manifest = helper.workspaceYaml().toFile();
+        mojo.scope = "branches";
         mojo.from = "repos";
         mojo.publish = true;
 
@@ -63,13 +66,14 @@ class WsSyncIntegrationTest {
     }
 
     @Test
-    void syncFromRepos_allMatch_noChanges() throws Exception {
+    void fromRepos_allMatch_noChanges() throws Exception {
         // All components are on main, which matches workspace.yaml
         String yamlBefore = Files.readString(
                 helper.workspaceYaml(), StandardCharsets.UTF_8);
 
-        WsSyncMojo mojo = TestLog.createMojo(WsSyncMojo.class);
+        WsAlignDraftMojo mojo = TestLog.createMojo(WsAlignDraftMojo.class);
         mojo.manifest = helper.workspaceYaml().toFile();
+        mojo.scope = "branches";
         mojo.from = "repos";
         mojo.publish = true;
 
@@ -82,15 +86,16 @@ class WsSyncIntegrationTest {
     }
 
     @Test
-    void syncFromRepos_dryRun_yamlUnchanged() throws Exception {
+    void fromRepos_dryRun_yamlUnchanged() throws Exception {
         // Switch lib-a to a feature branch
         exec(tempDir.resolve("lib-a"), "git", "checkout", "-b", "feature/test");
 
         String yamlBefore = Files.readString(
                 helper.workspaceYaml(), StandardCharsets.UTF_8);
 
-        WsSyncMojo mojo = TestLog.createMojo(WsSyncMojo.class);
+        WsAlignDraftMojo mojo = TestLog.createMojo(WsAlignDraftMojo.class);
         mojo.manifest = helper.workspaceYaml().toFile();
+        mojo.scope = "branches";
         mojo.from = "repos";
         mojo.publish = false;
 
@@ -103,27 +108,28 @@ class WsSyncIntegrationTest {
     }
 
     @Test
-    void syncFromRepos_commitsYamlChange() throws Exception {
+    void fromRepos_commitsYamlChange() throws Exception {
         // Switch lib-a to a feature branch
         exec(tempDir.resolve("lib-a"), "git", "checkout", "-b", "feature/sync-commit");
 
-        WsSyncMojo mojo = TestLog.createMojo(WsSyncMojo.class);
+        WsAlignDraftMojo mojo = TestLog.createMojo(WsAlignDraftMojo.class);
         mojo.manifest = helper.workspaceYaml().toFile();
+        mojo.scope = "branches";
         mojo.from = "repos";
         mojo.publish = true;
 
         mojo.execute();
 
-        // Verify git log shows the sync commit
+        // Verify git log shows the align commit
         String log = execCapture(tempDir,
                 "git", "log", "--oneline", "-3");
         assertThat(log).contains("workspace: align branch fields from repos");
     }
 
-    // ── syncFromManifest (manifest → repos) ──────────────────────────
+    // ── from=manifest (manifest → repos) ─────────────────────────────
 
     @Test
-    void syncFromManifest_switchesRepos() throws Exception {
+    void fromManifest_switchesRepos() throws Exception {
         // Create a "develop" branch in lib-a
         exec(tempDir.resolve("lib-a"), "git", "checkout", "-b", "develop");
         exec(tempDir.resolve("lib-a"), "git", "checkout", "main");
@@ -137,8 +143,9 @@ class WsSyncIntegrationTest {
                 "$1develop");
         Files.writeString(helper.workspaceYaml(), yaml, StandardCharsets.UTF_8);
 
-        WsSyncMojo mojo = TestLog.createMojo(WsSyncMojo.class);
+        WsAlignDraftMojo mojo = TestLog.createMojo(WsAlignDraftMojo.class);
         mojo.manifest = helper.workspaceYaml().toFile();
+        mojo.scope = "branches";
         mojo.from = "manifest";
         mojo.publish = true;
 
@@ -159,7 +166,7 @@ class WsSyncIntegrationTest {
     }
 
     @Test
-    void syncFromManifest_dirtyWorktree_skips() throws Exception {
+    void fromManifest_dirtyWorktree_skips() throws Exception {
         // Create a "develop" branch in lib-a and switch back
         exec(tempDir.resolve("lib-a"), "git", "checkout", "-b", "develop");
         exec(tempDir.resolve("lib-a"), "git", "checkout", "main");
@@ -175,8 +182,9 @@ class WsSyncIntegrationTest {
                 "$1develop");
         Files.writeString(helper.workspaceYaml(), yaml, StandardCharsets.UTF_8);
 
-        WsSyncMojo mojo = TestLog.createMojo(WsSyncMojo.class);
+        WsAlignDraftMojo mojo = TestLog.createMojo(WsAlignDraftMojo.class);
         mojo.manifest = helper.workspaceYaml().toFile();
+        mojo.scope = "branches";
         mojo.from = "manifest";
         mojo.publish = true;
 
@@ -189,10 +197,11 @@ class WsSyncIntegrationTest {
     }
 
     @Test
-    void syncFromManifest_allMatch_noChanges() throws Exception {
+    void fromManifest_allMatch_noChanges() throws Exception {
         // All components are on main, workspace.yaml says main
-        WsSyncMojo mojo = TestLog.createMojo(WsSyncMojo.class);
+        WsAlignDraftMojo mojo = TestLog.createMojo(WsAlignDraftMojo.class);
         mojo.manifest = helper.workspaceYaml().toFile();
+        mojo.scope = "branches";
         mojo.from = "manifest";
         mojo.publish = true;
 

@@ -100,8 +100,6 @@ public enum WsGoal {
             "Preview switching subprojects to a coordinated branch."),
     SWITCH_PUBLISH("switch-publish", WsSwitchPublishMojo.class,
             "Switch subprojects to a coordinated branch."),
-    SYNC("sync", WsSyncMojo.class,
-            "Sync workspace.yaml to match on-disk subproject state."),
     UPDATE_FEATURE_DRAFT("update-feature-draft", UpdateFeatureDraftMojo.class,
             "Preview rebasing a feature branch onto main."),
     UPDATE_FEATURE_PUBLISH("update-feature-publish", UpdateFeaturePublishMojo.class,

@@ -50,8 +50,7 @@ import java.util.Set;
  *       {@code workspace.yaml} against the actual branch each cloned
  *       subproject is on. With {@code from=repos} (default), the yaml
  *       is updated from on-disk state; with {@code from=manifest},
- *       each subproject is checked out to the declared branch. This
- *       replaces the former {@code ws:sync} goal.</li>
+ *       each subproject is checked out to the declared branch.</li>
  * </ul>
  *
  * <pre>{@code

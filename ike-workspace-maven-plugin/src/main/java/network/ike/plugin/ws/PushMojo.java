@@ -36,6 +36,18 @@ public class PushMojo extends AbstractWorkspaceMojo {
     @Parameter(property = "remote", defaultValue = "origin")
     String remote;
 
+    /**
+     * When {@code true}, the first push failure (e.g. non-fast-forward,
+     * authentication error) halts the goal with a {@link MojoException}
+     * instead of warning and continuing. Default {@code false} preserves
+     * the per-subproject best-effort behavior; {@link WsSyncMojo} sets
+     * this to {@code true} so a non-fast-forward leaves the workspace
+     * in a known state for the user to resolve, rather than appearing
+     * to succeed for some subprojects and silently failing for others.
+     */
+    @Parameter(property = "failFast", defaultValue = "false")
+    boolean failFast;
+
     @Override
     public void execute() throws MojoException {
         if (isWorkspaceMode()) {
@@ -79,6 +91,10 @@ public class PushMojo extends AbstractWorkspaceMojo {
                     uncommittedWarnings++;
                 }
             } catch (MojoException e) {
+                if (failFast) {
+                    throw new MojoException("push failed at workspace root: "
+                            + e.getMessage(), e);
+                }
                 getLog().warn(Ansi.red("  ✗ ") + "workspace root — "
                         + e.getMessage());
                 failed++;
@@ -126,6 +142,10 @@ public class PushMojo extends AbstractWorkspaceMojo {
                     uncommittedWarnings++;
                 }
             } catch (MojoException e) {
+                if (failFast) {
+                    throw new MojoException("push failed at " + name + ": "
+                            + e.getMessage(), e);
+                }
                 getLog().warn(Ansi.red("  ✗ ") + name + " — "
                         + e.getMessage());
                 failed++;

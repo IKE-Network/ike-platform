@@ -28,8 +28,11 @@ import java.util.Map;
  * and parent — replacing regex-based extraction throughout the
  * workspace plugin.
  *
- * <p>For writes, static utility methods perform targeted text
- * replacement on the raw POM content, preserving formatting.
+ * <p>For writes, static utility methods delegate to {@link PomRewriter},
+ * which uses OpenRewrite's XML Lossless Semantic Tree to update version
+ * elements in place — preserving whitespace, comments, and quote style.
+ * Regex/sed-style substitution on POMs is forbidden; see
+ * {@code feedback_no_sed_on_poms}.
  */
 final class PomModel {
 
@@ -172,7 +175,7 @@ final class PomModel {
                 .toList();
     }
 
-    // ── Writing (targeted text replacement) ────────────────────────
+    // ── Writing (OpenRewrite XML LST via PomRewriter) ──────────────
 
     /**
      * Update the version of a specific dependency identified by

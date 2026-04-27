@@ -633,8 +633,10 @@ public class WsAlignDraftMojo extends AbstractWorkspaceMojo {
      * mismatched versions.
      *
      * <p>Uses Maven 4's {@link PomModel} for reading dependency coordinates
-     * (no regex for extraction). Writes use targeted text replacement via
-     * {@link PomModel#updateDependencyVersion} to preserve formatting.
+     * (no regex for extraction). Writes go through {@link PomRewriter},
+     * which uses OpenRewrite's XML Lossless Semantic Tree to preserve
+     * whitespace, comments, and quote style — never regex or sed-style
+     * substitution. See {@code feedback_no_sed_on_poms} for the discipline.
      *
      * @return number of changes made (or that would be made in draft)
      */
@@ -695,7 +697,7 @@ public class WsAlignDraftMojo extends AbstractWorkspaceMojo {
                     changes++;
                 }
             } else if (!currentVersion.equals(target.version)) {
-                // Direct version mismatch — targeted text replacement
+                // Direct version mismatch — rewrite via OpenRewrite LST
                 String relPath = subprojectDir.toPath().relativize(
                         pomFile.toPath()).toString();
                 getLog().info("  " + ownerName + " (" + relPath + "): "

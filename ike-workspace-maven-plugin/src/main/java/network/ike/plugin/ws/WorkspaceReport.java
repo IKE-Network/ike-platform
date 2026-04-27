@@ -69,7 +69,8 @@ public final class WorkspaceReport {
 
             String timestamp = LocalDateTime.now().format(TIMESTAMP_FMT);
             String fullContent = "# " + goalName + "\n"
-                    + "_" + timestamp + "_\n\n"
+                    + "_" + timestamp + " · ike-workspace-maven-plugin "
+                    + pluginVersion() + "_\n\n"
                     + content.stripTrailing() + "\n";
 
             Files.writeString(reportFile, fullContent, StandardCharsets.UTF_8);
@@ -202,6 +203,23 @@ public final class WorkspaceReport {
         if (line.isEmpty() || line.startsWith("#")) return false;
         String normalized = line.startsWith("/") ? line.substring(1) : line;
         return normalized.equals(pattern);
+    }
+
+    /**
+     * Read the plugin version from the JAR manifest's
+     * {@code Implementation-Version} attribute (set by
+     * {@code maven-jar-plugin}'s {@code addDefaultImplementationEntries}).
+     * Reports persist across plugin upgrades, so embedding the version
+     * in the header lets a reader tell which release generated an old
+     * file when the goal's output format or semantics has shifted.
+     *
+     * @return the plugin version, or {@code "(unknown)"} when the
+     *         manifest attribute is absent (e.g. during in-IDE test runs)
+     */
+    static String pluginVersion() {
+        String v = WorkspaceReport.class.getPackage()
+                .getImplementationVersion();
+        return v != null ? v : "(unknown)";
     }
 
     /**

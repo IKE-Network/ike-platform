@@ -110,6 +110,17 @@
         <maven-compiler-plugin.version>3.14.0</maven-compiler-plugin.version>
         <maven-surefire-plugin.version>3.5.2</maven-surefire-plugin.version>
         <maven-failsafe-plugin.version>3.5.2</maven-failsafe-plugin.version>
+        <maven-jar-plugin.version>3.4.2</maven-jar-plugin.version>
+        <maven-source-plugin.version>3.3.1</maven-source-plugin.version>
+        <jacoco-maven-plugin.version>0.8.14</jacoco-maven-plugin.version>
+        <!-- ASM in surefire/failsafe plugin realm — release that supports
+             classfile major 69 (Java 25). See #282. -->
+        <asm.version>9.9</asm.version>
+        <!-- Record-builder annotation processor — used across IKE Java
+             modules. See #282. -->
+        <record-builder-core.version>34</record-builder-core.version>
+        <!-- Skip jacoco with -Dike.skip.jacoco=true. -->
+        <ike.skip.jacoco>false</ike.skip.jacoco>
     </properties>
 
     <dependencyManagement>
@@ -276,6 +287,17 @@
                         </compilerArgs>
                         <showWarnings>true</showWarnings>
                         <showDeprecation>true</showDeprecation>
+                        <!-- Record-builder annotation processor — used      -->
+                        <!-- across IKE Java modules. Promoted to ike-parent -->
+                        <!-- so each consumer doesn't need to re-declare.    -->
+                        <!-- See #282.                                       -->
+                        <annotationProcessorPaths>
+                            <annotationProcessorPath>
+                                <groupId>io.soabase.record-builder</groupId>
+                                <artifactId>record-builder-processor</artifactId>
+                                <version>${record-builder-core.version}</version>
+                            </annotationProcessorPath>
+                        </annotationProcessorPaths>
                     </configuration>
                 </plugin>
 
@@ -283,12 +305,37 @@
                 <!-- enabled at test runtime to load preview-marked classes  -->
                 <!-- (e.g. anything from tinkar-entity, komet-*).            -->
                 <!-- @{argLine} preserves any agent argLine (jacoco etc.).   -->
+                <!-- ASM dependencies in plugin realm — surefire 3.5.x's     -->
+                <!-- bundled ASM doesn't reliably parse Java 25 class files  -->
+                <!-- (major 69). Promoted from komet-desktop. See #282.      -->
+                <!-- forkCount=1, reuseForks=false isolates each test JVM,   -->
+                <!-- avoiding cross-test JVM state and giving stable timings -->
+                <!-- under preview-features.                                  -->
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-surefire-plugin</artifactId>
                     <version>${maven-surefire-plugin.version}</version>
+                    <dependencies>
+                        <dependency>
+                            <groupId>org.ow2.asm</groupId>
+                            <artifactId>asm</artifactId>
+                            <version>${asm.version}</version>
+                        </dependency>
+                        <dependency>
+                            <groupId>org.ow2.asm</groupId>
+                            <artifactId>asm-tree</artifactId>
+                            <version>${asm.version}</version>
+                        </dependency>
+                        <dependency>
+                            <groupId>org.ow2.asm</groupId>
+                            <artifactId>asm-commons</artifactId>
+                            <version>${asm.version}</version>
+                        </dependency>
+                    </dependencies>
                     <configuration>
                         <useModulePath>false</useModulePath>
+                        <forkCount>1</forkCount>
+                        <reuseForks>false</reuseForks>
                         <argLine>
                             @{argLine}
                             --enable-preview
@@ -304,10 +351,29 @@
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-failsafe-plugin</artifactId>
                     <version>${maven-failsafe-plugin.version}</version>
+                    <dependencies>
+                        <dependency>
+                            <groupId>org.ow2.asm</groupId>
+                            <artifactId>asm</artifactId>
+                            <version>${asm.version}</version>
+                        </dependency>
+                        <dependency>
+                            <groupId>org.ow2.asm</groupId>
+                            <artifactId>asm-tree</artifactId>
+                            <version>${asm.version}</version>
+                        </dependency>
+                        <dependency>
+                            <groupId>org.ow2.asm</groupId>
+                            <artifactId>asm-commons</artifactId>
+                            <version>${asm.version}</version>
+                        </dependency>
+                    </dependencies>
                     <configuration>
                         <useModulePath>false</useModulePath>
+                        <forkCount>1</forkCount>
+                        <reuseForks>false</reuseForks>
                         <argLine>
-                            @{argLine}
+                            @{failsafeArgLine}
                             --enable-preview
                             --enable-native-access=ALL-UNNAMED
                             --add-opens java.base/java.lang=ALL-UNNAMED
@@ -316,6 +382,80 @@
                             --add-opens java.base/java.io=ALL-UNNAMED
                         </argLine>
                     </configuration>
+                </plugin>
+
+                <!-- maven-jar-plugin — manifest entries used by             -->
+                <!-- WorkspaceReport.pluginVersion to discover plugin        -->
+                <!-- version at runtime (see #208). Promoted from reactor    -->
+                <!-- root so external consumers get it. See #282.            -->
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-jar-plugin</artifactId>
+                    <version>${maven-jar-plugin.version}</version>
+                    <configuration>
+                        <archive>
+                            <manifest>
+                                <addDefaultImplementationEntries>true</addDefaultImplementationEntries>
+                                <addDefaultSpecificationEntries>true</addDefaultSpecificationEntries>
+                            </manifest>
+                        </archive>
+                    </configuration>
+                </plugin>
+
+                <!-- maven-source-plugin — auto-attach sources jar to every  -->
+                <!-- artifact. Promoted from reactor root so external        -->
+                <!-- consumers publish sources without re-declaring. #282.   -->
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-source-plugin</artifactId>
+                    <version>${maven-source-plugin.version}</version>
+                    <executions>
+                        <execution>
+                            <id>attach-sources</id>
+                            <goals>
+                                <goal>jar-no-fork</goal>
+                            </goals>
+                        </execution>
+                    </executions>
+                </plugin>
+
+                <!-- jacoco — code coverage. prepare-agent (surefire) and    -->
+                <!-- prepare-agent-integration (failsafe) symmetrically set  -->
+                <!-- @{argLine} and @{failsafeArgLine}, which the parent     -->
+                <!-- argLine configs above reference. Skip with              -->
+                <!-- -Dike.skip.jacoco=true. See #282.                       -->
+                <plugin>
+                    <groupId>org.jacoco</groupId>
+                    <artifactId>jacoco-maven-plugin</artifactId>
+                    <version>${jacoco-maven-plugin.version}</version>
+                    <configuration>
+                        <skip>${ike.skip.jacoco}</skip>
+                        <formats>
+                            <format>HTML</format>
+                            <format>XML</format>
+                            <format>CSV</format>
+                        </formats>
+                    </configuration>
+                    <executions>
+                        <execution>
+                            <id>jacoco-prepare-agent</id>
+                            <goals><goal>prepare-agent</goal></goals>
+                        </execution>
+                        <execution>
+                            <id>jacoco-prepare-agent-integration</id>
+                            <goals><goal>prepare-agent-integration</goal></goals>
+                        </execution>
+                        <execution>
+                            <id>jacoco-report</id>
+                            <phase>verify</phase>
+                            <goals><goal>report</goal></goals>
+                        </execution>
+                        <execution>
+                            <id>jacoco-report-integration</id>
+                            <phase>verify</phase>
+                            <goals><goal>report-integration</goal></goals>
+                        </execution>
+                    </executions>
                 </plugin>
 
                 <plugin>

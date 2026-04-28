@@ -23,5 +23,6 @@ public class WsAlignPublishMojo extends WsAlignDraftMojo {
     public void execute() throws MojoException {
         publish = true;
         super.execute();
+        PostMutationSync.refresh(workspaceRoot(), getLog());
     }
 }

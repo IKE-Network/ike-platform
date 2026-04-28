@@ -324,7 +324,7 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
                 + "| Repo | " + repo + " |\n"
                 + "| Cloned | " + (cloned ? "yes" : "no — run ws:init") + " |\n");
 
-        IdeProfileSync.run(workspaceRoot(), getLog());
+        PostMutationSync.refresh(workspaceRoot(), getLog());
     }
 
     // ── YAML generation ──────────────────────────────────────────
@@ -446,10 +446,23 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
      * workspace.yaml. Replaces the current depends-on block with
      * the newly derived dependencies.
      */
-    void updateSubprojectDependencies(Path manifestPath, String subprojectName,
-                                      List<DerivedDep> derivedDeps) throws IOException {
+    static void updateSubprojectDependencies(Path manifestPath, String subprojectName,
+                                             List<DerivedDep> derivedDeps) throws IOException {
         String yaml = Files.readString(manifestPath, StandardCharsets.UTF_8);
+        String updated = rewriteDependsOnBlock(yaml, subprojectName, derivedDeps);
+        if (!updated.equals(yaml)) {
+            Files.writeString(manifestPath, updated, StandardCharsets.UTF_8);
+        }
+    }
 
+    /**
+     * Pure-string variant of {@link #updateSubprojectDependencies}: takes
+     * the current YAML and returns a new string with the named
+     * subproject's {@code depends-on} block replaced. Returns the input
+     * unchanged when the subproject is not present in the YAML.
+     */
+    static String rewriteDependsOnBlock(String yaml, String subprojectName,
+                                        List<DerivedDep> derivedDeps) {
         // Build the new depends-on block
         StringBuilder newDeps = new StringBuilder();
         if (derivedDeps != null && !derivedDeps.isEmpty()) {
@@ -474,12 +487,11 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
                 Pattern.MULTILINE);
         Matcher m = depsPattern.matcher(yaml);
         if (m.find()) {
-            yaml = yaml.substring(0, m.start(2))
+            return yaml.substring(0, m.start(2))
                     + newDeps
                     + yaml.substring(m.end(2));
         }
-
-        Files.writeString(manifestPath, yaml, StandardCharsets.UTF_8);
+        return yaml;
     }
 
     // ── POM generation ───────────────────────────────────────────
@@ -546,7 +558,7 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
      * correctly handles subprojects that share a groupId (e.g.,
      * tinkar-core and tinkar-composer both use {@code dev.ikm.tinkar}).
      */
-    private List<DerivedDep> deriveDependencies(Path wsDir, Path manifestPath,
+    static List<DerivedDep> deriveDependencies(Path wsDir, Path manifestPath,
                                                 Path subprojectDir, String subprojectName)
             throws IOException {
         // Collect all groupId:artifactId pairs referenced by this subproject
@@ -728,7 +740,7 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
      *
      * @return set of "groupId:artifactId" strings
      */
-    private Set<String> extractReferencedArtifacts(Path pomFile) throws IOException {
+    static Set<String> extractReferencedArtifacts(Path pomFile) throws IOException {
         Set<String> artifacts = new LinkedHashSet<>();
         scanPomForArtifacts(pomFile, artifacts);
         return artifacts;
@@ -739,7 +751,7 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
      * groupId:artifactId pairs using DOM parsing with property
      * resolution.
      */
-    private void scanPomForArtifacts(Path pomFile, Set<String> artifacts)
+    static void scanPomForArtifacts(Path pomFile, Set<String> artifacts)
             throws IOException {
         if (!Files.exists(pomFile)) return;
 

@@ -150,7 +150,7 @@ public class CommitMojo extends AbstractWorkspaceMojo {
 
         writeReport(WsGoal.COMMIT, summary + "\n");
 
-        IdeProfileSync.run(root, getLog());
+        PostMutationSync.refresh(root, getLog());
 
         if (failed > 0) {
             throw new MojoException(failed

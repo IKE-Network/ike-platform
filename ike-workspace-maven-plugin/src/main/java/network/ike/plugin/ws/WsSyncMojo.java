@@ -95,6 +95,6 @@ public class WsSyncMojo extends AbstractWorkspaceMojo {
         summary.append(".\n");
         writeReport(WsGoal.SYNC, summary.toString());
 
-        IdeProfileSync.run(workspaceRoot(), getLog());
+        PostMutationSync.refresh(workspaceRoot(), getLog());
     }
 }

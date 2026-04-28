@@ -135,6 +135,8 @@ public class WsVersionsUpgradePublishMojo extends AbstractWorkspaceMojo {
 
         writeReport(WsGoal.VERSIONS_UPGRADE_PUBLISH,
                 buildReport(plan, outcomes, planPath));
+
+        PostMutationSync.refresh(workspaceRoot(), getLog());
     }
 
     private Path resolvePlanPath(Path workspaceRootPath) {

@@ -58,6 +58,10 @@ public class WsSetParentPublishMojo extends WsSetParentDraftMojo {
         super.execute();
 
         if (noCommit || resolvedChangeCount == 0) {
+            // No commit: still refresh derived state so the workspace
+            // POMs (which super.execute() rewrote) are reflected in
+            // .mvn/maven.config and workspace.yaml's depends-on.
+            PostMutationSync.refresh(workspaceRoot(), getLog());
             return;
         }
 
@@ -71,5 +75,6 @@ public class WsSetParentPublishMojo extends WsSetParentDraftMojo {
         commit.manifest = this.manifest;
         commit.message = message;
         commit.execute();
+        // commit.execute() already refreshes derived state.
     }
 }

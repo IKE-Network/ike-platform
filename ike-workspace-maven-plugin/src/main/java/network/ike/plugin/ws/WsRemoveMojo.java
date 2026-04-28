@@ -151,7 +151,7 @@ public class WsRemoveMojo extends AbstractWorkspaceMojo {
         writeReport(WsGoal.REMOVE, "Removed subproject **" + subproject + "**."
                 + (deleteDir ? " Directory deleted." : "") + "\n");
 
-        IdeProfileSync.run(workspaceRoot(), getLog());
+        PostMutationSync.refresh(workspaceRoot(), getLog());
     }
 
     // ── YAML removal ────────────────────────────────────────────

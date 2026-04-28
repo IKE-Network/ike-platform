@@ -109,6 +109,6 @@ public class PullWorkspaceMojo extends AbstractWorkspaceMojo {
         writeReport(WsGoal.PULL, pulled + " pulled, " + skipped
                 + " skipped, " + failed + " failed.\n");
 
-        IdeProfileSync.run(root, getLog());
+        PostMutationSync.refresh(root, getLog());
     }
 }

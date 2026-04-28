@@ -194,7 +194,7 @@ public class InitWorkspaceMojo extends AbstractWorkspaceMojo {
         writeReport(WsGoal.INIT, buildInitMarkdownReport(
                 rows, cloned, syncthing, updated, skipped, wrappers));
 
-        IdeProfileSync.run(root, getLog());
+        PostMutationSync.refresh(root, getLog());
     }
 
     private String buildInitMarkdownReport(List<String[]> rows,

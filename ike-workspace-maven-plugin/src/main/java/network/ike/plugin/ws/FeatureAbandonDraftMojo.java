@@ -204,19 +204,8 @@ public class FeatureAbandonDraftMojo extends AbstractWorkspaceMojo {
         }
 
         // Publish mode — prompt for confirmation
-        if (!force) {
-            java.io.Console console = System.console();
-            if (console != null) {
-                String response = console.readLine(
-                        Ansi.YELLOW + "  Abandon feature/%s? (yes/no): " + Ansi.RESET,
-                        feature);
-                if (response == null || !response.trim().toLowerCase().startsWith("y")) {
-                    throw new MojoException("Abandon cancelled.");
-                }
-            } else {
-                throw new MojoException(
-                        "No interactive console for confirmation. Use -Dforce=true to skip.");
-            }
+        if (!force && !confirm("Abandon feature/" + feature + "?", false)) {
+            throw new MojoException("Abandon cancelled.");
         }
 
         // Execute
@@ -310,31 +299,12 @@ public class FeatureAbandonDraftMojo extends AbstractWorkspaceMojo {
             return detected;
         }
 
-        // Multiple features — list them and prompt
-        getLog().info("  Multiple feature branches detected:");
-        int i = 1;
+        // Multiple features — present a numbered selection menu
         List<String> featureList = new ArrayList<>(features);
-        for (String f : featureList) {
-            getLog().info("    " + i + ". " + f);
-            i++;
-        }
-
-        java.io.Console console = System.console();
-        if (console != null) {
-            String response = console.readLine(
-                    Ansi.YELLOW + "  Feature to abandon (name or number): " + Ansi.RESET);
-            if (response != null && !response.isBlank()) {
-                String trimmed = response.trim();
-                try {
-                    int idx = Integer.parseInt(trimmed) - 1;
-                    if (idx >= 0 && idx < featureList.size()) {
-                        return featureList.get(idx);
-                    }
-                } catch (NumberFormatException _) {
-                    // Not a number — treat as name
-                }
-                return trimmed;
-            }
+        String picked = selectFromList("Multiple feature branches detected"
+                + " — pick one to abandon", featureList);
+        if (picked != null) {
+            return picked;
         }
 
         throw new MojoException(
@@ -391,19 +361,8 @@ public class FeatureAbandonDraftMojo extends AbstractWorkspaceMojo {
         }
 
         // Publish mode — prompt for confirmation
-        if (!force) {
-            java.io.Console console = System.console();
-            if (console != null) {
-                String response = console.readLine(
-                        Ansi.YELLOW + "  Abandon feature/%s? (yes/no): " + Ansi.RESET,
-                        feature);
-                if (response == null || !response.trim().toLowerCase().startsWith("y")) {
-                    throw new MojoException("Abandon cancelled.");
-                }
-            } else {
-                throw new MojoException(
-                        "No interactive console for confirmation. Use -Dforce=true to skip.");
-            }
+        if (!force && !confirm("Abandon feature/" + feature + "?", false)) {
+            throw new MojoException("Abandon cancelled.");
         }
 
         FeatureFinishSupport.stripBranchVersionBare(dir, branchName, getLog());

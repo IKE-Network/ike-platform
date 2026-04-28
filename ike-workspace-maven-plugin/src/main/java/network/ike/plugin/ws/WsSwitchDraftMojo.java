@@ -450,12 +450,6 @@ public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
     private String promptForBranch(Map<String, Set<String>> branchSubprojects,
                                     String currentBranch)
             throws MojoException {
-        java.io.Console console = System.console();
-        if (console == null) {
-            throw new MojoException(
-                    "No interactive console available. Use -Dbranch=<name> to specify target.");
-        }
-
         List<String> branches = new ArrayList<>(branchSubprojects.keySet());
 
         getLog().info("");
@@ -474,10 +468,11 @@ public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
         }
         getLog().info("");
 
-        String input = console.readLine("  Select branch [1-" + branches.size() + "]: ");
-        if (input == null || input.isBlank()) {
-            throw new MojoException("No selection made.");
-        }
+        // Resolve via requireParam — accepts either an index (1..N) or a
+        // typed branch name. The prompt label becomes the property hint
+        // a non-interactive caller would see.
+        String input = requireParam(null, "branch",
+                "Select branch [1-" + branches.size() + "] or branch name");
 
         try {
             int idx = Integer.parseInt(input.trim()) - 1;

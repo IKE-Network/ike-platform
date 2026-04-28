@@ -7,6 +7,8 @@ import org.apache.maven.api.plugin.Log;
 import org.apache.maven.api.plugin.Mojo;
 import org.apache.maven.api.plugin.MojoException;
 import org.apache.maven.api.plugin.annotations.Parameter;
+import org.apache.maven.api.services.Prompter;
+import org.apache.maven.api.services.PrompterException;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -48,6 +50,10 @@ public class WsCreateMojo implements Mojo {
     /** Maven logger, injected by the Maven 4 DI container. */
     @Inject
     private Log log;
+
+    /** Maven 4 prompter for interactive parameter resolution. */
+    @Inject
+    private Prompter prompter;
 
     /** Access the Maven logger. */
     private Log getLog() { return log; }
@@ -515,14 +521,23 @@ public class WsCreateMojo implements Mojo {
 
     private String promptParam(String propertyName, String label)
             throws MojoException {
-        java.io.Console console = System.console();
-        if (console != null) {
-            String input = console.readLine(label + ": ");
+        if (prompter == null) {
+            throw new MojoException(
+                    propertyName + " is required. Specify -D" + propertyName
+                            + "=<value> (no Prompter wired in this context).");
+        }
+        try {
+            String input = prompter.prompt(label);
             if (input != null && !input.isBlank()) {
                 return input.trim();
             }
+        } catch (PrompterException e) {
+            throw new MojoException(
+                    propertyName + " is required. Specify -D" + propertyName
+                            + "=<value>. (" + e.getMessage() + ")");
         }
         throw new MojoException(
-                propertyName + " is required. Specify -D" + propertyName + "=<value>");
+                propertyName + " is required. Specify -D" + propertyName
+                        + "=<value>");
     }
 }

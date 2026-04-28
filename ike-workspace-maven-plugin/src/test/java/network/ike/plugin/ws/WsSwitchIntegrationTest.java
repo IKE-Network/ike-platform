@@ -153,15 +153,16 @@ class WsSwitchIntegrationTest {
 
     @Test
     void switch_noConsole_noBranch_fails() throws Exception {
-        // No -Dbranch and no console → should fail
+        // No -Dbranch and no Prompter wired → should fail with the
+        // generic 'specify -D' message from requireParam.
         WsSwitchDraftMojo mojo = TestLog.createMojo(WsSwitchDraftMojo.class);
         mojo.manifest = helper.workspaceYaml().toFile();
-        // branch is null, System.console() returns null in tests
         mojo.publish = true;
 
         assertThatThrownBy(mojo::execute)
                 .isInstanceOf(MojoException.class)
-                .hasMessageContaining("No interactive console");
+                .hasMessageContaining("branch is required")
+                .hasMessageContaining("-Dbranch");
     }
 
     // ── Helpers ──────────────────────────────────────────────────────

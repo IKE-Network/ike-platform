@@ -6,14 +6,18 @@ import network.ike.workspace.Manifest;
 import network.ike.workspace.ManifestException;
 import network.ike.workspace.ManifestReader;
 import network.ike.workspace.WorkspaceGraph;
+import org.apache.maven.api.di.Inject;
 import org.apache.maven.api.plugin.Log;
 import org.apache.maven.api.plugin.Mojo;
 import org.apache.maven.api.plugin.MojoException;
 import org.apache.maven.api.plugin.annotations.Parameter;
-import org.apache.maven.api.di.Inject;
+import org.apache.maven.api.services.Prompter;
+import org.apache.maven.api.services.PrompterException;
 
 import java.io.File;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Base class for workspace goals that read {@code workspace.yaml}.
@@ -29,6 +33,19 @@ abstract class AbstractWorkspaceMojo implements Mojo {
      */
     @Inject
     private Log log;
+
+    /**
+     * Maven 4 prompter service, injected by the DI container. Used for
+     * all interactive prompts ({@link #requireParam}, {@link #confirm},
+     * {@link #selectFromList}). The Prompter coordinates stdout flushing
+     * and stdin reads correctly across terminal sessions, IntelliJ's
+     * Maven runner, and batch mode — replacing the older
+     * {@link System#console()} pattern, which silently fell through to
+     * "no prompt at all" in IntelliJ. Package-private setter is provided
+     * for test injection.
+     */
+    @Inject
+    private Prompter prompter;
 
     /**
      * Path to workspace.yaml. If not set, searches upward from the
@@ -54,6 +71,28 @@ abstract class AbstractWorkspaceMojo implements Mojo {
      */
     protected void setLog(Log log) {
         this.log = log;
+    }
+
+    /**
+     * Inject a {@link Prompter} (or a stub) for tests. Production code
+     * receives one via the Maven 4 DI container.
+     *
+     * @param prompter the prompter implementation to use
+     */
+    void setPrompter(Prompter prompter) {
+        this.prompter = prompter;
+    }
+
+    /**
+     * The injected {@link Prompter} for callers that need to pass it
+     * through to a static helper (e.g.,
+     * {@link FeatureFinishSupport#promptStaleBranchCleanup}).
+     *
+     * @return the prompter, or {@code null} when running in a context
+     *         without DI (some unit tests)
+     */
+    protected Prompter getPrompter() {
+        return prompter;
     }
 
     /**
@@ -175,10 +214,11 @@ abstract class AbstractWorkspaceMojo implements Mojo {
      * Prompt the user interactively for a required parameter when it
      * was not supplied on the command line.
      *
-     * <p>Uses {@link System#console()} so that IntelliJ run configs
-     * and terminal sessions can provide values without requiring
-     * placeholder {@code -D} properties. Falls back to a clear error
-     * message when running non-interactively (e.g., piped input).
+     * <p>Delegates to the injected Maven 4 {@link Prompter} so the
+     * prompt label appears inline with the input cursor in both
+     * terminal sessions and IntelliJ's Maven runner. In batch mode
+     * (or when no Prompter is wired), throws a clear error directing
+     * the user to pass the property explicitly.
      *
      * @param currentValue the value from the {@code @Parameter} field (may be null)
      * @param propertyName the {@code -D} property name (for the error message)
@@ -192,40 +232,91 @@ abstract class AbstractWorkspaceMojo implements Mojo {
             return currentValue.trim();
         }
 
-        // Try System.console() first (real terminal)
-        java.io.Console console = System.console();
-        if (console != null) {
-            String input = console.readLine(Ansi.YELLOW + "%s: " + Ansi.RESET, promptLabel);
+        if (prompter == null) {
+            throw new MojoException(
+                    propertyName + " is required. Specify -D" + propertyName
+                            + "=<value> (no Prompter wired in this context).");
+        }
+
+        try {
+            String input = prompter.prompt(promptLabel);
             if (input != null && !input.isBlank()) {
                 return input.trim();
             }
-        } else {
-            // IntelliJ's Maven runner spawns Maven as a child process
-            // with stdin/stdout wired to the Run console panel. System.console()
-            // is null (not a real terminal), but System.in is connected and
-            // interactive — the same mechanism the Plexus Prompter uses.
-            //
-            // Write the prompt directly to System.out (no trailing newline)
-            // and flush, so the input cursor lands on the same line as the
-            // prompt label — matching the System.console() experience.
-            // getLog().info() would append a newline, breaking that.
-            System.out.print(Ansi.yellow(promptLabel + ": "));
-            System.out.flush();
-            try {
-                java.io.BufferedReader reader = new java.io.BufferedReader(
-                        new java.io.InputStreamReader(System.in));
-                String input = reader.readLine();
-                if (input != null && !input.isBlank()) {
-                    return input.trim();
-                }
-            } catch (java.io.IOException e) {
-                // Fall through to error
-            }
+        } catch (PrompterException e) {
+            throw new MojoException(
+                    propertyName + " is required. Specify -D" + propertyName
+                            + "=<value> or run interactively. ("
+                            + e.getMessage() + ")");
         }
 
         throw new MojoException(
                 propertyName + " is required. Specify -D" + propertyName
                         + "=<value> or run interactively.");
+    }
+
+    /**
+     * Prompt the user with a yes/no question, accepting "y"/"yes"/"n"/"no"
+     * (case-insensitive). When invoked in a non-interactive context, the
+     * default is used.
+     *
+     * @param label      the question to display (without trailing punctuation)
+     * @param defaultYes whether {@code true} (yes) is the default
+     * @return {@code true} for yes, {@code false} for no
+     * @throws MojoException if no answer can be obtained
+     */
+    protected boolean confirm(String label, boolean defaultYes) {
+        if (prompter == null) {
+            return defaultYes;
+        }
+        String suffix = defaultYes ? " [Y/n]" : " [y/N]";
+        try {
+            String input = prompter.prompt(label + suffix,
+                    defaultYes ? "y" : "n");
+            if (input == null || input.isBlank()) {
+                return defaultYes;
+            }
+            String trimmed = input.trim().toLowerCase();
+            return trimmed.equals("y") || trimmed.equals("yes");
+        } catch (PrompterException e) {
+            throw new MojoException(
+                    "Could not read confirmation: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Prompt the user to pick from a numbered list. Returns the chosen
+     * option, or {@code null} when the list is empty.
+     *
+     * @param label   prompt header (printed via the Prompter as a message)
+     * @param options ordered list of choices
+     * @return the chosen option, or {@code null} if {@code options} is empty
+     * @throws MojoException if no valid choice can be obtained
+     */
+    protected String selectFromList(String label, List<String> options) {
+        if (options == null || options.isEmpty()) {
+            return null;
+        }
+        if (prompter == null) {
+            throw new MojoException(
+                    label + ": no Prompter wired in this context");
+        }
+        try {
+            prompter.showMessage(label + ":");
+            List<String> indices = new ArrayList<>(options.size());
+            for (int i = 0; i < options.size(); i++) {
+                prompter.showMessage("  " + (i + 1) + ") " + options.get(i));
+                indices.add(String.valueOf(i + 1));
+            }
+            String pick = prompter.prompt("Select [1-" + options.size() + "]",
+                    indices, "1");
+            int idx = Integer.parseInt(pick.trim()) - 1;
+            return options.get(idx);
+        } catch (PrompterException | NumberFormatException
+                 | IndexOutOfBoundsException e) {
+            throw new MojoException(
+                    "Could not read selection: " + e.getMessage());
+        }
     }
 
     /**

@@ -205,7 +205,8 @@ public class FeatureFinishMergeDraftMojo extends AbstractWorkspaceMojo {
         // Offer stale branch cleanup (#100)
         if (publish && merged > 0) {
             FeatureFinishSupport.promptStaleBranchCleanup(
-                    root, eligible, branchName, targetBranch, getLog());
+                    root, eligible, branchName, targetBranch,
+                    getPrompter(), getLog());
         }
 
         getLog().info("");

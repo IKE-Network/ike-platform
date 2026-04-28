@@ -376,18 +376,23 @@ class FeatureFinishSupport {
      * Scan for stale feature branches across all subprojects and offer
      * interactive cleanup after a successful feature-finish.
      *
-     * <p>Stale branches are feature branches that are fully merged into the
-     * target branch and are not the branch just finished. A 30-second
-     * interactive timeout defaults to "no" (safe for unattended runs).
+     * <p>Stale branches are feature branches that are fully merged into
+     * the target branch and are not the branch just finished. The
+     * interactive prompt defaults to "no" so unattended/batch runs
+     * (where the {@link Prompter} returns the default) leave stale
+     * branches in place rather than deleting them silently.
      *
-     * @param root         workspace root directory
-     * @param components   subproject names to scan
-     * @param finishedBranch the branch that was just finished (excluded from stale list)
-     * @param targetBranch the merge target (e.g., "main")
-     * @param log          Maven logger
+     * @param root           workspace root directory
+     * @param components     subproject names to scan
+     * @param finishedBranch the branch that was just finished (excluded
+     *                       from the stale list)
+     * @param targetBranch   the merge target (e.g., "main")
+     * @param prompter       Maven 4 prompter for the cleanup confirmation
+     * @param log            Maven logger
      */
     static void promptStaleBranchCleanup(File root, List<String> components,
                                            String finishedBranch, String targetBranch,
+                                           org.apache.maven.api.services.Prompter prompter,
                                            Log log) {
         // Collect stale branches across all subprojects
         Map<String, List<String>> staleBranches = new LinkedHashMap<>();
@@ -431,13 +436,25 @@ class FeatureFinishSupport {
                     + ", last commit: " + date + ")");
         }
 
-        // Prompt for deletion with 30-second timeout
+        // Prompt for deletion. Default "n" so non-interactive runs
+        // (batch mode, missing Prompter) leave the branches in place.
         log.info("");
-        String prompt = "  Delete " + uniqueBranches.size() + " stale branch"
-                + (uniqueBranches.size() == 1 ? "" : "es")
-                + "? [y/N] (30s timeout → No): ";
+        String prompt = "Delete " + uniqueBranches.size() + " stale branch"
+                + (uniqueBranches.size() == 1 ? "" : "es") + "? [y/N]";
 
-        boolean delete = promptWithTimeout(prompt, false, 30, log);
+        boolean delete = false;
+        if (prompter != null) {
+            try {
+                String input = prompter.prompt(prompt, "n");
+                if (input != null) {
+                    String trimmed = input.trim().toLowerCase();
+                    delete = trimmed.equals("y") || trimmed.equals("yes");
+                }
+            } catch (org.apache.maven.api.services.PrompterException e) {
+                log.debug("Prompt failed: " + e.getMessage()
+                        + " — defaulting to no");
+            }
+        }
 
         if (delete) {
             for (var entry : staleBranches.entrySet()) {
@@ -455,36 +472,6 @@ class FeatureFinishSupport {
             log.info("  Stale branches cleaned up.");
         } else {
             log.info("  Skipping stale branch cleanup.");
-        }
-    }
-
-    /**
-     * Prompt with a timeout that returns the default if no input arrives.
-     */
-    private static boolean promptWithTimeout(String prompt, boolean defaultValue,
-                                               int timeoutSeconds, Log log) {
-        java.io.Console console = System.console();
-        if (console == null) {
-            // Non-interactive — use default
-            return defaultValue;
-        }
-
-        var future = new java.util.concurrent.FutureTask<>(() -> {
-            String input = console.readLine(prompt);
-            return input != null && (input.trim().equalsIgnoreCase("y")
-                    || input.trim().equalsIgnoreCase("yes"));
-        });
-
-        Thread inputThread = Thread.ofVirtual().start(future);
-        try {
-            return future.get(timeoutSeconds, java.util.concurrent.TimeUnit.SECONDS);
-        } catch (java.util.concurrent.TimeoutException e) {
-            log.info("  (timeout — using default: "
-                    + (defaultValue ? "Yes" : "No") + ")");
-            future.cancel(true);
-            return defaultValue;
-        } catch (Exception e) {
-            return defaultValue;
         }
     }
 

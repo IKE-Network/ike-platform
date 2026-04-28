@@ -385,12 +385,15 @@ public class VcsOperations {
     }
 
     /**
-     * Stage all changes and commit with the given message.
+     * Commit the currently-staged changes with the given message via
+     * {@code git commit -F -} (message piped on stdin, no shell quoting
+     * issues, no argument-length limits). Does not stage — callers
+     * stage first via {@link #addAll} or per-path {@code git add}.
      * Sets {@code IKE_VCS_CONTEXT} to bypass the pre-commit hook.
      *
      * @param dir     the repository root directory
      * @param log     Maven logger
-     * @param message the commit message
+     * @param message the commit message; must not be {@code null} or blank
      * @throws MojoException if the git command fails
      */
     public static void commit(File dir, Log log, String message)
@@ -399,21 +402,20 @@ public class VcsOperations {
     }
 
     /**
-     * Commit without staging (assumes files are already staged).
-     * Sets {@code IKE_VCS_CONTEXT} to bypass the pre-commit hook.
+     * Alias for {@link #commit(File, Log, String)}; retained for callers
+     * that emphasize the "files are already staged" reading. Editor-mode
+     * (null-message) was removed in #277 — Maven's non-interactive child
+     * process cannot open an editor, so the path was never reachable in
+     * practice.
      *
      * @param dir     the repository root directory
      * @param log     Maven logger
-     * @param message the commit message, or {@code null} to open the editor
+     * @param message the commit message; must not be {@code null} or blank
      * @throws MojoException if the git command fails
      */
     public static void commitStaged(File dir, Log log, String message)
             throws MojoException {
-        if (message == null) {
-            runWithContext(dir, log, "git", "commit");
-        } else {
-            commitWithStdin(dir, log, message, "git", "commit", "-F", "-");
-        }
+        commit(dir, log, message);
     }
 
     /**

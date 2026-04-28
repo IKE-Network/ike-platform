@@ -474,7 +474,8 @@ public class VerifyWorkspaceMojo extends AbstractWorkspaceMojo {
                         + " at " + state.timestamp());
                 getLog().warn(indent + "               You are on '"
                         + localBranch + "'.");
-                getLog().warn(indent + "Action:        run 'mvnw ike:sync' to switch to the feature branch");
+                getLog().warn(indent + "Action:        run 'mvnw ws:switch -Dbranch="
+                        + state.branch() + "' to follow the feature branch");
             }
             case FEATURE_FINISH -> {
                 getLog().warn(indent + "Status:        feature finished on "
@@ -482,7 +483,8 @@ public class VerifyWorkspaceMojo extends AbstractWorkspaceMojo {
                         + ", merged to '" + state.branch() + "'");
                 getLog().warn(indent + "               You are on '"
                         + localBranch + "'.");
-                getLog().warn(indent + "Action:        run 'mvnw ike:sync' to return to '"
+                getLog().warn(indent + "Action:        run 'mvnw ws:switch -Dbranch="
+                        + state.branch() + "' to return to '"
                         + state.branch() + "'");
             }
             case SWITCH -> {
@@ -498,7 +500,8 @@ public class VerifyWorkspaceMojo extends AbstractWorkspaceMojo {
             case COMMIT, PUSH, RELEASE, CHECKPOINT -> {
                 getLog().warn(indent + "Status:        branch mismatch — local '"
                         + localBranch + "', state file '" + state.branch() + "'");
-                getLog().warn(indent + "Action:        run 'mvnw ike:sync' to reconcile");
+                getLog().warn(indent + "Action:        run 'mvnw ws:switch -Dbranch="
+                        + state.branch() + "' to reconcile");
             }
         }
     }
@@ -520,13 +523,13 @@ public class VerifyWorkspaceMojo extends AbstractWorkspaceMojo {
                 if (shaOnRemote) {
                     getLog().warn(indent + "Status:        commit on "
                             + state.machine() + " at " + state.timestamp());
-                    getLog().warn(indent + "Action:        run 'mvnw ike:sync'");
+                    getLog().warn(indent + "Action:        run 'mvnw ws:pull'");
                 } else {
                     getLog().warn(indent + "Status:        commit on "
                             + state.machine() + " at " + state.timestamp()
                             + ", but push did not complete");
                     getLog().warn(indent + "Action:        push from "
-                            + state.machine() + " first, then 'mvnw ike:sync' here");
+                            + state.machine() + " first, then 'mvnw ws:pull' here");
                     getLog().warn(indent + "               Or: IKE_VCS_OVERRIDE=1 to proceed independently");
                 }
             }
@@ -534,17 +537,17 @@ public class VerifyWorkspaceMojo extends AbstractWorkspaceMojo {
                 getLog().warn(indent + "Status:        push from "
                         + state.machine() + " at " + state.timestamp());
                 getLog().warn(indent + "               Local HEAD behind remote.");
-                getLog().warn(indent + "Action:        run 'mvnw ike:sync'");
+                getLog().warn(indent + "Action:        run 'mvnw ws:pull'");
             }
             case RELEASE -> {
                 getLog().warn(indent + "Status:        release performed on "
                         + state.machine() + " at " + state.timestamp());
-                getLog().warn(indent + "Action:        run 'mvnw ike:sync'");
+                getLog().warn(indent + "Action:        run 'mvnw ws:pull'");
             }
             case CHECKPOINT -> {
                 getLog().warn(indent + "Status:        checkpoint created on "
                         + state.machine() + " at " + state.timestamp());
-                getLog().warn(indent + "Action:        run 'mvnw ike:sync'");
+                getLog().warn(indent + "Action:        run 'mvnw ws:pull'");
             }
             case SWITCH -> {
                 getLog().warn(indent + "Status:        switched on "
@@ -555,7 +558,7 @@ public class VerifyWorkspaceMojo extends AbstractWorkspaceMojo {
             case FEATURE_START, FEATURE_FINISH -> {
                 getLog().warn(indent + "Status:        behind ("
                         + state.action().label() + " on " + state.machine() + ")");
-                getLog().warn(indent + "Action:        run 'mvnw ike:sync'");
+                getLog().warn(indent + "Action:        run 'mvnw ws:pull'");
             }
         }
     }

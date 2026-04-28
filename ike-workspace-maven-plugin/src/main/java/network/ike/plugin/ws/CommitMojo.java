@@ -51,8 +51,12 @@ public class CommitMojo extends AbstractWorkspaceMojo {
     public CommitMojo() {}
 
     /**
-     * Commit message. If omitted, git opens the editor and the
-     * prepare-commit-msg hook generates a message via Claude.
+     * Commit message. Required. When omitted on the command line, the
+     * goal prompts interactively (terminal or IntelliJ Maven runner)
+     * via {@link AbstractWorkspaceMojo#requireParam}. Throws a clear
+     * error when running in a non-interactive context (CI, piped
+     * input). The same resolved message is used for every repo in the
+     * workspace iteration.
      */
     @Parameter(property = "message")
     String message;
@@ -85,6 +89,12 @@ public class CommitMojo extends AbstractWorkspaceMojo {
         File root = workspaceRoot();
 
         List<String> sorted = graph.topologicalSort();
+
+        // Resolve the message before any work — prompts interactively
+        // when running in a terminal or IntelliJ's Maven runner, throws
+        // a clear error in non-interactive contexts (CI, piped input).
+        // One message applies to every repo in this invocation.
+        message = requireParam(message, "message", "Commit message");
 
         getLog().info("");
         getLog().info(header("Commit"));
@@ -138,13 +148,14 @@ public class CommitMojo extends AbstractWorkspaceMojo {
         getLog().info("  Done: " + summary);
         getLog().info("");
 
-        if (failed > 0) {
-            getLog().warn("  Some commits failed — check output above for details.");
-        }
-
         writeReport(WsGoal.COMMIT, summary + "\n");
 
         IdeProfileSync.run(root, getLog());
+
+        if (failed > 0) {
+            throw new MojoException(failed
+                    + " commit(s) failed — check output above for details.");
+        }
     }
 
     /**
@@ -194,11 +205,7 @@ public class CommitMojo extends AbstractWorkspaceMojo {
                 return CommitOutcome.SKIPPED_UNSTAGED;
             }
 
-            if (message != null && !message.isBlank()) {
-                VcsOperations.commit(dir, getLog(), message);
-            } else {
-                VcsOperations.commitStaged(dir, getLog(), null);
-            }
+            VcsOperations.commit(dir, getLog(), message);
             VcsOperations.writeVcsState(dir, VcsState.Action.COMMIT);
 
             if (push) {
@@ -240,6 +247,10 @@ public class CommitMojo extends AbstractWorkspaceMojo {
     }
 
     private void executeSingleRepo(File dir) throws MojoException {
+        // Resolve message before doing anything else — prompts when run
+        // interactively, throws clearly when piped/CI.
+        message = requireParam(message, "message", "Commit message");
+
         getLog().info("");
         getLog().info("IKE VCS Bridge — Commit");
         getLog().info("══════════════════════════════════════════════════════════════");
@@ -251,14 +262,8 @@ public class CommitMojo extends AbstractWorkspaceMojo {
             VcsOperations.addAll(dir, getLog());
         }
 
-        if (message != null && !message.isBlank()) {
-            getLog().info("  Committing...");
-            VcsOperations.commit(dir, getLog(), message);
-        } else {
-            getLog().info("  Committing (editor will open for message)...");
-            VcsOperations.commitStaged(dir, getLog(), null);
-        }
-
+        getLog().info("  Committing...");
+        VcsOperations.commit(dir, getLog(), message);
         VcsOperations.writeVcsState(dir, VcsState.Action.COMMIT);
 
         if (push) {

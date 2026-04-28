@@ -129,6 +129,7 @@ public class WsSetParentDraftMojo extends AbstractWorkspaceMojo {
         getLog().info("");
 
         List<ParentChange> changes = new ArrayList<>();
+        List<SkippedSubproject> skipped = new ArrayList<>();
 
         // --- Root POM ---
         String rootCurrentVersion = rootParent.version();
@@ -176,11 +177,14 @@ public class WsSetParentDraftMojo extends AbstractWorkspaceMojo {
             // happen to share an artifactId with the workspace parent.
             if (!parentGroupId.equals(compParent.groupId())
                     || !parentArtifactId.equals(compParent.artifactId())) {
-                getLog().debug("  " + name + ": parent is "
-                        + compParent.groupId() + ":"
-                        + compParent.artifactId() + ", not "
-                        + parentGroupId + ":" + parentArtifactId
-                        + " — skipping");
+                String actualGav = compParent.groupId() + ":"
+                        + compParent.artifactId() + ":"
+                        + compParent.version();
+                getLog().info("  " + Ansi.yellow("⊘ ") + name
+                        + ": parent " + actualGav
+                        + " — skipped (workspace parent is "
+                        + parentGroupId + ":" + parentArtifactId + ")");
+                skipped.add(new SkippedSubproject(name, actualGav));
                 continue;
             }
 
@@ -256,6 +260,11 @@ public class WsSetParentDraftMojo extends AbstractWorkspaceMojo {
                     + "Updated " + changes.size() + " POM(s) to "
                     + parentArtifactId + ":" + targetVersion);
         }
+        if (!skipped.isEmpty()) {
+            getLog().info("  " + skipped.size()
+                    + " subproject(s) skipped due to parent GAV mismatch"
+                    + " — see report for details.");
+        }
         getLog().info("");
 
         this.resolvedChangeCount = changes.size();
@@ -263,7 +272,7 @@ public class WsSetParentDraftMojo extends AbstractWorkspaceMojo {
         // --- Report ---
         writeReport(publish ? WsGoal.SET_PARENT_PUBLISH : WsGoal.SET_PARENT_DRAFT,
                 buildMarkdownReport(parentArtifactId, targetVersion,
-                        changes, draft));
+                        parentGroupId, changes, skipped, draft));
     }
 
     // ── Helpers ─────────────────────────────────────────────────────
@@ -312,40 +321,62 @@ public class WsSetParentDraftMojo extends AbstractWorkspaceMojo {
      *
      * @param parentArtifactId parent artifact name
      * @param targetVersion    target version
+     * @param parentGroupId    parent groupId (used for the skipped table)
      * @param changes          list of changes
+     * @param skipped          subprojects whose parent GAV did not match
      * @param draft            whether this is a draft run
      * @return markdown content
      */
     private String buildMarkdownReport(String parentArtifactId,
                                         String targetVersion,
+                                        String parentGroupId,
                                         List<ParentChange> changes,
+                                        List<SkippedSubproject> skipped,
                                         boolean draft) {
         StringBuilder md = new StringBuilder();
 
-        md.append("**Target:** `").append(parentArtifactId)
+        md.append("**Target:** `").append(parentGroupId)
+          .append(':').append(parentArtifactId)
           .append(':').append(targetVersion).append("`\n\n");
 
-        if (changes.isEmpty()) {
+        if (changes.isEmpty() && skipped.isEmpty()) {
             md.append("All POMs already at target version.\n");
             return md.toString();
         }
 
-        if (draft) {
-            md.append("**Dry run** — ").append(changes.size())
-              .append(" POM(s) would be updated.\n\n");
-        } else {
-            md.append("Updated ").append(changes.size())
-              .append(" POM(s).\n\n");
+        if (!changes.isEmpty()) {
+            if (draft) {
+                md.append("**Dry run** — ").append(changes.size())
+                  .append(" POM(s) would be updated.\n\n");
+            } else {
+                md.append("Updated ").append(changes.size())
+                  .append(" POM(s).\n\n");
+            }
+
+            md.append("| Subproject | POM | From | To |\n");
+            md.append("|-----------|-----|------|----|\n");
+            for (ParentChange c : changes) {
+                md.append("| ").append(c.subproject)
+                  .append(" | ").append(c.pomRelPath)
+                  .append(" | ").append(c.fromVersion)
+                  .append(" | ").append(c.toVersion)
+                  .append(" |\n");
+            }
         }
 
-        md.append("| Subproject | POM | From | To |\n");
-        md.append("|-----------|-----|------|----|\n");
-        for (ParentChange c : changes) {
-            md.append("| ").append(c.subproject)
-              .append(" | ").append(c.pomRelPath)
-              .append(" | ").append(c.fromVersion)
-              .append(" | ").append(c.toVersion)
-              .append(" |\n");
+        if (!skipped.isEmpty()) {
+            md.append("\n## Skipped (parent GAV mismatch)\n\n");
+            md.append("These subprojects inherit from a different parent GAV"
+                    + " and were not touched. The workspace parent is `")
+              .append(parentGroupId).append(':').append(parentArtifactId)
+              .append("`; each subproject's actual parent is shown below.\n\n");
+            md.append("| Subproject | Actual Parent |\n");
+            md.append("|-----------|---------------|\n");
+            for (SkippedSubproject s : skipped) {
+                md.append("| ").append(s.subproject)
+                  .append(" | `").append(s.actualParentGav)
+                  .append("` |\n");
+            }
         }
 
         return md.toString();
@@ -361,4 +392,16 @@ public class WsSetParentDraftMojo extends AbstractWorkspaceMojo {
      */
     private record ParentChange(String subproject, String pomRelPath,
                                  String fromVersion, String toVersion) {}
+
+    /**
+     * A subproject whose parent GAV did not match the workspace root's
+     * parent and was therefore skipped. Recorded for the report so the
+     * user can see exactly which subprojects were considered and why
+     * they were left untouched.
+     *
+     * @param subproject       subproject name from workspace.yaml
+     * @param actualParentGav  the subproject's parent {@code groupId:artifactId:version}
+     */
+    private record SkippedSubproject(String subproject,
+                                      String actualParentGav) {}
 }

@@ -204,9 +204,13 @@ abstract class AbstractWorkspaceMojo implements Mojo {
             // with stdin/stdout wired to the Run console panel. System.console()
             // is null (not a real terminal), but System.in is connected and
             // interactive — the same mechanism the Plexus Prompter uses.
-            // Use getLog().info() for the prompt so IntelliJ renders it
-            // through the Maven logger (no [stdout] prefix).
-            getLog().info(Ansi.yellow(promptLabel + ": "));
+            //
+            // Write the prompt directly to System.out (no trailing newline)
+            // and flush, so the input cursor lands on the same line as the
+            // prompt label — matching the System.console() experience.
+            // getLog().info() would append a newline, breaking that.
+            System.out.print(Ansi.yellow(promptLabel + ": "));
+            System.out.flush();
             try {
                 java.io.BufferedReader reader = new java.io.BufferedReader(
                         new java.io.InputStreamReader(System.in));

@@ -27,13 +27,21 @@ import java.util.List;
  * <p>Use {@code -DkeepBranch=true} only if you understand that the
  * branch can no longer be cleanly merged again.
  *
+ * <p>Before performing the squash-merge, this goal refreshes local
+ * {@code main} from {@code origin/main} via {@link RefreshMainSupport}
+ * so the feature is not landed on top of stale main. If the refresh
+ * would produce file conflicts, the goal hard-errors before touching
+ * any feature branch. See ike-issues#284.
+ *
  * <p>When to use: most features. Feature branch history is disposable.
  * Target branch gets one clean commit.
  *
  * <pre>{@code
- * mvn ike:feature-finish-squash -Dfeature=my-feature -Dmessage="Add widget support"
+ * mvn ws:feature-finish-squash-draft   -Dfeature=my-feature -Dmessage="Add widget"
+ * mvn ws:feature-finish-squash-publish -Dfeature=my-feature -Dmessage="Add widget"
  * }</pre>
  *
+ * @see RefreshMainSupport for the local-main refresh contract
  * @see FeatureFinishMergeDraftMojo for long-lived branches
  */
 @Mojo(name = "feature-finish-squash-draft", projectRequired = false, aggregator = true)

@@ -31,8 +31,16 @@ import java.util.Set;
  * workspace subprojects, optionally setting branch-qualified
  * SNAPSHOT versions in each POM.
  *
+ * <p>Before branching, this goal refreshes local {@code main} from
+ * {@code origin/main} via {@link RefreshMainSupport} so the new
+ * feature branch starts from current main rather than whatever stale
+ * state happens to be on the local machine. If the refresh would
+ * produce file conflicts, the goal hard-errors before any branch is
+ * created. See ike-issues#284.
+ *
  * <p><strong>Workspace mode</strong> (workspace.yaml found):</p>
  * <ol>
+ *   <li>Refreshes local main from {@code origin/main}</li>
  *   <li>Validates the working tree is clean</li>
  *   <li>Creates branch {@code feature/<name>} from the current HEAD</li>
  *   <li>If the subproject has a Maven version, sets a branch-qualified
@@ -52,9 +60,12 @@ import java.util.Set;
  * dependencies get their new versions first.
  *
  * <pre>{@code
- * mvn ike:feature-start -Dfeature=shield-terminology
- * mvn ike:feature-start -Dfeature=doc-refresh -DskipVersion=true
+ * mvn ws:feature-start-draft   -Dfeature=shield-terminology
+ * mvn ws:feature-start-publish -Dfeature=shield-terminology
+ * mvn ws:feature-start-publish -Dfeature=doc-refresh -DskipVersion=true
  * }</pre>
+ *
+ * @see RefreshMainSupport for the local-main refresh contract
  */
 @Mojo(name = "feature-start-draft", projectRequired = false, aggregator = true)
 public class FeatureStartDraftMojo extends AbstractWorkspaceMojo {

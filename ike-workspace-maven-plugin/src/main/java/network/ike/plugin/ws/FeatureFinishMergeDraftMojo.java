@@ -23,15 +23,24 @@ import java.util.List;
  * by default because histories stay connected — the branch can
  * continue to receive work and be merged again later.
  *
+ * <p>Before performing the merge, this goal refreshes local
+ * {@code main} from {@code origin/main} via {@link RefreshMainSupport}
+ * so the feature is not merged on top of stale main. If the refresh
+ * would produce file conflicts (the rare "two machines edited the
+ * same file on main without push/pull" case), the goal hard-errors
+ * before touching any feature branch. See ike-issues#284.
+ *
  * <p>When to use: long-lived feature branches that periodically merge
  * intermediate work to the target branch. Use when you need
  * traceability of individual feature commits on the target branch.
  *
  * <pre>{@code
- * mvn ike:feature-finish-merge -Dfeature=long-running
- * mvn ike:feature-finish-merge -Dfeature=done-feature -DkeepBranch=false
+ * mvn ws:feature-finish-merge-draft   -Dfeature=long-running
+ * mvn ws:feature-finish-merge-publish -Dfeature=long-running
+ * mvn ws:feature-finish-merge-publish -Dfeature=done -DkeepBranch=false
  * }</pre>
  *
+ * @see RefreshMainSupport for the local-main refresh contract
  * @see FeatureFinishSquashDraftMojo for clean single-commit merges (default)
  */
 @Mojo(name = "feature-finish-merge-draft", projectRequired = false, aggregator = true)

@@ -74,6 +74,8 @@ public enum WsGoal {
             "Pull all subprojects."),
     PUSH("push", PushMojo.class,
             "Push all subprojects."),
+    REFRESH_MAIN("refresh-main", WsRefreshMainMojo.class,
+            "Refresh local main from origin/main across the workspace."),
     RELEASE_DRAFT("release-draft", WsReleaseDraftMojo.class,
             "Preview a workspace release."),
     RELEASE_NOTES("release-notes", WsReleaseNotesMojo.class,

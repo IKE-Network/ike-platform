@@ -192,6 +192,11 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
             return;
         }
 
+        // Refresh local main from origin/main before squash-merging the
+        // feature branch in. Avoids shipping the feature on top of stale
+        // main. See ike-issues#284.
+        RefreshMainSupport.refreshOrThrow(root, eligible, targetBranch, getLog());
+
         // Merge each subproject
         int merged = 0;
         for (String name : eligible) {

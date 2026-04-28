@@ -24,19 +24,31 @@ import java.util.Set;
  * commit hashes and is safe for branches shared via Syncthing or pushed
  * to a remote.
  *
- * <p>Components are processed in topological order. If a conflict occurs,
- * the goal stops and reports the conflicting files with instructions for
- * resolving in IntelliJ. Re-running the goal after resolution continues
- * with the remaining components.
+ * <p>Both variants begin by refreshing local main from
+ * {@code origin/main} via {@link RefreshMainSupport} so the merge runs
+ * against current main rather than whatever stale state happens to be
+ * on the local machine. The refresh fast-forwards local main when
+ * possible and auto-resolves divergence with a merge commit when needed.
+ * If the refresh would produce file conflicts (the rare "two machines
+ * edited the same file on main without push/pull" case), the goal
+ * hard-errors before touching the feature branch. See ike-issues#284.
  *
- * <p>The draft variant predicts conflicts using {@code git merge-tree}
- * without touching the working tree — safe to run at any time.
+ * <p>Components are processed in topological order. If a conflict occurs
+ * during the feature-side merge, the goal stops and reports the
+ * conflicting files with instructions for resolving in IntelliJ.
+ * Re-running the goal after resolution continues with the remaining
+ * components.
+ *
+ * <p>The draft variant fetches and refreshes local main but does not
+ * modify the feature branch or working tree. Conflict prediction uses
+ * {@code git merge-tree}.
  *
  * <pre>{@code
- * mvn ws:update-feature-draft    # preview + predict conflicts
- * mvn ws:update-feature-publish  # merge main into feature branch
+ * mvn ws:update-feature-draft    # refresh main + preview + predict conflicts
+ * mvn ws:update-feature-publish  # refresh main + merge into feature branch
  * }</pre>
  *
+ * @see RefreshMainSupport for the local-main refresh contract
  * @see FeatureStartDraftMojo for creating feature branches
  * @see FeatureFinishSquashDraftMojo for merging back to main
  */
@@ -147,16 +159,15 @@ public class UpdateFeatureDraftMojo extends AbstractWorkspaceMojo {
             return;
         }
 
+        // Refresh local main from origin/main across eligible components
+        // before any feature-side comparison or merge. See ike-issues#284.
+        RefreshMainSupport.refreshOrThrow(root, eligible, targetBranch, getLog());
+
         // Show how far behind each subproject is + collect report data
         List<String[]> reportRows = new ArrayList<>();
         for (String name : eligible) {
             File dir = new File(root, name);
             try {
-                // Fetch to get latest main from origin
-                if (!draft) {
-                    VcsOperations.fetch(dir, getLog());
-                }
-
                 List<String> behind = VcsOperations.commitLog(
                         dir, branchName, targetBranch);
                 List<String> ahead = VcsOperations.commitLog(

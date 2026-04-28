@@ -118,6 +118,10 @@ public class FeatureStartDraftMojo extends AbstractWorkspaceMojo {
         }
         getLog().info("");
 
+        // Refresh local main from origin/main before branching, so the new
+        // feature branch starts from current main. See ike-issues#284.
+        RefreshMainSupport.refreshOrThrow(root, sorted, "main", getLog());
+
         // Analyze BOM cascade issues and prompt for confirmation
         List<CascadeGapRow> cascadeGaps = new ArrayList<>();
         if (!skipVersion) {

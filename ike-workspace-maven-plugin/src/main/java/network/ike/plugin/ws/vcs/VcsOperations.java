@@ -554,6 +554,37 @@ public class VcsOperations {
     }
 
     /**
+     * Fast-forward-only merge. Used to advance the currently-checked-out
+     * branch to a ref that is a strict descendant; fails if a real merge
+     * (or rebase) would be required.
+     *
+     * @param dir the repository root directory
+     * @param log Maven logger
+     * @param ref the ref to fast-forward to
+     * @throws MojoException if the merge is not fast-forwardable or git fails
+     */
+    public static void mergeFfOnly(File dir, Log log, String ref)
+            throws MojoException {
+        runWithContext(dir, log, "git", "merge", "--ff-only", ref);
+    }
+
+    /**
+     * Abort an in-progress merge ({@code git merge --abort}). Used as a
+     * cleanup safety net after a merge attempt fails unexpectedly. Does
+     * not throw if no merge is in progress.
+     *
+     * @param dir the repository root directory
+     * @param log Maven logger
+     */
+    public static void mergeAbortQuiet(File dir, Log log) {
+        try {
+            run(dir, log, null, "git", "merge", "--abort");
+        } catch (MojoException e) {
+            // No merge in progress, or already aborted — non-fatal here.
+        }
+    }
+
+    /**
      * Check whether a local branch exists.
      *
      * @param dir    the repository root directory

@@ -1,6 +1,7 @@
 package network.ike.plugin.ws;
 
 import network.ike.plugin.ReleaseSupport;
+import network.ike.plugin.ws.vcs.VcsOperations;
 import network.ike.workspace.Subproject;
 import network.ike.workspace.Dependency;
 import network.ike.workspace.Manifest;
@@ -84,7 +85,15 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
     private String description;
 
     /**
-     * Branch to track. If omitted, uses the workspace default.
+     * Branch to track. If omitted, the new subproject is placed on the
+     * workspace repo's current git branch (the workspace's active branch).
+     * If the workspace repo has no git state, falls back to the manifest's
+     * {@code defaults.branch}.
+     *
+     * <p>Passing an explicit {@code -Dbranch=} value that disagrees with
+     * the workspace repo's current branch is rejected — heterogeneous
+     * branch state across a workspace is not a supported configuration
+     * (see ike-issues#286).
      */
     @Parameter(property = "branch")
     private String branch;
@@ -132,6 +141,11 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
                     "No workspace.yaml found in " + wsDir
                     + ". Run ws:create first.");
         }
+
+        // Resolve the target branch up front: workspace repo HEAD is
+        // authoritative (ike-issues#286). The new subproject must land
+        // on the same branch as the rest of the workspace.
+        branch = resolveBranch(wsDir, manifestPath);
 
         // Derive subproject name from URL if not specified
         if (subproject == null || subproject.isBlank()) {
@@ -529,21 +543,136 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
         Files.writeString(pomPath, pom, StandardCharsets.UTF_8);
     }
 
+    // ── Branch resolution ────────────────────────────────────────
+
+    /**
+     * Resolve the branch that the new subproject should land on.
+     *
+     * <p>Precedence (ike-issues#286):
+     * <ol>
+     *   <li>The workspace repo's current git branch is authoritative.
+     *       If {@code -Dbranch=} was given and disagrees, fail — that's
+     *       a request for heterogeneous branch state, which is not
+     *       supported.</li>
+     *   <li>If the workspace dir is not a git repo (no {@code .git}),
+     *       use {@code -Dbranch=} if provided.</li>
+     *   <li>Otherwise, fall back to the manifest's
+     *       {@code defaults.branch}.</li>
+     * </ol>
+     *
+     * @param wsDir        the workspace root directory
+     * @param manifestPath path to workspace.yaml
+     * @return the resolved branch name; never null or blank
+     * @throws MojoException if {@code -Dbranch} disagrees with the
+     *                       workspace repo's current branch, or if no
+     *                       branch can be resolved at all
+     */
+    private String resolveBranch(Path wsDir, Path manifestPath) throws MojoException {
+        String requested = (branch != null && !branch.isBlank()) ? branch : null;
+        String wsBranch = workspaceHeadBranch(wsDir);
+
+        if (wsBranch != null) {
+            if (requested != null && !requested.equals(wsBranch)) {
+                throw new MojoException(
+                        "Requested branch '" + requested + "' disagrees with the "
+                                + "workspace repo's current branch '" + wsBranch + "'. "
+                                + "All subprojects in a workspace must track the same "
+                                + "branch (ike-issues#286). Either run on the matching "
+                                + "branch in the workspace repo, or omit -Dbranch= to "
+                                + "use the workspace's current branch.");
+            }
+            return wsBranch;
+        }
+
+        if (requested != null) return requested;
+
+        // No workspace git state, no -Dbranch — fall back to defaults.branch.
+        try {
+            String def = ManifestReader.read(manifestPath).defaults().branch();
+            if (def != null && !def.isBlank()) return def;
+        } catch (ManifestException e) {
+            // fall through to error below
+        }
+        throw new MojoException(
+                "Cannot resolve a branch for the new subproject: workspace repo "
+                        + "has no git state, no -Dbranch was given, and "
+                        + "defaults.branch is unset in workspace.yaml.");
+    }
+
+    /**
+     * Read the workspace repo's current branch, or null if the workspace
+     * directory is not a git repository.
+     */
+    private static String workspaceHeadBranch(Path wsDir) {
+        if (!Files.isDirectory(wsDir.resolve(".git"))) return null;
+        try {
+            String b = VcsOperations.currentBranch(wsDir.toFile());
+            return (b == null || b.isBlank()) ? null : b;
+        } catch (MojoException e) {
+            return null;
+        }
+    }
+
     // ── Clone ────────────────────────────────────────────────────
 
+    /**
+     * Clone the subproject onto the resolved workspace branch.
+     *
+     * <p>If the remote already has the branch, clones with {@code -b}.
+     * If the branch is absent on the remote, clones the remote's default
+     * branch and creates the workspace branch locally — mirroring what
+     * {@code ws:feature-start-publish} would have done if this subproject
+     * had been a workspace member at the time. The new branch is left
+     * unpushed; a subsequent {@code ws:push} promotes it to origin
+     * alongside the workspace.yaml change.
+     */
     private void cloneSubproject(Path wsDir) throws MojoException {
+        boolean remoteHasBranch = remoteHasBranch(wsDir, repo, branch);
+
         List<String> cmd = new ArrayList<>();
         cmd.add("git");
         cmd.add("clone");
         cmd.add("--depth");
         cmd.add("1");
-        if (branch != null && !branch.isBlank()) {
+        if (remoteHasBranch) {
             cmd.add("-b");
             cmd.add(branch);
         }
         cmd.add(repo);
         cmd.add(subproject);
         ReleaseSupport.exec(wsDir.toFile(), getLog(), cmd.toArray(new String[0]));
+
+        if (!remoteHasBranch) {
+            getLog().info("  Remote has no branch '" + branch
+                    + "' — creating it locally from the remote's default.");
+            ReleaseSupport.exec(wsDir.resolve(subproject).toFile(), getLog(),
+                    "git", "checkout", "-b", branch);
+        }
+    }
+
+    /**
+     * Probe whether {@code refs/heads/<branch>} exists on the given remote
+     * URL via {@code git ls-remote --heads}. Returns false on any failure
+     * (offline, auth, unknown repo) — the caller will surface the real
+     * error from the subsequent {@code git clone} attempt.
+     */
+    private static boolean remoteHasBranch(Path wsDir, String repoUrl, String branch) {
+        try {
+            ProcessBuilder pb = new ProcessBuilder(
+                    "git", "ls-remote", "--heads", repoUrl, branch)
+                    .directory(wsDir.toFile())
+                    .redirectErrorStream(false);
+            Process proc = pb.start();
+            String stdout = new String(proc.getInputStream().readAllBytes(),
+                    StandardCharsets.UTF_8).trim();
+            int exit = proc.waitFor();
+            return exit == 0 && !stdout.isEmpty();
+        } catch (IOException | InterruptedException e) {
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            return false;
+        }
     }
 
     // ── POM-based dependency derivation ────────────────────────

@@ -140,7 +140,7 @@ public class CommitMojo extends AbstractWorkspaceMojo {
         }
         if (skippedUnstaged > 0) {
             summary.append(", ").append(skippedUnstaged)
-                    .append(" skipped (untracked — drop -DstagedOnly to include)");
+                    .append(" skipped (uncommitted — drop -DstagedOnly to include)");
         }
         if (failed > 0) {
             summary.append(", ").append(failed).append(" failed");
@@ -194,11 +194,11 @@ public class CommitMojo extends AbstractWorkspaceMojo {
 
             if (!VcsOperations.hasStagedChanges(dir)) {
                 // stagedOnly=true and the user didn't stage anything,
-                // but there are untracked or unstaged changes
-                String files = VcsOperations.unstagedFiles(dir);
-                String suffix = files.isEmpty()
-                        ? newFiles.size() + " untracked"
-                        : "unstaged: " + files;
+                // but there are untracked or unstaged changes — surface
+                // both kinds so the developer sees exactly what would be
+                // dropped vs. what -DstagedOnly=false would pick up. (#231)
+                String suffix = formatUncommittedSuffix(
+                        VcsOperations.unstagedFiles(dir), newFiles);
                 getLog().warn(Ansi.yellow("  ⚠ ") + label
                         + " — skipped (" + suffix + ")");
                 getLog().warn("    Drop -DstagedOnly to stage and commit");
@@ -221,6 +221,43 @@ public class CommitMojo extends AbstractWorkspaceMojo {
             getLog().warn(Ansi.red("  ✗ ") + label + " — " + e.getMessage());
             return CommitOutcome.FAILED;
         }
+    }
+
+    /**
+     * Build the parenthesized suffix for the {@code stagedOnly}
+     * skip message. Reports both tracked-unstaged and untracked work
+     * with file paths so the developer sees exactly what is sitting
+     * uncommitted (#231).
+     *
+     * <p>Format examples:
+     * <ul>
+     *   <li>{@code "unstaged: a.java, b.java"} — tracked-unstaged only</li>
+     *   <li>{@code "untracked: c.java, d.java"} — untracked only</li>
+     *   <li>{@code "unstaged: a.java; untracked: b.java"} — both</li>
+     * </ul>
+     *
+     * @param unstagedFiles comma-separated list of tracked-modified-but-
+     *                      unstaged file paths (from
+     *                      {@link VcsOperations#unstagedFiles})
+     * @param newFiles      list of untracked-but-not-ignored file paths
+     *                      (from {@link VcsOperations#untrackedFiles})
+     * @return the suffix to interpolate inside {@code "skipped (...)"}
+     */
+    static String formatUncommittedSuffix(String unstagedFiles, List<String> newFiles) {
+        StringBuilder sb = new StringBuilder();
+        if (unstagedFiles != null && !unstagedFiles.isEmpty()) {
+            sb.append("unstaged: ").append(unstagedFiles);
+        }
+        if (newFiles != null && !newFiles.isEmpty()) {
+            if (sb.length() > 0) sb.append("; ");
+            sb.append("untracked: ").append(String.join(", ", newFiles));
+        }
+        if (sb.length() == 0) {
+            // Defensive: caller indicated uncommitted work, but no files
+            // were captured. Emit a placeholder rather than empty parens.
+            sb.append("uncommitted");
+        }
+        return sb.toString();
     }
 
     /**

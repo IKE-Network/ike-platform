@@ -50,7 +50,11 @@ import java.util.Set;
  *       {@code workspace.yaml} against the actual branch each cloned
  *       subproject is on. With {@code from=repos} (default), the yaml
  *       is updated from on-disk state; with {@code from=manifest},
- *       each subproject is checked out to the declared branch.</li>
+ *       each subproject is checked out to the declared branch; with
+ *       {@code from=workspace-head}, the workspace repo's HEAD is
+ *       authoritative and both the yaml fields <em>and</em> each
+ *       subproject's on-disk branch are reconciled to that single
+ *       value (ike-issues#287).</li>
  * </ul>
  *
  * <pre>{@code
@@ -58,7 +62,8 @@ import java.util.Set;
  * mvn ws:align-publish                        # apply (both axes)
  * mvn ws:align-publish -Dscope=poms           # POMs only
  * mvn ws:align-publish -Dscope=branches       # branches only
- * mvn ws:align-publish -Dscope=branches -Dfrom=manifest  # switch repos
+ * mvn ws:align-publish -Dscope=branches -Dfrom=manifest         # switch repos
+ * mvn ws:align-publish -Dscope=branches -Dfrom=workspace-head   # repair drift
  * }</pre>
  */
 @Mojo(name = "align-draft", projectRequired = false, aggregator = true)
@@ -80,9 +85,19 @@ public class WsAlignDraftMojo extends AbstractWorkspaceMojo {
 
     /**
      * Branch-sync direction — only consulted when {@code scope}
-     * includes branches. {@code repos} (default) reads actual branches
-     * and updates workspace.yaml; {@code manifest} runs
-     * {@code git checkout} per subproject so repos match the yaml.
+     * includes branches.
+     *
+     * <ul>
+     *   <li>{@code repos} (default) — read actual branches and update
+     *       {@code workspace.yaml}.</li>
+     *   <li>{@code manifest} — run {@code git checkout} per subproject so
+     *       repos match the yaml.</li>
+     *   <li>{@code workspace-head} — the workspace repo's current git
+     *       branch is authoritative; reconcile both the {@code branch:}
+     *       fields in {@code workspace.yaml} <em>and</em> each subproject's
+     *       on-disk branch to that single value. Repairs branch drift
+     *       across the workspace (ike-issues#287).</li>
+     * </ul>
      */
     @Parameter(property = "from", defaultValue = "repos")
     String from;
@@ -90,8 +105,8 @@ public class WsAlignDraftMojo extends AbstractWorkspaceMojo {
     /**
      * When true, allow branch checkout against subprojects with
      * uncommitted changes. Only consulted with
-     * {@code scope=branches|all} and {@code from=manifest}. Default
-     * {@code false}.
+     * {@code scope=branches|all} and {@code from=manifest|workspace-head}.
+     * Default {@code false}.
      */
     @Parameter(property = "force", defaultValue = "false")
     boolean force;
@@ -108,6 +123,14 @@ public class WsAlignDraftMojo extends AbstractWorkspaceMojo {
             throw new MojoException(
                     "Invalid scope '" + scope + "' — expected poms|branches|all");
         }
+        if (doBranches
+                && !"repos".equals(from)
+                && !"manifest".equals(from)
+                && !"workspace-head".equals(from)) {
+            throw new MojoException(
+                    "Invalid from '" + from
+                            + "' — expected repos|manifest|workspace-head");
+        }
 
         getLog().info("");
         getLog().info("IKE Workspace Align — reconcile POM dependencies"
@@ -115,10 +138,7 @@ public class WsAlignDraftMojo extends AbstractWorkspaceMojo {
         getLog().info("══════════════════════════════════════════════════════════════");
         getLog().info("  Scope: " + scope);
         if (doBranches) {
-            getLog().info("  Branches: "
-                    + ("manifest".equals(from)
-                            ? "manifest → repos (git checkout)"
-                            : "repos → manifest (update yaml)"));
+            getLog().info("  Branches: " + describeFromMode());
         }
 
         if (draft) {
@@ -368,11 +388,26 @@ public class WsAlignDraftMojo extends AbstractWorkspaceMojo {
                               Path manifestPath,
                               List<BranchChange> branchChanges,
                               boolean draft) throws MojoException {
-        if ("manifest".equals(from)) {
-            return alignBranchesFromManifest(graph, root, branchChanges, draft);
-        }
-        return alignBranchesFromRepos(graph, root, manifestPath,
-                branchChanges, draft);
+        return switch (from) {
+            case "manifest" ->
+                    alignBranchesFromManifest(graph, root, branchChanges, draft);
+            case "workspace-head" ->
+                    alignBranchesFromWorkspaceHead(graph, root, manifestPath,
+                            branchChanges, draft);
+            default ->
+                    alignBranchesFromRepos(graph, root, manifestPath,
+                            branchChanges, draft);
+        };
+    }
+
+    /** Human-readable label for the active {@code from=...} mode. */
+    private String describeFromMode() {
+        return switch (from) {
+            case "manifest" -> "manifest → repos (git checkout)";
+            case "workspace-head" ->
+                    "workspace HEAD → manifest + repos (authoritative branch)";
+            default -> "repos → manifest (update yaml)";
+        };
     }
 
     /**
@@ -427,6 +462,181 @@ public class WsAlignDraftMojo extends AbstractWorkspaceMojo {
         }
 
         return updates.size();
+    }
+
+    /**
+     * Reconcile every subproject's {@code branch:} field <em>and</em>
+     * on-disk git branch to the workspace repo's current HEAD.
+     *
+     * <p>This is the symmetric repair to {@code ws:add}'s
+     * branch-coherence rule (ike-issues#286): the workspace repo's
+     * branch is authoritative, and this mode brings everything else
+     * (YAML state, on-disk state) into agreement with it.
+     *
+     * <p>Behavior per subproject:
+     * <ol>
+     *   <li>If the YAML {@code branch:} != workspace HEAD → queue YAML
+     *       update.</li>
+     *   <li>If the on-disk branch != workspace HEAD → queue checkout.
+     *       Subprojects with uncommitted changes are skipped unless
+     *       {@code -Dforce=true} (same semantics as
+     *       {@code from=manifest}).</li>
+     * </ol>
+     *
+     * <p>If a subproject's local repo doesn't yet have the workspace
+     * branch, {@code git checkout} will fall through to creating it
+     * from {@code origin/<branch>} (the standard tracking-branch path).
+     * If the branch isn't on origin either, the checkout fails — that
+     * case is the {@code ws:add}'s territory; this mode does not push
+     * new branches to subproject origins.
+     *
+     * @return the number of changes applied (or that would be in draft mode)
+     * @throws MojoException if the workspace dir is not a git repo, or
+     *                       any individual checkout fails
+     */
+    private int alignBranchesFromWorkspaceHead(WorkspaceGraph graph, File root,
+                                                Path manifestPath,
+                                                List<BranchChange> branchChanges,
+                                                boolean draft) throws MojoException {
+        File wsRoot = manifestPath.getParent().toFile();
+        if (!new File(wsRoot, ".git").exists()) {
+            throw new MojoException(
+                    "from=workspace-head requires the workspace directory to be "
+                            + "a git repository. " + wsRoot.getAbsolutePath()
+                            + " has no .git directory.");
+        }
+        String wsBranch = gitBranch(wsRoot);
+        if (wsBranch == null || wsBranch.isBlank() || "unknown".equals(wsBranch)) {
+            throw new MojoException(
+                    "Could not read the workspace repo's current branch. "
+                            + "Ensure HEAD points at a named branch (not a "
+                            + "detached HEAD).");
+        }
+
+        getLog().info("  Workspace HEAD: " + wsBranch);
+
+        Map<String, String> yamlUpdates = new LinkedHashMap<>();
+        int checkoutsPlanned = 0;
+        int checkoutsApplied = 0;
+        int skippedDirty = 0;
+
+        for (Map.Entry<String, Subproject> entry : graph.manifest().subprojects().entrySet()) {
+            String name = entry.getKey();
+            Subproject subproject = entry.getValue();
+            File dir = new File(root, name);
+
+            // YAML reconciliation runs whether or not the repo is cloned.
+            String declared = subproject.branch();
+            if (declared == null || !declared.equals(wsBranch)) {
+                yamlUpdates.put(name, wsBranch);
+                branchChanges.add(new BranchChange(
+                        name, declared == null ? "(unset)" : declared,
+                        wsBranch, "yaml"));
+                getLog().info("  branch: " + name + " (yaml): "
+                        + (declared == null ? "(unset)" : declared)
+                        + " → " + wsBranch + (draft ? " (draft)" : ""));
+            }
+
+            // Checkout reconciliation only applies to cloned subprojects.
+            if (!new File(dir, ".git").exists()) continue;
+            String actual = gitBranch(dir);
+            if (wsBranch.equals(actual)) continue;
+
+            String status = gitStatus(dir);
+            if (!status.isEmpty() && !force) {
+                getLog().warn("  ⚠ " + name + ": uncommitted changes — skipping"
+                        + " checkout (pass -Dforce=true to override)");
+                skippedDirty++;
+                continue;
+            }
+
+            checkoutsPlanned++;
+            branchChanges.add(new BranchChange(name, actual, wsBranch, "checkout"));
+            getLog().info("  branch: " + name + " (repo): " + actual
+                    + " → " + wsBranch + (draft ? " (draft)" : ""));
+
+            if (!draft) {
+                // If the branch already exists locally (or on origin),
+                // a plain checkout works — git will set up tracking.
+                // Otherwise create it from the current HEAD, mirroring
+                // ws:add's workspace-branch-coherence semantics.
+                if (localBranchExists(dir, wsBranch)
+                        || originBranchExists(dir, wsBranch)) {
+                    ReleaseSupport.exec(dir, getLog(),
+                            "git", "checkout", wsBranch);
+                } else {
+                    getLog().info("    " + name + " has no '" + wsBranch
+                            + "' locally or on origin — creating from "
+                            + actual + ".");
+                    ReleaseSupport.exec(dir, getLog(),
+                            "git", "checkout", "-b", wsBranch);
+                }
+                checkoutsApplied++;
+            }
+        }
+
+        if (yamlUpdates.isEmpty() && checkoutsPlanned == 0 && skippedDirty == 0) {
+            getLog().info("  Branches: workspace, manifest, and repos all agree  ✓");
+            return 0;
+        }
+
+        if (!draft && !yamlUpdates.isEmpty()) {
+            try {
+                ManifestWriter.updateBranches(manifestPath, yamlUpdates);
+                getLog().info("  Branches: updated workspace.yaml ("
+                        + yamlUpdates.size() + " field(s))");
+                ReleaseSupport.exec(wsRoot, getLog(),
+                        "git", "add", "workspace.yaml");
+                ReleaseSupport.exec(wsRoot, getLog(),
+                        "git", "commit", "-m",
+                        "workspace: align branch fields to " + wsBranch);
+            } catch (IOException e) {
+                throw new MojoException(
+                        "Failed to update workspace.yaml: " + e.getMessage(), e);
+            }
+        }
+
+        if (draft) {
+            getLog().info("  Branches: " + (yamlUpdates.size() + checkoutsPlanned)
+                    + " change(s) would be applied"
+                    + (skippedDirty > 0
+                            ? " (" + skippedDirty + " skipped — uncommitted)"
+                            : ""));
+            return yamlUpdates.size() + checkoutsPlanned;
+        }
+        getLog().info("  Branches: " + yamlUpdates.size()
+                + " yaml update(s), " + checkoutsApplied + " checkout(s), "
+                + skippedDirty + " skipped (uncommitted)");
+        return yamlUpdates.size() + checkoutsApplied;
+    }
+
+    /**
+     * Whether {@code refs/heads/<branch>} exists in the local repo.
+     */
+    private static boolean localBranchExists(File dir, String branch) {
+        try {
+            String out = ReleaseSupport.execCapture(dir,
+                    "git", "branch", "--list", branch);
+            return out != null && !out.trim().isEmpty();
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
+     * Whether {@code refs/heads/<branch>} exists on the origin remote.
+     * Returns false on any failure (offline, no remote, etc.) — the
+     * caller treats that the same as \"doesn't exist on origin\" and
+     * creates the branch locally from the current HEAD.
+     */
+    private static boolean originBranchExists(File dir, String branch) {
+        try {
+            String out = ReleaseSupport.execCapture(dir,
+                    "git", "ls-remote", "--heads", "origin", branch);
+            return out != null && !out.trim().isEmpty();
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     /**

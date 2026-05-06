@@ -385,8 +385,18 @@ abstract class AbstractWorkspaceMojo implements Mojo {
      */
     protected void writeReport(WsGoal goal, String content) {
         try {
-            WorkspaceReport.write(
-                    workspaceRoot().toPath(), goal.qualified(), content, getLog());
+            java.nio.file.Path root = workspaceRoot().toPath();
+            WorkspaceReport.write(root, goal.qualified(), content, getLog());
+            // After a successful -publish, the matching -draft report is
+            // now stale — it described what WOULD happen, but it has
+            // happened. Leaving both files alongside each other misleads
+            // readers (ike-issues#300). Best-effort delete; debug-log on
+            // failure.
+            if (goal.isPublish()) {
+                goal.pair().ifPresent(draft ->
+                        WorkspaceReport.deleteReport(
+                                root, draft.qualified(), getLog()));
+            }
         } catch (MojoException e) {
             getLog().debug("Could not resolve workspace root for report: "
                     + e.getMessage());

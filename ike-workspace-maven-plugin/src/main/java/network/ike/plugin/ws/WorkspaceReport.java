@@ -95,6 +95,35 @@ public final class WorkspaceReport {
     }
 
     /**
+     * Delete a goal's report file if present. Used when a successful
+     * {@code -publish} run obsoletes the matching {@code -draft} report
+     * — the draft says \"this would happen,\" but it now has, and leaving
+     * the stale draft alongside the publish report misleads readers
+     * into thinking the operation hasn't completed.
+     *
+     * <p>No-op when the file doesn't exist. Errors (file locked, etc.)
+     * are logged at debug only — best-effort cleanup, never fatal.
+     *
+     * @param workspaceRoot the workspace root directory
+     * @param goalName      the goal name whose report file to delete
+     *                      (e.g., {@code "ws:scaffold-upgrade-draft"})
+     * @param log           Maven logger; may be null
+     */
+    public static void deleteReport(Path workspaceRoot, String goalName, Log log) {
+        Path reportFile = reportPath(workspaceRoot, goalName);
+        try {
+            if (Files.deleteIfExists(reportFile) && log != null) {
+                log.debug("ws: removed stale report " + reportFile.getFileName());
+            }
+        } catch (IOException e) {
+            if (log != null) {
+                log.debug("Could not delete stale report "
+                        + reportFile.getFileName() + ": " + e.getMessage());
+            }
+        }
+    }
+
+    /**
      * Open the workspace root in the default file manager or IDE so
      * the user can browse the {@code ws꞉*.md} reports alongside
      * {@code workspace.yaml} and the aggregator {@code pom.xml}.

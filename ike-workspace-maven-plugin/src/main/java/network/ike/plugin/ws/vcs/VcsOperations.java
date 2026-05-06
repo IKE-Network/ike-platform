@@ -849,21 +849,58 @@ public class VcsOperations {
     }
 
     /**
-     * Check whether the local HEAD matches the VCS state file.
+     * Check whether the local HEAD has fallen behind the VCS state
+     * file written by a coordinated workspace operation. Returns
+     * {@code false} when the state file is simply stale relative to
+     * later local commits — this is the common case after
+     * {@code git commit --amend} or any subsequent commit that didn't
+     * route through a {@code ws:*} goal (ike-issues#232).
+     *
+     * <p>Decision table:
+     * <ul>
+     *   <li>No state file → {@code false} (nothing to sync against).</li>
+     *   <li>Branch mismatch → {@code true} (state file expects a
+     *       different branch).</li>
+     *   <li>{@code state.sha == localSha} → {@code false}.</li>
+     *   <li>{@code state.sha} is a strict ancestor of {@code localSha}
+     *       → {@code false} (state file is stale, but HEAD is just
+     *       ahead — no cross-machine pull needed).</li>
+     *   <li>Anything else (state.sha unknown, descendant of HEAD, or
+     *       diverged) → {@code true} (genuine catch-up required).</li>
+     * </ul>
      *
      * @param dir the repository root directory
-     * @return true if in sync or if no state file exists, false if catch-up is needed
-     * @throws MojoException if reading git state fails
+     * @return {@code true} when {@code sync} should run, {@code false}
+     *         when the working tree is already current
+     * @throws MojoException if reading basic git state fails
      */
     public static boolean needsSync(File dir) throws MojoException {
         Optional<VcsState> state = VcsState.readFrom(dir.toPath());
         if (state.isEmpty()) {
             return false;
         }
-        String localSha = headSha(dir);
-        String localBranch = currentBranch(dir);
         VcsState s = state.get();
-        return !s.sha().equals(localSha) || !s.branch().equals(localBranch);
+        String localBranch = currentBranch(dir);
+        if (!s.branch().equals(localBranch)) {
+            return true;
+        }
+        String localSha = headSha(dir);
+        if (s.sha().equals(localSha)) {
+            return false;
+        }
+        // Common case after a routine local commit: state.sha is an
+        // ancestor of HEAD, so the state file is just stale relative to
+        // post-ws:commit work. No sync needed.
+        try {
+            if (isAncestor(dir, s.sha(), localSha)) {
+                return false;
+            }
+        } catch (MojoException e) {
+            // state.sha unknown locally — could be a commit pushed
+            // from another machine that we haven't fetched yet.
+            // Treat as needing sync.
+        }
+        return true;
     }
 
     /**
@@ -952,14 +989,28 @@ public class VcsOperations {
         }
 
         String newSha = headSha(dir);
-        if (!newSha.equals(state.sha())) {
-            log.warn("  HEAD after sync (" + newSha + ") does not match state file ("
-                    + state.sha() + ").");
-            log.warn("  The push from " + state.machine() + " may not have completed.");
-            log.warn("  Push from " + state.machine() + " first, then retry sync.");
-        } else {
+        if (newSha.equals(state.sha())) {
             log.info("  HEAD now matches state file: " + newSha);
+            return newSha;
         }
+        // After fast-forward / no-op, HEAD may legitimately sit ahead
+        // of state.sha — the state file is just stale relative to
+        // later local commits, not a sign of a missing push
+        // (ike-issues#232). Only warn when state.sha is genuinely
+        // unreachable from HEAD.
+        try {
+            if (isAncestor(dir, state.sha(), newSha)) {
+                log.info("  HEAD (" + newSha + ") is ahead of state file ("
+                        + state.sha() + ") — state file is stale, no action needed.");
+                return newSha;
+            }
+        } catch (MojoException ignored) {
+            // state.sha unreachable locally — fall through to warning.
+        }
+        log.warn("  HEAD after sync (" + newSha + ") does not match state file ("
+                + state.sha() + ").");
+        log.warn("  The push from " + state.machine() + " may not have completed.");
+        log.warn("  Push from " + state.machine() + " first, then retry sync.");
 
         return newSha;
     }

@@ -124,6 +124,23 @@ class VcsOperationsTest {
     }
 
     @Test
+    void needsSync_falseWhenStateShaIsAncestorOfHead() throws Exception {
+        // Mirrors the ike-issues#232 trace: ws:commit writes the state
+        // file, then a routine local commit (or git commit --amend)
+        // advances HEAD past it. The state file is now stale but HEAD
+        // is just ahead — no sync needed.
+        Files.createDirectories(tempDir.resolve(".ike"));
+        VcsOperations.writeVcsState(repoDir, VcsState.Action.COMMIT);
+
+        Files.writeString(tempDir.resolve("file.txt"), "hello v2",
+                StandardCharsets.UTF_8);
+        exec("git", "add", "file.txt");
+        exec("git", "commit", "-m", "Local follow-up commit");
+
+        assertThat(VcsOperations.needsSync(repoDir)).isFalse();
+    }
+
+    @Test
     void catchUp_noOpWhenNotIkeManaged() throws MojoException {
         // No .ike/ directory — should do nothing
         VcsOperations.catchUp(repoDir, log);

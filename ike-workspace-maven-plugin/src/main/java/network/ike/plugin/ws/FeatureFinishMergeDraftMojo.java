@@ -83,6 +83,7 @@ public class FeatureFinishMergeDraftMojo extends AbstractWorkspaceMojo {
                 feature = requireParam(feature, "feature",
                         "Feature to merge (without feature/ prefix)");
             }
+            validateFeatureName(feature);
             executeBareMode("feature/" + feature);
             return;
         }
@@ -94,6 +95,7 @@ public class FeatureFinishMergeDraftMojo extends AbstractWorkspaceMojo {
             feature = FeatureFinishSupport.detectFeature(
                     workspaceRoot(), all, this, getLog());
         }
+        validateFeatureName(feature);
         String branchName = "feature/" + feature;
 
         // message is optional — auto-generated from subproject history

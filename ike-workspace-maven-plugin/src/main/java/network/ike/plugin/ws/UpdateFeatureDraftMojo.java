@@ -94,6 +94,7 @@ public class UpdateFeatureDraftMojo extends AbstractWorkspaceMojo {
             feature = FeatureFinishSupport.detectFeature(
                     root, all, this, getLog());
         }
+        validateFeatureName(feature);
         String branchName = "feature/" + feature;
 
         Set<String> targets = graph.manifest().subprojects().keySet();

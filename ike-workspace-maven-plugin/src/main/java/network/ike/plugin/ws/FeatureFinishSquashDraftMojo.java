@@ -93,6 +93,7 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
                 feature = requireParam(feature, "feature",
                         "Feature to squash-merge (without feature/ prefix)");
             }
+            validateFeatureName(feature);
             validateMessage(draft);
             executeBareMode("feature/" + feature);
             return;
@@ -105,6 +106,7 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
             feature = FeatureFinishSupport.detectFeature(
                     workspaceRoot(), all, this, getLog());
         }
+        validateFeatureName(feature);
         validateMessage(draft);
         executeWorkspaceMode("feature/" + feature);
     }

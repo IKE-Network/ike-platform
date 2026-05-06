@@ -99,6 +99,7 @@ public class FeatureStartDraftMojo extends AbstractWorkspaceMojo {
     @Override
     public void execute() throws MojoException {
         feature = requireParam(feature, "feature", "Feature name (without feature/ prefix)");
+        validateFeatureName(feature);
         String branchName = "feature/" + feature;
 
         if (!isWorkspaceMode()) {

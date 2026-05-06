@@ -2,6 +2,7 @@ package network.ike.plugin.ws;
 
 import network.ike.plugin.ReleaseSupport;
 
+import network.ike.workspace.FeatureName;
 import network.ike.workspace.Manifest;
 import network.ike.workspace.ManifestException;
 import network.ike.workspace.ManifestReader;
@@ -253,6 +254,29 @@ abstract class AbstractWorkspaceMojo implements Mojo {
         throw new MojoException(
                 propertyName + " is required. Specify -D" + propertyName
                         + "=<value> or run interactively.");
+    }
+
+    /**
+     * Validate a feature-name string with {@link FeatureName#of} and
+     * surface any rule violation as a clean {@link MojoException} (the
+     * raw {@code IllegalArgumentException} would otherwise bubble up
+     * as a Maven internal error). Use this anywhere a feature name
+     * leaves the {@code -Dfeature=} command-line boundary
+     * (ike-issues#205).
+     *
+     * @param feature the candidate feature name (must already be
+     *                resolved — i.e. non-null after
+     *                {@link #requireParam} or auto-detection)
+     * @return the validated {@link FeatureName} value
+     * @throws MojoException if {@code feature} fails the
+     *                       {@code FeatureName} syntax rules
+     */
+    protected static FeatureName validateFeatureName(String feature) {
+        try {
+            return FeatureName.of(feature);
+        } catch (IllegalArgumentException e) {
+            throw new MojoException(e.getMessage());
+        }
     }
 
     /**

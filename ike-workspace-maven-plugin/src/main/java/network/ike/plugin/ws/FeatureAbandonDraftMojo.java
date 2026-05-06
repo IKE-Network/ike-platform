@@ -109,6 +109,7 @@ public class FeatureAbandonDraftMojo extends AbstractWorkspaceMojo {
         if (feature == null || feature.isBlank()) {
             feature = detectFeatureBranch(root, reversed);
         }
+        validateFeatureName(feature);
         String branchName = "feature/" + feature;
 
         // Collect eligible components and show preview
@@ -332,6 +333,7 @@ public class FeatureAbandonDraftMojo extends AbstractWorkspaceMojo {
                                 + "). Specify with -Dfeature=<name>.");
             }
         }
+        validateFeatureName(feature);
         String branchName = "feature/" + feature;
 
         getLog().info("");

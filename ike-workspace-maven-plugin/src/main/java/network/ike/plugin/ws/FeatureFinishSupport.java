@@ -23,6 +23,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.regex.Pattern;
 
 /**
  * Shared logic for feature-finish goals (squash, merge, rebase).
@@ -499,10 +500,19 @@ class FeatureFinishSupport {
         List<File> allPoms = ReleaseSupport.findPomFiles(dir);
         List<String> contaminated = new ArrayList<>();
 
+        // Match only Maven version coordinates that still carry the
+        // branch qualifier — i.e. <digits>(.<digits>)*-<qualifier>-SNAPSHOT.
+        // The previous content.contains("-" + qualifier + "-") check
+        // also flagged legitimate artifactIds, groupIds, and property
+        // names that happened to share the qualifier substring
+        // (ike-issues#292).
+        Pattern qualifiedVersion = Pattern.compile(
+                "\\b\\d+(?:\\.\\d+)*-" + Pattern.quote(qualifier) + "-SNAPSHOT\\b");
+
         for (File pom : allPoms) {
             try {
                 String content = Files.readString(pom.toPath(), StandardCharsets.UTF_8);
-                if (content.contains("-" + qualifier + "-")) {
+                if (qualifiedVersion.matcher(content).find()) {
                     contaminated.add(dir.toPath().relativize(pom.toPath()).toString());
                 }
             } catch (IOException e) {

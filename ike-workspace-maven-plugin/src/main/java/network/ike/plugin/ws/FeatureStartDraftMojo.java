@@ -88,6 +88,14 @@ public class FeatureStartDraftMojo extends AbstractWorkspaceMojo {
     /** Creates this goal instance. */
     public FeatureStartDraftMojo() {}
 
+    /**
+     * Reusable cascade / version-qualification helpers, lazily
+     * instantiated in {@link #execute()} so the injected logger is
+     * available. Extracted from this class in ike-issues#204 so that
+     * sibling-clone work (#201) can share the same logic.
+     */
+    private FeatureStartSupport support;
+
     /** A row in the feature-start summary table. */
     private record BranchRow(String subproject, String branch,
                               String snapshotVersion, String status) {}
@@ -98,6 +106,7 @@ public class FeatureStartDraftMojo extends AbstractWorkspaceMojo {
 
     @Override
     public void execute() throws MojoException {
+        support = new FeatureStartSupport(getLog());
         feature = requireParam(feature, "feature", "Feature name (without feature/ prefix)");
         validateFeatureName(feature);
         String branchName = "feature/" + feature;
@@ -215,14 +224,14 @@ public class FeatureStartDraftMojo extends AbstractWorkspaceMojo {
 
             // Auto-unshallow if this is a shallow clone — feature
             // branches need full history for merge-base operations
-            ensureFullClone(dir, name);
+            support.ensureFullClone(dir, name);
 
             ReleaseSupport.exec(dir, getLog(),
                     "git", "checkout", "-b", branchName);
 
             if (!skipVersion && effectiveVersion != null
                     && !effectiveVersion.isEmpty()) {
-                setPomVersion(dir, effectiveVersion, newVersion);
+                support.setPomVersion(dir, effectiveVersion, newVersion);
                 ReleaseSupport.exec(dir, getLog(),
                         "git", "add", "pom.xml");
                 ReleaseSupport.exec(dir, getLog(),
@@ -242,14 +251,14 @@ public class FeatureStartDraftMojo extends AbstractWorkspaceMojo {
 
         // Remove intra-reactor version pins (draft reports, publish removes)
         if (!created.isEmpty()) {
-            removeIntraReactorPins(root, created, publish);
+            support.removeIntraReactorPins(root, created, publish);
         }
 
         // Cascade version-property updates to downstream components
         if (!created.isEmpty() && publish && !skipVersion) {
-            cascadeVersionProperties(graph, root, sorted, branchName);
-            cascadeBomProperties(graph, root, sorted, branchName);
-            cascadeBomImports(graph, root, sorted, branchName);
+            support.cascadeVersionProperties(graph, root, sorted, branchName);
+            support.cascadeBomProperties(graph, root, sorted, branchName);
+            support.cascadeBomImports(graph, root, sorted, branchName);
         }
 
         // Write VCS state for each branched subproject (no push — branches stay local)
@@ -358,7 +367,7 @@ public class FeatureStartDraftMojo extends AbstractWorkspaceMojo {
         }
 
         // Auto-unshallow if needed
-        ensureFullClone(dir, dir.getName());
+        support.ensureFullClone(dir, dir.getName());
 
         // Create branch
         ReleaseSupport.exec(dir, getLog(),
@@ -370,7 +379,7 @@ public class FeatureStartDraftMojo extends AbstractWorkspaceMojo {
             String newVersion = VersionSupport.branchQualifiedVersion(
                     currentVersion, branchName);
             getLog().info("  Version: " + currentVersion + " \u2192 " + newVersion);
-            setPomVersion(dir, currentVersion, newVersion);
+            support.setPomVersion(dir, currentVersion, newVersion);
             ReleaseSupport.exec(dir, getLog(), "git", "add", "pom.xml");
             // Also stage any updated submodule POMs
             try {
@@ -440,223 +449,6 @@ public class FeatureStartDraftMojo extends AbstractWorkspaceMojo {
 
         } catch (IOException e) {
             getLog().warn("  Could not update workspace.yaml: " + e.getMessage());
-        }
-    }
-
-    /**
-     * Set the POM version, handling both simple and multi-module projects.
-     * Uses ReleaseSupport's POM manipulation which skips the parent block.
-     */
-    private void setPomVersion(File dir, String oldVersion, String newVersion)
-            throws MojoException {
-        File pom = new File(dir, "pom.xml");
-        if (!pom.exists()) {
-            getLog().warn("    No pom.xml found in " + dir.getName());
-            return;
-        }
-
-        // Set version in root POM
-        ReleaseSupport.setPomVersion(pom, oldVersion, newVersion);
-
-        // Also update any submodule POMs that reference the old version
-        // in their <parent> block (for multi-module projects)
-        try {
-            List<File> allPoms = ReleaseSupport.findPomFiles(dir);
-            for (File subPom : allPoms) {
-                if (subPom.equals(pom)) continue;
-                try {
-                    String content = java.nio.file.Files.readString(
-                            subPom.toPath(), java.nio.charset.StandardCharsets.UTF_8);
-                    if (content.contains("<version>" + oldVersion + "</version>")) {
-                        String updated = content.replace(
-                                "<version>" + oldVersion + "</version>",
-                                "<version>" + newVersion + "</version>");
-                        java.nio.file.Files.writeString(
-                                subPom.toPath(), updated,
-                                java.nio.charset.StandardCharsets.UTF_8);
-                        String rel = dir.toPath().relativize(subPom.toPath()).toString();
-                        getLog().info("    updated: " + rel);
-                        ReleaseSupport.exec(dir, getLog(), "git", "add", rel);
-                    }
-                } catch (java.io.IOException e) {
-                    getLog().warn("    Could not update " + subPom + ": " + e.getMessage());
-                }
-            }
-        } catch (MojoException e) {
-            getLog().warn("    Could not scan for submodule POMs: " + e.getMessage());
-        }
-    }
-
-    /**
-     * Cascade version-property updates to downstream components.
-     *
-     * <p>When an upstream subproject's version changes (e.g., tinkar-core
-     * gets a branch-qualified version), downstream components that track
-     * that version via a POM property (declared as {@code version-property}
-     * in workspace.yaml) need their property updated too.
-     *
-     * <p>For example, if rocks-kb depends on tinkar-core with
-     * {@code version-property: ike-bom.version}, and tinkar-core's version
-     * changed to {@code 1.127.2-feature-foo-SNAPSHOT}, then rocks-kb's
-     * {@code <ike-bom.version>} property is updated to match.
-     */
-    private void cascadeVersionProperties(WorkspaceGraph graph, File root,
-                                           List<String> sorted, String branchName)
-            throws MojoException {
-
-        // Build map of upstream subproject → new branch-qualified version
-        java.util.Map<String, String> newVersions = new java.util.LinkedHashMap<>();
-        for (String name : sorted) {
-            Subproject sub = graph.manifest().subprojects().get(name);
-            if (sub.version() != null && !sub.version().isEmpty()) {
-                newVersions.put(name, VersionSupport.branchQualifiedVersion(
-                        sub.version(), branchName));
-            }
-        }
-
-        // For each subproject in topological order, update version-properties
-        // that reference upstream subprojects
-        for (String name : sorted) {
-            Subproject sub = graph.manifest().subprojects().get(name);
-            File dir = new File(root, name);
-            File pomFile = new File(dir, "pom.xml");
-            if (!pomFile.exists()) continue;
-
-            boolean pomChanged = false;
-            try {
-                String content = java.nio.file.Files.readString(
-                        pomFile.toPath(), java.nio.charset.StandardCharsets.UTF_8);
-                String original = content;
-
-                for (network.ike.workspace.Dependency dep : sub.dependsOn()) {
-                    String upstreamName = dep.subproject();
-                    if (dep.versionProperty() == null) continue;
-                    if (!newVersions.containsKey(upstreamName)) continue;
-
-                    String upstreamVersion = newVersions.get(upstreamName);
-                    String before = content;
-                    content = PomRewriter.updateProperty(
-                            content, dep.versionProperty(), upstreamVersion);
-
-                    if (!content.equals(before)) {
-                        getLog().info("    " + name + ": " + dep.versionProperty()
-                                + " → " + upstreamVersion
-                                + " (from " + upstreamName + ")");
-                    }
-                }
-
-                if (!content.equals(original)) {
-                    java.nio.file.Files.writeString(
-                            pomFile.toPath(), content,
-                            java.nio.charset.StandardCharsets.UTF_8);
-                    ReleaseSupport.exec(dir, getLog(), "git", "add", "pom.xml");
-                    ReleaseSupport.exec(dir, getLog(), "git", "commit", "-m",
-                            "feature: update dependency versions for " + branchName);
-                    pomChanged = true;
-                }
-            } catch (java.io.IOException e) {
-                getLog().warn("    Could not cascade version properties in "
-                        + name + ": " + e.getMessage());
-            }
-        }
-    }
-
-    /**
-     * Cascade branch-qualified versions into POM properties that match
-     * workspace subproject names.
-     *
-     * <p>Scans each subproject's root POM {@code <properties>} block for
-     * entries like {@code <tinkar-core.version>1.0.0-SNAPSHOT</tinkar-core.version>}
-     * where "tinkar-core" matches a workspace subproject name. Updates
-     * these properties to the branch-qualified version.
-     *
-     * <p>This complements {@link #cascadeVersionProperties} which only
-     * handles properties explicitly declared via {@code version-property}
-     * in workspace.yaml dependency entries.
-     */
-    private void cascadeBomProperties(WorkspaceGraph graph, File root,
-                                       List<String> sorted, String branchName)
-            throws MojoException {
-
-        // Build map of subproject name → new branch-qualified version
-        java.util.Map<String, String> newVersions = new java.util.LinkedHashMap<>();
-        for (String name : sorted) {
-            Subproject sub = graph.manifest().subprojects().get(name);
-            String effectiveVersion = sub.version();
-            if (effectiveVersion == null || effectiveVersion.isEmpty()) {
-                File pom = new File(new File(root, name), "pom.xml");
-                if (pom.exists()) {
-                    try {
-                        effectiveVersion = ReleaseSupport.readPomVersion(pom);
-                    } catch (MojoException e) { /* skip */ }
-                }
-            }
-            if (effectiveVersion != null && !effectiveVersion.isEmpty()) {
-                newVersions.put(name, VersionSupport.branchQualifiedVersion(
-                        effectiveVersion, branchName));
-            }
-        }
-
-        // For each subproject, check its POM properties for references
-        // to other workspace subprojects (e.g., <tinkar-core.version>)
-        for (String name : sorted) {
-            File dir = new File(root, name);
-            File pomFile = new File(dir, "pom.xml");
-            if (!pomFile.exists()) continue;
-
-            try {
-                String content = java.nio.file.Files.readString(
-                        pomFile.toPath(), java.nio.charset.StandardCharsets.UTF_8);
-                String original = content;
-
-                for (java.util.Map.Entry<String, String> vEntry : newVersions.entrySet()) {
-                    String subName = vEntry.getKey();
-                    if (subName.equals(name)) continue;
-
-                    String propertyName = subName + ".version";
-                    String before = content;
-                    content = PomRewriter.updateProperty(
-                            content, propertyName, vEntry.getValue());
-
-                    if (!content.equals(before)) {
-                        getLog().info("    " + name + ": <" + propertyName
-                                + "> → " + vEntry.getValue());
-                    }
-                }
-
-                if (!content.equals(original)) {
-                    java.nio.file.Files.writeString(
-                            pomFile.toPath(), content,
-                            java.nio.charset.StandardCharsets.UTF_8);
-                    ReleaseSupport.exec(dir, getLog(), "git", "add", "pom.xml");
-                    ReleaseSupport.exec(dir, getLog(), "git", "commit", "-m",
-                            "feature: update BOM properties for " + branchName);
-                }
-            } catch (java.io.IOException e) {
-                getLog().warn("    Could not cascade BOM properties in "
-                        + name + ": " + e.getMessage());
-            }
-        }
-    }
-
-    /**
-     * Check if a subproject is a shallow clone and fetch full history
-     * if needed. Feature branches require full history for merge-base
-     * operations during feature-finish.
-     */
-    private void ensureFullClone(File dir, String name)
-            throws MojoException {
-        try {
-            String isShallow = ReleaseSupport.execCapture(dir,
-                    "git", "rev-parse", "--is-shallow-repository");
-            if ("true".equals(isShallow.trim())) {
-                getLog().info("    Fetching full history (shallow clone detected)...");
-                ReleaseSupport.exec(dir, getLog(),
-                        "git", "fetch", "--unshallow");
-            }
-        } catch (MojoException e) {
-            getLog().warn("    Could not check/unshallow " + name
-                    + ": " + e.getMessage());
         }
     }
 
@@ -788,219 +580,5 @@ public class FeatureStartDraftMojo extends AbstractWorkspaceMojo {
         return gaps;
     }
 
-    /**
-     * Cascade BOM import version updates to downstream components.
-     *
-     * <p>When an upstream subproject's version changes (e.g., tinkar-core
-     * gets a branch-qualified version), downstream components that import
-     * a BOM published by the upstream need their import version updated.
-     */
-    private void cascadeBomImports(WorkspaceGraph graph, File root,
-                                    List<String> sorted, String branchName)
-            throws MojoException {
-        // Build published artifact sets and new version map
-        java.util.Map<String, java.util.Set<PublishedArtifactSet.Artifact>>
-                workspaceArtifacts = new java.util.LinkedHashMap<>();
-        java.util.Map<String, String> newVersions = new java.util.LinkedHashMap<>();
 
-        for (String name : sorted) {
-            Subproject sub = graph.manifest().subprojects().get(name);
-            java.nio.file.Path subDir = root.toPath().resolve(name);
-
-            if (java.nio.file.Files.exists(subDir.resolve("pom.xml"))) {
-                try {
-                    workspaceArtifacts.put(name,
-                            PublishedArtifactSet.scan(subDir));
-                } catch (java.io.IOException e) {
-                    // Skip
-                }
-            }
-
-            // Resolve effective version (same logic as the branching loop)
-            String effectiveVersion = sub.version();
-            if (effectiveVersion == null || effectiveVersion.isEmpty()) {
-                File pom = new File(new File(root, name), "pom.xml");
-                if (pom.exists()) {
-                    try {
-                        effectiveVersion = ReleaseSupport.readPomVersion(pom);
-                    } catch (MojoException e) { /* skip */ }
-                }
-            }
-            if (effectiveVersion != null && !effectiveVersion.isEmpty()) {
-                newVersions.put(name, VersionSupport.branchQualifiedVersion(
-                        effectiveVersion, branchName));
-            }
-        }
-
-        // For each subproject in topological order, check if it imports
-        // a BOM published by an upstream subproject that got a new version
-        for (String name : sorted) {
-            Subproject sub = graph.manifest().subprojects().get(name);
-            File dir = new File(root, name);
-            java.nio.file.Path pomPath = dir.toPath().resolve("pom.xml");
-
-            if (!java.nio.file.Files.exists(pomPath)) continue;
-
-            java.util.List<BomAnalysis.BomImport> bomImports;
-            try {
-                bomImports = BomAnalysis.extractBomImports(
-                        pomPath, workspaceArtifacts);
-            } catch (java.io.IOException e) {
-                continue;
-            }
-
-            boolean pomChanged = false;
-            for (BomAnalysis.BomImport bom : bomImports) {
-                if (!bom.isWorkspaceInternal()) continue;
-
-                String upstreamName = bom.publishingSubproject();
-                if (!newVersions.containsKey(upstreamName)) continue;
-
-                String newVersion = newVersions.get(upstreamName);
-                try {
-                    boolean updated = BomAnalysis.updateBomImportVersion(
-                            pomPath, bom.groupId(), bom.artifactId(), newVersion);
-                    if (updated) {
-                        getLog().info("    " + name + ": BOM import "
-                                + bom.groupId() + ":" + bom.artifactId()
-                                + " → " + newVersion);
-                        pomChanged = true;
-                    }
-                } catch (java.io.IOException e) {
-                    getLog().warn("    Could not update BOM import in "
-                            + name + ": " + e.getMessage());
-                }
-            }
-
-            if (pomChanged) {
-                try {
-                    ReleaseSupport.exec(dir, getLog(), "git", "add", "pom.xml");
-                    ReleaseSupport.exec(dir, getLog(),
-                            "git", "commit", "-m",
-                            "feature: update BOM imports for " + branchName);
-                } catch (MojoException e) {
-                    getLog().warn("    Could not commit BOM update in "
-                            + name + ": " + e.getMessage());
-                }
-            }
-        }
-    }
-
-    // ── Intra-reactor version pin removal ───────────────────────
-
-    /**
-     * Detect and remove intra-reactor version pins across all
-     * components. A "pin" is a {@code <version>} tag on a dependency
-     * whose {@code groupId:artifactId} matches another module within
-     * the same reactor — the reactor resolves versions automatically,
-     * so explicit pins are redundant and cause cascade issues.
-     *
-     * <p>In draft mode, reports what would be removed. In publish mode,
-     * removes the pins and commits the changes.
-     *
-     * @param root      workspace root directory
-     * @param components subproject names to scan
-     * @param publish   true to actually remove; false to report only
-     */
-    private void removeIntraReactorPins(File root, List<String> components,
-                                         boolean publish)
-            throws MojoException {
-        for (String name : components) {
-            File subDir = new File(root, name);
-            File rootPom = new File(subDir, "pom.xml");
-            if (!rootPom.exists()) continue;
-
-            try {
-                // Build the set of all reactor artifactIds by walking
-                // the subproject tree from the subproject root POM.
-                PomModel rootModel = PomModel.parse(rootPom.toPath());
-                String reactorGroupId = rootModel.groupId();
-                Set<String> reactorArtifacts = new java.util.LinkedHashSet<>();
-                collectReactorArtifacts(subDir.toPath(), rootModel,
-                        reactorArtifacts);
-
-                if (reactorArtifacts.size() <= 1) continue;  // no submodules
-
-                // Scan all POMs for pinned intra-reactor dependencies
-                List<java.io.File> allPoms = ReleaseSupport.findPomFiles(subDir);
-                boolean anyChanged = false;
-
-                for (java.io.File pom : allPoms) {
-                    PomModel model = PomModel.parse(pom.toPath());
-                    String content = model.content();
-                    String updated = content;
-
-                    for (var dep : model.allDependencies()) {
-                        String version = dep.getVersion();
-                        if (version == null) continue;
-
-                        // Check if this dependency is a reactor sibling
-                        // — any explicit <version> is redundant, whether
-                        // literal ("1.0.0-SNAPSHOT") or property-based
-                        // ("${project.version}")
-                        String depGroupId = dep.getGroupId();
-                        if (depGroupId == null) depGroupId = reactorGroupId;
-                        if (!reactorArtifacts.contains(dep.getArtifactId())) continue;
-
-                        // Found an intra-reactor pin
-                        String relPath = subDir.toPath()
-                                .relativize(pom.toPath()).toString();
-
-                        if (publish) {
-                            updated = PomModel.removeDependencyVersion(
-                                    updated, depGroupId, dep.getArtifactId());
-                            getLog().info("    removed intra-reactor pin "
-                                    + dep.getArtifactId() + " " + version
-                                    + " from " + relPath);
-                        } else {
-                            getLog().info("  [draft] " + name + "/" + relPath
-                                    + ": intra-reactor pin " + dep.getArtifactId()
-                                    + " " + version
-                                    + " would be removed (reactor resolves version)");
-                        }
-                    }
-
-                    if (publish && !updated.equals(content)) {
-                        java.nio.file.Files.writeString(pom.toPath(), updated,
-                                java.nio.charset.StandardCharsets.UTF_8);
-                        anyChanged = true;
-                    }
-                }
-
-                if (anyChanged) {
-                    ReleaseSupport.exec(subDir, getLog(), "git", "add", "-A");
-                    ReleaseSupport.exec(subDir, getLog(),
-                            "git", "commit", "-m",
-                            "build: remove intra-reactor version pins");
-                }
-            } catch (java.io.IOException e) {
-                getLog().warn("    Could not scan " + name
-                        + " for intra-reactor pins: " + e.getMessage());
-            }
-        }
-    }
-
-    /**
-     * Recursively collect all artifactIds in a reactor tree by walking
-     * the {@code <subprojects>} (or {@code <modules>}) declarations.
-     *
-     * @param baseDir           directory of the POM being scanned
-     * @param model             parsed POM model
-     * @param reactorArtifacts  accumulator for discovered artifactIds
-     */
-    private void collectReactorArtifacts(java.nio.file.Path baseDir,
-                                          PomModel model,
-                                          Set<String> reactorArtifacts)
-            throws java.io.IOException {
-        reactorArtifacts.add(model.artifactId());
-
-        for (String sub : model.subprojects()) {
-            java.nio.file.Path subDir = baseDir.resolve(sub);
-            java.nio.file.Path subPom = subDir.resolve("pom.xml");
-            if (java.nio.file.Files.exists(subPom)) {
-                PomModel subModel = PomModel.parse(subPom);
-                collectReactorArtifacts(subDir, subModel, reactorArtifacts);
-            }
-        }
-    }
 }

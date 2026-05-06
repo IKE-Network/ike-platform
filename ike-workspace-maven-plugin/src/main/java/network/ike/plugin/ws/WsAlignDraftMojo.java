@@ -29,42 +29,31 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Align workspace state: inter-subproject dependency versions in POM
- * files and branch fields in {@code workspace.yaml}.
+ * Align inter-subproject dependency versions in POM files (preview).
  *
- * <p>This is the {@code ws:align-draft} goal (preview). The
- * corresponding {@code ws:align-publish} applies the same changes.
- * Two axes are reconciled, both expressing the same
- * "declared ↔ actual" pattern (see #180):
+ * <p>This is the {@code ws:align-draft} goal. The corresponding
+ * {@code ws:align-publish} applies the same changes. Daily-use, safe,
+ * idempotent.
  *
- * <ul>
- *   <li><b>POMs</b> — for each subproject on disk, scan POM dependency
- *       declarations. When a dependency's groupId matches another
- *       workspace subproject and the declared version does not match
- *       that subproject's current POM version, the dependency version
- *       is updated. Property-based versions (e.g. {@code <ike-bom.version>})
- *       are updated via {@code PomModel.updateProperty}; direct
- *       {@code <version>} tags are updated via
- *       {@code PomModel.updateDependencyVersion}.</li>
- *   <li><b>Branches</b> — reconcile {@code branch:} fields in
- *       {@code workspace.yaml} against the actual branch each cloned
- *       subproject is on. With {@code from=repos} (default), the yaml
- *       is updated from on-disk state; with {@code from=manifest},
- *       each subproject is checked out to the declared branch; with
- *       {@code from=workspace-head}, the workspace repo's HEAD is
- *       authoritative and both the yaml fields <em>and</em> each
- *       subproject's on-disk branch are reconciled to that single
- *       value (ike-issues#287).</li>
- * </ul>
+ * <p>For each subproject on disk, scans POM dependency declarations.
+ * When a dependency's groupId matches another workspace subproject
+ * and the declared version does not match that subproject's current
+ * POM version, the dependency version is updated. Property-based
+ * versions (e.g. {@code <ike-bom.version>}) are updated via
+ * {@link PomModel#updateProperty}; direct {@code <version>} tags are
+ * updated via {@link PomModel#updateDependencyVersion}.
+ *
+ * <p>Branch reconciliation (the rare "manifest ↔ git state" recovery
+ * operation that used to share this goal as
+ * {@code -Dscope=branches}) is now {@link WsReconcileBranchesDraftMojo}
+ * ({@code ws:reconcile-branches-draft}) per the ike-issues#200 split.
  *
  * <pre>{@code
- * mvn ws:align-draft                         # report only (both axes)
- * mvn ws:align-publish                        # apply (both axes)
- * mvn ws:align-publish -Dscope=poms           # POMs only
- * mvn ws:align-publish -Dscope=branches       # branches only
- * mvn ws:align-publish -Dscope=branches -Dfrom=manifest         # switch repos
- * mvn ws:align-publish -Dscope=branches -Dfrom=workspace-head   # repair drift
+ * mvn ws:align-draft                # preview POM version updates
+ * mvn ws:align-publish               # apply
  * }</pre>
+ *
+ * @see WsReconcileBranchesDraftMojo for branch-state recovery
  */
 @Mojo(name = "align-draft", projectRequired = false, aggregator = true)
 public class WsAlignDraftMojo extends AbstractWorkspaceMojo {
@@ -76,11 +65,18 @@ public class WsAlignDraftMojo extends AbstractWorkspaceMojo {
     boolean publish;
 
     /**
-     * What to align: {@code poms} (inter-subproject dependency
-     * versions), {@code branches} (workspace.yaml branch fields vs.
-     * on-disk git state), or {@code all} (both). Default {@code all}.
+     * What to align — only {@code poms} is accepted on {@code ws:align}
+     * after ike-issues#200. Branch reconciliation moved to the dedicated
+     * {@link WsReconcileBranchesDraftMojo} ({@code ws:reconcile-branches-draft})
+     * and its publish counterpart. Passing {@code -Dscope=branches} or
+     * {@code -Dscope=all} on {@code ws:align} throws with a pointer to
+     * the new goal.
+     *
+     * <p>The parameter is retained as a transitional migration aid so
+     * users with muscle memory get a clear error rather than a
+     * silently-changed default.
      */
-    @Parameter(property = "scope", defaultValue = "all")
+    @Parameter(property = "scope", defaultValue = "poms")
     String scope;
 
     /**
@@ -114,11 +110,37 @@ public class WsAlignDraftMojo extends AbstractWorkspaceMojo {
     /** Creates this goal instance. */
     public WsAlignDraftMojo() {}
 
+    /**
+     * Whether this goal may run the branch-axis reconciliation. False
+     * for {@code ws:align} (POM-only after ike-issues#200); overridden
+     * to true by {@link WsReconcileBranchesDraftMojo} so the same
+     * implementation can serve both goal names without duplicating
+     * the cascade logic.
+     */
+    protected boolean isBranchScopeAllowed() {
+        return false;
+    }
+
     @Override
     public void execute() throws MojoException {
         boolean draft = !publish;
+
+        // Migration gate (ike-issues#200): ws:align is POM-only.
+        // Branch reconciliation moved to ws:reconcile-branches-{draft,publish}.
+        if (!isBranchScopeAllowed()
+                && ("branches".equals(scope) || "all".equals(scope))) {
+            throw new MojoException(
+                    "ws:align no longer supports -Dscope=" + scope
+                            + " (ike-issues#200). Branch reconciliation moved to:\n"
+                            + "  mvn ws:reconcile-branches-"
+                            + (publish ? "publish" : "draft")
+                            + (from != null && !"repos".equals(from)
+                                    ? " -Dfrom=" + from : "")
+                            + "\n  ws:align is now POM-only — drop -Dscope=.");
+        }
+
         boolean doPoms = !"branches".equals(scope);
-        boolean doBranches = !"poms".equals(scope);
+        boolean doBranches = isBranchScopeAllowed() && !"poms".equals(scope);
         if (!doPoms && !doBranches) {
             throw new MojoException(
                     "Invalid scope '" + scope + "' — expected poms|branches|all");

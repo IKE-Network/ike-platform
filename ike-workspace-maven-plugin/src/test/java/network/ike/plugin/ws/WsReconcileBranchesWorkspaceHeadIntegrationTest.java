@@ -13,7 +13,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Integration tests for {@link WsAlignDraftMojo} with
+ * Integration tests for {@link WsReconcileBranchesDraftMojo} with
  * {@code from=workspace-head}.
  *
  * <p>The workspace repo's HEAD branch is treated as authoritative;
@@ -22,7 +22,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * (ike-issues#287). This is the symmetric repair to {@code ws:add}'s
  * branch-coherence rule (ike-issues#286).
  */
-class WsAlignWorkspaceHeadIntegrationTest {
+class WsReconcileBranchesWorkspaceHeadIntegrationTest {
 
     @TempDir
     Path tempDir;
@@ -51,7 +51,7 @@ class WsAlignWorkspaceHeadIntegrationTest {
         // followed yet — exactly the drift this mode is designed to fix.
         exec(tempDir, "git", "checkout", "-b", "feature/X");
 
-        WsAlignDraftMojo mojo = TestLog.createMojo(WsAlignDraftMojo.class);
+        WsReconcileBranchesDraftMojo mojo = TestLog.createMojo(WsReconcileBranchesDraftMojo.class);
         mojo.manifest = helper.workspaceYaml().toFile();
         mojo.scope = "branches";
         mojo.from = "workspace-head";
@@ -81,7 +81,7 @@ class WsAlignWorkspaceHeadIntegrationTest {
         String yamlBefore = Files.readString(
                 helper.workspaceYaml(), StandardCharsets.UTF_8);
 
-        WsAlignDraftMojo mojo = TestLog.createMojo(WsAlignDraftMojo.class);
+        WsReconcileBranchesDraftMojo mojo = TestLog.createMojo(WsReconcileBranchesDraftMojo.class);
         mojo.manifest = helper.workspaceYaml().toFile();
         mojo.scope = "branches";
         mojo.from = "workspace-head";
@@ -103,7 +103,7 @@ class WsAlignWorkspaceHeadIntegrationTest {
     void workspaceHead_allAgree_noChanges() throws Exception {
         // Workspace stays on main; YAML says main; repos are on main.
         // Nothing to do.
-        WsAlignDraftMojo mojo = TestLog.createMojo(WsAlignDraftMojo.class);
+        WsReconcileBranchesDraftMojo mojo = TestLog.createMojo(WsReconcileBranchesDraftMojo.class);
         mojo.manifest = helper.workspaceYaml().toFile();
         mojo.scope = "branches";
         mojo.from = "workspace-head";
@@ -121,7 +121,7 @@ class WsAlignWorkspaceHeadIntegrationTest {
         // Strip the workspace's .git so from=workspace-head has no anchor.
         deleteRecursive(tempDir.resolve(".git"));
 
-        WsAlignDraftMojo mojo = TestLog.createMojo(WsAlignDraftMojo.class);
+        WsReconcileBranchesDraftMojo mojo = TestLog.createMojo(WsReconcileBranchesDraftMojo.class);
         mojo.manifest = helper.workspaceYaml().toFile();
         mojo.scope = "branches";
         mojo.from = "workspace-head";
@@ -134,7 +134,7 @@ class WsAlignWorkspaceHeadIntegrationTest {
 
     @Test
     void workspaceHead_invalidFrom_throws() throws Exception {
-        WsAlignDraftMojo mojo = TestLog.createMojo(WsAlignDraftMojo.class);
+        WsReconcileBranchesDraftMojo mojo = TestLog.createMojo(WsReconcileBranchesDraftMojo.class);
         mojo.manifest = helper.workspaceYaml().toFile();
         mojo.scope = "branches";
         mojo.from = "garbage-value";

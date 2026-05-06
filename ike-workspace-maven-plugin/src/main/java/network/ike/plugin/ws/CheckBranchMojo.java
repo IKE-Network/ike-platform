@@ -44,7 +44,7 @@ public class CheckBranchMojo extends AbstractWorkspaceMojo {
      *   <li>{@code workspace} — survey every subproject's on-disk branch
      *       and YAML {@code branch:} field against the workspace repo's
      *       HEAD (authoritative). Reports drift, suggests
-     *       {@code ws:align-publish -Dscope=branches -Dfrom=workspace-head}.
+     *       {@code ws:reconcile-branches-publish -Dfrom=workspace-head}.
      *       Read-only; never blocks (ike-issues#287).</li>
      * </ul>
      */
@@ -222,7 +222,7 @@ public class CheckBranchMojo extends AbstractWorkspaceMojo {
             }
             getLog().warn("");
             getLog().warn("  Repair with:");
-            getLog().warn("    mvn ws:align-publish -Dscope=branches "
+            getLog().warn("    mvn ws:reconcile-branches-publish "
                     + "-Dfrom=workspace-head");
             getLog().warn("");
         }
@@ -248,7 +248,7 @@ public class CheckBranchMojo extends AbstractWorkspaceMojo {
               .append(" | ").append(status).append(" |\n");
         }
         if (driftCount > 0) {
-            md.append("\n_Repair: `mvn ws:align-publish -Dscope=branches "
+            md.append("\n_Repair: `mvn ws:reconcile-branches-publish "
                     + "-Dfrom=workspace-head`_\n");
         }
         writeReport(WsGoal.CHECK_BRANCH, md.toString());

@@ -12,7 +12,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 
 /**
- * Integration tests for {@link WsAlignDraftMojo} with {@code scope=branches},
+ * Integration tests for {@link WsReconcileBranchesDraftMojo} with {@code scope=branches},
  * exercising real temp workspaces.
  *
  * <p>Each test creates a fresh workspace via {@link TestWorkspaceHelper},
@@ -21,7 +21,7 @@ import static org.assertj.core.api.Assertions.assertThatCode;
  * the manifest from on-disk state; {@code from=manifest} switches repos
  * to match the manifest).
  */
-class WsAlignBranchesIntegrationTest {
+class WsReconcileBranchesIntegrationTest {
 
     @TempDir
     Path tempDir;
@@ -51,7 +51,7 @@ class WsAlignBranchesIntegrationTest {
         // Switch lib-a to a feature branch
         exec(tempDir.resolve("lib-a"), "git", "checkout", "-b", "feature/test");
 
-        WsAlignDraftMojo mojo = TestLog.createMojo(WsAlignDraftMojo.class);
+        WsReconcileBranchesDraftMojo mojo = TestLog.createMojo(WsReconcileBranchesDraftMojo.class);
         mojo.manifest = helper.workspaceYaml().toFile();
         mojo.scope = "branches";
         mojo.from = "repos";
@@ -71,7 +71,7 @@ class WsAlignBranchesIntegrationTest {
         String yamlBefore = Files.readString(
                 helper.workspaceYaml(), StandardCharsets.UTF_8);
 
-        WsAlignDraftMojo mojo = TestLog.createMojo(WsAlignDraftMojo.class);
+        WsReconcileBranchesDraftMojo mojo = TestLog.createMojo(WsReconcileBranchesDraftMojo.class);
         mojo.manifest = helper.workspaceYaml().toFile();
         mojo.scope = "branches";
         mojo.from = "repos";
@@ -93,7 +93,7 @@ class WsAlignBranchesIntegrationTest {
         String yamlBefore = Files.readString(
                 helper.workspaceYaml(), StandardCharsets.UTF_8);
 
-        WsAlignDraftMojo mojo = TestLog.createMojo(WsAlignDraftMojo.class);
+        WsReconcileBranchesDraftMojo mojo = TestLog.createMojo(WsReconcileBranchesDraftMojo.class);
         mojo.manifest = helper.workspaceYaml().toFile();
         mojo.scope = "branches";
         mojo.from = "repos";
@@ -112,7 +112,7 @@ class WsAlignBranchesIntegrationTest {
         // Switch lib-a to a feature branch
         exec(tempDir.resolve("lib-a"), "git", "checkout", "-b", "feature/sync-commit");
 
-        WsAlignDraftMojo mojo = TestLog.createMojo(WsAlignDraftMojo.class);
+        WsReconcileBranchesDraftMojo mojo = TestLog.createMojo(WsReconcileBranchesDraftMojo.class);
         mojo.manifest = helper.workspaceYaml().toFile();
         mojo.scope = "branches";
         mojo.from = "repos";
@@ -143,7 +143,7 @@ class WsAlignBranchesIntegrationTest {
                 "$1develop");
         Files.writeString(helper.workspaceYaml(), yaml, StandardCharsets.UTF_8);
 
-        WsAlignDraftMojo mojo = TestLog.createMojo(WsAlignDraftMojo.class);
+        WsReconcileBranchesDraftMojo mojo = TestLog.createMojo(WsReconcileBranchesDraftMojo.class);
         mojo.manifest = helper.workspaceYaml().toFile();
         mojo.scope = "branches";
         mojo.from = "manifest";
@@ -182,7 +182,7 @@ class WsAlignBranchesIntegrationTest {
                 "$1develop");
         Files.writeString(helper.workspaceYaml(), yaml, StandardCharsets.UTF_8);
 
-        WsAlignDraftMojo mojo = TestLog.createMojo(WsAlignDraftMojo.class);
+        WsReconcileBranchesDraftMojo mojo = TestLog.createMojo(WsReconcileBranchesDraftMojo.class);
         mojo.manifest = helper.workspaceYaml().toFile();
         mojo.scope = "branches";
         mojo.from = "manifest";
@@ -199,7 +199,7 @@ class WsAlignBranchesIntegrationTest {
     @Test
     void fromManifest_allMatch_noChanges() throws Exception {
         // All components are on main, workspace.yaml says main
-        WsAlignDraftMojo mojo = TestLog.createMojo(WsAlignDraftMojo.class);
+        WsReconcileBranchesDraftMojo mojo = TestLog.createMojo(WsReconcileBranchesDraftMojo.class);
         mojo.manifest = helper.workspaceYaml().toFile();
         mojo.scope = "branches";
         mojo.from = "manifest";

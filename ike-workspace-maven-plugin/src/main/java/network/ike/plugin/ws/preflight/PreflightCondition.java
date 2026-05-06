@@ -8,6 +8,10 @@ import org.apache.maven.api.plugin.Log;
 import org.apache.maven.api.plugin.MojoException;
 
 import java.io.File;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -111,6 +115,53 @@ public enum PreflightCondition {
                     + "  property to a released (non-SNAPSHOT) version before\n"
                     + "  re-running the release."));
         }
+    },
+
+    /**
+     * No {@code .mvn/jvm.config} file in the workspace root or any
+     * subproject may contain a line starting with {@code #}.
+     *
+     * <p>Maven parses {@code .mvn/jvm.config} as raw JVM arguments —
+     * one token per line, with no comment syntax. A {@code #} at
+     * column 0 is passed to the JVM launcher as a main-class name and
+     * IntelliJ surfaces it as
+     * {@code Error: Could not find or load main class #}. The fix is
+     * to delete the offending line; comments belong in
+     * {@code .mvn/jvm.config.notes} or similar adjacent files.
+     *
+     * <p>This is the gate referenced in ike-issues#217. The check fires
+     * before the bad file can propagate to git or Syncthing — Maven's
+     * own {@code validate} phase can't catch this in the project that
+     * contains the bad file because the JVM dies before plugin code
+     * runs.
+     */
+    JVM_CONFIG_NO_HASH_COMMENTS(
+            "No .mvn/jvm.config file contains a # comment line") {
+        @Override
+        public Optional<String> check(PreflightContext ctx) {
+            File root = ctx.workspaceRoot();
+            List<String> violations = new ArrayList<>();
+
+            collectJvmConfigViolations(root, WORKSPACE_ROOT_NAME, violations);
+            for (String name : ctx.subprojects()) {
+                collectJvmConfigViolations(new File(root, name), name,
+                        violations);
+            }
+
+            if (violations.isEmpty()) return Optional.empty();
+
+            var sb = new StringBuilder();
+            sb.append(violations.size())
+                    .append(" .mvn/jvm.config file(s) contain # comment lines:\n");
+            for (String v : violations) {
+                sb.append("    • ").append(v).append('\n');
+            }
+            sb.append("  Maven parses .mvn/jvm.config as raw JVM arguments\n");
+            sb.append("  — '#' at column 0 is passed to the JVM launcher as a\n");
+            sb.append("  main-class name and crashes the build. Delete the\n");
+            sb.append("  offending line; put commentary in an adjacent file.");
+            return Optional.of(sb.toString());
+        }
     };
 
     /** Special marker used when the workspace root itself has uncommitted changes. */
@@ -144,6 +195,41 @@ public enum PreflightCondition {
                     "git", "status", "--porcelain").trim();
         } catch (MojoException e) {
             return "";
+        }
+    }
+
+    /**
+     * If {@code dir/.mvn/jvm.config} exists and contains any line whose
+     * first non-empty character is {@code #}, append one entry per
+     * offending line to {@code accum}. Format:
+     * {@code <displayName>/.mvn/jvm.config:<lineNo>: <text>}.
+     *
+     * <p>Empty lines and whitespace-only lines are ignored. Quietly
+     * tolerates {@link IOException} — preflight is best-effort and
+     * shouldn't fail the gate over a transient read error.
+     *
+     * @param dir         the directory whose {@code .mvn/jvm.config} to scan
+     * @param displayName name shown in the violation list
+     *                    ({@link #WORKSPACE_ROOT_NAME} for the workspace
+     *                    root, otherwise the subproject name)
+     * @param accum       accumulator for formatted violation strings
+     */
+    static void collectJvmConfigViolations(File dir, String displayName,
+                                           List<String> accum) {
+        Path config = dir.toPath().resolve(".mvn").resolve("jvm.config");
+        if (!Files.isRegularFile(config)) return;
+        try {
+            List<String> lines = Files.readAllLines(config, StandardCharsets.UTF_8);
+            for (int i = 0; i < lines.size(); i++) {
+                String line = lines.get(i);
+                String trimmed = line.stripLeading();
+                if (trimmed.startsWith("#")) {
+                    accum.add(displayName + "/.mvn/jvm.config:"
+                            + (i + 1) + ": " + line);
+                }
+            }
+        } catch (IOException e) {
+            // Best-effort — preflight does not fail on read errors.
         }
     }
 }

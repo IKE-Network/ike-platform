@@ -66,6 +66,8 @@ public enum WsGoal {
             "List ws:* goals discovered from the plugin descriptor."),
     INIT("init", InitWorkspaceMojo.class,
             "Initialize a workspace: clone subprojects per workspace.yaml."),
+    LINT("lint", WsLintMojo.class,
+            "Surface preflight conditions as a hygiene gate (read-only)."),
     OVERVIEW("overview", OverviewWorkspaceMojo.class,
             "Workspace overview: manifest, graph, status, cascade."),
     POST_RELEASE("post-release", WsPostReleaseMojo.class,

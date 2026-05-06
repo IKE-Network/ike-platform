@@ -75,6 +75,16 @@ public class CommitMojo extends AbstractWorkspaceMojo {
     @Parameter(property = "push", defaultValue = "false")
     boolean push;
 
+    /**
+     * Skip the {@code .mvn/jvm.config} hash-comment lint check that
+     * runs before commit (ike-issues#217). Default is to run the
+     * check; pass {@code -Dws.commit.skipLint=true} to opt out (rare —
+     * the check exists because Maven's own validate phase can't catch
+     * a {@code #}-comment'd jvm.config in the project that contains it).
+     */
+    @Parameter(property = "ws.commit.skipLint", defaultValue = "false")
+    boolean skipLint;
+
     @Override
     public void execute() throws MojoException {
         if (isWorkspaceMode()) {
@@ -89,6 +99,21 @@ public class CommitMojo extends AbstractWorkspaceMojo {
         File root = workspaceRoot();
 
         List<String> sorted = graph.topologicalSort();
+
+        // Pre-commit hygiene: catch # comments in .mvn/jvm.config files
+        // before they reach git or Syncthing. Maven's own validate phase
+        // can't catch this in the project that contains the bad file
+        // (the JVM dies before plugin code runs), so the transport
+        // boundary is the right gate (ike-issues#217). Hard-fail —
+        // committing the file would brick the affected machine.
+        if (!skipLint) {
+            network.ike.plugin.ws.preflight.Preflight.of(
+                    java.util.List.of(network.ike.plugin.ws.preflight
+                            .PreflightCondition.JVM_CONFIG_NO_HASH_COMMENTS),
+                    network.ike.plugin.ws.preflight.PreflightContext.of(
+                            root, graph, sorted))
+                    .requirePassed(WsGoal.COMMIT);
+        }
 
         // Resolve the message before any work — prompts interactively
         // when running in a terminal or IntelliJ's Maven runner, throws

@@ -173,6 +173,58 @@ final class PomRewriter {
     }
 
     /**
+     * Update the workspace root POM's own coordinates — its top-level
+     * {@code <groupId>}, {@code <artifactId>}, and {@code <version>}
+     * elements (the ones not nested under {@code <parent>} or any
+     * {@code <dependency>} / {@code <plugin>}). Used by
+     * {@link WsAdoptRootMojo} to migrate the legacy
+     * {@code local.aggregate:<name>:1.0.0-SNAPSHOT} placeholder to a
+     * real GAV (ike-issues#184).
+     *
+     * <p>Pass {@code null} for any field to leave it unchanged; pass a
+     * non-null replacement to rewrite that single element. Top-level
+     * matching uses the XPath {@code /project/<element>} so nested
+     * artifact references are not affected.
+     *
+     * @param pomContent    the raw POM text
+     * @param newGroupId    the project's new groupId, or null to skip
+     * @param newArtifactId the project's new artifactId, or null to skip
+     * @param newVersion    the project's new version, or null to skip
+     * @return updated POM text, or unchanged when no element matches
+     *         and no rewrite was attempted
+     */
+    static String updateProjectCoordinates(String pomContent,
+                                           String newGroupId,
+                                           String newArtifactId,
+                                           String newVersion) {
+        Xml.Document doc = parse(pomContent);
+        if (doc == null) return pomContent;
+
+        XPathMatcher gidMatcher = new XPathMatcher("/project/groupId");
+        XPathMatcher aidMatcher = new XPathMatcher("/project/artifactId");
+        XPathMatcher verMatcher = new XPathMatcher("/project/version");
+
+        Xml.Document updated = (Xml.Document) new XmlVisitor<Integer>() {
+            @Override
+            public Xml.Tag visitTag(Xml.Tag tag, Integer ctx) {
+                Xml.Tag t = (Xml.Tag) super.visitTag(tag, ctx);
+                if (newGroupId != null && gidMatcher.matches(getCursor())) {
+                    return t.withValue(newGroupId);
+                }
+                if (newArtifactId != null && aidMatcher.matches(getCursor())) {
+                    return t.withValue(newArtifactId);
+                }
+                if (newVersion != null && verMatcher.matches(getCursor())) {
+                    return t.withValue(newVersion);
+                }
+                return t;
+            }
+        }.visitNonNull(doc, 0);
+
+        return print(updated);
+    }
+
+    /**
      * Remove the {@code <version>} child from a dependency matched by
      * {@code groupId:artifactId}. Used to eliminate intra-reactor
      * version pins where the reactor resolves the version automatically.

@@ -24,6 +24,8 @@ public enum WsGoal {
 
     ADD("add", WsAddMojo.class,
             "Add a subproject to the workspace."),
+    ADOPT_ROOT("adopt-root", WsAdoptRootMojo.class,
+            "Migrate an existing workspace from placeholder GAV to real coordinates."),
     ALIGN_DRAFT("align-draft", WsAlignDraftMojo.class,
             "Preview inter-subproject version alignment."),
     ALIGN_PUBLISH("align-publish", WsAlignPublishMojo.class,

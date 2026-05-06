@@ -226,7 +226,19 @@ final class IdeProfileSync {
             out.append('\n');
         }
         out.append(BEGIN_MARKER).append('\n');
-        out.append("-P").append(String.join(",", activeProfiles)).append('\n');
+        // Maven 4 treats unknown profiles as a fatal error. When IntelliJ
+        // (or any reactor invocation scoped with -pl <subproject>) parses a
+        // subproject in isolation, the with-* profiles only declared in
+        // the workspace aggregator POM are absent — and the build aborts
+        // before importing. The Maven 4 "?profileId" prefix marks the
+        // activation as optional: present-and-active if the profile
+        // exists, soft-warning if it doesn't. See ike-issues#299.
+        out.append("-P");
+        for (int i = 0; i < activeProfiles.size(); i++) {
+            if (i > 0) out.append(',');
+            out.append('?').append(activeProfiles.get(i));
+        }
+        out.append('\n');
         out.append(END_MARKER);
     }
 }

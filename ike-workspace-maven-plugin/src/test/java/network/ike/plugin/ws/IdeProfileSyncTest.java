@@ -28,7 +28,7 @@ class IdeProfileSyncTest {
                 List.of("with-tinkar-core", "with-komet-bom"));
         assertThat(out).isEqualTo(
                 "# >>> ws:ide-sync managed >>>\n"
-                        + "-Pwith-tinkar-core,with-komet-bom\n"
+                        + "-P?with-tinkar-core,?with-komet-bom\n"
                         + "# <<< ws:ide-sync managed <<<\n");
     }
 
@@ -40,7 +40,7 @@ class IdeProfileSyncTest {
         assertThat(out).isEqualTo(
                 "-T 1C\n-pl\n!.teamcity\n"
                         + "# >>> ws:ide-sync managed >>>\n"
-                        + "-Pwith-tinkar-core\n"
+                        + "-P?with-tinkar-core\n"
                         + "# <<< ws:ide-sync managed <<<\n");
     }
 
@@ -48,14 +48,14 @@ class IdeProfileSyncTest {
     void replacesExistingBlock_keepingUserLines() {
         String existing = "-T 1C\n-pl\n!.teamcity\n"
                 + "# >>> ws:ide-sync managed >>>\n"
-                + "-Pwith-tinkar-core\n"
+                + "-P?with-tinkar-core\n"
                 + "# <<< ws:ide-sync managed <<<\n";
         String out = IdeProfileSync.rewriteOwnedBlock(existing,
                 List.of("with-tinkar-core", "with-komet-bom"));
         assertThat(out).isEqualTo(
                 "-T 1C\n-pl\n!.teamcity\n"
                         + "# >>> ws:ide-sync managed >>>\n"
-                        + "-Pwith-tinkar-core,with-komet-bom\n"
+                        + "-P?with-tinkar-core,?with-komet-bom\n"
                         + "# <<< ws:ide-sync managed <<<\n");
     }
 
@@ -63,7 +63,7 @@ class IdeProfileSyncTest {
     void emptyProfilesRemovesExistingBlock() {
         String existing = "-T 1C\n"
                 + "# >>> ws:ide-sync managed >>>\n"
-                + "-Pwith-tinkar-core\n"
+                + "-P?with-tinkar-core\n"
                 + "# <<< ws:ide-sync managed <<<\n";
         String out = IdeProfileSync.rewriteOwnedBlock(existing, List.of());
         assertThat(out).isEqualTo("-T 1C\n");
@@ -80,16 +80,32 @@ class IdeProfileSyncTest {
     }
 
     @Test
+    void emitsOptionalProfilePrefixSoMaven4DoesNotFail() {
+        // Regression guard for ike-issues#299: the Maven 4 importer
+        // (and any `mvn -pl <subproject>` invocation) parses
+        // subprojects in isolation, where the workspace-aggregator's
+        // with-* profiles aren't declared. A bare `-P` arg makes
+        // those activations fatal; the `?` prefix marks them
+        // optional (soft-warning if absent).
+        String out = IdeProfileSync.rewriteOwnedBlock("",
+                List.of("with-tinkar-core", "with-komet-bom"));
+        assertThat(out)
+                .contains("-P?with-tinkar-core,?with-komet-bom")
+                .doesNotContain("-Pwith-tinkar-core")
+                .doesNotContain("-P with-");
+    }
+
+    @Test
     void preservesLinesAfterBlock() {
         String existing = "-T 1C\n"
                 + "# >>> ws:ide-sync managed >>>\n"
-                + "-Pwith-old\n"
+                + "-P?with-old\n"
                 + "# <<< ws:ide-sync managed <<<\n"
                 + "-DskipTests=false\n";
         String out = IdeProfileSync.rewriteOwnedBlock(existing,
                 List.of("with-new"));
         assertThat(out).contains("-T 1C\n");
-        assertThat(out).contains("-Pwith-new\n");
+        assertThat(out).contains("-P?with-new\n");
         assertThat(out).contains("-DskipTests=false");
         assertThat(out).doesNotContain("with-old");
     }

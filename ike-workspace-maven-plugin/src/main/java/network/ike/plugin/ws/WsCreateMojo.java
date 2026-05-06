@@ -29,16 +29,26 @@ import java.time.LocalDate;
  *   <li>POM uses Maven 4.1.0 model with {@code root="true"}</li>
  *   <li>.gitignore uses whitelist strategy (ignore everything,
  *       whitelist workspace-owned files)</li>
- *   <li>workspace.yaml has schema-version 1.0 with empty subprojects</li>
+ *   <li>workspace.yaml has schema-version 1.1 with a typed
+ *       {@code workspace-root:} block holding the workspace's GAV
+ *       (ike-issues#183) and an empty {@code subprojects:} list</li>
  *   <li>.mvn/maven.config sets {@code -T 1C}</li>
  * </ul>
  *
  * <p>After creation, use {@code ws:add} to add subproject repos,
  * then {@code ws:init} to clone them.
  *
+ * <p>Required: {@code -Dgroup=<groupId>}. The pre-#183 placeholder
+ * coordinates ({@code local.aggregate:<name>:1.0.0-SNAPSHOT}) are no
+ * longer supported — every new workspace ships with real coordinates
+ * so {@code ws:release}, {@code ws:align}, and site deploy can
+ * address it. Existing workspaces stuck on the placeholder migrate
+ * via {@code ws:adopt-root} (#184).
+ *
  * <pre>{@code
- * mvn ws:create -Dname=my-workspace
- * mvn ws:create -Dname=my-workspace -Dorg=knowledge-graphlet
+ * mvn ws:create -Dname=my-workspace -Dgroup=network.ike.workspace
+ * mvn ws:create -Dname=my-workspace -Dgroup=org.example -Dversion=2-SNAPSHOT
+ * mvn ws:create -Dname=my-workspace -Dgroup=org.example -Dorg=my-gh-org
  * }</pre>
  *
  * @see WsAddMojo for adding subprojects to an existing workspace
@@ -82,6 +92,35 @@ public class WsCreateMojo implements Mojo {
     private String org;
 
     /**
+     * Maven groupId for the workspace root POM. Required (no default
+     * — placeholder GAVs are not supported, see ike-issues#183).
+     * Persisted to {@code workspace-root.groupId} in workspace.yaml.
+     *
+     * <p>Convention: {@code network.ike.workspace} for IKE-managed
+     * workspaces; downstream consumers pick a groupId that fits their
+     * organization namespace.
+     */
+    @Parameter(property = "group")
+    private String group;
+
+    /**
+     * Initial workspace root version. Single-segment monotonic
+     * (per {@code feedback_no_semver_assumption}); defaults to
+     * {@code 1-SNAPSHOT}. The version increments after each release
+     * of the workspace root, NOT per software-meaningful change. It
+     * represents \"the Nth release of this workspace manifest\".
+     */
+    @Parameter(property = "version", defaultValue = "1-SNAPSHOT")
+    private String version;
+
+    /**
+     * Maven artifactId for the workspace root POM. Defaults to
+     * {@link #name} when omitted (ike-issues#183).
+     */
+    @Parameter(property = "artifactId")
+    private String artifactId;
+
+    /**
      * Default Maven version for subprojects. Written to
      * {@code defaults.maven-version} in workspace.yaml.
      */
@@ -110,6 +149,23 @@ public class WsCreateMojo implements Mojo {
             name = promptParam("name", "Workspace name");
         }
 
+        // -Dgroup is required for real coordinates (ike-issues#183).
+        // The placeholder local.aggregate:<name>:1.0.0-SNAPSHOT path is
+        // gone; existing workspaces stuck on it migrate via ws:adopt-root.
+        if (group == null || group.isBlank()) {
+            throw new MojoException(
+                    "ws:create requires -Dgroup=<groupId> (e.g. "
+                            + "network.ike.workspace). The workspace root "
+                            + "needs real Maven coordinates so ws:release, "
+                            + "ws:align, and site deploy can address it. "
+                            + "See ike-issues#183.");
+        }
+
+        // artifactId defaults to the workspace name.
+        if (artifactId == null || artifactId.isBlank()) {
+            artifactId = name;
+        }
+
         // Default description to the workspace name
         if (description == null || description.isBlank()) {
             description = name;
@@ -130,6 +186,7 @@ public class WsCreateMojo implements Mojo {
         getLog().info(name + " — Create");
         getLog().info("══════════════════════════════════════════════════════════════");
         getLog().info("  Name:      " + name);
+        getLog().info("  GAV:       " + group + ":" + artifactId + ":" + version);
         getLog().info("  Directory: " + wsDir);
         if (org != null && !org.isBlank()) {
             getLog().info("  Remote:    https://github.com/" + org + "/" + name + ".git");
@@ -227,9 +284,9 @@ public class WsCreateMojo implements Mojo {
         xml.append("        <version>").append(parentVersion).append("</version>\n");
         xml.append("        <relativePath/>\n");
         xml.append("    </parent>\n\n");
-        xml.append("    <groupId>local.aggregate</groupId>\n");
-        xml.append("    <artifactId>").append(name).append("</artifactId>\n");
-        xml.append("    <version>1-SNAPSHOT</version>\n");
+        xml.append("    <groupId>").append(group).append("</groupId>\n");
+        xml.append("    <artifactId>").append(artifactId).append("</artifactId>\n");
+        xml.append("    <version>").append(version).append("</version>\n");
         xml.append("    <packaging>pom</packaging>\n\n");
         xml.append("    <name>").append(description).append("</name>\n\n");
         xml.append("    <build>\n");
@@ -268,8 +325,15 @@ public class WsCreateMojo implements Mojo {
         yaml.append("#   cd ").append(name).append("\n");
         yaml.append("#   mvn ws:init\n");
         yaml.append("#   mvn clean install\n\n");
-        yaml.append("schema-version: \"1.0\"\n");
+        yaml.append("schema-version: \"1.1\"\n");
         yaml.append("generated: ").append(today).append("\n\n");
+        // Workspace root coordinates (#183) — real GAV for ws:release,
+        // ws:align, and site deploy to address. Single-segment monotonic
+        // version (not semver — per feedback_no_semver_assumption).
+        yaml.append("workspace-root:\n");
+        yaml.append("  groupId: ").append(group).append("\n");
+        yaml.append("  artifactId: ").append(artifactId).append("\n");
+        yaml.append("  version: ").append(version).append("\n\n");
         yaml.append("defaults:\n");
         yaml.append("  branch: ").append(defaultBranch).append("\n");
         yaml.append("  maven-version: \"").append(mavenVersion).append("\"\n\n");

@@ -229,12 +229,16 @@ class WsReleaseCascadeTest {
                     null,
                     null,
                     null,
+                    null,
+                    Subproject.STATE_SNAPSHOT,
+                    null,
                     null);
             subprojects.put(spec.name, sub);
         }
         Manifest manifest = new Manifest(
                 "1.0", "2026-04-21",
                 new Defaults("main", "4.0.0-rc-5"),
+                null,                       // workspaceRoot (legacy compat)
                 subprojects,
                 IdeSettings.EMPTY);
         return new WorkspaceGraph(manifest);

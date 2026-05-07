@@ -102,6 +102,17 @@ public class WsPostReleaseMojo extends AbstractWorkspaceMojo {
                 continue;
             }
 
+            // Idempotency guard (#294): re-running with the same
+            // -DnextVersion on a subproject already at that version is a
+            // no-op \u2014 log and skip rather than running the rewrite +
+            // commit machinery only to discover there's nothing to do.
+            if (nextVersion.equals(currentVersion)) {
+                getLog().info("  \u2713 " + name + " \u2014 already at "
+                        + nextVersion);
+                skipped++;
+                continue;
+            }
+
             getLog().info("  \u2192 " + name + " \u2014 " + currentVersion
                     + " \u2192 " + nextVersion);
 

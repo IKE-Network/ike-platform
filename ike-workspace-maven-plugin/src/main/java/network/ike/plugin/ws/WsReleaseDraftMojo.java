@@ -171,6 +171,15 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
             releasePreflight.requirePassed(WsGoal.RELEASE_PUBLISH);
         }
 
+        // Refresh local main from origin/main before the release loop —
+        // the cascade picks up parent versions and property bumps off
+        // local main, and Syncthing-paired workflows can leave local
+        // main stale (ike-issues#284). Same invariant the feature
+        // flows establish; releases need it for the same reason.
+        if (publish) {
+            RefreshMainSupport.refreshOrThrow(root, candidates, "main", getLog());
+        }
+
         // ── 2a. Detect source-changed checked-out subprojects ────────────
         // First pass: gather the set of subprojects whose own commits
         // require a release. Cascade-only downstream is added in 2b.

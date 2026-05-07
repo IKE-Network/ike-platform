@@ -118,6 +118,34 @@ public class WsCheckpointDraftMojo extends AbstractWorkspaceMojo {
             name = deriveCheckpointName(root);
         }
 
+        // Idempotency guard (#294): in publish mode, exit cleanly when a
+        // checkpoint with this name was already created. The checkpoint
+        // file in checkpoints/ is the durable success marker; if it
+        // exists, re-running would either duplicate-tag (failing at git)
+        // or rewrite the file with a fresh timestamp (changing the
+        // commit). Either way "running twice = same result" is violated.
+        if (publish) {
+            Path existingCheckpoint = root.toPath().resolve("checkpoints")
+                    .resolve(checkpointFileName(name));
+            if (Files.isRegularFile(existingCheckpoint)) {
+                getLog().info("");
+                getLog().info("  Checkpoint '" + name
+                        + "' already exists — nothing to do.");
+                getLog().info("    " + existingCheckpoint);
+                getLog().info("  To create a new checkpoint, pass a "
+                        + "different -Dname=…, or delete the existing");
+                getLog().info("  file (and the matching checkpoint/"
+                        + name + " tag in each subproject) first.");
+                getLog().info("");
+                writeReport(WsGoal.CHECKPOINT_PUBLISH,
+                        "Idempotent skip — checkpoint **`" + name
+                                + "`** already exists at `"
+                                + root.toPath().relativize(existingCheckpoint)
+                                + "`.\n");
+                return;
+            }
+        }
+
         String wsTagName = "checkpoint/" + name;
         String timestamp = ISO_UTC.format(Instant.now());
         String author = resolveAuthor(root);

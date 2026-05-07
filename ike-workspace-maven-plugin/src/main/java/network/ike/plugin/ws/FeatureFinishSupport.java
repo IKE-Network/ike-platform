@@ -446,7 +446,13 @@ class FeatureFinishSupport {
         boolean delete = false;
         if (prompter != null) {
             try {
-                String input = prompter.prompt(prompt, "n");
+                // Surface the prompt through the Maven logger so it
+                // shows reliably in IntelliJ's Maven runner — Prompter
+                // writes are buffered separately from getLog (#301).
+                log.info("  " + prompt);
+                System.out.flush();
+                System.err.flush();
+                String input = prompter.prompt("> ", "n");
                 if (input != null) {
                     String trimmed = input.trim().toLowerCase();
                     delete = trimmed.equals("y") || trimmed.equals("yes");

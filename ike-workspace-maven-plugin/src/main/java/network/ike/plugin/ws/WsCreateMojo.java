@@ -591,7 +591,15 @@ public class WsCreateMojo implements Mojo {
                             + "=<value> (no Prompter wired in this context).");
         }
         try {
-            String input = prompter.prompt(label);
+            // Surface the label through getLog so the prompt appears
+            // reliably in IntelliJ's Maven runner — Prompter writes
+            // are buffered separately from the standard logger
+            // pipeline (ike-issues#301).
+            getLog().info("");
+            getLog().info("  " + label + ":");
+            System.out.flush();
+            System.err.flush();
+            String input = prompter.prompt("> ");
             if (input != null && !input.isBlank()) {
                 return input.trim();
             }

@@ -51,6 +51,7 @@ public class WsPostReleaseMojo extends AbstractWorkspaceMojo {
     public void execute() throws MojoException {
         nextVersion = requireParam(nextVersion, "nextVersion",
                 "Next development version (e.g., 4-SNAPSHOT)");
+        validateMavenVersion(nextVersion);
 
         WorkspaceGraph graph = loadGraph();
         File root = workspaceRoot();

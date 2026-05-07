@@ -6,6 +6,8 @@ import network.ike.workspace.FeatureName;
 import network.ike.workspace.Manifest;
 import network.ike.workspace.ManifestException;
 import network.ike.workspace.ManifestReader;
+import network.ike.workspace.MavenVersion;
+import network.ike.workspace.SubprojectName;
 import network.ike.workspace.WorkspaceGraph;
 import org.apache.maven.api.di.Inject;
 import org.apache.maven.api.plugin.Log;
@@ -303,6 +305,47 @@ abstract class AbstractWorkspaceMojo implements Mojo {
     protected static FeatureName validateFeatureName(String feature) {
         try {
             return FeatureName.of(feature);
+        } catch (IllegalArgumentException e) {
+            throw new MojoException(e.getMessage());
+        }
+    }
+
+    /**
+     * Validate a subproject-name string with {@link SubprojectName#of}
+     * and surface any rule violation as a {@link MojoException}
+     * (ike-issues#295).
+     *
+     * @param subproject the candidate subproject name (already
+     *                   resolved — non-null after
+     *                   {@link #requireParam} or POM derivation)
+     * @return the validated {@link SubprojectName} value
+     * @throws MojoException if {@code subproject} fails the
+     *                       {@code SubprojectName} syntax rules
+     */
+    protected static SubprojectName validateSubprojectName(String subproject) {
+        try {
+            return SubprojectName.of(subproject);
+        } catch (IllegalArgumentException e) {
+            throw new MojoException(e.getMessage());
+        }
+    }
+
+    /**
+     * Validate a Maven version string with {@link MavenVersion#of}
+     * and surface any rule violation as a {@link MojoException}
+     * (ike-issues#295). Per
+     * {@code feedback_no_semver_assumption} the validator accepts
+     * single-segment monotonic, semver-like, calendar-based, and
+     * branch-qualified versions; it does not enforce semver.
+     *
+     * @param version the candidate version string
+     * @return the validated {@link MavenVersion} value
+     * @throws MojoException if {@code version} fails the
+     *                       {@code MavenVersion} syntax rules
+     */
+    protected static MavenVersion validateMavenVersion(String version) {
+        try {
+            return MavenVersion.of(version);
         } catch (IllegalArgumentException e) {
             throw new MojoException(e.getMessage());
         }

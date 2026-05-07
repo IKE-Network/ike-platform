@@ -151,6 +151,10 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
         if (subproject == null || subproject.isBlank()) {
             subproject = deriveSubprojectName(repo);
         }
+        // Validate via SubprojectName (#295). The derived name comes
+        // from a git URL's last path segment which usually conforms,
+        // but explicit -Dsubproject= and odd repo URLs can fail.
+        validateSubprojectName(subproject);
 
         // Check if already registered — if so, re-derive and update
         // rather than appending a duplicate (idempotent behavior)

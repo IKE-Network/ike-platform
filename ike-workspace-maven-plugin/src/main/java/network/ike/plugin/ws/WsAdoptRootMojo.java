@@ -149,6 +149,12 @@ public class WsAdoptRootMojo extends AbstractWorkspaceMojo {
             }
         }
 
+        // Validate artifactId via SubprojectName, version via
+        // MavenVersion (#295) — single typed boundary for the
+        // strings flowing into the rewritten POM and YAML.
+        validateSubprojectName(resolvedArtifactId);
+        validateMavenVersion(version);
+
         getLog().info("");
         getLog().info("Adopt Root — workspace coordinates");
         getLog().info("══════════════════════════════════════════════════════════════");

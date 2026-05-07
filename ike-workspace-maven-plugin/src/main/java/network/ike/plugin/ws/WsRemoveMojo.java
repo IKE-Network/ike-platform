@@ -65,6 +65,7 @@ public class WsRemoveMojo extends AbstractWorkspaceMojo {
     public void execute() throws MojoException {
         subproject = requireParam(subproject, "subproject",
                 "Subproject name to remove");
+        validateSubprojectName(subproject);
 
         // Resolve workspace root and paths
         Path manifestPath = resolveManifest();

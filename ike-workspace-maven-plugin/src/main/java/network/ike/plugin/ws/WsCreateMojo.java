@@ -1,6 +1,8 @@
 package network.ike.plugin.ws;
 
 import network.ike.plugin.ReleaseSupport;
+import network.ike.workspace.MavenVersion;
+import network.ike.workspace.SubprojectName;
 
 import org.apache.maven.api.di.Inject;
 import org.apache.maven.api.plugin.Log;
@@ -164,6 +166,20 @@ public class WsCreateMojo implements Mojo {
         // artifactId defaults to the workspace name.
         if (artifactId == null || artifactId.isBlank()) {
             artifactId = name;
+        }
+
+        // Validate name + artifactId via SubprojectName and version
+        // via MavenVersion (#295) — single typed boundary for the
+        // string parameters that flow into the generated POM.
+        // WsCreateMojo doesn't extend AbstractWorkspaceMojo (it
+        // implements Mojo directly), so the helpers can't be reused;
+        // inline the IAE → MojoException conversion.
+        try {
+            SubprojectName.of(name);
+            SubprojectName.of(artifactId);
+            MavenVersion.of(version);
+        } catch (IllegalArgumentException e) {
+            throw new MojoException(e.getMessage());
         }
 
         // Default description to the workspace name

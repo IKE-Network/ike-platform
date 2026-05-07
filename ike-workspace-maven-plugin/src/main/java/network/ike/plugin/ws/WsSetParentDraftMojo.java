@@ -103,6 +103,7 @@ public class WsSetParentDraftMojo extends AbstractWorkspaceMojo {
 
         String targetVersion = requireParam(parentVersion,
                 "parent.version", "Target parent version");
+        validateMavenVersion(targetVersion);
         parentVersion = targetVersion;
 
         String parentGroupId = rootParent.groupId();

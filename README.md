@@ -1,5 +1,7 @@
 # IKE Platform
 
+**Documentation:** https://ike.network/ike-platform/
+
 Parent POM, BOM, and workspace-orchestration plugin for the IKE
 Community build pipeline.
 

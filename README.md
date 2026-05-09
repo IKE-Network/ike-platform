@@ -54,11 +54,23 @@ can still align dependency versions by importing the BOM:
 ike-tooling → ike-docs → [ike-platform] → { doc-example, example-project } → ike-example-ws
 ```
 
-Release order is enforced by the literal version pins in `ike-parent`'s
-`<pluginManagement>`: `ike-maven-plugin` and `ike-doc-maven-plugin` are
-pinned to specific released versions (not `${...}` properties), because
-Maven resolves `<extensions>true</extensions>` plugins before property
-interpolation.
+Release order is structurally upstream-first: `ike-parent`'s
+`<pluginManagement>` declares `ike-maven-plugin` at
+`${ike-tooling.version}` and `ike-doc-maven-plugin` at
+`${ike-docs.version}`, both of which must be resolvable from Nexus
+when downstream reactors load.
+
+Earlier revisions of these docs cited extension-realm timing
+(`<extensions>true</extensions>` plugins resolving at project-load
+time, before property interpolation) as the reason for literal-
+version pinning. That constraint was eliminated in
+[`IKE-Network/ike-issues#321`](https://github.com/IKE-Network/ike-issues/issues/321):
+both upstream plugins retired their custom-packaging registrations
+and `ike-parent` dropped both `<extensions>true</extensions>`
+declarations. The cascade ordering is unchanged; the literal-version
+pinning is gone. See
+[`ike-parent/src/site/asciidoc/index.adoc`](ike-parent/src/site/asciidoc/index.adoc)
+for the full design rationale.
 
 ## History
 

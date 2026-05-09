@@ -21,24 +21,42 @@ After validate completes, read and follow these files in `.claude/standards/`:
 
 Root parent POM for all projects inheriting IKE build conventions.
 Declares centralized dependency versions in `<dependencyManagement>`,
-the plugin management matrix (including the `ike-doc-maven-plugin`
-external-extensions declaration from `ike-docs`), and the AsciiDoc
-documentation pipeline.
+the plugin management matrix (including upstream IKE plugins from
+`ike-tooling` and `ike-docs` at `${...}` property versions), and the
+AsciiDoc documentation pipeline.
 
 - **Artifact**: `network.ike.platform:ike-parent`
 - **Packaging**: POM
 
 ## Key Conventions
 
-- Dependency versions are managed inline in `<dependencyManagement>`
-- The `ike-doc-maven-plugin` declaration uses a **literal** version
-  (not a property) because Maven resolves `<extensions>true</extensions>`
-  plugins before property interpolation
-- `ike-maven-plugin`, `ike-workspace-maven-plugin`, and
-  `ike-doc-maven-plugin` all co-release on their respective repo
-  cadences; this POM pins each at a literal version
-- All modules in this reactor share the unified `ike-platform` version
-- Projects inheriting ike-parent get managed versions automatically
+- Dependency versions are managed inline in `<dependencyManagement>`.
+- Upstream IKE plugins resolve via property indirection:
+  `ike-maven-plugin` at `${ike-tooling.version}`,
+  `ike-doc-maven-plugin` at `${ike-docs.version}`. Both are regular
+  managed plugins — no `<extensions>true</extensions>`, no custom
+  packaging contributed to the build extension realm.
+- `ike-workspace-maven-plugin` is a sibling module in this reactor
+  and uses `${project.version}`.
+- All modules in this reactor share the unified `ike-platform`
+  version.
+- Projects inheriting `ike-parent` get managed versions
+  automatically.
+
+## History
+
+Earlier revisions of this POM declared `ike-maven-plugin` and
+`ike-doc-maven-plugin` with `<extensions>true</extensions>` at
+literal versions, because Maven resolves extension plugins at
+project-load time, before property interpolation. That
+declaration registered the custom `<packaging>ike-doc</packaging>`
+type for documentation modules. The custom packaging was retired
+in `IKE-Network/ike-issues#321` in favor of a classifier-canonical
+doc shape (`<classifier>adoc</classifier><type>zip</type>`); both
+`<extensions>true</extensions>` declarations were dropped in the
+same migration. See
+`ike-parent/src/site/asciidoc/index.adoc` for the full design
+rationale.
 
 ## Build
 

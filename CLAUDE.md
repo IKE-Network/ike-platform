@@ -1,6 +1,6 @@
 # ike-platform
 
-Parent POM (ike-parent), BOM (ike-bom), and workspace plugin (ike-workspace-maven-plugin). Consumes ike-docs via the extensions=true declaration on ike-doc-maven-plugin.
+Parent POM (ike-parent), BOM (ike-bom), and workspace plugin (ike-workspace-maven-plugin). Consumes ike-docs and ike-tooling as ordinary managed plugins under property indirection (`${ike-docs.version}`, `${ike-tooling.version}`). Earlier revisions registered the custom `<packaging>ike-doc</packaging>` type via `<extensions>true</extensions>` on `ike-doc-maven-plugin`; that machinery was retired in `IKE-Network/ike-issues#321` in favor of a classifier-canonical doc shape (see `ike-parent/src/site/asciidoc/index.adoc` for the design rationale).
 
 ## Build Standards
 

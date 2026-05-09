@@ -41,7 +41,7 @@ to the task you are performing.
 ## Project Overview
 
 This is **IKE Platform** — a Maven 4 reactor that hosts the
-IKE Community's parent POM, its BOM, and the workspace-orchestration
+IKE Network's parent POM, its BOM, and the workspace-orchestration
 Maven plugin. It is the hub that ties `ike-tooling` and `ike-docs`
 together into a single set of build conventions that downstream
 projects (e.g., `ike-lab-documents`, `doc-example`, `example-project`)

@@ -2,7 +2,7 @@
 
 **Documentation:** https://ike.network/ike-platform/ike-parent/
 
-Standard parent POM for IKE Community projects. Inheriting it
+Standard parent POM for IKE Network projects. Inheriting it
 provides Java 25 build conventions, GPG signing via Bouncy Castle,
 JaCoCo, the AsciiDoc documentation pipeline, dependency version
 management for the IKE ecosystem, and `extensions=true` declarations

@@ -6,14 +6,14 @@ canonical_url: https://ike.network/ike-platform/ike-parent/licenses.html
 
 # Licenses (SPDX)
 
-Licenses for declared dependencies of `ike-parent` 30, grouped by SPDX expression. Rendered from `[bom.json](bom.json)[1]` (CycloneDX) at `pre-site` phase by `ike:render-spdx-licenses` (ike-issues#335).
+Licenses for declared dependencies of `ike-parent` 31, grouped by SPDX expression. Rendered from `[bom.json](bom.json)[1]` (CycloneDX) at `pre-site` phase by `ike:render-spdx-licenses` (ike-issues#335).
 
 ## [#summary](#summary)Summary
 
 | SPDX Expression | Components |
 | --- | --- |
-| `Apache-2.0` | 3 |
-| **Total** | **3** |
+| `Apache-2.0` | 4 |
+| **Total** | **4** |
 
 ## [#apache-2-0](#apache-2-0)Apache-2.0
 
@@ -21,9 +21,10 @@ Reference: [Apache-2.0 on spdx.org](https://spdx.org/licenses/Apache-2.0.html)[2
 
 | Group | Artifact | Version |
 | --- | --- | --- |
-| `network.ike.tooling` | `ike-build-standards` | `147` |
-| `network.ike.tooling` | `ike-build-standards` | `147` |
-| `network.ike.tooling` | `ike-build-standards` | `147` |
+| `network.ike.tooling` | `ike-build-standards` | `148` |
+| `network.ike.tooling` | `ike-build-standards` | `148` |
+| `network.ike.tooling` | `ike-build-standards` | `148` |
+| `network.ike.tooling` | `ike-build-standards` | `148` |
 
 ## [#see-also](#see-also)See also
 

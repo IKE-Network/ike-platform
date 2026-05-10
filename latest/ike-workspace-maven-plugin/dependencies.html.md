@@ -12,8 +12,8 @@ The following is a list of compile dependencies for this project. These dependen
 
 | GroupId | ArtifactId | Version | Type | Licenses |
 | --- | --- | --- | --- | --- |
-| network.ike.tooling | [ike-maven-plugin-support](https://ike.network/ike-tooling/ike-maven-plugin-support/)[1] | 147 | jar | [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt)[2] |
-| network.ike.tooling | [ike-workspace-model](https://ike.network/ike-tooling/ike-workspace-model/)[3] | 147 | jar | [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt)[2] |
+| network.ike.tooling | [ike-maven-plugin-support](https://ike.network/ike-tooling/ike-maven-plugin-support/)[1] | 148 | jar | [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt)[2] |
+| network.ike.tooling | [ike-workspace-model](https://ike.network/ike-tooling/ike-workspace-model/)[3] | 148 | jar | [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt)[2] |
 | org.openrewrite | [rewrite-xml](https://github.com/openrewrite/rewrite)[4] | 8.79.2 | jar | [The Apache Software License, Version 2.0](http://www.apache.org/licenses/LICENSE-2.0.txt)[5] |
 
 ## [test](#test)
@@ -31,8 +31,9 @@ The following is a list of provided dependencies for this project. These depende
 
 | GroupId | ArtifactId | Version | Classifier | Type | Licenses |
 | --- | --- | --- | --- | --- | --- |
-| network.ike.tooling | [ike-build-standards](https://ike.network/ike-tooling/ike-build-standards/)[9] | 147 | claude | zip | [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt)[2] |
-| network.ike.tooling | [ike-build-standards](https://ike.network/ike-tooling/ike-build-standards/)[9] | 147 | site-theme | zip | [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt)[2] |
+| network.ike.tooling | [ike-build-standards](https://ike.network/ike-tooling/ike-build-standards/)[9] | 148 | built-with | zip | [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt)[2] |
+| network.ike.tooling | [ike-build-standards](https://ike.network/ike-tooling/ike-build-standards/)[9] | 148 | claude | zip | [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt)[2] |
+| network.ike.tooling | [ike-build-standards](https://ike.network/ike-tooling/ike-build-standards/)[9] | 148 | site-theme | zip | [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt)[2] |
 | org.apache.maven | [maven-api-core](https://maven.apache.org/ref/4.0.0-rc-5/api/maven-api-core/)[10] | 4.0.0-rc-5 | - | jar | [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0.txt)[2] |
 | org.apache.maven | [maven-api-di](https://maven.apache.org/ref/4.0.0-rc-5/api/maven-api-di/)[11] | 4.0.0-rc-5 | - | jar | [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0.txt)[2] |
 | org.apache.maven | [maven-api-model](https://maven.apache.org/ref/4.0.0-rc-5/api/maven-api-model/)[12] | 4.0.0-rc-5 | - | jar | [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0.txt)[2] |
@@ -118,13 +119,13 @@ The following is a list of test dependencies for this project. These dependencie
 
 ## [Dependency Tree](#dependency-tree)
 
-- network.ike.platform:ike-workspace-maven-plugin:maven-plugin:30 ** 
+- network.ike.platform:ike-workspace-maven-plugin:maven-plugin:31 ** 
   
   | IKE Workspace Maven Plugin |
   | --- |
   | **Description: **Cross-platform Maven plugin for multi-repository workspace management: initialization, verification, feature branching, release orchestration, and checkpoint creation. **URL: **[https://ike.network/ike-platform/ike-workspace-maven-plugin/](https://ike.network/ike-platform/ike-workspace-maven-plugin/)[61] **Project Licenses: **[Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt)[2] |
   
-    - network.ike.tooling:ike-workspace-model:jar:147 (compile) ** 
+    - network.ike.tooling:ike-workspace-model:jar:148 (compile) ** 
       
       | IKE Workspace Model |
       | --- |
@@ -162,12 +163,12 @@ The following is a list of test dependencies for this project. These dependencie
                               | Stax2 API |
                               | --- |
                               | **Description: **Stax2 API is an extension to basic Stax 1.0 API that adds significant new functionality, such as full-featured bi-direction validation interface and high-performance Typed Access API. **URL: **[http://github.com/FasterXML/stax2-api](http://github.com/FasterXML/stax2-api)[27] **Project Licenses: **[The BSD 2-Clause License](http://www.opensource.org/licenses/bsd-license.php)[28] |
-    - network.ike.tooling:ike-maven-plugin-support:jar:147 (compile) ** 
+    - network.ike.tooling:ike-maven-plugin-support:jar:148 (compile) ** 
       
       | IKE Maven Plugin Support |
       | --- |
       | **Description: **Shared library for IKE Maven plugins: goal identifier interface, base Mojo with per-goal report writing, self-healing gitignore, and interactive parameter resolution helpers. **URL: **[https://ike.network/ike-tooling/ike-maven-plugin-support/](https://ike.network/ike-tooling/ike-maven-plugin-support/)[1] **Project Licenses: **[Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt)[2] |
-    - network.ike.tooling:ike-build-standards:zip:claude:147 (provided) ** 
+    - network.ike.tooling:ike-build-standards:zip:claude:148 (provided) ** 
       
       | IKE Build Standards |
       | --- |
@@ -446,7 +447,12 @@ The following is a list of test dependencies for this project. These dependencie
             | Byte Buddy (without dependencies) |
             | --- |
             | **Description: **Byte Buddy is a Java library for creating Java classes at run time. This artifact is a build of Byte Buddy with all ASM dependencies repackaged into its own name space. **URL: **[https://bytebuddy.net/byte-buddy](https://bytebuddy.net/byte-buddy)[58] **Project Licenses: **[Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt)[2] |
-    - network.ike.tooling:ike-build-standards:zip:site-theme:147 (provided) ** 
+    - network.ike.tooling:ike-build-standards:zip:site-theme:148 (provided) ** 
+      
+      | IKE Build Standards |
+      | --- |
+      | **Description: **Versioned Claude instruction files for IKE projects. Modular standards (Maven, Java, IKE-specific) distributed as a classified Maven artifact. **URL: **[https://ike.network/ike-tooling/ike-build-standards/](https://ike.network/ike-tooling/ike-build-standards/)[9] **Project Licenses: **[Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt)[2] |
+    - network.ike.tooling:ike-build-standards:zip:built-with:148 (provided) ** 
       
       | IKE Build Standards |
       | --- |
@@ -521,10 +527,11 @@ The following is a list of test dependencies for this project. These dependencie
 |    • Versioned | - | 2940 | 2898 | 39 | 1.8 | Yes |
 | jna-5.18.1.jar | 2 MB | 191 | 124 | 4 | 1.8 | Yes |
 | jna-platform-5.18.1.jar | 1.4 MB | 1336 | 1288 | 15 | 1.8 | Yes |
-| ike-build-standards-147-claude.zip | 81 kB | - | - | - | - | - |
-| ike-build-standards-147-site-theme.zip | 3.4 kB | - | - | - | - | - |
-| ike-maven-plugin-support-147.jar | 37.9 kB | 31 | 19 | 2 | 25 | Yes |
-| ike-workspace-model-147.jar | 108.6 kB | 57 | 46 | 2 | 25 | Yes |
+| ike-build-standards-148-built-with.zip | 3.5 kB | - | - | - | - | - |
+| ike-build-standards-148-claude.zip | 81 kB | - | - | - | - | - |
+| ike-build-standards-148-site-theme.zip | 3.4 kB | - | - | - | - | - |
+| ike-maven-plugin-support-148.jar | 37.9 kB | 31 | 19 | 2 | 25 | Yes |
+| ike-workspace-model-148.jar | 108.4 kB | 57 | 46 | 2 | 25 | Yes |
 | antlr4-runtime-4.13.2.jar | 326.3 kB | 232 | 215 | 7 | 1.8 | Yes |
 | commons-lang3-3.20.0.jar | 713.9 kB | 454 | - | - | - | - |
 |    • Root | - | 452 | 421 | 18 | 1.8 | Yes |
@@ -577,8 +584,8 @@ The following is a list of test dependencies for this project. These dependencie
 | snakeyaml-2.2.jar | 334.4 kB | 278 | - | - | - | - |
 |    • Root | - | 270 | 229 | 23 | 1.7 | Yes |
 |    • Versioned | - | 8 | 3 | 2 | 9 | Yes |
-| 62 | 30.4 MB | 19494 | 15071 | 600 | 25 | 58 |
+| 63 | 30.4 MB | 19494 | 15071 | 600 | 25 | 58 |
 | compile: 23 | compile: 9.7 MB | compile: 5841 | compile: 5144 | compile: 268 | 25 | compile: 22 |
 | runtime: 23 | runtime: 8.8 MB | runtime: 5436 | runtime: 4921 | runtime: 204 | runtime: 23 |
-| provided: 6 | provided: 623.3 kB | provided: 494 | provided: 423 | provided: 12 | provided: 4 |
+| provided: 7 | provided: 626.8 kB | provided: 494 | provided: 423 | provided: 12 | provided: 4 |
 | test: 10 | test: 11.2 MB | test: 7723 | test: 4583 | test: 116 | 17 | test: 9 |

@@ -43,8 +43,8 @@ import java.time.LocalDate;
  * <p>Required: {@code -Dgroup=<groupId>}. The pre-#183 placeholder
  * coordinates ({@code local.aggregate:<name>:1.0.0-SNAPSHOT}) are no
  * longer supported — every new workspace ships with real coordinates
- * so {@code ws:release}, {@code ws:align}, and site deploy can
- * address it. Existing workspaces stuck on the placeholder migrate
+ * so {@code ws:release-publish}, {@code ws:align-publish}, and site
+ * deploy can address it. Existing workspaces stuck on the placeholder migrate
  * via {@code ws:adopt-root} (#184).
  *
  * <pre>{@code
@@ -158,8 +158,8 @@ public class WsCreateMojo implements Mojo {
             throw new MojoException(
                     "ws:create requires -Dgroup=<groupId> (e.g. "
                             + "network.ike.workspace). The workspace root "
-                            + "needs real Maven coordinates so ws:release, "
-                            + "ws:align, and site deploy can address it. "
+                            + "needs real Maven coordinates so ws:release-publish, "
+                            + "ws:align-publish, and site deploy can address it. "
                             + "See ike-issues#183.");
         }
 
@@ -343,8 +343,8 @@ public class WsCreateMojo implements Mojo {
         yaml.append("#   mvn clean install\n\n");
         yaml.append("schema-version: \"1.1\"\n");
         yaml.append("generated: ").append(today).append("\n\n");
-        // Workspace root coordinates (#183) — real GAV for ws:release,
-        // ws:align, and site deploy to address. Single-segment monotonic
+        // Workspace root coordinates (#183) — real GAV for ws:release-publish,
+        // ws:align-publish, and site deploy to address. Single-segment monotonic
         // version (not semver — per feedback_no_semver_assumption).
         yaml.append("workspace-root:\n");
         yaml.append("  groupId: ").append(group).append("\n");

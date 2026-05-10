@@ -11,13 +11,19 @@ import java.nio.file.Path;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Migration tests for the ike-issues#200 split: {@code ws:align}
- * is now POM-only, and any invocation that asks for branch
- * reconciliation must throw with a pointer to the new goal.
+ * Migration tests for the ike-issues#200 split: {@code ws:align-draft}
+ * and {@code ws:align-publish} are now POM-only, and any invocation
+ * that asks for branch reconciliation must throw with a pointer to
+ * the new goal.
  *
  * <p>Both {@code -Dscope=branches} and {@code -Dscope=all} (the
  * old default) are caught here; only {@code -Dscope=poms} (the new
  * default) is permitted.
+ *
+ * <p>The runtime error message names the actually-invoked goal
+ * ({@code ws:align-draft} when {@code publish=false},
+ * {@code ws:align-publish} when {@code publish=true}) so the user
+ * gets back the same goal name they typed (ike-issues#170).
  */
 class WsAlignMigrationTest {
 
@@ -35,7 +41,7 @@ class WsAlignMigrationTest {
 
         assertThatThrownBy(mojo::execute)
                 .isInstanceOf(MojoException.class)
-                .hasMessageContaining("ws:align no longer supports -Dscope=branches")
+                .hasMessageContaining("ws:align-draft no longer supports -Dscope=branches")
                 .hasMessageContaining("ws:reconcile-branches-draft");
     }
 
@@ -51,7 +57,7 @@ class WsAlignMigrationTest {
 
         assertThatThrownBy(mojo::execute)
                 .isInstanceOf(MojoException.class)
-                .hasMessageContaining("ws:align no longer supports -Dscope=all")
+                .hasMessageContaining("ws:align-draft no longer supports -Dscope=all")
                 .hasMessageContaining("ws:reconcile-branches-draft");
     }
 
@@ -66,6 +72,11 @@ class WsAlignMigrationTest {
 
         assertThatThrownBy(mojo::execute)
                 .isInstanceOf(MojoException.class)
+                // The error names the invoked goal (ws:align-publish)
+                // and the pointer (ws:reconcile-branches-publish) —
+                // ike-issues#170 fixed the previously-stale "ws:align"
+                // reference here.
+                .hasMessageContaining("ws:align-publish no longer supports")
                 .hasMessageContaining("ws:reconcile-branches-publish");
     }
 

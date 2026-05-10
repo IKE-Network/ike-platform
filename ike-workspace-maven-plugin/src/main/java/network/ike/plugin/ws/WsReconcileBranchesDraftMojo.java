@@ -10,8 +10,9 @@ import org.apache.maven.api.plugin.annotations.Mojo;
  * <p>This is the {@code ws:reconcile-branches-draft} goal — recovery /
  * rare-use, separated from {@link WsAlignDraftMojo}'s POM-axis daily
  * driver per ike-issues#200's two-axis split (Option B). Each goal
- * name now describes its audience: {@code ws:align} is the safe daily
- * POM convergence; {@code ws:reconcile-branches} is the
+ * name now describes its audience: {@code ws:align-draft} /
+ * {@code ws:align-publish} is the safe daily POM convergence;
+ * {@code ws:reconcile-branches-draft} / {@code -publish} is the
  * branch-state recovery operation that runs when something has
  * already gone wrong.
  *

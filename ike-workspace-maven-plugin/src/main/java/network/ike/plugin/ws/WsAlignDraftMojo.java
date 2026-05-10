@@ -65,11 +65,12 @@ public class WsAlignDraftMojo extends AbstractWorkspaceMojo {
     boolean publish;
 
     /**
-     * What to align — only {@code poms} is accepted on {@code ws:align}
-     * after ike-issues#200. Branch reconciliation moved to the dedicated
+     * What to align — only {@code poms} is accepted on the
+     * {@code ws:align-draft} / {@code ws:align-publish} pair after
+     * ike-issues#200. Branch reconciliation moved to the dedicated
      * {@link WsReconcileBranchesDraftMojo} ({@code ws:reconcile-branches-draft})
      * and its publish counterpart. Passing {@code -Dscope=branches} or
-     * {@code -Dscope=all} on {@code ws:align} throws with a pointer to
+     * {@code -Dscope=all} on either align goal throws with a pointer to
      * the new goal.
      *
      * <p>The parameter is retained as a transitional migration aid so
@@ -112,10 +113,10 @@ public class WsAlignDraftMojo extends AbstractWorkspaceMojo {
 
     /**
      * Whether this goal may run the branch-axis reconciliation. False
-     * for {@code ws:align} (POM-only after ike-issues#200); overridden
-     * to true by {@link WsReconcileBranchesDraftMojo} so the same
-     * implementation can serve both goal names without duplicating
-     * the cascade logic.
+     * for {@code ws:align-draft} / {@code ws:align-publish} (POM-only
+     * after ike-issues#200); overridden to true by
+     * {@link WsReconcileBranchesDraftMojo} so the same implementation
+     * can serve both goal names without duplicating the cascade logic.
      */
     protected boolean isBranchScopeAllowed() {
         return false;
@@ -125,18 +126,20 @@ public class WsAlignDraftMojo extends AbstractWorkspaceMojo {
     public void execute() throws MojoException {
         boolean draft = !publish;
 
-        // Migration gate (ike-issues#200): ws:align is POM-only.
+        // Migration gate (ike-issues#200): the align goals are POM-only.
         // Branch reconciliation moved to ws:reconcile-branches-{draft,publish}.
         if (!isBranchScopeAllowed()
                 && ("branches".equals(scope) || "all".equals(scope))) {
+            String invokedGoal = "ws:align-" + (publish ? "publish" : "draft");
             throw new MojoException(
-                    "ws:align no longer supports -Dscope=" + scope
+                    invokedGoal + " no longer supports -Dscope=" + scope
                             + " (ike-issues#200). Branch reconciliation moved to:\n"
                             + "  mvn ws:reconcile-branches-"
                             + (publish ? "publish" : "draft")
                             + (from != null && !"repos".equals(from)
                                     ? " -Dfrom=" + from : "")
-                            + "\n  ws:align is now POM-only — drop -Dscope=.");
+                            + "\n  " + invokedGoal
+                            + " is now POM-only — drop -Dscope=.");
         }
 
         boolean doPoms = !"branches".equals(scope);

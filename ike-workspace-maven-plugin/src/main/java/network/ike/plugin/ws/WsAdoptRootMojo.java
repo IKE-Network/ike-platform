@@ -22,8 +22,8 @@ import java.nio.file.Path;
  * Maven coordinates (ike-issues#184).
  *
  * <p>The placeholder GAV signals "throwaway" and prevents
- * {@code ws:release} (#185) from releasing the workspace root,
- * {@code ws:align} from aligning to it, and site deploy (#186) from
+ * {@code ws:release-publish} (#185) from releasing the workspace root,
+ * {@code ws:align-publish} from aligning to it, and site deploy (#186) from
  * publishing under a stable address. {@code ws:adopt-root} performs
  * the one-time rewrite:
  *

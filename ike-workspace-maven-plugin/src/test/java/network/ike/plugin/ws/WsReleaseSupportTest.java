@@ -91,6 +91,70 @@ class WsReleaseSupportTest {
                 .isEqualTo("20");
     }
 
+    // ── isReleaseCadenceCommit (#347) ────────────────────────────────
+
+    @Test
+    void isReleaseCadenceCommit_releaseSetVersion_isCadence() {
+        assertThat(WsReleaseDraftMojo.isReleaseCadenceCommit(
+                "release: set version to 35")).isTrue();
+        assertThat(WsReleaseDraftMojo.isReleaseCadenceCommit(
+                "release: set version to 1-RC1")).isTrue();
+    }
+
+    @Test
+    void isReleaseCadenceCommit_mergeRelease_isCadence() {
+        assertThat(WsReleaseDraftMojo.isReleaseCadenceCommit(
+                "merge: release 35")).isTrue();
+    }
+
+    @Test
+    void isReleaseCadenceCommit_postReleaseBump_isCadence() {
+        assertThat(WsReleaseDraftMojo.isReleaseCadenceCommit(
+                "post-release: bump to 36-SNAPSHOT")).isTrue();
+    }
+
+    @Test
+    void isReleaseCadenceCommit_releaseRestore_isCadence() {
+        assertThat(WsReleaseDraftMojo.isReleaseCadenceCommit(
+                "release: restore ${project.version} references")).isTrue();
+    }
+
+    @Test
+    void isReleaseCadenceCommit_sitePublish_isCadence() {
+        assertThat(WsReleaseDraftMojo.isReleaseCadenceCommit(
+                "site: publish ike-tooling 151")).isTrue();
+    }
+
+    @Test
+    void isReleaseCadenceCommit_featureCommit_isNotCadence() {
+        // Real source-change commits — should not be filtered.
+        assertThat(WsReleaseDraftMojo.isReleaseCadenceCommit(
+                "feat: add ike:render-sbom-viewer (#341)")).isFalse();
+        assertThat(WsReleaseDraftMojo.isReleaseCadenceCommit(
+                "fix: drop empty <activeRecipes/> (#325)")).isFalse();
+        assertThat(WsReleaseDraftMojo.isReleaseCadenceCommit(
+                "docs: refresh sub-pages after v150 cascade")).isFalse();
+        assertThat(WsReleaseDraftMojo.isReleaseCadenceCommit(
+                "chore: bump ike-parent 33 -> 34")).isFalse();
+    }
+
+    @Test
+    void isReleaseCadenceCommit_substringMatchOfPattern_isNotCadence() {
+        // A regular commit that happens to contain "release:" or
+        // "merge:" mid-line should not be filtered (anchor is ^).
+        assertThat(WsReleaseDraftMojo.isReleaseCadenceCommit(
+                "feat: improve release: docs")).isFalse();
+        assertThat(WsReleaseDraftMojo.isReleaseCadenceCommit(
+                "docs: note about merge: workflow")).isFalse();
+    }
+
+    @Test
+    void isReleaseCadenceCommit_blankOrNull_isNotCadence() {
+        assertThat(WsReleaseDraftMojo.isReleaseCadenceCommit(null)).isFalse();
+        assertThat(WsReleaseDraftMojo.isReleaseCadenceCommit("")).isFalse();
+        assertThat(WsReleaseDraftMojo.isReleaseCadenceCommit("   ")).isFalse();
+    }
+
     // ── updateParentVersion ──────────────────────────────────────────
 
     @Test

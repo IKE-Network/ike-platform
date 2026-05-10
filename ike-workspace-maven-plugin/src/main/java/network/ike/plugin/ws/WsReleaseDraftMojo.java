@@ -206,15 +206,23 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
                 continue;
             }
 
-            int commitsSinceTag = commitsSinceTag(subDir, latestTag);
-            if (commitsSinceTag > 0) {
+            // #347: count only commits whose subjects don't match
+            // the release-cadence pattern, so retries of a partial
+            // cascade don't re-release subprojects whose only
+            // post-tag commits are release/merge/post-release/site
+            // bookkeeping from a previous successful attempt.
+            int meaningfulCommits =
+                    meaningfulCommitsSinceTag(subDir, latestTag);
+            if (meaningfulCommits > 0) {
                 releasable.put(name, new ReleaseCandidate(name, sub, subDir,
-                        latestTag, commitsSinceTag + " commits since " + latestTag));
+                        latestTag,
+                        meaningfulCommits + " commits since " + latestTag));
                 sourceChanged.add(name);
                 continue;
             }
 
-            getLog().debug("Skipping " + name + " — clean (at " + latestTag + ")");
+            getLog().debug("Skipping " + name + " — clean (at "
+                    + latestTag + "; only cadence commits since)");
         }
 
         // ── 2b. Cascade — add transitive downstream of source-changed ───
@@ -586,6 +594,83 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
         }
     }
 
+    // ── Helper: count meaningful (non-release-cadence) commits ────────
+    //
+    // ike-issues#347: when a partial cascade fails after some
+    // subprojects have already released, retries kept finding "new"
+    // commits since each subproject's tag — the post-release-bump
+    // commit, the merge commit, and the release-set-version commit
+    // produced by the prior attempt's ike:release-publish. Each retry
+    // saw commitsSinceTag > 0 and re-released, ratcheting subprojects
+    // forward by one version per retry.
+    //
+    // Filter out commits whose subject matches the well-known
+    // release-cadence patterns produced by ReleaseSupport:
+    //   - "release: set version to N"
+    //   - "release: restore ${project.version} references"
+    //   - "merge: release N"
+    //   - "post-release: bump to <next>-SNAPSHOT"
+    //   - "site: publish <project> N"
+    //
+    // If every commit since the tag matches one of those patterns,
+    // the subproject has no real source changes — return 0 so the
+    // outer logic treats it as already-released.
+
+    private static final java.util.regex.Pattern RELEASE_CADENCE_PATTERN =
+            java.util.regex.Pattern.compile(
+                    "^(release: set version to .+"
+                            + "|release: restore .+"
+                            + "|merge: release .+"
+                            + "|post-release: bump to .+"
+                            + "|site: publish .+)$");
+
+    /**
+     * Count commits between {@code tag} and HEAD whose subjects do
+     * NOT match a release-cadence pattern.
+     *
+     * <p>Used in place of {@link #commitsSinceTag(File, String)} for
+     * "do we need to release this again?" decisions, so that retries
+     * after a partial cascade failure don't re-release subprojects
+     * whose only post-tag commits are cadence-emitted ones.
+     *
+     * @param subDir the subproject directory
+     * @param tag    the latest release tag
+     * @return number of non-cadence commits since {@code tag}, or
+     *         {@code -1} on error
+     */
+    int meaningfulCommitsSinceTag(File subDir, String tag) {
+        try {
+            String log = ReleaseSupport.execCapture(subDir,
+                    "git", "log", tag + "..HEAD",
+                    "--pretty=format:%s", "--no-merges");
+            if (log == null) return 0;
+            String trimmed = log.strip();
+            if (trimmed.isEmpty()) return 0;
+            int count = 0;
+            for (String subject : trimmed.split("\n")) {
+                if (!RELEASE_CADENCE_PATTERN.matcher(subject.strip()).matches()) {
+                    count++;
+                }
+            }
+            return count;
+        } catch (Exception e) {
+            return -1;
+        }
+    }
+
+    /**
+     * Test whether a commit subject matches a release-cadence
+     * pattern (would be filtered out by
+     * {@link #meaningfulCommitsSinceTag}). Public for unit testing.
+     *
+     * @param subject the commit subject line
+     * @return {@code true} when the subject is cadence-emitted
+     */
+    public static boolean isReleaseCadenceCommit(String subject) {
+        if (subject == null) return false;
+        return RELEASE_CADENCE_PATTERN.matcher(subject.strip()).matches();
+    }
+
     // ── Helper: workspace root has unreleased changes? ───────────────
     // ike-issues#328: the workspace itself participates in the
     // release set when source-changed. Returns true when the
@@ -606,7 +691,10 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
             // workspace anchors it.
             return true;
         }
-        return commitsSinceTag(root, latestTag) > 0;
+        // #347: filter out cadence commits so a previous successful
+        // workspace release isn't seen as "still needs releasing"
+        // on a retry triggered by a downstream subproject failure.
+        return meaningfulCommitsSinceTag(root, latestTag) > 0;
     }
 
     // ── Helper: read current POM version ─────────────────────────────

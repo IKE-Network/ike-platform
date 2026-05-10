@@ -1,4 +1,12 @@
-# Third-Party Notices — IKE Platform
+# Third-Party Notices — IKE ike-platform
+
+This file is a discoverability stub for the legal-style filename
+that license scanners look for at the repo root. The canonical,
+rendered, friendly-named version is at:
+
+- **Current release:** https://ike.network/ike-platform/built-with.html
+- **Versioned:** https://ike.network/ike-platform/&lt;version&gt;/built-with.html
+- **Latest:** https://ike.network/ike-platform/latest/built-with.html
 
 Three layers of attribution ship with each release:
 
@@ -8,29 +16,16 @@ Three layers of attribution ship with each release:
    - Full transitive dependency graph, SPDX-normalized licenses, artifact hashes.
    - Also reachable as a Maven artifact with `<classifier>cyclonedx</classifier>`.
 
-2. **Maven Site dependency report (HTML, human-browseable):**
-   - https://ike.network/ike-platform/dependencies.html
+2. **Licenses (SPDX, HTML):**
    - https://ike.network/ike-platform/licenses.html
-   - https://ike.network/ike-platform/dependency-management.html (BOM-managed entries)
+   - SPDX-grouped, deduplicated view of declared dependencies, rendered from `bom.json`.
 
-3. **Curated Third-Party Notices (this document):**
-   - **Current release:** https://ike.network/ike-platform/THIRD_PARTY_NOTICES.html
-   - **Versioned:** https://ike.network/ike-platform/&lt;version&gt;/THIRD_PARTY_NOTICES.html
-   - **Latest:** https://ike.network/ike-platform/latest/THIRD_PARTY_NOTICES.html
-   - The source AsciiDoc lives at [`src/site/asciidoc/THIRD_PARTY_NOTICES.adoc`](src/site/asciidoc/THIRD_PARTY_NOTICES.adoc).
-
-## What's covered
-
-The curated document acknowledges third-party open-source software
-that consumers of `ike-parent` / `ike-bom` pick up indirectly: the
-Java language and runtime, BOM-managed dependency families (Jackson,
-SLF4J/Logback, Commons, Guava), test frameworks, signing
-infrastructure (Bouncy Castle), and the AsciiDoc/Site components
-reachable through the `ike-parent` consumer chain.
-
-For corresponding notices in the rest of the IKE platform see:
-
-- [ike-tooling](https://ike.network/ike-tooling/THIRD_PARTY_NOTICES.html) — Maven build infrastructure, plugin core, signing.
-- [ike-docs](https://ike.network/ike-docs/THIRD_PARTY_NOTICES.html) — AsciiDoc rendering chain, fonts, DocBook, frontend assets.
+3. **Built With** (this stub's canonical home):
+   - Curated companion covering components mechanical reports can't see —
+     Maven Site skin, external services, fonts inside artifacts, frontend
+     assets in rendered HTML.
+   - Source content lives at [`src/main/built-with/supplement.yaml`](src/main/built-with/supplement.yaml)
+     at the reactor root. The rendered HTML is generated per-module by
+     `ike:built-with` (ike-issues#336).
 
 Issues or omissions: file at https://github.com/IKE-Network/ike-issues.

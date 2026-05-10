@@ -552,6 +552,65 @@
                         </execution>
                     </executions>
                 </plugin>
+
+                <!-- ── maven-resources-plugin ──────────────────────────────
+                     Hosts the copy-bom-to-site execution (#333) so the
+                     CycloneDX SBOM produced at package phase is reachable
+                     from the rendered Maven Site at site:site time. The
+                     resources plugin runs once at pre-site, copying
+                     target/bom.{json,xml} into target/site/ where Maven
+                     Site picks them up alongside the rendered HTML. -->
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-resources-plugin</artifactId>
+                    <version>${maven-resources-plugin.version}</version>
+                    <executions>
+                        <execution>
+                            <id>copy-bom-to-site</id>
+                            <phase>pre-site</phase>
+                            <goals><goal>copy-resources</goal></goals>
+                            <configuration>
+                                <outputDirectory>${project.build.directory}/site</outputDirectory>
+                                <resources>
+                                    <resource>
+                                        <directory>${project.build.directory}</directory>
+                                        <includes>
+                                            <include>bom.json</include>
+                                            <include>bom.xml</include>
+                                        </includes>
+                                    </resource>
+                                </resources>
+                            </configuration>
+                        </execution>
+                    </executions>
+                </plugin>
+
+                <!-- ── cyclonedx-maven-plugin ──────────────────────────────
+                     Generates a CycloneDX Software Bill of Materials at
+                     package phase: target/bom.json + target/bom.xml.
+                     Auto-attaches them as Maven artifacts with classifier
+                     `cyclonedx`, so consumers can pull the SBOM through
+                     Nexus / Maven Central as well as from the published
+                     site (see copy-bom-to-site above).
+
+                     Licenses are normalized to SPDX expressions
+                     (`Apache-2.0`, `EPL-2.0 OR GPL-2.0-only`, …) so the
+                     output is ingestible by Dependency-Track, Trivy,
+                     Snyk, and GitHub's dependency graph without the
+                     POM-string noise that plagues licenses.html. See
+                     ike-issues#333. -->
+                <plugin>
+                    <groupId>org.cyclonedx</groupId>
+                    <artifactId>cyclonedx-maven-plugin</artifactId>
+                    <version>2.9.0</version>
+                    <executions>
+                        <execution>
+                            <id>make-bom</id>
+                            <phase>package</phase>
+                            <goals><goal>makeBom</goal></goals>
+                        </execution>
+                    </executions>
+                </plugin>
             </plugins>
         </pluginManagement>
 
@@ -580,6 +639,26 @@
             <plugin>
                 <groupId>org.jacoco</groupId>
                 <artifactId>jacoco-maven-plugin</artifactId>
+            </plugin>
+
+            <!-- SBOM (#333) — CycloneDX produces target/bom.{json,xml}
+                 at package phase; maven-resources-plugin copies them
+                 into target/site/ at pre-site so they're reachable
+                 from the published Maven Site. Configuration in
+                 pluginManagement above. -->
+            <plugin>
+                <groupId>org.cyclonedx</groupId>
+                <artifactId>cyclonedx-maven-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-resources-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>copy-bom-to-site</id>
+                        <!-- inherits config from pluginManagement -->
+                    </execution>
+                </executions>
             </plugin>
 
             <!-- IKE Maven Plugin — release orchestration, BOM generation,

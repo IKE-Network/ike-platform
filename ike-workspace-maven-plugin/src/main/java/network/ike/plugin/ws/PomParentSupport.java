@@ -15,7 +15,7 @@ import java.util.regex.Pattern;
  * Writing uses the OpenRewrite LST via {@link PomRewriter}.
  * Thread-safe — all methods are stateless.
  */
-final class PomParentSupport {
+public final class PomParentSupport {
 
     private PomParentSupport() {}
 
@@ -81,7 +81,7 @@ final class PomParentSupport {
      *         missing
      * @throws IOException if the file cannot be read
      */
-    static boolean hasEmptyRelativePath(Path pomFile) throws IOException {
+    public static boolean hasEmptyRelativePath(Path pomFile) throws IOException {
         String content = Files.readString(pomFile, StandardCharsets.UTF_8);
         return hasEmptyRelativePathInContent(content);
     }
@@ -95,7 +95,7 @@ final class PomParentSupport {
      * @return {@code true} when the {@code <parent>} block contains
      *         an empty {@code <relativePath/>}
      */
-    static boolean hasEmptyRelativePathInContent(String pomContent) {
+    public static boolean hasEmptyRelativePathInContent(String pomContent) {
         if (pomContent == null) return false;
         // Find the <parent>...</parent> block first; an empty
         // <relativePath/> outside <parent> isn't relevant.

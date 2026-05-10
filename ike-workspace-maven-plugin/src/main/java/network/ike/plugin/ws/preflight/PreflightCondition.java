@@ -162,6 +162,217 @@ public enum PreflightCondition {
             sb.append("  offending line; put commentary in an adjacent file.");
             return Optional.of(sb.toString());
         }
+    },
+
+    /**
+     * Every workspace subproject's root POM must either declare
+     * {@code <distributionManagement>} locally or have a {@code <parent>}
+     * block to inherit from (#346, surfaced by #343 when {@code its/}
+     * was missing both).
+     *
+     * <p>Site goals — specifically {@code site:stage}, which the
+     * workspace release cascade runs — fail with
+     * <em>"Missing distribution management in project ..."</em> when
+     * neither is present. That failure surfaces deep inside the
+     * release flow, after some subprojects have already tagged. This
+     * preflight catches the missing declaration upfront so the
+     * release-draft is authoritative.
+     */
+    SUBPROJECT_HAS_DISTRIBUTION_MANAGEMENT(
+            "Every subproject root POM resolves <distributionManagement>") {
+        @Override
+        public Optional<String> check(PreflightContext ctx) {
+            File root = ctx.workspaceRoot();
+            List<String> violations = new ArrayList<>();
+
+            for (String name : ctx.subprojects()) {
+                File pom = new File(new File(root, name), "pom.xml");
+                if (!pom.isFile()) continue;
+                String content;
+                try {
+                    content = Files.readString(pom.toPath(),
+                            StandardCharsets.UTF_8);
+                } catch (IOException e) {
+                    // Best-effort — preflight does not fail on read errors
+                    continue;
+                }
+                if (!hasDistributionManagementOrParent(content)) {
+                    violations.add(name + " (no <distributionManagement> "
+                            + "or <parent> in its root POM)");
+                }
+            }
+
+            if (violations.isEmpty()) return Optional.empty();
+
+            var sb = new StringBuilder();
+            sb.append(violations.size())
+                    .append(" subproject(s) missing <distributionManagement>:\n");
+            for (String v : violations) {
+                sb.append("    • ").append(v).append('\n');
+            }
+            sb.append("  site:stage during the workspace release cascade\n");
+            sb.append("  will fail with \"Missing distribution management in\n");
+            sb.append("  project ...\". Either declare\n");
+            sb.append("  <distributionManagement><site>...</site>... directly\n");
+            sb.append("  on the subproject's root POM, or add a <parent>\n");
+            sb.append("  block inheriting from one of the IKE parents (e.g.\n");
+            sb.append("  network.ike.platform:ike-parent).");
+            return Optional.of(sb.toString());
+        }
+    },
+
+    /**
+     * No subproject's {@code <properties>} block may declare a
+     * locally-overriding value for any IKE-foundation property name
+     * (#346, surfaced by the {@code its/} pom property-shadowing in
+     * the v150 cascade).
+     *
+     * <p>Foundation properties (
+     * {@code ike-tooling.version},
+     * {@code ike-docs.version},
+     * {@code ike-platform.version}) are set by {@code ike-parent}'s
+     * inheritance chain. Local overrides silently shadow the
+     * workspace's intended versions and pin plugins to old releases
+     * that may lack newer goals. Preferred discipline: namespace
+     * local overrides under {@code it.*}, {@code local.*}, or a
+     * project-specific prefix that doesn't collide with the
+     * foundation set.
+     */
+    NO_FOUNDATION_PROPERTY_SHADOWING(
+            "No subproject overrides ike-foundation property names") {
+        @Override
+        public Optional<String> check(PreflightContext ctx) {
+            File root = ctx.workspaceRoot();
+            List<String> violations = new ArrayList<>();
+
+            for (String name : ctx.subprojects()) {
+                File pom = new File(new File(root, name), "pom.xml");
+                if (!pom.isFile()) continue;
+                String content;
+                try {
+                    content = Files.readString(pom.toPath(),
+                            StandardCharsets.UTF_8);
+                } catch (IOException e) {
+                    continue;
+                }
+                for (String prop : FOUNDATION_PROPERTY_NAMES) {
+                    if (shadowsProperty(content, prop)) {
+                        violations.add(name + "/pom.xml shadows <" + prop
+                                + "> (inherited from ike-parent)");
+                    }
+                }
+            }
+
+            if (violations.isEmpty()) return Optional.empty();
+
+            var sb = new StringBuilder();
+            sb.append(violations.size())
+                    .append(" IKE-foundation property shadow(s):\n");
+            for (String v : violations) {
+                sb.append("    • ").append(v).append('\n');
+            }
+            sb.append("  These property names control plugin resolution for\n");
+            sb.append("  every project inheriting ike-parent. Local overrides\n");
+            sb.append("  pin plugins to whatever version the subproject\n");
+            sb.append("  declares, often pre-dating goals the release cycle\n");
+            sb.append("  expects (e.g. ike-tooling 126 lacks #335's\n");
+            sb.append("  render-spdx-licenses). Rename the local property to\n");
+            sb.append("  an `it.*` / `local.*` namespace and update any\n");
+            sb.append("  references to use the new name.");
+            return Optional.of(sb.toString());
+        }
+    },
+
+    /**
+     * When a subproject's {@code <parent>} declares the same GA as the
+     * workspace aggregator's own {@code <parent>}, enforce the two
+     * coherence rules from #324:
+     *
+     * <ol>
+     *   <li>{@code <parent><version>} matches the workspace's.</li>
+     *   <li>{@code <parent>} block includes an empty
+     *       {@code <relativePath/>} to prevent the Maven 4
+     *       parent-cycle error.</li>
+     * </ol>
+     *
+     * <p>This preflight is the release-gate analog of
+     * {@code ws:verify}'s coherence check (#324). The verify check
+     * warns; the preflight blocks. Composed via Preflight so
+     * release-draft surfaces it as a warning and release-publish
+     * promotes it to a hard error.
+     */
+    PARENT_COHERENCE(
+            "Subprojects sharing the workspace's parent GA have "
+                    + "matching version + <relativePath/>") {
+        @Override
+        public Optional<String> check(PreflightContext ctx) {
+            File root = ctx.workspaceRoot();
+            File workspacePom = new File(root, "pom.xml");
+            if (!workspacePom.isFile()) return Optional.empty();
+
+            String workspaceContent;
+            try {
+                workspaceContent = Files.readString(workspacePom.toPath(),
+                        StandardCharsets.UTF_8);
+            } catch (IOException e) {
+                return Optional.empty();
+            }
+
+            String wsParentGA = extractParentGa(workspaceContent);
+            String wsParentVersion = extractParentVersion(workspaceContent);
+            if (wsParentGA == null) return Optional.empty();
+
+            List<String> violations = new ArrayList<>();
+
+            for (String name : ctx.subprojects()) {
+                File pom = new File(new File(root, name), "pom.xml");
+                if (!pom.isFile()) continue;
+                String content;
+                try {
+                    content = Files.readString(pom.toPath(),
+                            StandardCharsets.UTF_8);
+                } catch (IOException e) {
+                    continue;
+                }
+                String subParentGA = extractParentGa(content);
+                String subParentVersion = extractParentVersion(content);
+                if (subParentGA == null
+                        || !subParentGA.equals(wsParentGA)) {
+                    continue; // out of scope — different parent
+                }
+
+                if (wsParentVersion != null
+                        && !wsParentVersion.equals(subParentVersion)) {
+                    violations.add(name + " parent " + subParentGA + ":"
+                            + subParentVersion + " != workspace " + wsParentGA
+                            + ":" + wsParentVersion + " (#324)");
+                    continue;
+                }
+
+                if (!network.ike.plugin.ws.PomParentSupport
+                        .hasEmptyRelativePathInContent(content)) {
+                    violations.add(name + " parent " + subParentGA + ":"
+                            + subParentVersion + " missing empty "
+                            + "<relativePath/> (#324 cycle prevention)");
+                }
+            }
+
+            if (violations.isEmpty()) return Optional.empty();
+
+            var sb = new StringBuilder();
+            sb.append(violations.size())
+                    .append(" parent-coherence violation(s):\n");
+            for (String v : violations) {
+                sb.append("    • ").append(v).append('\n');
+            }
+            sb.append("  Subprojects sharing the workspace's parent GA must\n");
+            sb.append("  agree on parent version AND declare an empty\n");
+            sb.append("  <relativePath/> to prevent the Maven 4\n");
+            sb.append("  \"parents form a cycle\" error. ws:verify reports\n");
+            sb.append("  the same coherence check as a warning; the release\n");
+            sb.append("  gate promotes it to a hard requirement.");
+            return Optional.of(sb.toString());
+        }
     };
 
     /** Special marker used when the workspace root itself has uncommitted changes. */
@@ -232,4 +443,113 @@ public enum PreflightCondition {
             // Best-effort — preflight does not fail on read errors.
         }
     }
+
+    /**
+     * IKE-foundation property names that
+     * {@link #NO_FOUNDATION_PROPERTY_SHADOWING} flags as illegal local
+     * overrides.
+     */
+    static final List<String> FOUNDATION_PROPERTY_NAMES = List.of(
+            "ike-tooling.version",
+            "ike-docs.version",
+            "ike-platform.version");
+
+    /**
+     * Return {@code true} when the POM content contains either a
+     * {@code <distributionManagement>} block or a {@code <parent>}
+     * block. Used by
+     * {@link #SUBPROJECT_HAS_DISTRIBUTION_MANAGEMENT} — site:stage
+     * needs at least one of these to resolve the deploy target.
+     *
+     * @param pomContent the POM XML as a string
+     * @return {@code true} when at least one block is present
+     */
+    static boolean hasDistributionManagementOrParent(String pomContent) {
+        if (pomContent == null) return false;
+        return DISTRIBUTION_MGMT_OR_PARENT.matcher(pomContent).find();
+    }
+
+    /**
+     * Return {@code true} when the POM has a {@code <properties>} block
+     * containing an element whose tag name equals {@code propertyName}.
+     * Tolerates whitespace inside the tag value (including blank).
+     *
+     * @param pomContent   the POM XML as a string
+     * @param propertyName the property tag name to scan for
+     * @return {@code true} when the property is declared at the
+     *         project's top-level {@code <properties>}
+     */
+    static boolean shadowsProperty(String pomContent, String propertyName) {
+        if (pomContent == null || propertyName == null) return false;
+        // Scope to <properties>...</properties> at top level — a
+        // <properties> nested inside a plugin <configuration> isn't
+        // a shadowing site.
+        var matcher = TOP_LEVEL_PROPERTIES_BLOCK.matcher(pomContent);
+        while (matcher.find()) {
+            String block = matcher.group(1);
+            if (java.util.regex.Pattern
+                    .compile("<" + java.util.regex.Pattern.quote(propertyName)
+                            + "\\b")
+                    .matcher(block).find()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static final java.util.regex.Pattern DISTRIBUTION_MGMT_OR_PARENT =
+            java.util.regex.Pattern.compile(
+                    "(?s)<distributionManagement\\b|<parent\\b");
+
+    /**
+     * Extract the parent {@code groupId:artifactId} from a POM string,
+     * or {@code null} when no {@code <parent>} block is present.
+     *
+     * @param pomContent the POM XML
+     * @return {@code "groupId:artifactId"} or {@code null}
+     */
+    static String extractParentGa(String pomContent) {
+        if (pomContent == null) return null;
+        var parentMatcher = java.util.regex.Pattern.compile(
+                "(?s)<parent\\b[^>]*>(.*?)</parent>").matcher(pomContent);
+        if (!parentMatcher.find()) return null;
+        String block = parentMatcher.group(1);
+        var gMatch = java.util.regex.Pattern.compile(
+                "<groupId>\\s*([^<]+?)\\s*</groupId>").matcher(block);
+        var aMatch = java.util.regex.Pattern.compile(
+                "<artifactId>\\s*([^<]+?)\\s*</artifactId>").matcher(block);
+        if (!gMatch.find() || !aMatch.find()) return null;
+        return gMatch.group(1).trim() + ":" + aMatch.group(1).trim();
+    }
+
+    /**
+     * Extract the parent {@code <version>} from a POM string, or
+     * {@code null} when no {@code <parent>} block is present or it
+     * lacks an explicit version.
+     *
+     * @param pomContent the POM XML
+     * @return the version string or {@code null}
+     */
+    static String extractParentVersion(String pomContent) {
+        if (pomContent == null) return null;
+        var parentMatcher = java.util.regex.Pattern.compile(
+                "(?s)<parent\\b[^>]*>(.*?)</parent>").matcher(pomContent);
+        if (!parentMatcher.find()) return null;
+        String block = parentMatcher.group(1);
+        var vMatch = java.util.regex.Pattern.compile(
+                "<version>\\s*([^<]+?)\\s*</version>").matcher(block);
+        if (!vMatch.find()) return null;
+        return vMatch.group(1).trim();
+    }
+
+    /**
+     * Match the project's top-level {@code <properties>} block.
+     * Anchored to follow either {@code </artifactId>},
+     * {@code </version>}, or {@code </name>} so it doesn't match
+     * nested {@code <properties>} inside plugin {@code <configuration>}
+     * blocks. Best-effort — handles the common shape of IKE POMs.
+     */
+    private static final java.util.regex.Pattern TOP_LEVEL_PROPERTIES_BLOCK =
+            java.util.regex.Pattern.compile(
+                    "(?s)<properties>\\s*(.*?)\\s*</properties>");
 }

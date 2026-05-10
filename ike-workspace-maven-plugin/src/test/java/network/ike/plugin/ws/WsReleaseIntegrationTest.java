@@ -336,12 +336,13 @@ class WsReleaseIntegrationTest {
     // ── Non-draft: error recovery path ───────────────────────────
 
     @Test
-    void nonDryRun_noMvnw_failsWithMojoException() throws Exception {
-        // All components modified (never tagged). Non-draft will try
-        // to run "mvn ike:release" — which fails because there is no
-        // mvn/mvnw in the component directories. Verify that:
-        //  1. The error message names the failed component
-        //  2. The exception is MojoException
+    void nonDryRun_synthSubprojectsLackingDistMgmt_failsAtPreflight() throws Exception {
+        // The synthetic workspace's subprojects (lib-a/lib-b/app-c)
+        // don't declare <parent> or <distributionManagement>. After
+        // #346 expanded the release-publish preflight to include
+        // SUBPROJECT_HAS_DISTRIBUTION_MANAGEMENT, this case now fails
+        // at preflight time instead of during the later mvnw exec
+        // step. Verify the early-failure message is informative.
         WsReleaseDraftMojo mojo = TestLog.createMojo(WsReleaseDraftMojo.class);
         mojo.manifest = helper.workspaceYaml().toFile();
         mojo.publish = true;
@@ -350,12 +351,17 @@ class WsReleaseIntegrationTest {
 
         assertThatThrownBy(mojo::execute)
                 .isInstanceOf(MojoException.class)
-                .hasMessageContaining("Workspace release failed");
+                .hasMessageContaining("preflight failed")
+                .hasMessageContaining("<distributionManagement>");
     }
 
     @Test
-    void nonDryRun_failureReportsReleasedSoFar() throws Exception {
-        // Tag lib-a and lib-b so only app-c is release-pending
+    void nonDryRun_failureReportsAtPreflight() throws Exception {
+        // Tag lib-a and lib-b so only app-c is release-pending.
+        // After #346, the SUBPROJECT_HAS_DISTRIBUTION_MANAGEMENT
+        // preflight catches the missing-distMgmt across all three
+        // synthetic subprojects before the mvnw exec step is
+        // reached — the test asserts the preflight failure now.
         for (String name : new String[]{"lib-a", "lib-b"}) {
             exec(tempDir.resolve(name), "git", "tag", "v1.0.0");
         }
@@ -366,10 +372,9 @@ class WsReleaseIntegrationTest {
         mojo.skipCheckpoint = true;
         mojo.push = false;
 
-        // app-c is release-pending (never released) — will try mvn ike:release
-        // and fail. The error message should name app-c.
         assertThatThrownBy(mojo::execute)
                 .isInstanceOf(MojoException.class)
+                .hasMessageContaining("preflight failed")
                 .hasMessageContaining("app-c");
     }
 

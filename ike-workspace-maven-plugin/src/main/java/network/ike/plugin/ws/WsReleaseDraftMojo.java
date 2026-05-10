@@ -157,13 +157,33 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
 
         boolean draft = !publish;
 
-        // ── Preflight: all working trees must be clean (#132, #154) ───
+        // ── Preflight: all working trees clean, no POM-shape gotchas ──
         // (Javadoc cleanliness is checked per-module by ike:release
         //  preflight — see ReleaseDraftMojo — so every entry point
         //  enforces it, not only workspace-level releases.)
+        //
+        // #346 expanded the preflight set so the dry-run is
+        // authoritative: every cascade-time gotcha that has bitten a
+        // release is checked at draft time, not discovered mid-flight
+        // after some subprojects have already tagged:
+        //   WORKING_TREE_CLEAN                   — #132 #154
+        //   NO_SNAPSHOT_PROPERTIES               — Maven 4 consumer
+        //                                          flattener leak
+        //   SUBPROJECT_HAS_DISTRIBUTION_MANAGEMENT — site:stage gate
+        //                                          (#343 surfaced)
+        //   NO_FOUNDATION_PROPERTY_SHADOWING     — ike-tooling.version
+        //                                          shadowing pinned the
+        //                                          plugin to a stale
+        //                                          version that lacked
+        //                                          newer goals
+        //   PARENT_COHERENCE                     — #324 release gate
+        //                                          form
         PreflightResult releasePreflight = Preflight.of(
                 List.of(PreflightCondition.WORKING_TREE_CLEAN,
-                        PreflightCondition.NO_SNAPSHOT_PROPERTIES),
+                        PreflightCondition.NO_SNAPSHOT_PROPERTIES,
+                        PreflightCondition.SUBPROJECT_HAS_DISTRIBUTION_MANAGEMENT,
+                        PreflightCondition.NO_FOUNDATION_PROPERTY_SHADOWING,
+                        PreflightCondition.PARENT_COHERENCE),
                 PreflightContext.of(root, graph, candidates));
         if (draft) {
             releasePreflight.warnIfFailed(getLog(), WsGoal.RELEASE_PUBLISH);

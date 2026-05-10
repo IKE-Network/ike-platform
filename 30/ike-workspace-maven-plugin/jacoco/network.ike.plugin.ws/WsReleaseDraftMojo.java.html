@@ -1,0 +1,1128 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>WsReleaseDraftMojo.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">WsReleaseDraftMojo.java</span></div><h1>WsReleaseDraftMojo.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.plugin.ReleaseSupport;
+import network.ike.plugin.ws.ReleasePlan.ArtifactReleasePlan;
+import network.ike.plugin.ws.ReleasePlan.GA;
+import network.ike.plugin.ws.ReleasePlan.PropertyReleasePlan;
+import network.ike.plugin.ws.ReleasePlan.ReferenceKind;
+import network.ike.plugin.ws.ReleasePlan.ReferenceSite;
+import network.ike.plugin.ws.ReleasePlanCompute.ArtifactReleaseIntent;
+import network.ike.plugin.ws.ReleasePlanCompute.SubprojectRoot;
+import network.ike.plugin.ws.preflight.Preflight;
+import network.ike.plugin.ws.preflight.PreflightCondition;
+import network.ike.plugin.ws.preflight.PreflightContext;
+import network.ike.plugin.ws.preflight.PreflightResult;
+
+import network.ike.workspace.Subproject;
+import network.ike.workspace.WorkspaceGraph;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
+
+
+import java.io.File;
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
+
+/**
+ * Workspace-level release — release all release-pending checked-out
+ * components (those with unreleased commits since their last tag, or
+ * cascaded as transitive downstream of one) in topological order.
+ *
+ * &lt;p&gt;Scans checked-out components for commits since their last release
+ * tag. The release set is the union of:
+ * &lt;ul&gt;
+ *   &lt;li&gt;&lt;b&gt;source-changed&lt;/b&gt; — subprojects with unreleased commits
+ *       since their last tag (or never released);&lt;/li&gt;
+ *   &lt;li&gt;&lt;b&gt;transitive downstream&lt;/b&gt; — every checked-out subproject
+ *       that depends, directly or transitively, on a source-changed
+ *       subproject. Catches workspaces where a mid-graph change forces
+ *       downstream re-publish even though those downstream subprojects
+ *       have no source changes of their own.&lt;/li&gt;
+ * &lt;/ul&gt;
+ * The release set is topologically sorted and released in dependency
+ * order. Before each subproject's release, a single
+ * &lt;em&gt;catch-up alignment commit&lt;/em&gt; bumps every workspace-internal
+ * upstream version reference (parent and {@code &lt;X.version&gt;} property)
+ * to the upstream's current target version — this-cycle's new version
+ * if the upstream is releasing this cycle, otherwise the upstream's
+ * current published version on disk. All upstream bumps for a single
+ * subproject batch into one commit (never two).&lt;/p&gt;
+ *
+ * &lt;p&gt;Catch-up never expands the release set: a subproject with stale
+ * upstream properties but no source changes &lt;em&gt;and&lt;/em&gt; no upstream
+ * releasing in this cycle is not pulled in.&lt;/p&gt;
+ *
+ * &lt;p&gt;If catch-up alignment fails for any subproject (POM rewrite or
+ * commit error), the release halts at that subproject with a
+ * {@link MojoException} naming the failing subproject and property —
+ * never silently continues.&lt;/p&gt;
+ *
+ * &lt;p&gt;&lt;strong&gt;What it does, per subproject:&lt;/strong&gt;&lt;/p&gt;
+ * &lt;ol&gt;
+ *   &lt;li&gt;Detect latest release tag ({@code v*})&lt;/li&gt;
+ *   &lt;li&gt;Check for commits since that tag&lt;/li&gt;
+ *   &lt;li&gt;If source-changed or cascade-induced: catch-up upstream version
+ *       references in this subproject's POM (single commit), then run
+ *       {@code mvn ike:release-publish} in that subproject's directory&lt;/li&gt;
+ * &lt;/ol&gt;
+ *
+ * &lt;p&gt;&lt;strong&gt;Workspace-level preflight&lt;/strong&gt; (applied before any
+ * subproject is released):&lt;/p&gt;
+ * &lt;ul&gt;
+ *   &lt;li&gt;{@link PreflightCondition#WORKING_TREE_CLEAN} — every
+ *       checked-out subproject (and the workspace root) must have no
+ *       uncommitted changes.&lt;/li&gt;
+ *   &lt;li&gt;{@link PreflightCondition#NO_SNAPSHOT_PROPERTIES} — no root
+ *       POM may carry a {@code &lt;properties&gt;} value ending in
+ *       {@code -SNAPSHOT}. Catches the {@code ike-parent-105.pom}
+ *       leakage class of bug at its source (see issues #175, #177).&lt;/li&gt;
+ * &lt;/ul&gt;
+ *
+ * &lt;p&gt;Per-subproject preflight (javadoc warnings, git push auth, SSH
+ * proxy, gh CLI auth, Maven wrapper, post-mutation SNAPSHOT
+ * &lt;code&gt;&amp;lt;version&amp;gt;&lt;/code&gt; scan) runs inside each
+ * {@code ike:release-publish} invocation — see {@code ReleaseDraftMojo}
+ * in the {@code ike-maven-plugin} module. This ensures the same
+ * gates apply whether a release is invoked workspace-level or
+ * directly inside a single subproject.
+ *
+ * &lt;p&gt;The cascade is self-limiting: only checked-out components with
+ * changes since their last release are candidates. Components not
+ * present in the aggregator are not considered.&lt;/p&gt;
+ *
+ * &lt;pre&gt;{@code
+ * mvn ws:release-draft                       # preview what would be released
+ * mvn ws:release-publish                     # release all release-pending components
+ * }&lt;/pre&gt;
+ */
+@Mojo(name = &quot;release-draft&quot;, projectRequired = false, aggregator = true)
+public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
+
+<span class="fc" id="L115">    private static final DateTimeFormatter ISO_UTC =</span>
+<span class="fc" id="L116">            DateTimeFormatter.ofPattern(&quot;yyyy-MM-dd'T'HH:mm:ss'Z'&quot;)</span>
+<span class="fc" id="L117">                    .withZone(ZoneOffset.UTC);</span>
+
+    /** Preview what would be released without executing. */
+    @Parameter(property = &quot;publish&quot;, defaultValue = &quot;false&quot;)
+    boolean publish;
+
+    /** Skip the pre-release checkpoint. */
+    @Parameter(property = &quot;skipCheckpoint&quot;, defaultValue = &quot;false&quot;)
+    boolean skipCheckpoint;
+
+    /** Push releases to remote. Passed through to ike:release. */
+    @Parameter(property = &quot;push&quot;, defaultValue = &quot;true&quot;)
+    boolean push;
+
+    /**
+     * GitHub repository for release creation (e.g., &quot;IKE-Network/komet&quot;).
+     * If set, creates a GitHub Release for each released subproject and
+     * attaches any platform installers found in the subproject's
+     * {@code target/installers/} directory.
+     */
+    @Parameter(property = &quot;githubRepo&quot;)
+    String githubRepo;
+
+    /**
+     * Glob pattern for installer artifacts to attach to the GitHub Release.
+     * Matched relative to each subproject's {@code target/} directory.
+     */
+    @Parameter(property = &quot;installerGlob&quot;, defaultValue = &quot;installers/*.{pkg,dmg,msi,deb,rpm}&quot;)
+    String installerGlob;
+
+    /** Creates this goal instance. */
+<span class="fc" id="L148">    public WsReleaseDraftMojo() {}</span>
+
+    @Override
+    public void execute() throws MojoException {
+<span class="fc" id="L152">        WorkspaceGraph graph = loadGraph();</span>
+<span class="fc" id="L153">        File root = workspaceRoot();</span>
+
+        // ── 1. Determine candidate components ─────────────────────────
+<span class="fc" id="L156">        List&lt;String&gt; candidates = graph.topologicalSort();</span>
+
+<span class="fc bfc" id="L158" title="All 2 branches covered.">        boolean draft = !publish;</span>
+
+        // ── Preflight: all working trees must be clean (#132, #154) ───
+        // (Javadoc cleanliness is checked per-module by ike:release
+        //  preflight — see ReleaseDraftMojo — so every entry point
+        //  enforces it, not only workspace-level releases.)
+<span class="fc" id="L164">        PreflightResult releasePreflight = Preflight.of(</span>
+<span class="fc" id="L165">                List.of(PreflightCondition.WORKING_TREE_CLEAN,</span>
+                        PreflightCondition.NO_SNAPSHOT_PROPERTIES),
+<span class="fc" id="L167">                PreflightContext.of(root, graph, candidates));</span>
+<span class="fc bfc" id="L168" title="All 2 branches covered.">        if (draft) {</span>
+<span class="fc" id="L169">            releasePreflight.warnIfFailed(getLog(), WsGoal.RELEASE_PUBLISH);</span>
+        } else {
+<span class="fc" id="L171">            releasePreflight.requirePassed(WsGoal.RELEASE_PUBLISH);</span>
+        }
+
+        // Refresh local main from origin/main before the release loop —
+        // the cascade picks up parent versions and property bumps off
+        // local main, and Syncthing-paired workflows can leave local
+        // main stale (ike-issues#284). Same invariant the feature
+        // flows establish; releases need it for the same reason.
+<span class="fc bfc" id="L179" title="All 2 branches covered.">        if (publish) {</span>
+<span class="fc" id="L180">            RefreshMainSupport.refreshOrThrow(root, candidates, &quot;main&quot;, getLog());</span>
+        }
+
+        // ── 2a. Detect source-changed checked-out subprojects ────────────
+        // First pass: gather the set of subprojects whose own commits
+        // require a release. Cascade-only downstream is added in 2b.
+<span class="fc" id="L186">        Map&lt;String, ReleaseCandidate&gt; releasable = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc" id="L187">        Set&lt;String&gt; sourceChanged = new LinkedHashSet&lt;&gt;();</span>
+<span class="fc bfc" id="L188" title="All 2 branches covered.">        for (String name : graph.topologicalSort()) {</span>
+<span class="pc bpc" id="L189" title="1 of 2 branches missed.">            if (!candidates.contains(name)) continue;</span>
+
+<span class="fc" id="L191">            Subproject sub = graph.manifest().subprojects().get(name);</span>
+<span class="pc bpc" id="L192" title="1 of 2 branches missed.">            if (sub == null) continue;</span>
+
+<span class="fc" id="L194">            File subDir = new File(root, name);</span>
+<span class="pc bpc" id="L195" title="2 of 4 branches missed.">            if (!subDir.isDirectory() || !new File(subDir, &quot;pom.xml&quot;).exists()) {</span>
+<span class="nc" id="L196">                getLog().debug(&quot;Skipping &quot; + name + &quot; — not checked out&quot;);</span>
+<span class="nc" id="L197">                continue;</span>
+            }
+
+<span class="fc" id="L200">            String latestTag = latestReleaseTag(subDir);</span>
+<span class="fc bfc" id="L201" title="All 2 branches covered.">            if (latestTag == null) {</span>
+                // No release tag exists — subproject has never been released
+<span class="fc" id="L203">                releasable.put(name, new ReleaseCandidate(name, sub, subDir,</span>
+                        null, &quot;never released&quot;));
+<span class="fc" id="L205">                sourceChanged.add(name);</span>
+<span class="fc" id="L206">                continue;</span>
+            }
+
+<span class="fc" id="L209">            int commitsSinceTag = commitsSinceTag(subDir, latestTag);</span>
+<span class="fc bfc" id="L210" title="All 2 branches covered.">            if (commitsSinceTag &gt; 0) {</span>
+<span class="fc" id="L211">                releasable.put(name, new ReleaseCandidate(name, sub, subDir,</span>
+                        latestTag, commitsSinceTag + &quot; commits since &quot; + latestTag));
+<span class="fc" id="L213">                sourceChanged.add(name);</span>
+<span class="fc" id="L214">                continue;</span>
+            }
+
+<span class="fc" id="L217">            getLog().debug(&quot;Skipping &quot; + name + &quot; — clean (at &quot; + latestTag + &quot;)&quot;);</span>
+<span class="fc" id="L218">        }</span>
+
+        // ── 2b. Cascade — add transitive downstream of source-changed ───
+        // Every checked-out subproject that depends (directly or
+        // transitively) on a source-changed subproject must also release
+        // so its parent/property references can pick up the new upstream
+        // version. Catch-up never expands the release set: subprojects
+        // with stale properties but no source change and no upstream in
+        // this cycle stay out.
+<span class="fc" id="L227">        Set&lt;String&gt; releaseSet = computeReleaseSet(graph, sourceChanged);</span>
+<span class="fc bfc" id="L228" title="All 2 branches covered.">        for (String name : releaseSet) {</span>
+<span class="fc bfc" id="L229" title="All 2 branches covered.">            if (releasable.containsKey(name)) continue;</span>
+
+<span class="fc" id="L231">            Subproject sub = graph.manifest().subprojects().get(name);</span>
+<span class="pc bpc" id="L232" title="1 of 2 branches missed.">            if (sub == null) continue;</span>
+
+<span class="fc" id="L234">            File subDir = new File(root, name);</span>
+<span class="pc bpc" id="L235" title="2 of 4 branches missed.">            if (!subDir.isDirectory() || !new File(subDir, &quot;pom.xml&quot;).exists()) {</span>
+<span class="nc" id="L236">                getLog().info(&quot;  Skipping cascaded &quot; + name</span>
+                        + &quot; — not checked out (downstream version stays stale)&quot;);
+<span class="nc" id="L238">                continue;</span>
+            }
+
+<span class="fc" id="L241">            String latestTag = latestReleaseTag(subDir);</span>
+<span class="fc" id="L242">            String reason = &quot;downstream of &quot; + describeUpstreamCause(</span>
+                    name, graph, sourceChanged);
+<span class="fc" id="L244">            releasable.put(name, new ReleaseCandidate(name, sub, subDir,</span>
+                    latestTag, reason));
+<span class="fc" id="L246">        }</span>
+
+<span class="fc bfc" id="L248" title="All 2 branches covered.">        if (releasable.isEmpty()) {</span>
+<span class="fc" id="L249">            getLog().info(&quot;No components need releasing. All are clean.&quot;);</span>
+<span class="fc" id="L250">            return;</span>
+        }
+
+        // ── 3. Topological sort of release-pending components ────────────
+<span class="fc" id="L254">        List&lt;String&gt; releaseOrder = graph.topologicalSort().stream()</span>
+<span class="fc" id="L255">                .filter(releasable::containsKey)</span>
+<span class="fc" id="L256">                .toList();</span>
+
+        // ── 4. Report plan ────────────────────────────────────────────
+<span class="fc" id="L259">        getLog().info(&quot;════════════════════════════════════════════════════&quot;);</span>
+<span class="fc bfc" id="L260" title="All 2 branches covered.">        getLog().info(draft ? &quot;  WORKSPACE RELEASE — DRAFT&quot; : &quot;  WORKSPACE RELEASE&quot;);</span>
+<span class="fc" id="L261">        getLog().info(&quot;════════════════════════════════════════════════════&quot;);</span>
+<span class="fc" id="L262">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L263">        getLog().info(&quot;Components to release (&quot; + releaseOrder.size() + &quot;):&quot;);</span>
+<span class="fc bfc" id="L264" title="All 2 branches covered.">        for (int i = 0; i &lt; releaseOrder.size(); i++) {</span>
+<span class="fc" id="L265">            ReleaseCandidate rc = releasable.get(releaseOrder.get(i));</span>
+<span class="fc" id="L266">            String version = currentVersion(rc.dir);</span>
+<span class="fc" id="L267">            getLog().info(&quot;  &quot; + (i + 1) + &quot;. &quot; + rc.name</span>
+                    + &quot; (&quot; + version + &quot;) — &quot; + rc.reason);
+        }
+<span class="fc" id="L270">        getLog().info(&quot;&quot;);</span>
+
+        // ── 4a. Compute release plan (single source of truth) ────────
+        // One plan for the entire cascade, computed once up front. Every
+        // pre-release alignment is a blind lookup in this plan — no
+        // mid-flight heuristics. See dev-release-plan design topic.
+        ReleasePlan plan;
+        try {
+<span class="fc" id="L278">            plan = buildReleasePlan(releaseOrder, releasable);</span>
+<span class="nc" id="L279">        } catch (IOException e) {</span>
+<span class="nc" id="L280">            throw new MojoException(</span>
+<span class="nc" id="L281">                    &quot;Release plan compute failed: &quot; + e.getMessage(), e);</span>
+<span class="fc" id="L282">        }</span>
+<span class="fc" id="L283">        logReleasePlan(plan);</span>
+<span class="fc" id="L284">        writeReleasePlan(root, plan);</span>
+
+<span class="fc bfc" id="L286" title="All 2 branches covered.">        if (draft) {</span>
+<span class="fc" id="L287">            getLog().info(&quot;[DRAFT] No releases executed (draft mode).&quot;);</span>
+<span class="fc" id="L288">            return;</span>
+        }
+
+        // ── 5. Pre-release checkpoint ─────────────────────────────────
+<span class="fc bfc" id="L292" title="All 2 branches covered.">        if (!skipCheckpoint) {</span>
+            String checkpointName = &quot;pre-release-&quot;
+<span class="fc" id="L294">                    + Instant.now().atZone(ZoneOffset.UTC)</span>
+<span class="fc" id="L295">                            .format(DateTimeFormatter.ofPattern(&quot;yyyyMMdd-HHmmss&quot;));</span>
+<span class="fc" id="L296">            getLog().info(&quot;Creating pre-release checkpoint: &quot; + checkpointName);</span>
+<span class="fc" id="L297">            writeCheckpoint(root, graph, checkpointName);</span>
+        }
+
+        // ── 6. Release each subproject in order ────────────────────────
+<span class="fc" id="L301">        List&lt;String&gt; released = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L302">        Map&lt;String, String&gt; releasedVersions = new LinkedHashMap&lt;&gt;();</span>
+
+<span class="pc bpc" id="L304" title="1 of 2 branches missed.">        for (String name : releaseOrder) {</span>
+<span class="fc" id="L305">            ReleaseCandidate rc = releasable.get(name);</span>
+<span class="fc" id="L306">            getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L307">            getLog().info(&quot;────────────────────────────────────────────────&quot;);</span>
+<span class="fc" id="L308">            getLog().info(&quot;  Releasing: &quot; + rc.name);</span>
+<span class="fc" id="L309">            getLog().info(&quot;────────────────────────────────────────────────&quot;);</span>
+
+            // Catch-up alignment: bump every workspace-internal upstream
+            // version reference (this-cycle bumps + catch-up to current
+            // published versions) into a single commit. Hard-stops the
+            // release on failure (#192) — no silent stale POMs.
+<span class="fc" id="L315">            updateParentVersions(plan, rc, releasedVersions, root);</span>
+
+            // Derive release version from current SNAPSHOT
+<span class="fc" id="L318">            String currentVersion = currentVersion(rc.dir);</span>
+<span class="fc" id="L319">            String releaseVersion = currentVersion.replace(&quot;-SNAPSHOT&quot;, &quot;&quot;);</span>
+
+            try {
+                // Find mvnw or mvn
+<span class="fc" id="L323">                String mvn = findMvn(rc.dir);</span>
+
+<span class="nc" id="L325">                ReleaseSupport.exec(rc.dir, getLog(),</span>
+                        mvn, &quot;ike:release-publish&quot;,
+                        &quot;-DpushRelease=&quot; + push,
+                        &quot;-B&quot;);
+
+<span class="nc" id="L330">                released.add(rc.name);</span>
+<span class="nc" id="L331">                releasedVersions.put(rc.name, releaseVersion);</span>
+<span class="nc" id="L332">                getLog().info(Ansi.green(&quot;  ✓ &quot;) + &quot;Released &quot; + rc.name + &quot; &quot; + releaseVersion);</span>
+<span class="fc" id="L333">            } catch (Exception e) {</span>
+<span class="fc" id="L334">                getLog().error(Ansi.red(&quot;  ✗ &quot;) + &quot;Failed to release &quot; + rc.name + &quot;: &quot; + e.getMessage());</span>
+<span class="fc" id="L335">                getLog().error(&quot;&quot;);</span>
+<span class="fc" id="L336">                getLog().error(&quot;Released so far: &quot; + released);</span>
+<span class="fc" id="L337">                getLog().error(&quot;Failed at: &quot; + rc.name);</span>
+<span class="fc" id="L338">                getLog().error(&quot;Remaining: &quot; + releaseOrder.subList(</span>
+<span class="fc" id="L339">                        releaseOrder.indexOf(name) + 1, releaseOrder.size()));</span>
+<span class="fc" id="L340">                throw new MojoException(</span>
+                        &quot;Workspace release failed at &quot; + rc.name, e);
+<span class="nc" id="L342">            }</span>
+<span class="nc" id="L343">        }</span>
+
+        // ── 7. Summary ───────────────────────────────────────────────
+<span class="nc" id="L346">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L347">        getLog().info(&quot;════════════════════════════════════════════════════&quot;);</span>
+<span class="nc" id="L348">        getLog().info(&quot;  WORKSPACE RELEASE COMPLETE&quot;);</span>
+<span class="nc" id="L349">        getLog().info(&quot;════════════════════════════════════════════════════&quot;);</span>
+<span class="nc bnc" id="L350" title="All 2 branches missed.">        for (var entry : releasedVersions.entrySet()) {</span>
+<span class="nc" id="L351">            getLog().info(&quot;  &quot; + entry.getKey() + &quot; → &quot; + entry.getValue());</span>
+<span class="nc" id="L352">        }</span>
+<span class="nc" id="L353">        getLog().info(&quot;&quot;);</span>
+
+        // ── 8. GitHub Release (optional) ──────────────────────────────
+<span class="nc bnc" id="L356" title="All 4 branches missed.">        if (githubRepo != null &amp;&amp; !githubRepo.isBlank()) {</span>
+<span class="nc" id="L357">            createGitHubReleases(root, releasedVersions);</span>
+        }
+
+        // Structured markdown report
+<span class="nc bnc" id="L361" title="All 2 branches missed.">        writeReport(publish ? WsGoal.RELEASE_PUBLISH : WsGoal.RELEASE_DRAFT, buildReleaseMarkdownReport(releasedVersions));</span>
+<span class="nc" id="L362">    }</span>
+
+    /**
+     * Compute the release set: source-changed subprojects union the
+     * transitive downstream cascade of each.
+     *
+     * &lt;p&gt;This is a pure function over the workspace graph and the set
+     * of source-changed subprojects. Cascade is computed via
+     * {@link WorkspaceGraph#cascade(String)} (BFS on reverse edges).
+     * Order in the returned set follows the graph's topological sort.
+     *
+     * &lt;p&gt;By construction, the release set contains every member of
+     * {@code sourceChanged} plus everything that depends on any of
+     * them (directly or transitively). It never contains a subproject
+     * that has neither a source change nor a release-set upstream —
+     * stale properties alone cannot expand the release set (see #192).
+     *
+     * @param graph         the workspace dependency graph
+     * @param sourceChanged subproject names whose own commits warrant
+     *                      a release this cycle
+     * @return release set in topological order (dependencies first)
+     */
+    public static Set&lt;String&gt; computeReleaseSet(WorkspaceGraph graph,
+                                                Set&lt;String&gt; sourceChanged) {
+<span class="fc" id="L386">        Set&lt;String&gt; set = new LinkedHashSet&lt;&gt;(sourceChanged);</span>
+<span class="fc bfc" id="L387" title="All 2 branches covered.">        for (String name : sourceChanged) {</span>
+<span class="pc bpc" id="L388" title="1 of 2 branches missed.">            if (!graph.manifest().subprojects().containsKey(name)) continue;</span>
+<span class="fc" id="L389">            set.addAll(graph.cascade(name));</span>
+<span class="fc" id="L390">        }</span>
+        // Reorder by topo sort so the result is deterministic and matches
+        // the dependency order callers expect.
+<span class="fc" id="L393">        Set&lt;String&gt; ordered = new LinkedHashSet&lt;&gt;();</span>
+<span class="fc bfc" id="L394" title="All 2 branches covered.">        for (String name : graph.topologicalSort()) {</span>
+<span class="fc bfc" id="L395" title="All 2 branches covered.">            if (set.contains(name)) ordered.add(name);</span>
+<span class="fc" id="L396">        }</span>
+<span class="fc" id="L397">        return ordered;</span>
+    }
+
+    /**
+     * Describe which source-changed subproject(s) caused a downstream
+     * subproject to be cascaded into the release set. Used purely for
+     * the human-readable &quot;downstream of X&quot; reason in the release plan.
+     *
+     * &lt;p&gt;If multiple source-changed subprojects are upstream, returns
+     * the topologically-nearest set joined by {@code &quot;, &quot;}.
+     */
+    private static String describeUpstreamCause(String downstream,
+                                                 WorkspaceGraph graph,
+                                                 Set&lt;String&gt; sourceChanged) {
+        // Walk the forward edges to find which source-changed subprojects
+        // this one transitively depends on. Use BFS from downstream.
+<span class="fc" id="L413">        List&lt;String&gt; causes = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L414">        Set&lt;String&gt; visited = new LinkedHashSet&lt;&gt;();</span>
+<span class="fc" id="L415">        java.util.Deque&lt;String&gt; queue = new java.util.ArrayDeque&lt;&gt;();</span>
+<span class="fc" id="L416">        queue.add(downstream);</span>
+<span class="fc" id="L417">        visited.add(downstream);</span>
+<span class="fc bfc" id="L418" title="All 2 branches covered.">        while (!queue.isEmpty()) {</span>
+<span class="fc" id="L419">            String current = queue.poll();</span>
+<span class="fc" id="L420">            Subproject sub = graph.manifest().subprojects().get(current);</span>
+<span class="pc bpc" id="L421" title="1 of 2 branches missed.">            if (sub == null) continue;</span>
+<span class="fc bfc" id="L422" title="All 2 branches covered.">            for (network.ike.workspace.Dependency dep : sub.dependsOn()) {</span>
+<span class="fc" id="L423">                String up = dep.subproject();</span>
+<span class="pc bpc" id="L424" title="1 of 2 branches missed.">                if (!visited.add(up)) continue;</span>
+<span class="fc bfc" id="L425" title="All 2 branches covered.">                if (sourceChanged.contains(up)) {</span>
+<span class="fc" id="L426">                    causes.add(up);</span>
+                } else {
+<span class="fc" id="L428">                    queue.add(up);</span>
+                }
+<span class="fc" id="L430">            }</span>
+<span class="fc" id="L431">        }</span>
+<span class="pc bpc" id="L432" title="1 of 2 branches missed.">        if (causes.isEmpty()) return &quot;(unknown upstream)&quot;;</span>
+<span class="fc" id="L433">        return String.join(&quot;, &quot;, causes);</span>
+    }
+
+    /**
+     * Create GitHub Releases for released components and attach
+     * platform installers. Uses {@code gh} CLI. Each subproject gets
+     * a release tagged {@code v&lt;version&gt;}. If the release already
+     * exists, uploads are appended with {@code --clobber}.
+     */
+    private void createGitHubReleases(File root,
+                                        Map&lt;String, String&gt; releasedVersions)
+            throws MojoException {
+<span class="nc bnc" id="L445" title="All 2 branches missed.">        for (var entry : releasedVersions.entrySet()) {</span>
+<span class="nc" id="L446">            String name = entry.getKey();</span>
+<span class="nc" id="L447">            String version = entry.getValue();</span>
+<span class="nc" id="L448">            String tag = &quot;v&quot; + version;</span>
+<span class="nc" id="L449">            File subDir = new File(root, name);</span>
+
+            // Collect installer artifacts
+<span class="nc" id="L452">            java.nio.file.Path targetDir = subDir.toPath().resolve(&quot;target&quot;);</span>
+<span class="nc" id="L453">            List&lt;String&gt; artifacts = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L454" title="All 2 branches missed.">            if (java.nio.file.Files.exists(targetDir)) {</span>
+                try {
+<span class="nc" id="L456">                    java.nio.file.PathMatcher matcher =</span>
+<span class="nc" id="L457">                            targetDir.getFileSystem().getPathMatcher(</span>
+                                    &quot;glob:&quot; + installerGlob);
+<span class="nc" id="L459">                    try (var walk = java.nio.file.Files.walk(targetDir, 3)) {</span>
+<span class="nc" id="L460">                        walk.filter(java.nio.file.Files::isRegularFile)</span>
+<span class="nc" id="L461">                            .filter(p -&gt; matcher.matches(</span>
+<span class="nc" id="L462">                                    targetDir.relativize(p)))</span>
+<span class="nc" id="L463">                            .forEach(p -&gt; artifacts.add(p.toString()));</span>
+                    }
+<span class="nc" id="L465">                } catch (java.io.IOException e) {</span>
+<span class="nc" id="L466">                    getLog().debug(&quot;Could not scan installers for &quot; + name</span>
+<span class="nc" id="L467">                            + &quot;: &quot; + e.getMessage());</span>
+<span class="nc" id="L468">                }</span>
+            }
+
+<span class="nc" id="L471">            getLog().info(&quot;  Creating GitHub Release: &quot; + tag</span>
+<span class="nc bnc" id="L472" title="All 2 branches missed.">                    + (artifacts.isEmpty() ? &quot;&quot;</span>
+<span class="nc" id="L473">                        : &quot; (&quot; + artifacts.size() + &quot; installer&quot;</span>
+<span class="nc bnc" id="L474" title="All 2 branches missed.">                          + (artifacts.size() == 1 ? &quot;&quot; : &quot;s&quot;) + &quot;)&quot;));</span>
+
+            try {
+                // Try create first; fall back to upload if release exists
+<span class="nc" id="L478">                List&lt;String&gt; cmd = new ArrayList&lt;&gt;(List.of(</span>
+                        &quot;gh&quot;, &quot;release&quot;, &quot;create&quot;, tag,
+                        &quot;--repo&quot;, githubRepo,
+                        &quot;--title&quot;, name + &quot; &quot; + version,
+                        &quot;--generate-notes&quot;));
+<span class="nc" id="L483">                cmd.addAll(artifacts);</span>
+
+<span class="nc" id="L485">                ReleaseSupport.exec(subDir, getLog(),</span>
+<span class="nc" id="L486">                        cmd.toArray(String[]::new));</span>
+<span class="nc" id="L487">            } catch (MojoException e) {</span>
+                // Release may already exist — append assets
+<span class="nc bnc" id="L489" title="All 2 branches missed.">                if (!artifacts.isEmpty()) {</span>
+                    try {
+<span class="nc" id="L491">                        List&lt;String&gt; uploadCmd = new ArrayList&lt;&gt;(List.of(</span>
+                                &quot;gh&quot;, &quot;release&quot;, &quot;upload&quot;, tag,
+                                &quot;--repo&quot;, githubRepo, &quot;--clobber&quot;));
+<span class="nc" id="L494">                        uploadCmd.addAll(artifacts);</span>
+<span class="nc" id="L495">                        ReleaseSupport.exec(subDir, getLog(),</span>
+<span class="nc" id="L496">                                uploadCmd.toArray(String[]::new));</span>
+<span class="nc" id="L497">                    } catch (MojoException uploadErr) {</span>
+<span class="nc" id="L498">                        getLog().warn(&quot;  Could not upload to release &quot; + tag</span>
+<span class="nc" id="L499">                                + &quot;: &quot; + uploadErr.getMessage());</span>
+<span class="nc" id="L500">                    }</span>
+                } else {
+<span class="nc" id="L502">                    getLog().warn(&quot;  GitHub Release creation failed for &quot;</span>
+<span class="nc" id="L503">                            + tag + &quot;: &quot; + e.getMessage());</span>
+                }
+<span class="nc" id="L505">            }</span>
+<span class="nc" id="L506">        }</span>
+<span class="nc" id="L507">    }</span>
+
+    private String buildReleaseMarkdownReport(
+            Map&lt;String, String&gt; releasedVersions) {
+<span class="nc" id="L511">        var sb = new StringBuilder();</span>
+<span class="nc" id="L512">        sb.append(releasedVersions.size())</span>
+<span class="nc" id="L513">                .append(&quot; subproject(s) released.\n\n&quot;);</span>
+<span class="nc" id="L514">        sb.append(&quot;| Subproject | Version | Status |\n&quot;);</span>
+<span class="nc" id="L515">        sb.append(&quot;|-----------|---------|--------|\n&quot;);</span>
+<span class="nc bnc" id="L516" title="All 2 branches missed.">        for (var entry : releasedVersions.entrySet()) {</span>
+<span class="nc" id="L517">            sb.append(&quot;| &quot;).append(entry.getKey())</span>
+<span class="nc" id="L518">                    .append(&quot; | &quot;).append(entry.getValue())</span>
+<span class="nc" id="L519">                    .append(&quot; | ✓ |\n&quot;);</span>
+<span class="nc" id="L520">        }</span>
+<span class="nc" id="L521">        return sb.toString();</span>
+    }
+
+    // ── Helper: find latest release tag ──────────────────────────────
+
+    private String latestReleaseTag(File subDir) {
+        try {
+<span class="fc" id="L528">            String tags = ReleaseSupport.execCapture(subDir,</span>
+                    &quot;git&quot;, &quot;tag&quot;, &quot;-l&quot;, &quot;v*&quot;, &quot;--sort=-version:refname&quot;);
+<span class="pc bpc" id="L530" title="1 of 4 branches missed.">            if (tags == null || tags.isBlank()) return null;</span>
+<span class="fc" id="L531">            return tags.lines().findFirst().orElse(null);</span>
+<span class="nc" id="L532">        } catch (Exception e) {</span>
+<span class="nc" id="L533">            return null;</span>
+        }
+    }
+
+    // ── Helper: count commits since tag ──────────────────────────────
+
+    private int commitsSinceTag(File subDir, String tag) {
+        try {
+<span class="fc" id="L541">            String count = ReleaseSupport.execCapture(subDir,</span>
+                    &quot;git&quot;, &quot;rev-list&quot;, tag + &quot;..HEAD&quot;, &quot;--count&quot;);
+<span class="fc" id="L543">            return Integer.parseInt(count.strip());</span>
+<span class="nc" id="L544">        } catch (Exception e) {</span>
+<span class="nc" id="L545">            return -1;</span>
+        }
+    }
+
+    // ── Helper: read current POM version ─────────────────────────────
+
+    private String currentVersion(File subDir) {
+        try {
+<span class="fc" id="L553">            Path pom = subDir.toPath().resolve(&quot;pom.xml&quot;);</span>
+<span class="fc" id="L554">            String content = Files.readString(pom, StandardCharsets.UTF_8);</span>
+<span class="fc" id="L555">            return extractVersionFromPom(content);</span>
+<span class="nc" id="L556">        } catch (Exception e) {</span>
+<span class="nc" id="L557">            return &quot;unknown&quot;;</span>
+        }
+    }
+
+    /**
+     * Extract the first {@code &lt;version&gt;} value from POM XML content.
+     *
+     * &lt;p&gt;This is a simple regex extraction — finds the first
+     * {@code &lt;version&gt;...&lt;/version&gt;} in the content. Good enough for
+     * workspace POMs where the project version appears early.
+     *
+     * @param pomContent raw POM XML as a string
+     * @return the version string, or {@code &quot;unknown&quot;} if not found
+     */
+    public static String extractVersionFromPom(String pomContent) {
+<span class="fc bfc" id="L572" title="All 4 branches covered.">        if (pomContent == null || pomContent.isBlank()) return &quot;unknown&quot;;</span>
+<span class="fc" id="L573">        var matcher = java.util.regex.Pattern.compile(</span>
+<span class="fc" id="L574">                &quot;&lt;version&gt;([^&lt;]+)&lt;/version&gt;&quot;).matcher(pomContent);</span>
+<span class="fc bfc" id="L575" title="All 2 branches covered.">        if (matcher.find()) return matcher.group(1);</span>
+<span class="fc" id="L576">        return &quot;unknown&quot;;</span>
+    }
+
+    // ── Helper: catch-up alignment for a single subproject ──────────
+
+    /**
+     * Catch-up alignment for a single subproject, driven by the
+     * pre-computed {@link ReleasePlan}.
+     *
+     * &lt;p&gt;Two passes:
+     * &lt;ol&gt;
+     *   &lt;li&gt;&lt;b&gt;Plan-driven, in-cascade:&lt;/b&gt; walk the plan's artifact
+     *       and property entries; apply updates to any POM under
+     *       {@code rc.dir}. Property names, target values, and POM paths
+     *       are all pre-computed — no heuristics, no reinterpretation.
+     *       Covers child-override properties and parent references in
+     *       submodules that the old manifest-only logic missed.&lt;/li&gt;
+     *   &lt;li&gt;&lt;b&gt;Out-of-cascade catch-up:&lt;/b&gt; for each manifest dependency
+     *       whose upstream is &lt;em&gt;not&lt;/em&gt; in the cascade, align the
+     *       root POM's parent ref and manifest-declared property to the
+     *       upstream's current on-disk version. This rescues stale
+     *       properties without expanding the release set.&lt;/li&gt;
+     * &lt;/ol&gt;
+     *
+     * &lt;p&gt;All bumps for a single subproject batch into one git commit.
+     * If any POM rewrite, write, or git command fails, this method
+     * throws {@link MojoException} so the release loop halts — silent
+     * partial alignment is never acceptable (#192).
+     *
+     * @param plan             the pre-computed release plan
+     * @param rc               the subproject being prepared for release
+     * @param releasedVersions this-cycle release map (for catch-up logging)
+     * @param root             workspace root (for reading upstream POMs
+     *                         that aren't in the plan)
+     * @throws MojoException if POM I/O, git add, or git commit fails
+     */
+    private void updateParentVersions(ReleasePlan plan,
+                                       ReleaseCandidate rc,
+                                       Map&lt;String, String&gt; releasedVersions,
+                                       File root) throws MojoException {
+<span class="fc" id="L616">        Path rcDir = rc.dir.toPath().toAbsolutePath().normalize();</span>
+<span class="fc" id="L617">        Map&lt;Path, String&gt; pomContent = new LinkedHashMap&lt;&gt;();</span>
+
+        try {
+            // ── 1. Plan-driven: in-cascade property updates ─────────
+<span class="pc bpc" id="L621" title="1 of 2 branches missed.">            for (PropertyReleasePlan pp : plan.properties()) {</span>
+<span class="nc" id="L622">                Path decl = pp.declaringPomPath();</span>
+<span class="nc bnc" id="L623" title="All 2 branches missed.">                if (!decl.startsWith(rcDir)) continue;</span>
+<span class="nc" id="L624">                String before = pomContent.computeIfAbsent(decl, this::readPomContent);</span>
+<span class="nc" id="L625">                String after = PomRewriter.updateProperty(</span>
+<span class="nc" id="L626">                        before, pp.propertyName(), pp.releaseValue());</span>
+<span class="nc bnc" id="L627" title="All 2 branches missed.">                if (!after.equals(before)) {</span>
+<span class="nc" id="L628">                    pomContent.put(decl, after);</span>
+<span class="nc" id="L629">                    getLog().info(&quot;    &quot; + rc.name + &quot; (&quot;</span>
+<span class="nc" id="L630">                            + rcDir.relativize(decl) + &quot;): &quot;</span>
+<span class="nc" id="L631">                            + pp.propertyName() + &quot; → &quot; + pp.releaseValue()</span>
+                            + &quot; (plan)&quot;);
+                }
+<span class="nc" id="L634">            }</span>
+
+            // ── 2. Plan-driven: in-cascade parent updates ───────────
+<span class="fc bfc" id="L637" title="All 2 branches covered.">            for (ArtifactReleasePlan ap : plan.artifacts().values()) {</span>
+<span class="fc bfc" id="L638" title="All 2 branches covered.">                for (ReferenceSite site : ap.referenceSites()) {</span>
+<span class="pc bpc" id="L639" title="1 of 2 branches missed.">                    if (site.kind() != ReferenceKind.PARENT) continue;</span>
+<span class="nc" id="L640">                    Path pomPath = site.pomPath();</span>
+<span class="nc bnc" id="L641" title="All 2 branches missed.">                    if (!pomPath.startsWith(rcDir)) continue;</span>
+<span class="nc" id="L642">                    String before = pomContent.computeIfAbsent(pomPath, this::readPomContent);</span>
+<span class="nc" id="L643">                    String after = PomRewriter.updateParentVersion(</span>
+<span class="nc" id="L644">                            before, ap.ga().groupId(), ap.ga().artifactId(),</span>
+<span class="nc" id="L645">                            ap.releaseValue());</span>
+<span class="nc bnc" id="L646" title="All 2 branches missed.">                    if (!after.equals(before)) {</span>
+<span class="nc" id="L647">                        pomContent.put(pomPath, after);</span>
+<span class="nc" id="L648">                        getLog().info(&quot;    &quot; + rc.name + &quot; (&quot;</span>
+<span class="nc" id="L649">                                + rcDir.relativize(pomPath) + &quot;): &quot;</span>
+<span class="nc" id="L650">                                + &quot;parent &quot; + ap.ga().artifactId()</span>
+<span class="nc" id="L651">                                + &quot; → &quot; + ap.releaseValue() + &quot; (plan)&quot;);</span>
+                    }
+<span class="nc" id="L653">                }</span>
+<span class="fc" id="L654">            }</span>
+
+            // ── 3. Out-of-cascade catch-up ──────────────────────────
+            // Read the RC's root &lt;parent&gt; block once so the catch-up
+            // match can require BOTH groupId and artifactId (#241).
+<span class="fc" id="L659">            Set&lt;String&gt; inPlan = plan.artifacts().values().stream()</span>
+<span class="fc" id="L660">                    .map(ArtifactReleasePlan::producingSubproject)</span>
+<span class="fc" id="L661">                    .collect(Collectors.toSet());</span>
+<span class="fc" id="L662">            Path rootPom = rcDir.resolve(&quot;pom.xml&quot;);</span>
+            PomParentSupport.ParentInfo rootPomParent;
+            try {
+<span class="fc" id="L665">                rootPomParent = PomParentSupport.readParent(rootPom);</span>
+<span class="nc" id="L666">            } catch (IOException e) {</span>
+<span class="nc" id="L667">                getLog().warn(&quot;    &quot; + rc.name + &quot;: cannot read root&quot;</span>
+<span class="nc" id="L668">                        + &quot; &lt;parent&gt; for catch-up — &quot; + e.getMessage());</span>
+<span class="nc" id="L669">                rootPomParent = null;</span>
+<span class="fc" id="L670">            }</span>
+<span class="fc bfc" id="L671" title="All 2 branches covered.">            for (network.ike.workspace.Dependency dep : rc.subproject.dependsOn()) {</span>
+<span class="pc bpc" id="L672" title="1 of 2 branches missed.">                if (inPlan.contains(dep.subproject())) continue;</span>
+<span class="fc" id="L673">                String target = upstreamTargetVersion(</span>
+<span class="fc" id="L674">                        dep.subproject(), releasedVersions, root);</span>
+<span class="pc bpc" id="L675" title="1 of 2 branches missed.">                if (target == null) {</span>
+<span class="nc" id="L676">                    getLog().debug(&quot;    &quot; + rc.name + &quot;: no target for &quot;</span>
+<span class="nc" id="L677">                            + dep.subproject() + &quot; (not in plan, not on disk)&quot;);</span>
+<span class="nc" id="L678">                    continue;</span>
+                }
+<span class="fc" id="L680">                String before = pomContent.computeIfAbsent(rootPom, this::readPomContent);</span>
+                // Only update the root &lt;parent&gt; when the dep's
+                // subproject name matches the root parent's artifactId.
+                // The full GA is then used for the rewrite so unrelated
+                // groupIds with the same artifactId aren't touched (#241).
+<span class="pc bpc" id="L685" title="1 of 2 branches missed.">                if (rootPomParent != null</span>
+<span class="nc bnc" id="L686" title="All 2 branches missed.">                        &amp;&amp; dep.subproject().equals(rootPomParent.artifactId())) {</span>
+<span class="nc" id="L687">                    String after = PomRewriter.updateParentVersion(</span>
+<span class="nc" id="L688">                            before, rootPomParent.groupId(),</span>
+<span class="nc" id="L689">                            rootPomParent.artifactId(), target);</span>
+<span class="nc bnc" id="L690" title="All 2 branches missed.">                    if (!after.equals(before)) {</span>
+<span class="nc" id="L691">                        pomContent.put(rootPom, after);</span>
+<span class="nc" id="L692">                        getLog().info(&quot;    &quot; + rc.name + &quot;: parent &quot;</span>
+<span class="nc" id="L693">                                + rootPomParent.groupId() + &quot;:&quot;</span>
+<span class="nc" id="L694">                                + rootPomParent.artifactId() + &quot; → &quot;</span>
+                                + target + &quot; (out-of-cascade catch-up)&quot;);
+<span class="nc" id="L696">                        before = after;</span>
+                    }
+                }
+<span class="pc bpc" id="L699" title="1 of 2 branches missed.">                if (dep.versionProperty() != null) {</span>
+<span class="nc" id="L700">                    String after = PomRewriter.updateProperty(</span>
+<span class="nc" id="L701">                            before, dep.versionProperty(), target);</span>
+<span class="nc bnc" id="L702" title="All 2 branches missed.">                    if (!after.equals(before)) {</span>
+<span class="nc" id="L703">                        pomContent.put(rootPom, after);</span>
+<span class="nc" id="L704">                        getLog().info(&quot;    &quot; + rc.name + &quot;: &quot;</span>
+<span class="nc" id="L705">                                + dep.versionProperty() + &quot; → &quot; + target</span>
+                                + &quot; (out-of-cascade catch-up)&quot;);
+                    }
+                }
+<span class="fc" id="L709">            }</span>
+<span class="nc" id="L710">        } catch (UncheckedIOException e) {</span>
+<span class="nc" id="L711">            throw new MojoException(</span>
+                    &quot;Catch-up alignment for &quot; + rc.name
+<span class="nc" id="L713">                            + &quot; failed reading POM: &quot; + e.getMessage(),</span>
+<span class="nc" id="L714">                    e.getCause());</span>
+<span class="fc" id="L715">        }</span>
+
+        // ── 4. Write modified POMs ──────────────────────────────────
+<span class="fc" id="L718">        List&lt;Path&gt; changedPoms = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L719" title="All 2 branches covered.">        for (Map.Entry&lt;Path, String&gt; entry : pomContent.entrySet()) {</span>
+<span class="fc" id="L720">            Path path = entry.getKey();</span>
+<span class="fc" id="L721">            String content = entry.getValue();</span>
+            String original;
+            try {
+<span class="fc" id="L724">                original = Files.readString(path, StandardCharsets.UTF_8);</span>
+<span class="nc" id="L725">            } catch (IOException e) {</span>
+<span class="nc" id="L726">                throw new MojoException(</span>
+                        &quot;Catch-up alignment for &quot; + rc.name
+                                + &quot; failed: cannot read &quot; + path + &quot;: &quot;
+<span class="nc" id="L729">                                + e.getMessage(), e);</span>
+<span class="fc" id="L730">            }</span>
+<span class="pc bpc" id="L731" title="1 of 2 branches missed.">            if (!content.equals(original)) {</span>
+                try {
+<span class="nc" id="L733">                    Files.writeString(path, content, StandardCharsets.UTF_8);</span>
+<span class="nc" id="L734">                } catch (IOException e) {</span>
+<span class="nc" id="L735">                    throw new MojoException(</span>
+                            &quot;Catch-up alignment for &quot; + rc.name
+                                    + &quot; failed: cannot write &quot; + path
+<span class="nc" id="L738">                                    + &quot;: &quot; + e.getMessage(), e);</span>
+<span class="nc" id="L739">                }</span>
+<span class="nc" id="L740">                changedPoms.add(path);</span>
+            }
+<span class="fc" id="L742">        }</span>
+<span class="pc bpc" id="L743" title="1 of 2 branches missed.">        if (!changedPoms.isEmpty()) {</span>
+<span class="nc" id="L744">            getLog().info(&quot;  Updated &quot; + changedPoms.size()</span>
+                    + &quot; POM(s) in &quot; + rc.name);
+        }
+
+<span class="pc bpc" id="L748" title="1 of 2 branches missed.">        if (changedPoms.isEmpty()) return;</span>
+
+        // ── 5. Stage + commit in one batch ──────────────────────────
+        try {
+<span class="nc bnc" id="L752" title="All 2 branches missed.">            for (Path p : changedPoms) {</span>
+<span class="nc" id="L753">                ReleaseSupport.exec(rc.dir, getLog(),</span>
+<span class="nc" id="L754">                        &quot;git&quot;, &quot;add&quot;, rcDir.relativize(p).toString());</span>
+<span class="nc" id="L755">            }</span>
+<span class="nc" id="L756">            ReleaseSupport.exec(rc.dir, getLog(),</span>
+                    &quot;git&quot;, &quot;commit&quot;, &quot;-m&quot;,
+                    &quot;chore: align upstream versions before release&quot;);
+<span class="nc" id="L759">        } catch (MojoException e) {</span>
+<span class="nc" id="L760">            throw new MojoException(</span>
+                    &quot;Catch-up alignment for &quot; + rc.name
+<span class="nc" id="L762">                            + &quot; failed at git commit: &quot; + e.getMessage(), e);</span>
+<span class="nc" id="L763">        }</span>
+<span class="nc" id="L764">    }</span>
+
+    /**
+     * Read POM content as UTF-8. Used inside
+     * {@link Map#computeIfAbsent}; wraps {@link IOException} as
+     * {@link UncheckedIOException} which the caller re-throws as
+     * {@link MojoException}.
+     */
+    private String readPomContent(Path path) {
+        try {
+<span class="fc" id="L774">            return Files.readString(path, StandardCharsets.UTF_8);</span>
+<span class="nc" id="L775">        } catch (IOException e) {</span>
+<span class="nc" id="L776">            throw new UncheckedIOException(e);</span>
+        }
+    }
+
+    /**
+     * Build the full cascade's release plan from the release order and
+     * the set of releasable candidates. Each subproject becomes an
+     * {@link ArtifactReleaseIntent} whose pre/release/post values are
+     * derived from the subproject's current {@code &lt;version&gt;} (must end
+     * in {@code -SNAPSHOT}).
+     *
+     * &lt;p&gt;The reactor scan walks each released subproject's root POM to
+     * collect every property declaration and reference site across the
+     * cascade. Out-of-cascade subprojects do not participate; their
+     * POMs are not scanned and their properties do not appear in the
+     * plan.
+     *
+     * @param releaseOrder the topologically-sorted subproject names
+     * @param releasable   the candidates indexed by name
+     * @return the immutable release plan
+     * @throws IOException if any POM cannot be read
+     */
+    private ReleasePlan buildReleasePlan(
+            List&lt;String&gt; releaseOrder,
+            Map&lt;String, ReleaseCandidate&gt; releasable) throws IOException {
+<span class="fc" id="L801">        List&lt;ArtifactReleaseIntent&gt; intents = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L802">        List&lt;SubprojectRoot&gt; subprojectRoots = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L803">        List&lt;Path&gt; reactorRoots = new ArrayList&lt;&gt;();</span>
+
+<span class="fc bfc" id="L805" title="All 2 branches covered.">        for (String name : releaseOrder) {</span>
+<span class="fc" id="L806">            ReleaseCandidate rc = releasable.get(name);</span>
+<span class="fc" id="L807">            Path rootPom = rc.dir.toPath().resolve(&quot;pom.xml&quot;)</span>
+<span class="fc" id="L808">                    .toAbsolutePath().normalize();</span>
+<span class="fc" id="L809">            PomModel pom = PomModel.parse(rootPom);</span>
+
+<span class="fc" id="L811">            String groupId = pom.groupId();</span>
+<span class="fc" id="L812">            String artifactId = pom.artifactId();</span>
+<span class="fc" id="L813">            String preReleaseValue = pom.version();</span>
+<span class="pc bpc" id="L814" title="1 of 2 branches missed.">            if (preReleaseValue == null</span>
+<span class="pc bpc" id="L815" title="1 of 2 branches missed.">                    || !preReleaseValue.endsWith(&quot;-SNAPSHOT&quot;)) {</span>
+<span class="nc" id="L816">                throw new IOException(</span>
+                        &quot;Subproject &quot; + name + &quot; (&quot; + rootPom + &quot;) version &quot;
+                                + &quot;must end in -SNAPSHOT; got &quot;
+                                + preReleaseValue);
+            }
+<span class="fc" id="L821">            String releaseValue = preReleaseValue.substring(</span>
+<span class="fc" id="L822">                    0, preReleaseValue.length() - &quot;-SNAPSHOT&quot;.length());</span>
+<span class="fc" id="L823">            String postReleaseValue = nextSnapshotVersion(releaseValue);</span>
+
+<span class="fc" id="L825">            intents.add(new ArtifactReleaseIntent(</span>
+                    new GA(groupId, artifactId),
+                    name,
+                    rootPom,
+                    preReleaseValue,
+                    releaseValue,
+                    postReleaseValue));
+<span class="fc" id="L832">            subprojectRoots.add(new SubprojectRoot(name, rootPom));</span>
+<span class="fc" id="L833">            reactorRoots.add(rootPom);</span>
+<span class="fc" id="L834">        }</span>
+
+<span class="fc" id="L836">        ReactorWalker.ReactorScan scan = ReactorWalker.walkAll(reactorRoots);</span>
+<span class="fc" id="L837">        return ReleasePlanCompute.compute(scan, subprojectRoots, intents);</span>
+    }
+
+    /**
+     * Derive the post-release next-snapshot from a release value by
+     * incrementing the trailing numeric segment. Matches the IKE
+     * single-segment convention: {@code 110} → {@code 111-SNAPSHOT}.
+     * If the release value has no trailing digits, appends
+     * {@code .1-SNAPSHOT}.
+     *
+     * @param releaseValue release version (must not end in -SNAPSHOT)
+     * @return next-snapshot version
+     */
+    static String nextSnapshotVersion(String releaseValue) {
+<span class="fc" id="L851">        int i = releaseValue.length();</span>
+<span class="pc bpc" id="L852" title="1 of 4 branches missed.">        while (i &gt; 0 &amp;&amp; Character.isDigit(releaseValue.charAt(i - 1))) i--;</span>
+<span class="pc bpc" id="L853" title="1 of 2 branches missed.">        if (i == releaseValue.length()) {</span>
+<span class="nc" id="L854">            return releaseValue + &quot;.1-SNAPSHOT&quot;;</span>
+        }
+<span class="fc" id="L856">        String prefix = releaseValue.substring(0, i);</span>
+<span class="fc" id="L857">        long n = Long.parseLong(releaseValue.substring(i));</span>
+<span class="fc" id="L858">        return prefix + (n + 1) + &quot;-SNAPSHOT&quot;;</span>
+    }
+
+    /**
+     * Log the release plan at INFO: one line per artifact and per
+     * property. This is the pre-mutation audit view; the same data is
+     * also persisted to {@code plan.yaml} at the workspace root for
+     * later inspection (#212).
+     */
+    private void logReleasePlan(ReleasePlan plan) {
+<span class="fc" id="L868">        getLog().info(&quot;Release plan:&quot;);</span>
+<span class="fc bfc" id="L869" title="All 2 branches covered.">        for (ArtifactReleasePlan ap : plan.artifacts().values()) {</span>
+<span class="fc" id="L870">            getLog().info(&quot;  artifact &quot; + ap.ga() + &quot;: &quot;</span>
+<span class="fc" id="L871">                    + ap.preReleaseValue() + &quot; → &quot;</span>
+<span class="fc" id="L872">                    + ap.releaseValue() + &quot; → &quot;</span>
+<span class="fc" id="L873">                    + ap.postReleaseValue()</span>
+<span class="fc" id="L874">                    + &quot; (&quot; + ap.referenceSites().size() + &quot; reference&quot;</span>
+<span class="fc bfc" id="L875" title="All 2 branches covered.">                    + (ap.referenceSites().size() == 1 ? &quot;&quot; : &quot;s&quot;) + &quot;)&quot;);</span>
+<span class="fc" id="L876">        }</span>
+<span class="pc bpc" id="L877" title="1 of 2 branches missed.">        for (PropertyReleasePlan pp : plan.properties()) {</span>
+<span class="nc" id="L878">            getLog().info(&quot;  property &quot; + pp.propertyName()</span>
+<span class="nc" id="L879">                    + &quot; in &quot; + pp.declaringSubproject() + &quot;: &quot;</span>
+<span class="nc" id="L880">                    + pp.preReleaseValue() + &quot; → &quot; + pp.releaseValue()</span>
+<span class="nc" id="L881">                    + &quot; (&quot; + pp.referenceSites().size() + &quot; reference&quot;</span>
+<span class="nc bnc" id="L882" title="All 2 branches missed.">                    + (pp.referenceSites().size() == 1 ? &quot;&quot; : &quot;s&quot;) + &quot;)&quot;);</span>
+<span class="nc" id="L883">        }</span>
+<span class="fc" id="L884">    }</span>
+
+    /**
+     * Persist the release plan to {@code plan.yaml} at the workspace
+     * root. Written before any mutation so the audit artifact reflects
+     * the plan that will drive the cascade. In draft mode, the file is
+     * still emitted — it's the point of draft mode.
+     *
+     * &lt;p&gt;Write failures are logged as warnings and do not abort the
+     * release; the plan.yaml is an audit artifact, not a gate.
+     *
+     * @param root the workspace root directory
+     * @param plan the release plan to serialize
+     */
+    private void writeReleasePlan(File root, ReleasePlan plan) {
+<span class="fc" id="L899">        Path file = root.toPath().resolve(&quot;plan.yaml&quot;);</span>
+<span class="fc" id="L900">        String timestamp = ISO_UTC.format(Instant.now());</span>
+<span class="fc" id="L901">        String yaml = buildReleasePlanYaml(timestamp, root.toPath(), plan);</span>
+        try {
+<span class="fc" id="L903">            Files.writeString(file, yaml, StandardCharsets.UTF_8);</span>
+<span class="fc" id="L904">            getLog().info(&quot;Release plan written: &quot; + file);</span>
+<span class="nc" id="L905">        } catch (IOException e) {</span>
+<span class="nc" id="L906">            getLog().warn(&quot;Could not write plan.yaml: &quot; + e.getMessage());</span>
+<span class="fc" id="L907">        }</span>
+<span class="fc" id="L908">    }</span>
+
+    /**
+     * Build the {@code plan.yaml} audit content from a release plan.
+     *
+     * &lt;p&gt;Pure function: no I/O, no git — suitable for unit testing.
+     * Paths are emitted relative to {@code workspaceRoot} when possible;
+     * absolute otherwise.
+     *
+     * @param timestamp     ISO-8601 UTC timestamp
+     * @param workspaceRoot workspace root, used to relativize POM paths
+     * @param plan          the release plan
+     * @return YAML content
+     */
+    static String buildReleasePlanYaml(
+            String timestamp, Path workspaceRoot, ReleasePlan plan) {
+<span class="fc" id="L924">        Path rootAbs = workspaceRoot.toAbsolutePath().normalize();</span>
+<span class="fc" id="L925">        StringBuilder y = new StringBuilder();</span>
+<span class="fc" id="L926">        y.append(&quot;# Workspace release plan (pre-mutation audit)\n&quot;);</span>
+<span class="fc" id="L927">        y.append(&quot;# Generated: &quot;).append(timestamp).append(&quot;\n&quot;);</span>
+<span class="fc" id="L928">        y.append(&quot;timestamp: &quot;).append(timestamp).append(&quot;\n&quot;);</span>
+
+<span class="fc" id="L930">        y.append(&quot;artifacts:\n&quot;);</span>
+<span class="pc bpc" id="L931" title="1 of 2 branches missed.">        if (plan.artifacts().isEmpty()) {</span>
+<span class="nc" id="L932">            y.append(&quot;  []\n&quot;);</span>
+        }
+<span class="fc bfc" id="L934" title="All 2 branches covered.">        for (ArtifactReleasePlan ap : plan.artifacts().values()) {</span>
+<span class="fc" id="L935">            y.append(&quot;  - groupId: &quot;).append(ap.ga().groupId()).append(&quot;\n&quot;);</span>
+<span class="fc" id="L936">            y.append(&quot;    artifactId: &quot;).append(ap.ga().artifactId()).append(&quot;\n&quot;);</span>
+<span class="fc" id="L937">            y.append(&quot;    producingSubproject: &quot;)</span>
+<span class="fc" id="L938">                    .append(ap.producingSubproject()).append(&quot;\n&quot;);</span>
+<span class="fc" id="L939">            y.append(&quot;    rootPomPath: &quot;)</span>
+<span class="fc" id="L940">                    .append(relPath(rootAbs, ap.rootPomPath())).append(&quot;\n&quot;);</span>
+<span class="fc" id="L941">            y.append(&quot;    preReleaseValue: &quot;).append(ap.preReleaseValue()).append(&quot;\n&quot;);</span>
+<span class="fc" id="L942">            y.append(&quot;    releaseValue: &quot;).append(ap.releaseValue()).append(&quot;\n&quot;);</span>
+<span class="fc" id="L943">            y.append(&quot;    postReleaseValue: &quot;).append(ap.postReleaseValue()).append(&quot;\n&quot;);</span>
+<span class="fc" id="L944">            appendSites(y, &quot;    &quot;, rootAbs, ap.referenceSites());</span>
+<span class="fc" id="L945">        }</span>
+
+<span class="fc" id="L947">        y.append(&quot;properties:\n&quot;);</span>
+<span class="pc bpc" id="L948" title="1 of 2 branches missed.">        if (plan.properties().isEmpty()) {</span>
+<span class="fc" id="L949">            y.append(&quot;  []\n&quot;);</span>
+        }
+<span class="pc bpc" id="L951" title="1 of 2 branches missed.">        for (PropertyReleasePlan pp : plan.properties()) {</span>
+<span class="nc" id="L952">            y.append(&quot;  - propertyName: &quot;).append(pp.propertyName()).append(&quot;\n&quot;);</span>
+<span class="nc" id="L953">            y.append(&quot;    declaringPomPath: &quot;)</span>
+<span class="nc" id="L954">                    .append(relPath(rootAbs, pp.declaringPomPath())).append(&quot;\n&quot;);</span>
+<span class="nc" id="L955">            y.append(&quot;    declaringSubproject: &quot;)</span>
+<span class="nc bnc" id="L956" title="All 2 branches missed.">                    .append(pp.declaringSubproject().isEmpty()</span>
+<span class="nc" id="L957">                            ? &quot;\&quot;\&quot;&quot; : pp.declaringSubproject()).append(&quot;\n&quot;);</span>
+<span class="nc" id="L958">            y.append(&quot;    preReleaseValue: &quot;).append(pp.preReleaseValue()).append(&quot;\n&quot;);</span>
+<span class="nc" id="L959">            y.append(&quot;    releaseValue: &quot;).append(pp.releaseValue()).append(&quot;\n&quot;);</span>
+<span class="nc" id="L960">            y.append(&quot;    postReleaseValue: &quot;).append(pp.postReleaseValue()).append(&quot;\n&quot;);</span>
+<span class="nc" id="L961">            appendSites(y, &quot;    &quot;, rootAbs, pp.referenceSites());</span>
+<span class="nc" id="L962">        }</span>
+
+<span class="fc" id="L964">        return y.toString();</span>
+    }
+
+    private static void appendSites(
+            StringBuilder y, String indent, Path rootAbs,
+            List&lt;ReferenceSite&gt; sites) {
+<span class="fc bfc" id="L970" title="All 2 branches covered.">        if (sites.isEmpty()) {</span>
+<span class="fc" id="L971">            y.append(indent).append(&quot;referenceSites: []\n&quot;);</span>
+<span class="fc" id="L972">            return;</span>
+        }
+<span class="fc" id="L974">        y.append(indent).append(&quot;referenceSites:\n&quot;);</span>
+<span class="fc bfc" id="L975" title="All 2 branches covered.">        for (ReferenceSite s : sites) {</span>
+<span class="fc" id="L976">            y.append(indent).append(&quot;  - pomPath: &quot;)</span>
+<span class="fc" id="L977">                    .append(relPath(rootAbs, s.pomPath())).append(&quot;\n&quot;);</span>
+<span class="fc" id="L978">            y.append(indent).append(&quot;    kind: &quot;).append(s.kind()).append(&quot;\n&quot;);</span>
+<span class="fc" id="L979">            y.append(indent).append(&quot;    targetGa: &quot;).append(s.targetGa()).append(&quot;\n&quot;);</span>
+<span class="fc" id="L980">            y.append(indent).append(&quot;    textAtSite: &quot;)</span>
+<span class="pc bpc" id="L981" title="1 of 2 branches missed.">                    .append(s.textAtSite() == null</span>
+<span class="nc" id="L982">                            ? &quot;null&quot;</span>
+<span class="fc" id="L983">                            : &quot;\&quot;&quot; + s.textAtSite().replace(&quot;\&quot;&quot;, &quot;\\\&quot;&quot;) + &quot;\&quot;&quot;)</span>
+<span class="fc" id="L984">                    .append(&quot;\n&quot;);</span>
+<span class="fc" id="L985">        }</span>
+<span class="fc" id="L986">    }</span>
+
+    private static String relPath(Path rootAbs, Path p) {
+<span class="fc" id="L989">        Path abs = p.toAbsolutePath().normalize();</span>
+<span class="pc bpc" id="L990" title="1 of 2 branches missed.">        if (abs.startsWith(rootAbs)) {</span>
+<span class="fc" id="L991">            Path rel = rootAbs.relativize(abs);</span>
+<span class="fc" id="L992">            String s = rel.toString();</span>
+<span class="pc bpc" id="L993" title="1 of 2 branches missed.">            return s.isEmpty() ? &quot;.&quot; : s;</span>
+        }
+<span class="nc" id="L995">        return abs.toString();</span>
+    }
+
+    /**
+     * Resolve the catch-up target version for a single upstream.
+     *
+     * &lt;p&gt;If the upstream released earlier in this cycle, returns the
+     * &lt;em&gt;released&lt;/em&gt; version (e.g., release 105 → downstream
+     * references become {@code 105}). Downstream POMs must reference
+     * artifacts that actually exist in the remote repository; the
+     * post-release next-snapshot bump (e.g., {@code 106-SNAPSHOT})
+     * sits on the upstream's main branch but is not yet deployed and
+     * would produce an unresolvable reference.
+     *
+     * &lt;p&gt;Otherwise reads the upstream's current pom.xml version from
+     * disk. If the upstream is neither in this cycle nor checked out,
+     * returns {@code null} — there's no value to align to.
+     */
+    String upstreamTargetVersion(String upstreamName,
+                                  Map&lt;String, String&gt; releasedVersions,
+                                  File root) {
+<span class="fc bfc" id="L1016" title="All 2 branches covered.">        if (releasedVersions.containsKey(upstreamName)) {</span>
+<span class="fc" id="L1017">            return releasedVersions.get(upstreamName);</span>
+        }
+<span class="fc" id="L1019">        File upstreamDir = new File(root, upstreamName);</span>
+<span class="fc bfc" id="L1020" title="All 2 branches covered.">        if (!upstreamDir.isDirectory()</span>
+<span class="pc bpc" id="L1021" title="1 of 2 branches missed.">                || !new File(upstreamDir, &quot;pom.xml&quot;).exists()) {</span>
+<span class="fc" id="L1022">            return null;</span>
+        }
+<span class="fc" id="L1024">        String version = currentVersion(upstreamDir);</span>
+<span class="pc bpc" id="L1025" title="1 of 2 branches missed.">        return &quot;unknown&quot;.equals(version) ? null : version;</span>
+    }
+
+    // ── Helper: write checkpoint YAML ────────────────────────────────
+
+    private void writeCheckpoint(File root, WorkspaceGraph graph, String name)
+            throws MojoException {
+<span class="fc" id="L1032">        Path checkpointsDir = root.toPath().resolve(&quot;checkpoints&quot;);</span>
+        try {
+<span class="fc" id="L1034">            Files.createDirectories(checkpointsDir);</span>
+<span class="fc" id="L1035">            Path file = checkpointsDir.resolve(&quot;checkpoint-&quot; + name + &quot;.yaml&quot;);</span>
+
+            // Gather subproject data for the pure function
+<span class="fc" id="L1038">            String timestamp = ISO_UTC.format(Instant.now());</span>
+<span class="fc" id="L1039">            List&lt;String[]&gt; componentData = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L1040" title="All 2 branches covered.">            for (String subName : graph.topologicalSort()) {</span>
+<span class="fc" id="L1041">                File subDir = new File(root, subName);</span>
+<span class="pc bpc" id="L1042" title="1 of 2 branches missed.">                if (!subDir.isDirectory()) continue;</span>
+<span class="fc" id="L1043">                componentData.add(new String[]{</span>
+<span class="fc" id="L1044">                        subName, gitBranch(subDir), gitShortSha(subDir),</span>
+<span class="fc" id="L1045">                        currentVersion(subDir),</span>
+<span class="pc bpc" id="L1046" title="1 of 2 branches missed.">                        String.valueOf(!gitStatus(subDir).isEmpty())</span>
+                });
+<span class="fc" id="L1048">            }</span>
+
+<span class="fc" id="L1050">            String yaml = buildPreReleaseCheckpointYaml(name, timestamp, componentData);</span>
+<span class="fc" id="L1051">            Files.writeString(file, yaml, StandardCharsets.UTF_8);</span>
+<span class="fc" id="L1052">            getLog().info(&quot;Checkpoint written: &quot; + file);</span>
+<span class="nc" id="L1053">        } catch (IOException e) {</span>
+<span class="nc" id="L1054">            getLog().warn(&quot;Could not write checkpoint: &quot; + e.getMessage());</span>
+<span class="fc" id="L1055">        }</span>
+<span class="fc" id="L1056">    }</span>
+
+    /**
+     * Build pre-release checkpoint YAML content from pre-gathered
+     * subproject data.
+     *
+     * &lt;p&gt;This is a pure function with no git or I/O dependencies,
+     * suitable for direct unit testing.
+     *
+     * @param name          checkpoint name
+     * @param timestamp     ISO-8601 UTC timestamp
+     * @param componentData list of {@code [name, branch, sha, version, modified]}
+     *                      arrays for each present subproject
+     * @return YAML checkpoint content
+     */
+    public static String buildPreReleaseCheckpointYaml(
+            String name, String timestamp, List&lt;String[]&gt; componentData) {
+<span class="fc" id="L1073">        StringBuilder yaml = new StringBuilder();</span>
+<span class="fc" id="L1074">        yaml.append(&quot;# Workspace checkpoint: &quot;).append(name).append(&quot;\n&quot;);</span>
+<span class="fc" id="L1075">        yaml.append(&quot;# Generated: &quot;).append(timestamp).append(&quot;\n&quot;);</span>
+<span class="fc" id="L1076">        yaml.append(&quot;checkpoint: &quot;).append(name).append(&quot;\n&quot;);</span>
+<span class="fc" id="L1077">        yaml.append(&quot;timestamp: &quot;).append(timestamp).append(&quot;\n&quot;);</span>
+<span class="fc" id="L1078">        yaml.append(&quot;subprojects:\n&quot;);</span>
+
+<span class="fc bfc" id="L1080" title="All 2 branches covered.">        for (String[] sub : componentData) {</span>
+<span class="fc" id="L1081">            yaml.append(&quot;  &quot;).append(sub[0]).append(&quot;:\n&quot;);</span>
+<span class="fc" id="L1082">            yaml.append(&quot;    branch: &quot;).append(sub[1]).append(&quot;\n&quot;);</span>
+<span class="fc" id="L1083">            yaml.append(&quot;    sha: &quot;).append(sub[2]).append(&quot;\n&quot;);</span>
+<span class="fc" id="L1084">            yaml.append(&quot;    version: &quot;).append(sub[3]).append(&quot;\n&quot;);</span>
+<span class="fc" id="L1085">            yaml.append(&quot;    modified: &quot;).append(sub[4]).append(&quot;\n&quot;);</span>
+<span class="fc" id="L1086">        }</span>
+
+<span class="fc" id="L1088">        return yaml.toString();</span>
+    }
+
+    // ── Helper: find mvn or mvnw ─────────────────────────────────────
+
+    private String findMvn(File subDir) {
+<span class="fc" id="L1094">        return resolveMvnCommand(subDir);</span>
+    }
+
+    /**
+     * Resolve the Maven executable for a subproject directory.
+     *
+     * &lt;p&gt;Checks for {@code mvnw} (executable) and {@code mvnw.cmd} in
+     * the given directory. Falls back to {@code &quot;mvn&quot;} from the system
+     * PATH if no wrapper is found.
+     *
+     * @param subDir the subproject directory to check
+     * @return absolute path to mvnw/mvnw.cmd, or {@code &quot;mvn&quot;}
+     */
+    public static String resolveMvnCommand(File subDir) {
+<span class="fc" id="L1108">        File mvnw = new File(subDir, &quot;mvnw&quot;);</span>
+<span class="fc bfc" id="L1109" title="All 4 branches covered.">        if (mvnw.exists() &amp;&amp; mvnw.canExecute()) {</span>
+<span class="fc" id="L1110">            return mvnw.getAbsolutePath();</span>
+        }
+<span class="fc" id="L1112">        File mvnwCmd = new File(subDir, &quot;mvnw.cmd&quot;);</span>
+<span class="fc bfc" id="L1113" title="All 2 branches covered.">        if (mvnwCmd.exists()) {</span>
+<span class="fc" id="L1114">            return mvnwCmd.getAbsolutePath();</span>
+        }
+<span class="fc" id="L1116">        return &quot;mvn&quot;;</span>
+    }
+
+    // ── Record for candidate tracking ────────────────────────────────
+
+<span class="fc" id="L1121">    private record ReleaseCandidate(</span>
+            String name,
+            Subproject subproject,
+            File dir,
+            String lastTag,
+            String reason) {}
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

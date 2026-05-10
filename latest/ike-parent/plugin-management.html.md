@@ -8,8 +8,8 @@ canonical_url: https://ike.network/ike-platform/ike-parent/plugin-management.htm
 
 | GroupId | ArtifactId | Version |
 | --- | --- | --- |
-| network.ike.docs | [semantic-linebreak](https://github.com/IKE-Network/ike-docs)[1] | 9 |
-| network.ike.platform | [ike-workspace-maven-plugin](https://ike.network/ike-platform/ike-workspace-maven-plugin/)[2] | 31 |
+| network.ike.docs | [semantic-linebreak](https://github.com/IKE-Network/ike-docs)[1] | 10 |
+| network.ike.platform | [ike-workspace-maven-plugin](https://ike.network/ike-platform/ike-workspace-maven-plugin/)[2] | 32 |
 | network.ike.tooling | [ike-maven-plugin](https://ike.network/ike-tooling/ike-maven-plugin/)[3] | 148 |
 | org.apache.maven.plugins | [maven-artifact-plugin](https://maven.apache.org/plugins/maven-artifact-plugin/)[4] | 3.5.2 |
 | org.apache.maven.plugins | [maven-assembly-plugin](https://maven.apache.org/plugins/maven-assembly-plugin/)[5] | 3.7.1 |

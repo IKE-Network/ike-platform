@@ -23,7 +23,7 @@ No transitive dependencies are required for this project.
 
 ## [Dependency Tree](#dependency-tree)
 
-- network.ike.platform:ike-bom:pom:31 ** 
+- network.ike.platform:ike-bom:pom:32 ** 
   
   | IKE Bill of Materials |
   | --- |

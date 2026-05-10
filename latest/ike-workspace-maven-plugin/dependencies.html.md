@@ -119,7 +119,7 @@ The following is a list of test dependencies for this project. These dependencie
 
 ## [Dependency Tree](#dependency-tree)
 
-- network.ike.platform:ike-workspace-maven-plugin:maven-plugin:31 ** 
+- network.ike.platform:ike-workspace-maven-plugin:maven-plugin:32 ** 
   
   | IKE Workspace Maven Plugin |
   | --- |

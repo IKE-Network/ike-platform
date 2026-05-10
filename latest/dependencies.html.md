@@ -23,7 +23,7 @@ No transitive dependencies are required for this project.
 
 ## [Dependency Tree](#dependency-tree)
 
-- network.ike.platform:ike-platform:pom:31 ** 
+- network.ike.platform:ike-platform:pom:32 ** 
   
   | IKE Platform |
   | --- |

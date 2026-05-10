@@ -1,0 +1,284 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>PomRewriter.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">PomRewriter.java</span></div><h1>PomRewriter.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import org.openrewrite.xml.XPathMatcher;
+import org.openrewrite.xml.XmlParser;
+import org.openrewrite.xml.XmlVisitor;
+import org.openrewrite.xml.tree.Xml;
+
+/**
+ * AST-aware POM manipulation using OpenRewrite's XML LST.
+ *
+ * &lt;p&gt;Replaces regex-based POM editing with lossless semantic tree
+ * (LST) transformations that preserve formatting, comments, and
+ * whitespace. Each method parses the POM, applies a targeted change,
+ * and serializes back to text.
+ *
+ * &lt;p&gt;Usage:
+ * &lt;pre&gt;{@code
+ * String updated = PomRewriter.updateDependencyVersion(
+ *     pomContent, &quot;network.ike&quot;, &quot;ike-bom&quot;, &quot;84&quot;);
+ * }&lt;/pre&gt;
+ *
+ * @see PomModel for read-only POM access via Maven 4 model API
+ */
+final class PomRewriter {
+
+    private PomRewriter() {}
+
+<span class="fc" id="L28">    private static final XmlParser PARSER = new XmlParser();</span>
+
+    /**
+     * Update the version of a specific dependency identified by
+     * {@code groupId:artifactId} anywhere in the POM (both
+     * {@code &lt;dependencies&gt;} and {@code &lt;dependencyManagement&gt;}).
+     *
+     * @param pomContent the raw POM text
+     * @param groupId    dependency groupId to match
+     * @param artifactId dependency artifactId to match
+     * @param newVersion the version to set
+     * @return updated POM text, or unchanged if no match
+     */
+    static String updateDependencyVersion(String pomContent,
+                                           String groupId,
+                                           String artifactId,
+                                           String newVersion) {
+<span class="fc" id="L45">        Xml.Document doc = parse(pomContent);</span>
+<span class="pc bpc" id="L46" title="1 of 2 branches missed.">        if (doc == null) return pomContent;</span>
+
+<span class="fc" id="L48">        Xml.Document updated = (Xml.Document) new XmlVisitor&lt;Integer&gt;() {</span>
+            @Override
+            public Xml.Tag visitTag(Xml.Tag tag, Integer ctx) {
+<span class="fc" id="L51">                Xml.Tag t = (Xml.Tag) super.visitTag(tag, ctx);</span>
+<span class="fc bfc" id="L52" title="All 2 branches covered.">                if (!&quot;dependency&quot;.equals(t.getName())) return t;</span>
+
+<span class="fc" id="L54">                String gid = t.getChildValue(&quot;groupId&quot;).orElse(null);</span>
+<span class="fc" id="L55">                String aid = t.getChildValue(&quot;artifactId&quot;).orElse(null);</span>
+<span class="pc bpc" id="L56" title="2 of 4 branches missed.">                if (groupId.equals(gid) &amp;&amp; artifactId.equals(aid)) {</span>
+<span class="fc" id="L57">                    return t.withChildValue(&quot;version&quot;, newVersion);</span>
+                }
+<span class="nc" id="L59">                return t;</span>
+            }
+<span class="fc" id="L61">        }.visitNonNull(doc, 0);</span>
+
+<span class="fc" id="L63">        return print(updated);</span>
+    }
+
+    /**
+     * Update the parent version for a matching
+     * {@code groupId:artifactId} in the POM's {@code &lt;parent&gt;} block.
+     *
+     * &lt;p&gt;Matching requires &lt;strong&gt;both&lt;/strong&gt; groupId and
+     * artifactId to match. This prevents cross-coordinate mutation
+     * when the same artifactId lives under multiple groupIds
+     * (e.g. {@code network.ike.platform:ike-parent} vs.
+     * {@code network.ike.pipeline:ike-parent}) — see issue #241.
+     *
+     * @param pomContent       the raw POM text
+     * @param parentGroupId    the parent groupId to match (required)
+     * @param parentArtifactId the parent artifactId to match (required)
+     * @param newVersion       the new version to set
+     * @return updated POM text, or unchanged if no match
+     */
+    static String updateParentVersion(String pomContent,
+                                       String parentGroupId,
+                                       String parentArtifactId,
+                                       String newVersion) {
+<span class="fc" id="L86">        Xml.Document doc = parse(pomContent);</span>
+<span class="pc bpc" id="L87" title="1 of 2 branches missed.">        if (doc == null) return pomContent;</span>
+
+<span class="fc" id="L89">        Xml.Document updated = (Xml.Document) new XmlVisitor&lt;Integer&gt;() {</span>
+            @Override
+            public Xml.Tag visitTag(Xml.Tag tag, Integer ctx) {
+<span class="fc" id="L92">                Xml.Tag t = (Xml.Tag) super.visitTag(tag, ctx);</span>
+<span class="fc bfc" id="L93" title="All 2 branches covered.">                if (!&quot;parent&quot;.equals(t.getName())) return t;</span>
+
+<span class="fc" id="L95">                String gid = t.getChildValue(&quot;groupId&quot;).orElse(null);</span>
+<span class="fc" id="L96">                String aid = t.getChildValue(&quot;artifactId&quot;).orElse(null);</span>
+<span class="fc bfc" id="L97" title="All 2 branches covered.">                if (parentGroupId.equals(gid)</span>
+<span class="fc bfc" id="L98" title="All 2 branches covered.">                        &amp;&amp; parentArtifactId.equals(aid)) {</span>
+<span class="fc" id="L99">                    return t.withChildValue(&quot;version&quot;, newVersion);</span>
+                }
+<span class="fc" id="L101">                return t;</span>
+            }
+<span class="fc" id="L103">        }.visitNonNull(doc, 0);</span>
+
+<span class="fc" id="L105">        return print(updated);</span>
+    }
+
+    /**
+     * Update a version property value in the POM's {@code &lt;properties&gt;}
+     * block.
+     *
+     * @param pomContent   the raw POM text
+     * @param propertyName the property name (e.g., &quot;tinkar-core.version&quot;)
+     * @param newValue     the new property value
+     * @return updated POM text, or unchanged if no match
+     */
+    static String updateProperty(String pomContent,
+                                  String propertyName,
+                                  String newValue) {
+<span class="fc" id="L120">        Xml.Document doc = parse(pomContent);</span>
+<span class="pc bpc" id="L121" title="1 of 2 branches missed.">        if (doc == null) return pomContent;</span>
+
+<span class="fc" id="L123">        XPathMatcher propertiesMatcher = new XPathMatcher(</span>
+                &quot;/project/properties/&quot; + propertyName);
+<span class="fc" id="L125">        Xml.Document updated = (Xml.Document) new XmlVisitor&lt;Integer&gt;() {</span>
+            @Override
+            public Xml.Tag visitTag(Xml.Tag tag, Integer ctx) {
+<span class="fc" id="L128">                Xml.Tag t = (Xml.Tag) super.visitTag(tag, ctx);</span>
+<span class="fc bfc" id="L129" title="All 2 branches covered.">                if (propertiesMatcher.matches(getCursor())) {</span>
+<span class="fc" id="L130">                    return t.withValue(newValue);</span>
+                }
+<span class="fc" id="L132">                return t;</span>
+            }
+<span class="fc" id="L134">        }.visitNonNull(doc, 0);</span>
+
+<span class="fc" id="L136">        return print(updated);</span>
+    }
+
+    /**
+     * Update the version of a specific plugin identified by
+     * {@code groupId:artifactId} anywhere in the POM (both
+     * {@code &lt;plugins&gt;} and {@code &lt;pluginManagement&gt;}).
+     *
+     * @param pomContent the raw POM text
+     * @param groupId    plugin groupId to match
+     * @param artifactId plugin artifactId to match
+     * @param newVersion the version to set
+     * @return updated POM text, or unchanged if no match
+     */
+    static String updatePluginVersion(String pomContent,
+                                       String groupId,
+                                       String artifactId,
+                                       String newVersion) {
+<span class="nc" id="L154">        Xml.Document doc = parse(pomContent);</span>
+<span class="nc bnc" id="L155" title="All 2 branches missed.">        if (doc == null) return pomContent;</span>
+
+<span class="nc" id="L157">        Xml.Document updated = (Xml.Document) new XmlVisitor&lt;Integer&gt;() {</span>
+            @Override
+            public Xml.Tag visitTag(Xml.Tag tag, Integer ctx) {
+<span class="nc" id="L160">                Xml.Tag t = (Xml.Tag) super.visitTag(tag, ctx);</span>
+<span class="nc bnc" id="L161" title="All 2 branches missed.">                if (!&quot;plugin&quot;.equals(t.getName())) return t;</span>
+
+<span class="nc" id="L163">                String gid = t.getChildValue(&quot;groupId&quot;).orElse(null);</span>
+<span class="nc" id="L164">                String aid = t.getChildValue(&quot;artifactId&quot;).orElse(null);</span>
+<span class="nc bnc" id="L165" title="All 4 branches missed.">                if (groupId.equals(gid) &amp;&amp; artifactId.equals(aid)) {</span>
+<span class="nc" id="L166">                    return t.withChildValue(&quot;version&quot;, newVersion);</span>
+                }
+<span class="nc" id="L168">                return t;</span>
+            }
+<span class="nc" id="L170">        }.visitNonNull(doc, 0);</span>
+
+<span class="nc" id="L172">        return print(updated);</span>
+    }
+
+    /**
+     * Update the workspace root POM's own coordinates — its top-level
+     * {@code &lt;groupId&gt;}, {@code &lt;artifactId&gt;}, and {@code &lt;version&gt;}
+     * elements (the ones not nested under {@code &lt;parent&gt;} or any
+     * {@code &lt;dependency&gt;} / {@code &lt;plugin&gt;}). Used by
+     * {@link WsAdoptRootMojo} to migrate the legacy
+     * {@code local.aggregate:&lt;name&gt;:1.0.0-SNAPSHOT} placeholder to a
+     * real GAV (ike-issues#184).
+     *
+     * &lt;p&gt;Pass {@code null} for any field to leave it unchanged; pass a
+     * non-null replacement to rewrite that single element. Top-level
+     * matching uses the XPath {@code /project/&lt;element&gt;} so nested
+     * artifact references are not affected.
+     *
+     * @param pomContent    the raw POM text
+     * @param newGroupId    the project's new groupId, or null to skip
+     * @param newArtifactId the project's new artifactId, or null to skip
+     * @param newVersion    the project's new version, or null to skip
+     * @return updated POM text, or unchanged when no element matches
+     *         and no rewrite was attempted
+     */
+    static String updateProjectCoordinates(String pomContent,
+                                           String newGroupId,
+                                           String newArtifactId,
+                                           String newVersion) {
+<span class="fc" id="L200">        Xml.Document doc = parse(pomContent);</span>
+<span class="pc bpc" id="L201" title="1 of 2 branches missed.">        if (doc == null) return pomContent;</span>
+
+<span class="fc" id="L203">        XPathMatcher gidMatcher = new XPathMatcher(&quot;/project/groupId&quot;);</span>
+<span class="fc" id="L204">        XPathMatcher aidMatcher = new XPathMatcher(&quot;/project/artifactId&quot;);</span>
+<span class="fc" id="L205">        XPathMatcher verMatcher = new XPathMatcher(&quot;/project/version&quot;);</span>
+
+<span class="fc" id="L207">        Xml.Document updated = (Xml.Document) new XmlVisitor&lt;Integer&gt;() {</span>
+            @Override
+            public Xml.Tag visitTag(Xml.Tag tag, Integer ctx) {
+<span class="fc" id="L210">                Xml.Tag t = (Xml.Tag) super.visitTag(tag, ctx);</span>
+<span class="pc bpc" id="L211" title="1 of 4 branches missed.">                if (newGroupId != null &amp;&amp; gidMatcher.matches(getCursor())) {</span>
+<span class="fc" id="L212">                    return t.withValue(newGroupId);</span>
+                }
+<span class="pc bpc" id="L214" title="1 of 4 branches missed.">                if (newArtifactId != null &amp;&amp; aidMatcher.matches(getCursor())) {</span>
+<span class="fc" id="L215">                    return t.withValue(newArtifactId);</span>
+                }
+<span class="pc bpc" id="L217" title="1 of 4 branches missed.">                if (newVersion != null &amp;&amp; verMatcher.matches(getCursor())) {</span>
+<span class="fc" id="L218">                    return t.withValue(newVersion);</span>
+                }
+<span class="fc" id="L220">                return t;</span>
+            }
+<span class="fc" id="L222">        }.visitNonNull(doc, 0);</span>
+
+<span class="fc" id="L224">        return print(updated);</span>
+    }
+
+    /**
+     * Remove the {@code &lt;version&gt;} child from a dependency matched by
+     * {@code groupId:artifactId}. Used to eliminate intra-reactor
+     * version pins where the reactor resolves the version automatically.
+     *
+     * @param pomContent the raw POM text
+     * @param groupId    dependency groupId to match
+     * @param artifactId dependency artifactId to match
+     * @return updated POM text with version tag removed, or unchanged if no match
+     */
+    static String removeDependencyVersion(String pomContent,
+                                           String groupId,
+                                           String artifactId) {
+<span class="fc" id="L240">        Xml.Document doc = parse(pomContent);</span>
+<span class="pc bpc" id="L241" title="1 of 2 branches missed.">        if (doc == null) return pomContent;</span>
+
+<span class="fc" id="L243">        Xml.Document updated = (Xml.Document) new XmlVisitor&lt;Integer&gt;() {</span>
+            @Override
+            public Xml.Tag visitTag(Xml.Tag tag, Integer ctx) {
+<span class="fc" id="L246">                Xml.Tag t = (Xml.Tag) super.visitTag(tag, ctx);</span>
+<span class="fc bfc" id="L247" title="All 2 branches covered.">                if (!&quot;dependency&quot;.equals(t.getName())) return t;</span>
+
+<span class="fc" id="L249">                String gid = t.getChildValue(&quot;groupId&quot;).orElse(null);</span>
+<span class="fc" id="L250">                String aid = t.getChildValue(&quot;artifactId&quot;).orElse(null);</span>
+<span class="pc bpc" id="L251" title="2 of 4 branches missed.">                if (groupId.equals(gid) &amp;&amp; artifactId.equals(aid)</span>
+<span class="pc bpc" id="L252" title="1 of 2 branches missed.">                        &amp;&amp; t.getChild(&quot;version&quot;).isPresent()) {</span>
+                    // Filter out the &lt;version&gt; element from content
+<span class="fc" id="L254">                    var filtered = t.getContent().stream()</span>
+<span class="fc" id="L255">                            .filter(c -&gt; !(c instanceof Xml.Tag child</span>
+<span class="pc bpc" id="L256" title="1 of 6 branches missed.">                                    &amp;&amp; &quot;version&quot;.equals(child.getName())))</span>
+<span class="fc" id="L257">                            .toList();</span>
+<span class="fc" id="L258">                    return t.withContent(filtered);</span>
+                }
+<span class="nc" id="L260">                return t;</span>
+            }
+<span class="fc" id="L262">        }.visitNonNull(doc, 0);</span>
+
+<span class="fc" id="L264">        return print(updated);</span>
+    }
+
+    /**
+     * Parse POM content into an OpenRewrite XML document.
+     */
+    private static Xml.Document parse(String pomContent) {
+<span class="fc" id="L271">        return PARSER.parse(pomContent)</span>
+<span class="fc" id="L272">                .findFirst()</span>
+<span class="fc" id="L273">                .map(t -&gt; (Xml.Document) t)</span>
+<span class="fc" id="L274">                .orElse(null);</span>
+    }
+
+    /**
+     * Serialize an XML document back to a string.
+     */
+    private static String print(Xml.Document doc) {
+<span class="fc" id="L281">        return doc.printAll();</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

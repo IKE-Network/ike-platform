@@ -199,9 +199,10 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
             }
 
             // Detect parent POM — match against workspace subprojects
+            PomParentSupport.ParentInfo parentInfo = null;
             try {
-                PomParentSupport.ParentInfo parentInfo =
-                        PomParentSupport.readParent(subprojectDir.resolve("pom.xml"));
+                parentInfo = PomParentSupport.readParent(
+                        subprojectDir.resolve("pom.xml"));
                 if (parentInfo != null) {
                     Manifest existing = ManifestReader.read(manifestPath);
                     for (Map.Entry<String, Subproject> candidate :
@@ -215,6 +216,21 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
                 }
             } catch (Exception e) {
                 // Non-fatal — parent detection is best-effort
+            }
+
+            // #324 parent coherence: if the new subproject's
+            // <parent> GA matches the workspace aggregator's own
+            // <parent> GA, enforce two rules:
+            //   1. Version coherence — same version as workspace
+            //   2. Cycle prevention — empty <relativePath/>
+            // Warn (not fail) at add time so an operator who hits
+            // either violation gets the heads-up before running
+            // mvn install. The matching ws:verify check is
+            // authoritative — failure mode there is what blocks
+            // a release.
+            if (parentInfo != null) {
+                checkParentCoherenceAtAdd(wsDir, subprojectDir,
+                        subproject, parentInfo);
             }
 
             // Derive dependencies by matching POM groupIds against
@@ -1338,6 +1354,71 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
             return ReleaseSupport.readPomArtifactId(wsDir.resolve("pom.xml").toFile());
         } catch (MojoException e) {
             return "Workspace";
+        }
+    }
+
+    /**
+     * Apply ike-issues#324 parent-coherence rules to a freshly-added
+     * subproject. Warning-only at add time — the matching check in
+     * {@code ws:verify} is the authoritative gate.
+     *
+     * @param wsDir          workspace root directory
+     * @param subprojectDir  subproject's checked-out directory
+     * @param subprojectName subproject name (workspace.yaml key)
+     * @param parentInfo     subproject's declared parent
+     */
+    private void checkParentCoherenceAtAdd(Path wsDir,
+                                            Path subprojectDir,
+                                            String subprojectName,
+                                            PomParentSupport.ParentInfo parentInfo) {
+        PomParentSupport.ParentInfo wsParent;
+        try {
+            wsParent = PomParentSupport.readParent(wsDir.resolve("pom.xml"));
+        } catch (Exception e) {
+            // Workspace pom unreadable or no parent — nothing to enforce.
+            return;
+        }
+        if (wsParent == null
+                || wsParent.groupId() == null
+                || wsParent.artifactId() == null) {
+            return;
+        }
+
+        // Decision matrix gate: same GA as workspace's parent?
+        if (!java.util.Objects.equals(wsParent.groupId(), parentInfo.groupId())
+                || !java.util.Objects.equals(wsParent.artifactId(),
+                        parentInfo.artifactId())) {
+            return;
+        }
+
+        String coords = parentInfo.groupId() + ":" + parentInfo.artifactId();
+
+        // Rule 2: version coherence
+        if (!java.util.Objects.equals(wsParent.version(), parentInfo.version())) {
+            getLog().warn("  WARN: " + subprojectName + " parent "
+                    + coords + ":" + parentInfo.version()
+                    + " != workspace " + coords + ":" + wsParent.version()
+                    + " (#324 coherence violation — fix before "
+                    + "ws:release-publish or expect ws:verify to flag it)");
+            return;
+        }
+
+        // Rule 1: cycle prevention
+        boolean hasEmptyRelativePath;
+        try {
+            hasEmptyRelativePath = PomParentSupport.hasEmptyRelativePath(
+                    subprojectDir.resolve("pom.xml"));
+        } catch (Exception e) {
+            return;
+        }
+        if (!hasEmptyRelativePath) {
+            getLog().warn("  WARN: " + subprojectName + " parent "
+                    + coords + ":" + parentInfo.version()
+                    + " matches workspace parent but is missing empty "
+                    + "<relativePath/> (#324 cycle prevention — Maven 4 "
+                    + "will fail with \"parents form a cycle\" once the "
+                    + "subproject participates in the reactor; add "
+                    + "<relativePath/> inside the <parent> block)");
         }
     }
 

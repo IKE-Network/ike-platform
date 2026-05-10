@@ -78,6 +78,7 @@ public class VerifyWorkspaceMojo extends AbstractWorkspaceMojo {
         if (isWorkspaceMode()) {
             verifyWorkspaceManifest();
             verifyParentAlignment();
+            verifyParentCoherence();
             verifyBomCascade();
             if (checkConvergence) {
                 verifyDependencyConvergence();
@@ -215,6 +216,143 @@ public class VerifyWorkspaceMojo extends AbstractWorkspaceMojo {
                     + " subproject(s) misaligned");
             verifyRows.add(new String[]{"Parent alignment",
                     misaligned + "/" + checked + " misaligned"});
+        }
+    }
+
+    // ── Parent coherence — same GA as workspace's parent ─────────
+    //
+    // ike-issues#324: when a subproject's <parent> declares the SAME
+    // groupId+artifactId as the workspace aggregator's own <parent>
+    // (typically network.ike.platform:ike-parent for IKE-Network
+    // workspaces), two policy rules apply:
+    //
+    //   1. Cycle prevention. The subproject must include an empty
+    //      <relativePath/> in its <parent> block. Without it,
+    //      Maven 4's model builder fails with "The parents form a
+    //      cycle" — the subproject's parent lookup tries the
+    //      filesystem first, finds an ike-parent at a different
+    //      version, can't reconcile, and bails. Established
+    //      precedent in komet workspaces; documented in MAVEN.md
+    //      and IKE-WORKSPACE.md.
+    //
+    //   2. Version coherence. The subproject's <parent><version>
+    //      must equal the workspace aggregator's. Version drift
+    //      means subprojects inherit different pluginManagement +
+    //      dependencyManagement matrices — a silent loss of
+    //      consistency across the workspace.
+
+    private void verifyParentCoherence() throws MojoException {
+        java.nio.file.Path workspacePom = workspaceRoot().toPath().resolve("pom.xml");
+        if (!java.nio.file.Files.exists(workspacePom)) {
+            // Bare-VCS or unusual layout — nothing to enforce.
+            return;
+        }
+
+        PomParentSupport.ParentInfo workspaceParent;
+        try {
+            workspaceParent = PomParentSupport.readParent(workspacePom);
+        } catch (java.io.IOException e) {
+            getLog().debug("  Could not read workspace parent: " + e.getMessage());
+            return;
+        }
+        if (workspaceParent == null
+                || workspaceParent.groupId() == null
+                || workspaceParent.artifactId() == null) {
+            // Workspace doesn't inherit a parent — no coherence to
+            // enforce on subprojects.
+            return;
+        }
+
+        WorkspaceGraph graph = loadGraph();
+        File root = workspaceRoot();
+        int cycleRisk = 0;
+        int versionDrift = 0;
+        int coherent = 0;
+
+        getLog().info("");
+
+        for (Map.Entry<String, Subproject> entry :
+                graph.manifest().subprojects().entrySet()) {
+            String name = entry.getKey();
+            java.nio.file.Path pomFile = root.toPath().resolve(name).resolve("pom.xml");
+            if (!java.nio.file.Files.exists(pomFile)) continue;
+
+            PomParentSupport.ParentInfo subParent;
+            try {
+                subParent = PomParentSupport.readParent(pomFile);
+            } catch (java.io.IOException e) {
+                getLog().debug("  Could not read " + name + " parent: "
+                        + e.getMessage());
+                continue;
+            }
+            if (subParent == null) continue;
+
+            // Decision matrix gate: subproject's parent GA must match
+            // the workspace aggregator's parent GA. Otherwise this
+            // subproject inherits a different parent and is out of
+            // scope for these rules.
+            if (!java.util.Objects.equals(workspaceParent.groupId(),
+                            subParent.groupId())
+                    || !java.util.Objects.equals(workspaceParent.artifactId(),
+                            subParent.artifactId())) {
+                continue;
+            }
+
+            String coordinates = subParent.groupId() + ":"
+                    + subParent.artifactId();
+
+            // Rule 2: version coherence
+            if (!java.util.Objects.equals(workspaceParent.version(),
+                    subParent.version())) {
+                getLog().warn("  WARN: " + name + " parent "
+                        + coordinates + ":" + subParent.version()
+                        + " != workspace " + coordinates + ":"
+                        + workspaceParent.version()
+                        + " (#324 coherence violation)");
+                versionDrift++;
+                continue;
+            }
+
+            // Rule 1: cycle prevention — empty <relativePath/> required
+            boolean hasEmptyRelativePath;
+            try {
+                hasEmptyRelativePath =
+                        PomParentSupport.hasEmptyRelativePath(pomFile);
+            } catch (java.io.IOException e) {
+                getLog().debug("  Could not check relativePath for "
+                        + name + ": " + e.getMessage());
+                continue;
+            }
+
+            if (!hasEmptyRelativePath) {
+                getLog().warn("  WARN: " + name + " parent "
+                        + coordinates + ":" + subParent.version()
+                        + " matches workspace parent but is missing "
+                        + "empty <relativePath/> (#324 cycle prevention; "
+                        + "add <relativePath/> inside the <parent> block)");
+                cycleRisk++;
+                continue;
+            }
+
+            coherent++;
+        }
+
+        int problems = cycleRisk + versionDrift;
+        int total = problems + coherent;
+        if (total == 0) {
+            getLog().info("  Parent coherence: no subprojects share the "
+                    + "workspace's parent GA");
+            verifyRows.add(new String[]{"Parent coherence", "n/a"});
+        } else if (problems == 0) {
+            getLog().info(Ansi.green("  Parent coherence: " + coherent
+                    + " subproject(s) coherent  ✓"));
+            verifyRows.add(new String[]{"Parent coherence",
+                    coherent + " coherent ✓"});
+        } else {
+            String summary = versionDrift + " version drift, "
+                    + cycleRisk + " missing <relativePath/>";
+            getLog().warn("  Parent coherence: " + summary);
+            verifyRows.add(new String[]{"Parent coherence", summary});
         }
     }
 

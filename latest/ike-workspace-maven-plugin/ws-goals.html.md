@@ -399,9 +399,13 @@ mvn ws:align-publish                            # apply
 
 ### [#ws-set-parent--cascade-aggregator-parent-version](#ws-set-parent--cascade-aggregator-parent-version)ws:set-parent — cascade aggregator parent version
 
+For routine "bump to the latest tested-together foundation" work, prefer `ike:scaffold-draft` (drift report, available now) and `ike:scaffold-publish` (drift apply, post-`#348`). The scaffold manifest’s `foundation:` section pins the parent version + standard properties (`ike-tooling.version`, `ike-docs.version`, `ike-platform.version`) baked at ike-tooling release time — a single source of truth that bumps everything together.
+
+Use `ws:set-parent-publish` when you need to bump to a **specific non-current** version (reproducibility testing against an older `ike-parent`, partial-cycle rollback, etc.) — scaffold always points at the latest baked-in pin and can’t be overridden.
+
 Set the aggregator parent version (typically `ike-parent`) across the root POM and all subproject POMs in one operation. Cascades the parent version from the root POM to every cloned subproject, including submodule POMs that reference the same parent.
 
-Does **not** modify inter-subproject dependency versions — use `ws:align-publish` for that.
+Does **not** modify inter-subproject dependency versions — use `ws:align-publish` for that. Does **not** update properties (`ike-tooling.version`, `ike-docs.version`, `ike-platform.version`) — those need a separate `ws:versions-upgrade-publish` or manual edit. Scaffold-publish (post-#348) handles parent + properties in one operation.
 
 ```
 mvn ws:set-parent-draft -DnewVersion=21

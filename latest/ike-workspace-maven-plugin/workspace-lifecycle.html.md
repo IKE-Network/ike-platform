@@ -169,13 +169,21 @@ mvn ws:align-draft             # preview
 mvn ws:align-publish           # apply
 ```
 
-To cascade a parent POM bump (e.g., `ike-parent` 19 → 20) across the workspace:
+To cascade a parent POM bump (e.g., `ike-parent` 19 → 20) across the workspace, the recommended approach depends on what you’re bumping to:
 
 ```
+# Recommended: bump to the latest tested-together foundation
+# (parent + standard properties together). Reports drift now;
+# applies after #348 lands.
+mvn ike:scaffold-draft
+mvn ike:scaffold-publish              # (post-#348)
+
+# Override case: bump to a specific non-current version
+# (reproducibility test, partial-cycle rollback, etc.).
 mvn ws:set-parent-publish -DnewVersion=20
 ```
 
-`ws:set-parent` only touches the parent reference; it does **not** align inter-subproject dep versions. Pair with `ws:align-publish` afterward to converge both axes.
+`ws:set-parent` only touches the parent reference; it does **not** align inter-subproject dep versions or update standard properties. Pair with `ws:align-publish` afterward to converge both axes, or prefer `ike:scaffold-publish` once #348 ships — that handles parent + properties in one operation.
 
 For the rare case where `workspace.yaml’s recorded branch and the on-disk git checkout have drifted apart (e.g., a manual rebase moved some subprojects to a branch the YAML doesn’t know about), use the recovery goal:
 

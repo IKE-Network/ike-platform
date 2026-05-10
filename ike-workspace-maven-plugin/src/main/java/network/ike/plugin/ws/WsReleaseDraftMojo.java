@@ -622,19 +622,25 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
     }
 
     /**
-     * Extract the first {@code <version>} value from POM XML content.
+     * Extract the project's own {@code <version>} value from POM XML
+     * content.
      *
-     * <p>This is a simple regex extraction — finds the first
-     * {@code <version>...</version>} in the content. Good enough for
-     * workspace POMs where the project version appears early.
+     * <p>Strips any {@code <parent>...</parent>} block before scanning
+     * so we don't accidentally return the inherited parent's version
+     * for projects that declare a parent (like the workspace root pom
+     * inheriting {@code ike-parent}). Then takes the first remaining
+     * {@code <version>}, which is the project's own.
      *
      * @param pomContent raw POM XML as a string
      * @return the version string, or {@code "unknown"} if not found
      */
     public static String extractVersionFromPom(String pomContent) {
         if (pomContent == null || pomContent.isBlank()) return "unknown";
+        // Strip <parent>...</parent> so its <version> doesn't match.
+        String stripped = pomContent.replaceAll(
+                "(?s)<parent>.*?</parent>", "");
         var matcher = java.util.regex.Pattern.compile(
-                "<version>([^<]+)</version>").matcher(pomContent);
+                "<version>([^<]+)</version>").matcher(stripped);
         if (matcher.find()) return matcher.group(1);
         return "unknown";
     }

@@ -37,10 +37,14 @@ class WsReleaseSupportTest {
     }
 
     @Test
-    void extractVersionFromPom_withParentBlock_returnsParentVersion() {
-        // extractVersionFromPom finds the FIRST <version> — which is
-        // inside <parent>. This is the documented behavior for
-        // workspace-level quick reads.
+    void extractVersionFromPom_withParentBlock_returnsProjectVersion() {
+        // The <parent> block is stripped before scanning so the
+        // inherited parent's version doesn't shadow the project's
+        // own. Critical for the workspace pom (#326) which inherits
+        // ike-parent — without this, currentVersion(root) returned
+        // ike-parent's version, which surfaced as
+        // "Released workspace root 34" when the workspace was
+        // actually released as v1.
         String pom = """
                 <project>
                     <parent>
@@ -53,7 +57,7 @@ class WsReleaseSupportTest {
                 </project>
                 """;
         assertThat(WsReleaseDraftMojo.extractVersionFromPom(pom))
-                .isEqualTo("20-SNAPSHOT");
+                .isEqualTo("5.0.0");
     }
 
     @Test

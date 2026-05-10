@@ -4,65 +4,35 @@ date_modified: 2026-05-09
 canonical_url: https://ike.network/ike-platform/ike-parent/dependencies.html
 ---
 
-# Project Dependencies
+# Dependencies (SBOM)
 
-## [provided](#provided)
+Full transitive dependency graph for `ike-parent` 34, generated from [bom.json](bom.json)[1] (CycloneDX 1.6) at build time. Same SBOM source as the SPDX-grouped [licenses.html](licenses.html)[2] and the curated [built-with.html](built-with.html)[3] — three views of the same data.
 
-The following is a list of provided dependencies for this project. These dependencies are required to compile the application, but should be provided by default when using the library:
+## [#summary](#summary)Summary
 
-| GroupId | ArtifactId | Version | Classifier | Type | Licenses |
-| --- | --- | --- | --- | --- | --- |
-| network.ike.tooling | [ike-build-standards](https://ike.network/ike-tooling/ike-build-standards/)[1] | 149 | built-with | zip | [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt)[2] |
-| network.ike.tooling | [ike-build-standards](https://ike.network/ike-tooling/ike-build-standards/)[1] | 149 | claude | zip | [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt)[2] |
-| network.ike.tooling | [ike-build-standards](https://ike.network/ike-tooling/ike-build-standards/)[1] | 149 | config | zip | [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt)[2] |
-| network.ike.tooling | [ike-build-standards](https://ike.network/ike-tooling/ike-build-standards/)[1] | 149 | site-theme | zip | [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt)[2] |
+| Total components | 4 |
+| --- | --- |
+| Distinct license expressions | 1 |
 
-# Project Transitive Dependencies
+## [#components](#components)Components
 
-No transitive dependencies are required for this project.
+Sorted by group, artifact, version. Click [bom.json](bom.json)[1] for the raw machine-readable form (Dependency-Track, Trivy, Snyk, GitHub dep-graph all ingest it directly).
 
-# Project Dependency Graph
+| Group | Artifact | Version | License | Type |
+| --- | --- | --- | --- | --- |
+| `network.ike.tooling` | `ike-build-standards` | `150` | `Apache-2.0` | library |
+| `network.ike.tooling` | `ike-build-standards` | `150` | `Apache-2.0` | library |
+| `network.ike.tooling` | `ike-build-standards` | `150` | `Apache-2.0` | library |
+| `network.ike.tooling` | `ike-build-standards` | `150` | `Apache-2.0` | library |
 
-## [Dependency Tree](#dependency-tree)
+## [#download](#download)Download
 
-- network.ike.platform:ike-parent:pom:33 ** 
-  
-  | IKE Parent |
-  | --- |
-  | **Description: **Standard parent POM for IKE Network projects. Inheriting this POM provides build conventions (Java 25 compiler, test harness, GPG signing, AsciiDoc documentation pipeline) from the ike-platform reactor root and centralized dependency version management declared inline. Declares ike-doc-maven-plugin (from network.ike.docs) with extensions=true to provide the ike-doc custom packaging type to external doc projects. **URL: **[https://ike.network/ike-platform/ike-parent/](https://ike.network/ike-platform/ike-parent/)[3] **Project Licenses: **[Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt)[2] |
-  
-    - network.ike.tooling:ike-build-standards:zip:claude:149 (provided) ** 
-      
-      | IKE Build Standards |
-      | --- |
-      | **Description: **Versioned Claude instruction files for IKE projects. Modular standards (Maven, Java, IKE-specific) distributed as a classified Maven artifact. **URL: **[https://ike.network/ike-tooling/ike-build-standards/](https://ike.network/ike-tooling/ike-build-standards/)[1] **Project Licenses: **[Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt)[2] |
-    - network.ike.tooling:ike-build-standards:zip:config:149 (provided) ** 
-      
-      | IKE Build Standards |
-      | --- |
-      | **Description: **Versioned Claude instruction files for IKE projects. Modular standards (Maven, Java, IKE-specific) distributed as a classified Maven artifact. **URL: **[https://ike.network/ike-tooling/ike-build-standards/](https://ike.network/ike-tooling/ike-build-standards/)[1] **Project Licenses: **[Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt)[2] |
-    - network.ike.tooling:ike-build-standards:zip:site-theme:149 (provided) ** 
-      
-      | IKE Build Standards |
-      | --- |
-      | **Description: **Versioned Claude instruction files for IKE projects. Modular standards (Maven, Java, IKE-specific) distributed as a classified Maven artifact. **URL: **[https://ike.network/ike-tooling/ike-build-standards/](https://ike.network/ike-tooling/ike-build-standards/)[1] **Project Licenses: **[Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt)[2] |
-    - network.ike.tooling:ike-build-standards:zip:built-with:149 (provided) ** 
-      
-      | IKE Build Standards |
-      | --- |
-      | **Description: **Versioned Claude instruction files for IKE projects. Modular standards (Maven, Java, IKE-specific) distributed as a classified Maven artifact. **URL: **[https://ike.network/ike-tooling/ike-build-standards/](https://ike.network/ike-tooling/ike-build-standards/)[1] **Project Licenses: **[Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt)[2] |
+- [Software Bill of Materials (CycloneDX, JSON)](bom.json)[1] — raw machine-readable form. Includes purls, hashes, and dependency-graph edges that this page summarizes.
+- [bom.xml](bom.xml)[4] — same content in XML.
+- As a Maven artifact: pull `ike-parent:​34` with `<classifier>cyclonedx</classifier><type>json</type>` from Nexus / Maven Central.
 
-# Licenses
+## [#see-also](#see-also)See also
 
-**Apache License, Version 2.0: **IKE Build Standards, IKE Parent
-
-# Dependency File Details
-
-| Total | Size | Entries | Classes | Packages | Java Version | Debug Information |
-| --- | --- | --- | --- | --- | --- | --- |
-| ike-build-standards-149-built-with.zip | 3.5 kB | - | - | - | - | - |
-| ike-build-standards-149-claude.zip | 81 kB | - | - | - | - | - |
-| ike-build-standards-149-config.zip | 1.2 kB | - | - | - | - | - |
-| ike-build-standards-149-site-theme.zip | 3.4 kB | - | - | - | - | - |
-| 4 | 89.1 kB | - | - | - | - | - |
-| provided: 4 | provided: 89.1 kB | - | - | - | - | - |
+- [Licenses (SPDX)](licenses.html)[2] — same components grouped by license expression.
+- [Built With](built-with.html)[3] — curated narrative + per-license summary.
+- [ike-issues#341](https://github.com/IKE-Network/ike-issues/issues/341)[5] — the issue that introduced this page.

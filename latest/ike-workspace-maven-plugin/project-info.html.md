@@ -14,8 +14,7 @@ This document provides an overview of the various documents and links that are p
 | --- | --- |
 | [About](index.html)[2] | Cross-platform Maven plugin for multi-repository workspace management: initialization, verification, feature branching, release orchestration, and checkpoint creation. |
 | [Summary](summary.html)[3] | This document lists other related information of this project |
-| [Dependencies](dependencies.html)[4] | This document lists the project's dependencies and provides information on each dependency. |
-| [Maven Coordinates](dependency-info.html)[5] | This document describes how to include this project as a dependency using various dependency management tools. |
-| [Plugins](plugins.html)[6] | This document lists the build plugins and the report plugins used by this project. |
-| [Plugin Management](plugin-management.html)[7] | This document lists the plugins that are defined through pluginManagement. |
-| [Distribution Management](distribution-management.html)[8] | This document provides informations on the distribution management of this project. |
+| [Maven Coordinates](dependency-info.html)[4] | This document describes how to include this project as a dependency using various dependency management tools. |
+| [Plugins](plugins.html)[5] | This document lists the build plugins and the report plugins used by this project. |
+| [Plugin Management](plugin-management.html)[6] | This document lists the plugins that are defined through pluginManagement. |
+| [Distribution Management](distribution-management.html)[7] | This document provides informations on the distribution management of this project. |

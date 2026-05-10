@@ -342,6 +342,46 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
             }
         }
 
+        // ── 6b. Release the workspace root last (#326, #328) ─────────
+        // After all subprojects release, the workspace.yaml has been
+        // updated (per-subproject version: pin) by the post-release
+        // bumps inside ike:release-publish, AND the workspace pom may
+        // have been touched earlier in the cycle (parent bump from
+        // ws:set-parent-publish, .mvn/maven.config from ws:ide-sync).
+        // The workspace itself is therefore source-changed and should
+        // tag + deploy + refresh its site so the published cycle has
+        // a single anchor: "the workspace was at this commit when
+        // these subprojects released v_n".
+        //
+        // Skipped when nothing released (released.isEmpty()) since
+        // there's no cycle to anchor.
+        if (!released.isEmpty() && hasUnreleasedWorkspaceChanges(root)) {
+            getLog().info("");
+            getLog().info("────────────────────────────────────────────────");
+            getLog().info("  Releasing: workspace root");
+            getLog().info("────────────────────────────────────────────────");
+            String workspaceCurrent = currentVersion(root);
+            String workspaceVersion = workspaceCurrent.replace("-SNAPSHOT", "");
+            try {
+                String mvn = findMvn(root);
+                ReleaseSupport.exec(root, getLog(),
+                        mvn, "ike:release-publish",
+                        "-DpushRelease=" + push,
+                        "-B");
+                released.add("(workspace root)");
+                releasedVersions.put("(workspace root)", workspaceVersion);
+                getLog().info(Ansi.green("  ✓ ") + "Released workspace root "
+                        + workspaceVersion);
+            } catch (Exception e) {
+                getLog().error(Ansi.red("  ✗ ") + "Failed to release "
+                        + "workspace root: " + e.getMessage());
+                getLog().error("");
+                getLog().error("Subprojects released so far: " + released);
+                throw new MojoException(
+                        "Workspace root release failed", e);
+            }
+        }
+
         // ── 7. Summary ───────────────────────────────────────────────
         getLog().info("");
         getLog().info("════════════════════════════════════════════════════");
@@ -544,6 +584,29 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
         } catch (Exception e) {
             return -1;
         }
+    }
+
+    // ── Helper: workspace root has unreleased changes? ───────────────
+    // ike-issues#328: the workspace itself participates in the
+    // release set when source-changed. Returns true when the
+    // workspace has never been tagged or has commits since its last
+    // release tag.
+
+    private boolean hasUnreleasedWorkspaceChanges(File root) {
+        // Treat the workspace as a git repo only if .git is present.
+        // Some workspace setups (e.g., a Syncthing-only checkout
+        // without a per-machine git init) won't have one and there's
+        // nothing to release.
+        if (!new File(root, ".git").exists()) {
+            return false;
+        }
+        String latestTag = latestReleaseTag(root);
+        if (latestTag == null) {
+            // Never released — the first cycle that touches the
+            // workspace anchors it.
+            return true;
+        }
+        return commitsSinceTag(root, latestTag) > 0;
     }
 
     // ── Helper: read current POM version ─────────────────────────────

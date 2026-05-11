@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>WsScaffoldDraftMojo.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">WsScaffoldDraftMojo.java</span></div><h1>WsScaffoldDraftMojo.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.plugin.ReleaseSupport;
+import network.ike.workspace.Subproject;
+import network.ike.workspace.WorkspaceGraph;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
+
+import java.io.File;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Workspace-walking variant of {@code ike:scaffold-draft} (#350).
+ *
+ * &lt;p&gt;Iterates the workspace's subprojects (and the workspace root)
+ * in declaration order, invoking {@code ike:scaffold-draft} in each
+ * via a subprocess {@code mvn} call. Each per-subproject invocation
+ * is independent — output is streamed straight through, drift
+ * reports surface inline.
+ *
+ * &lt;p&gt;Mirrors the {@code ws:release-publish} → per-subproject
+ * {@code ike:release-publish} cascade pattern. Read-only: no POM
+ * mutation, no lockfile writes; use {@link WsScaffoldPublishMojo}
+ * to apply.
+ *
+ * &lt;p&gt;Usage:
+ * &lt;pre&gt;{@code
+ * mvn ws:scaffold-draft        # report drift across every subproject
+ * mvn ws:scaffold-publish      # apply (foundation drift opt-in)
+ * }&lt;/pre&gt;
+ *
+ * @see WsScaffoldPublishMojo
+ */
+@Mojo(name = &quot;scaffold-draft&quot;, projectRequired = false, aggregator = true)
+public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
+
+    /**
+     * When {@code true}, the subprocess invocation is
+     * {@code ike:scaffold-publish}; when {@code false} (default for
+     * the draft variant), it is {@code ike:scaffold-draft}. Set by
+     * {@link WsScaffoldPublishMojo} for the apply path.
+     */
+    @Parameter(property = &quot;publish&quot;, defaultValue = &quot;false&quot;)
+    boolean publish;
+
+    /**
+     * Forwarded to per-subproject {@code ike:scaffold-publish}: opt
+     * in to apply the foundation drift identified by #345's checker.
+     * Only consulted when {@link #publish} is {@code true}.
+     */
+    @Parameter(property = &quot;ike.scaffold.apply-foundation&quot;,
+               defaultValue = &quot;false&quot;)
+    boolean applyFoundation;
+
+    /** Creates this goal instance. */
+<span class="nc" id="L58">    public WsScaffoldDraftMojo() {}</span>
+
+    @Override
+    public void execute() throws MojoException {
+<span class="nc" id="L62">        WorkspaceGraph graph = loadGraph();</span>
+<span class="nc" id="L63">        File root = workspaceRoot();</span>
+<span class="nc bnc" id="L64" title="All 2 branches missed.">        String goal = publish ? &quot;ike:scaffold-publish&quot; : &quot;ike:scaffold-draft&quot;;</span>
+
+<span class="nc" id="L66">        getLog().info(&quot;&quot;);</span>
+<span class="nc bnc" id="L67" title="All 2 branches missed.">        getLog().info(publish ? &quot;ws:scaffold-publish&quot; : &quot;ws:scaffold-draft&quot;);</span>
+<span class="nc" id="L68">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+
+        // Walk each subproject in topological order, then the
+        // workspace root. Topological order isn't strictly needed
+        // for scaffold (each project's drift is independent), but
+        // keeps output predictable.
+<span class="nc" id="L74">        List&lt;String&gt; targets = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L75" title="All 2 branches missed.">        for (String name : graph.topologicalSort()) {</span>
+<span class="nc" id="L76">            File subDir = new File(root, name);</span>
+<span class="nc bnc" id="L77" title="All 2 branches missed.">            if (!new File(subDir, &quot;pom.xml&quot;).exists()) {</span>
+<span class="nc" id="L78">                getLog().debug(&quot;  &quot; + name + &quot;: not cloned — skipping&quot;);</span>
+<span class="nc" id="L79">                continue;</span>
+            }
+<span class="nc" id="L81">            targets.add(name);</span>
+<span class="nc" id="L82">        }</span>
+        // Workspace root last (mirrors ws:release-publish ordering).
+<span class="nc" id="L84">        boolean walkRoot = new File(root, &quot;pom.xml&quot;).exists();</span>
+
+<span class="nc" id="L86">        int processed = 0;</span>
+<span class="nc" id="L87">        int failed = 0;</span>
+<span class="nc bnc" id="L88" title="All 2 branches missed.">        for (String name : targets) {</span>
+<span class="nc" id="L89">            File subDir = new File(root, name);</span>
+<span class="nc" id="L90">            getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L91">            getLog().info(&quot;── &quot; + name + &quot; &quot;.repeat(Math.max(1, 60 - name.length())) + &quot;──&quot;);</span>
+            try {
+<span class="nc" id="L93">                runScaffoldInSubproject(subDir, goal);</span>
+<span class="nc" id="L94">                processed++;</span>
+<span class="nc" id="L95">            } catch (MojoException e) {</span>
+<span class="nc" id="L96">                getLog().error(&quot;  ✗ &quot; + name + &quot;: &quot; + e.getMessage());</span>
+<span class="nc" id="L97">                failed++;</span>
+<span class="nc" id="L98">            }</span>
+<span class="nc" id="L99">        }</span>
+<span class="nc bnc" id="L100" title="All 2 branches missed.">        if (walkRoot) {</span>
+<span class="nc" id="L101">            getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L102">            getLog().info(&quot;── (workspace root)&quot; + &quot; &quot;.repeat(43) + &quot;──&quot;);</span>
+            try {
+<span class="nc" id="L104">                runScaffoldInSubproject(root, goal);</span>
+<span class="nc" id="L105">                processed++;</span>
+<span class="nc" id="L106">            } catch (MojoException e) {</span>
+<span class="nc" id="L107">                getLog().error(&quot;  ✗ workspace root: &quot; + e.getMessage());</span>
+<span class="nc" id="L108">                failed++;</span>
+<span class="nc" id="L109">            }</span>
+        }
+
+<span class="nc" id="L112">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L113">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+<span class="nc" id="L114">        getLog().info(&quot;  Walked &quot; + processed + &quot; project(s)&quot;</span>
+<span class="nc bnc" id="L115" title="All 2 branches missed.">                + (failed &gt; 0 ? &quot;; &quot; + failed + &quot; failed&quot; : &quot;&quot;));</span>
+<span class="nc bnc" id="L116" title="All 2 branches missed.">        if (failed &gt; 0) {</span>
+<span class="nc" id="L117">            throw new MojoException(</span>
+<span class="nc bnc" id="L118" title="All 2 branches missed.">                    &quot;ws:&quot; + (publish ? &quot;scaffold-publish&quot; : &quot;scaffold-draft&quot;)</span>
+                    + &quot; saw &quot; + failed + &quot; per-subproject failure(s); &quot;
+                    + &quot;see logs above.&quot;);
+        }
+<span class="nc" id="L122">    }</span>
+
+    /**
+     * Run {@code mvn &lt;goal&gt;} in the given subproject directory. When
+     * {@code goal} is {@code ike:scaffold-publish} and the
+     * {@link #applyFoundation} flag is set, forwards
+     * {@code -Dike.scaffold.apply-foundation=true}.
+     *
+     * @param subDir the subproject directory
+     * @param goal   the ike goal to invoke (draft or publish)
+     */
+    private void runScaffoldInSubproject(File subDir, String goal)
+            throws MojoException {
+<span class="nc" id="L135">        String mvn = WsReleaseDraftMojo.resolveMvnCommand(subDir);</span>
+<span class="nc" id="L136">        List&lt;String&gt; args = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L137">        args.add(mvn);</span>
+<span class="nc" id="L138">        args.add(goal);</span>
+<span class="nc" id="L139">        args.add(&quot;-B&quot;);</span>
+<span class="nc bnc" id="L140" title="All 4 branches missed.">        if (publish &amp;&amp; applyFoundation) {</span>
+<span class="nc" id="L141">            args.add(&quot;-Dike.scaffold.apply-foundation=true&quot;);</span>
+        }
+<span class="nc" id="L143">        ReleaseSupport.exec(subDir, getLog(), args.toArray(new String[0]));</span>
+<span class="nc" id="L144">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

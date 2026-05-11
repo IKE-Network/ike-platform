@@ -1,0 +1,547 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>WsSwitchDraftMojo.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">WsSwitchDraftMojo.java</span></div><h1>WsSwitchDraftMojo.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.workspace.ManifestWriter;
+import network.ike.workspace.WorkspaceGraph;
+import network.ike.plugin.ws.preflight.Preflight;
+import network.ike.plugin.ws.preflight.PreflightCondition;
+import network.ike.plugin.ws.preflight.PreflightContext;
+import network.ike.plugin.ws.preflight.PreflightResult;
+import network.ike.plugin.ws.vcs.VcsOperations;
+import network.ike.plugin.ws.vcs.VcsState;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeMap;
+import java.util.TreeSet;
+
+/**
+ * Switch all workspace subprojects to a different branch with optional
+ * auto-stash.
+ *
+ * &lt;p&gt;Discovers all local feature branches across subprojects and presents
+ * an interactive menu. The selected branch is checked out in every
+ * subproject that has it locally; subprojects without the branch are
+ * skipped with a warning.
+ *
+ * &lt;p&gt;By default, uncommitted work is automatically stashed to a pushable
+ * custom ref ({@code refs/ws-stash/&lt;user-slug&gt;/&lt;branch&gt;}) on origin
+ * before switching, and any pre-existing stash on the target branch is
+ * fetched and applied after switching — work follows you across
+ * branches and machines (see #153). The stash ref is per-user
+ * (keyed by {@code git config user.email}) so multiple developers on
+ * the same repository have isolated stashes.
+ *
+ * &lt;p&gt;Pass {@code -DnoStash=true} to restore the pre-feature behavior:
+ * uncommitted changes fail the goal with the working-tree-clean
+ * preflight.
+ *
+ * &lt;p&gt;After switching, updates workspace.yaml branch fields and commits
+ * the change.
+ *
+ * &lt;pre&gt;{@code
+ * mvn ws:switch                        # interactive menu + auto-stash
+ * mvn ws:switch -Dbranch=feature/foo   # non-interactive
+ * mvn ws:switch -Dbranch=main          # switch all to main
+ * mvn ws:switch -DnoStash=true         # fail on uncommitted work
+ * }&lt;/pre&gt;
+ *
+ * @see FeatureStartDraftMojo for creating feature branches
+ */
+@Mojo(name = &quot;switch-draft&quot;, projectRequired = false, aggregator = true)
+public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
+
+    /** Full ref prefix for auto-stash refs (see #153). */
+    static final String STASH_REF_PREFIX = &quot;refs/ws-stash/&quot;;
+
+    /** Remote name for auto-stash push/fetch/delete. */
+    static final String STASH_REMOTE = &quot;origin&quot;;
+
+    /** Creates this goal instance. */
+<span class="fc" id="L70">    public WsSwitchDraftMojo() {}</span>
+
+    /**
+     * Target branch to switch to. If omitted, presents an interactive
+     * menu of available branches.
+     */
+    @Parameter(property = &quot;branch&quot;)
+    String branch;
+
+    /** Execute the switch. Default is draft (preview only). */
+    @Parameter(property = &quot;publish&quot;, defaultValue = &quot;false&quot;)
+    boolean publish;
+
+    /**
+     * Opt out of auto-stash. When {@code true}, uncommitted changes
+     * fail the goal (pre-#153 behavior); when {@code false} (default),
+     * uncommitted work is stashed to {@code refs/ws-stash/...} on
+     * origin before switching and re-applied on return.
+     */
+    @Parameter(property = &quot;noStash&quot;, defaultValue = &quot;false&quot;)
+    boolean noStash;
+
+    @Override
+    public void execute() throws MojoException {
+<span class="pc bpc" id="L94" title="1 of 2 branches missed.">        if (!isWorkspaceMode()) {</span>
+<span class="nc" id="L95">            throw new MojoException(</span>
+                    &quot;ws:switch requires a workspace (workspace.yaml). &quot;
+                    + &quot;Use 'git checkout &lt;branch&gt;' for single-repo switching.&quot;);
+        }
+
+<span class="fc bfc" id="L100" title="All 2 branches covered.">        boolean draft = !publish;</span>
+<span class="fc" id="L101">        WorkspaceGraph graph = loadGraph();</span>
+<span class="fc" id="L102">        File root = workspaceRoot();</span>
+
+<span class="fc" id="L104">        Set&lt;String&gt; targets = graph.manifest().subprojects().keySet();</span>
+
+<span class="fc" id="L106">        List&lt;String&gt; sorted = graph.topologicalSort(new LinkedHashSet&lt;&gt;(targets));</span>
+
+        // ── Discover branches ────────────────────────────────────
+        // Map: branch name → set of subprojects that have it locally
+<span class="fc" id="L110">        Map&lt;String, Set&lt;String&gt;&gt; branchSubprojects = new TreeMap&lt;&gt;();</span>
+<span class="fc" id="L111">        branchSubprojects.put(&quot;main&quot;, new TreeSet&lt;&gt;());</span>
+
+        String currentBranch;
+<span class="fc" id="L114">        Map&lt;String, Integer&gt; branchCounts = new TreeMap&lt;&gt;();</span>
+
+<span class="fc bfc" id="L116" title="All 2 branches covered.">        for (String name : sorted) {</span>
+<span class="fc" id="L117">            File dir = new File(root, name);</span>
+<span class="pc bpc" id="L118" title="1 of 2 branches missed.">            if (!new File(dir, &quot;.git&quot;).exists()) continue;</span>
+
+<span class="fc" id="L120">            String compBranch = gitBranch(dir);</span>
+<span class="fc" id="L121">            branchCounts.merge(compBranch, 1, Integer::sum);</span>
+
+            // Add main for every cloned subproject
+<span class="fc" id="L124">            branchSubprojects.get(&quot;main&quot;).add(name);</span>
+
+            // Discover all local feature branches
+<span class="fc" id="L127">            List&lt;String&gt; localFeatures = VcsOperations.localBranches(dir, &quot;feature/&quot;);</span>
+<span class="fc bfc" id="L128" title="All 2 branches covered.">            for (String fb : localFeatures) {</span>
+<span class="fc" id="L129">                branchSubprojects.computeIfAbsent(fb, _ -&gt; new TreeSet&lt;&gt;()).add(name);</span>
+<span class="fc" id="L130">            }</span>
+<span class="fc" id="L131">        }</span>
+
+        // Determine current branch (majority vote)
+<span class="fc" id="L134">        currentBranch = branchCounts.entrySet().stream()</span>
+<span class="fc" id="L135">                .max(Map.Entry.comparingByValue())</span>
+<span class="fc" id="L136">                .map(Map.Entry::getKey)</span>
+<span class="fc" id="L137">                .orElse(&quot;main&quot;);</span>
+
+        // ── Resolve target branch ────────────────────────────────
+<span class="pc bpc" id="L140" title="1 of 4 branches missed.">        if (branch == null || branch.isBlank()) {</span>
+<span class="nc" id="L141">            branch = promptForBranch(branchSubprojects, currentBranch);</span>
+        }
+
+<span class="fc bfc" id="L144" title="All 2 branches covered.">        if (branch.equals(currentBranch)) {</span>
+<span class="fc" id="L145">            getLog().info(&quot;Already on &quot; + currentBranch + &quot; — nothing to do.&quot;);</span>
+<span class="fc" id="L146">            return;</span>
+        }
+
+        // Validate the target branch exists somewhere (or is main)
+<span class="fc bfc" id="L150" title="All 4 branches covered.">        if (!branch.equals(&quot;main&quot;) &amp;&amp; !branchSubprojects.containsKey(branch)) {</span>
+<span class="fc" id="L151">            throw new MojoException(</span>
+                    &quot;Branch '&quot; + branch + &quot;' does not exist in any subproject. &quot;
+<span class="fc" id="L153">                    + &quot;Available: &quot; + branchSubprojects.keySet());</span>
+        }
+
+<span class="fc" id="L156">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L157">        getLog().info(header(&quot;Switch&quot;));</span>
+<span class="fc" id="L158">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+<span class="fc" id="L159">        getLog().info(&quot;  From:  &quot; + currentBranch);</span>
+<span class="fc" id="L160">        getLog().info(&quot;  To:    &quot; + branch);</span>
+<span class="fc bfc" id="L161" title="All 2 branches covered.">        if (draft) getLog().info(&quot;  Mode:  DRAFT&quot;);</span>
+<span class="fc bfc" id="L162" title="All 2 branches covered.">        if (noStash) getLog().info(&quot;  Stash: disabled (-DnoStash=true)&quot;);</span>
+<span class="fc" id="L163">        getLog().info(&quot;&quot;);</span>
+
+        // ── Preflight ─────────────────────────────────────────────
+<span class="fc bfc" id="L166" title="All 2 branches covered.">        if (noStash) {</span>
+            // Old behavior: hard-fail on uncommitted changes (#154).
+<span class="pc" id="L168">            PreflightResult switchPreflight = Preflight.of(</span>
+<span class="fc" id="L169">                    List.of(PreflightCondition.WORKING_TREE_CLEAN),</span>
+<span class="fc" id="L170">                    PreflightContext.of(root, graph, sorted));</span>
+<span class="nc bnc" id="L171" title="All 2 branches missed.">            if (draft) {</span>
+<span class="nc" id="L172">                switchPreflight.warnIfFailed(getLog(), WsGoal.SWITCH_PUBLISH);</span>
+            } else {
+<span class="nc" id="L174">                switchPreflight.requirePassed(WsGoal.SWITCH_PUBLISH);</span>
+            }
+<span class="nc" id="L176">        } else {</span>
+            // Auto-stash mode: run the #153 read-only preflight.
+<span class="fc" id="L178">            runAutoStashPreflight(root, sorted, currentBranch, branch, draft);</span>
+        }
+
+        // ── Per-subproject switch (with auto-stash) ──────────────
+<span class="pc bpc" id="L182" title="1 of 2 branches missed.">        String slug = noStash ? null : VcsOperations.userSlug(</span>
+<span class="fc" id="L183">                VcsOperations.userEmail(root));</span>
+<span class="fc" id="L184">        int switched = 0;</span>
+<span class="fc" id="L185">        int skipped = 0;</span>
+<span class="fc" id="L186">        int stashed = 0;</span>
+<span class="fc" id="L187">        int applied = 0;</span>
+
+<span class="fc bfc" id="L189" title="All 2 branches covered.">        for (String name : sorted) {</span>
+<span class="fc" id="L190">            File dir = new File(root, name);</span>
+<span class="pc bpc" id="L191" title="1 of 2 branches missed.">            if (!new File(dir, &quot;.git&quot;).exists()) {</span>
+<span class="nc" id="L192">                skipped++;</span>
+<span class="nc" id="L193">                continue;</span>
+            }
+
+<span class="fc" id="L196">            String compBranch = gitBranch(dir);</span>
+<span class="pc bpc" id="L197" title="1 of 2 branches missed.">            if (compBranch.equals(branch)) {</span>
+<span class="nc" id="L198">                getLog().info(&quot;  &quot; + Ansi.green(&quot;✓ &quot;) + name + &quot; — already on &quot; + branch);</span>
+<span class="nc" id="L199">                switched++;</span>
+<span class="nc" id="L200">                continue;</span>
+            }
+
+            // Target-branch existence check: main is always valid; for
+            // feature branches, the branch must exist locally.
+<span class="fc bfc" id="L205" title="All 2 branches covered.">            if (!branch.equals(&quot;main&quot;)) {</span>
+<span class="fc" id="L206">                List&lt;String&gt; localBranches = VcsOperations.localBranches(dir, &quot;&quot;);</span>
+<span class="pc bpc" id="L207" title="1 of 2 branches missed.">                if (!localBranches.contains(branch)) {</span>
+<span class="nc" id="L208">                    getLog().info(&quot;  &quot; + Ansi.yellow(&quot;⚠ &quot;) + name</span>
+                            + &quot; — branch &quot; + branch + &quot; does not exist locally, skipping&quot;);
+<span class="nc" id="L210">                    skipped++;</span>
+<span class="nc" id="L211">                    continue;</span>
+                }
+            }
+
+<span class="fc bfc" id="L215" title="All 2 branches covered.">            if (draft) {</span>
+<span class="fc" id="L216">                getLog().info(&quot;  [draft] &quot; + name + &quot; — would switch &quot;</span>
+                        + compBranch + &quot; → &quot; + branch);
+<span class="fc" id="L218">                switched++;</span>
+<span class="fc" id="L219">                continue;</span>
+            }
+
+            // ── Leave flow: stash work on source branch ──────────
+<span class="pc bpc" id="L223" title="2 of 4 branches missed.">            if (!noStash &amp;&amp; !VcsOperations.isClean(dir)) {</span>
+<span class="nc" id="L224">                stashLeave(dir, slug, compBranch);</span>
+<span class="nc" id="L225">                stashed++;</span>
+            }
+
+            // ── Checkout target ──────────────────────────────────
+<span class="fc" id="L229">            getLog().info(&quot;  &quot; + Ansi.cyan(&quot;→ &quot;) + name + &quot;: &quot; + compBranch + &quot; → &quot; + branch);</span>
+<span class="fc" id="L230">            VcsOperations.checkout(dir, getLog(), branch);</span>
+<span class="fc" id="L231">            switched++;</span>
+
+            // ── Arrive flow: apply stash on target branch if any ─
+<span class="pc bpc" id="L234" title="1 of 2 branches missed.">            if (!noStash) {</span>
+<span class="pc bpc" id="L235" title="1 of 2 branches missed.">                if (stashArrive(dir, slug, branch)) {</span>
+<span class="nc" id="L236">                    applied++;</span>
+                }
+            }
+<span class="fc" id="L239">        }</span>
+
+        // ── Update workspace.yaml ────────────────────────────────
+<span class="pc bpc" id="L242" title="1 of 4 branches missed.">        if (!draft &amp;&amp; switched &gt; 0) {</span>
+<span class="fc" id="L243">            updateWorkspaceYaml(sorted, branch);</span>
+<span class="fc" id="L244">            switchWorkspaceRepo(branch);</span>
+        }
+
+<span class="fc" id="L247">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L248">        var summaryParts = new StringBuilder();</span>
+<span class="fc" id="L249">        summaryParts.append(&quot;Switched: &quot;).append(switched)</span>
+<span class="fc" id="L250">                .append(&quot; | Skipped: &quot;).append(skipped);</span>
+<span class="pc bpc" id="L251" title="1 of 2 branches missed.">        if (stashed &gt; 0) summaryParts.append(&quot; | Stashed: &quot;).append(stashed);</span>
+<span class="pc bpc" id="L252" title="1 of 2 branches missed.">        if (applied &gt; 0) summaryParts.append(&quot; | Applied: &quot;).append(applied);</span>
+<span class="fc" id="L253">        getLog().info(&quot;  &quot; + summaryParts);</span>
+<span class="fc" id="L254">        getLog().info(&quot;&quot;);</span>
+
+        // Write report
+<span class="fc" id="L257">        var sb = new StringBuilder();</span>
+<span class="fc" id="L258">        sb.append(&quot;**From:** `&quot;).append(currentBranch)</span>
+<span class="fc" id="L259">          .append(&quot;` **To:** `&quot;).append(branch).append(&quot;`\n\n&quot;);</span>
+<span class="fc" id="L260">        sb.append(&quot;**&quot;).append(switched).append(&quot;** switched, **&quot;)</span>
+<span class="fc" id="L261">          .append(skipped).append(&quot;** skipped&quot;);</span>
+<span class="pc bpc" id="L262" title="1 of 2 branches missed.">        if (stashed &gt; 0) sb.append(&quot;, **&quot;).append(stashed).append(&quot;** stashed&quot;);</span>
+<span class="pc bpc" id="L263" title="1 of 2 branches missed.">        if (applied &gt; 0) sb.append(&quot;, **&quot;).append(applied).append(&quot;** applied&quot;);</span>
+<span class="fc" id="L264">        sb.append(&quot;.\n&quot;);</span>
+<span class="fc bfc" id="L265" title="All 2 branches covered.">        writeReport(publish ? WsGoal.SWITCH_PUBLISH : WsGoal.SWITCH_DRAFT,</span>
+<span class="fc" id="L266">                sb.toString());</span>
+<span class="fc" id="L267">    }</span>
+
+    /**
+     * Build the auto-stash ref path for a given user slug and branch.
+     * Branches with {@code /} in their name (e.g. {@code feature/A})
+     * become multi-segment ref paths, which git supports.
+     *
+     * @param slug   user slug from {@link VcsOperations#userSlug(String)}
+     * @param branch the branch name
+     * @return full ref path, e.g.
+     *         {@code &quot;refs/ws-stash/kec--knowledge-design/feature/A&quot;}
+     */
+    static String stashRef(String slug, String branch) {
+<span class="fc" id="L280">        return STASH_REF_PREFIX + slug + &quot;/&quot; + branch;</span>
+    }
+
+    /**
+     * Execute the leave flow on a subproject with uncommitted work:
+     * stash (including untracked), move stash to custom ref, drop local
+     * stash entry, push ref to origin. A collision on the source ref is
+     * detected at preflight; hitting it here means state changed between
+     * preflight and execute (racy), so fail loudly.
+     *
+     * @param dir          the subproject directory
+     * @param slug         user slug
+     * @param sourceBranch the branch we're leaving
+     * @throws MojoException if any step fails
+     */
+    private void stashLeave(File dir, String slug, String sourceBranch)
+            throws MojoException {
+<span class="nc" id="L297">        String ref = stashRef(slug, sourceBranch);</span>
+<span class="nc" id="L298">        String message = &quot;ws-auto/&quot; + sourceBranch;</span>
+<span class="nc" id="L299">        VcsOperations.stashPushUntracked(dir, getLog(), message);</span>
+<span class="nc" id="L300">        VcsOperations.updateRef(dir, getLog(), ref, &quot;refs/stash&quot;);</span>
+<span class="nc" id="L301">        VcsOperations.stashDrop(dir, getLog());</span>
+<span class="nc" id="L302">        VcsOperations.pushRef(dir, getLog(), STASH_REMOTE, ref);</span>
+<span class="nc" id="L303">        getLog().info(&quot;    &quot; + Ansi.yellow(&quot;↟ &quot;) + &quot;stashed → &quot; + ref);</span>
+<span class="nc" id="L304">    }</span>
+
+    /**
+     * Execute the arrive flow on a subproject that's just checked out
+     * the target branch: probe for a remote stash ref for this
+     * user/branch; if present, fetch it, apply it, and delete the ref
+     * locally and remotely.
+     *
+     * @param dir          the subproject directory
+     * @param slug         user slug
+     * @param targetBranch the branch we just switched to
+     * @return {@code true} if a stash was applied, {@code false} if no
+     *         stash was present
+     * @throws MojoException if the apply or cleanup fails
+     */
+    private boolean stashArrive(File dir, String slug, String targetBranch)
+            throws MojoException {
+<span class="fc" id="L321">        String ref = stashRef(slug, targetBranch);</span>
+        boolean present;
+        try {
+<span class="nc" id="L324">            present = VcsOperations.remoteRefExists(dir, STASH_REMOTE, ref);</span>
+<span class="fc" id="L325">        } catch (MojoException e) {</span>
+<span class="fc" id="L326">            getLog().warn(&quot;    &quot; + Ansi.yellow(&quot;⚠ &quot;) + &quot;could not probe &quot;</span>
+<span class="fc" id="L327">                    + STASH_REMOTE + &quot; for &quot; + ref + &quot; — &quot; + e.getMessage());</span>
+<span class="fc" id="L328">            return false;</span>
+<span class="nc" id="L329">        }</span>
+<span class="nc bnc" id="L330" title="All 2 branches missed.">        if (!present) return false;</span>
+
+<span class="nc" id="L332">        VcsOperations.fetchRef(dir, getLog(), STASH_REMOTE, ref);</span>
+<span class="nc" id="L333">        VcsOperations.stashApply(dir, getLog(), ref);</span>
+<span class="nc" id="L334">        VcsOperations.deleteLocalRef(dir, getLog(), ref);</span>
+<span class="nc" id="L335">        VcsOperations.deleteRemoteRef(dir, getLog(), STASH_REMOTE, ref);</span>
+<span class="nc" id="L336">        getLog().info(&quot;    &quot; + Ansi.green(&quot;↡ &quot;) + &quot;stash applied from &quot; + ref);</span>
+<span class="nc" id="L337">        return true;</span>
+    }
+
+    /**
+     * Read-only preflight for the auto-stash switch flow. Verifies:
+     * user.email is configured, the workspace root is reachable at
+     * origin, source-branch stash collisions are absent, and per-
+     * subproject target-branch stash presence is reported (informational).
+     *
+     * &lt;p&gt;On any hard failure (missing user.email, source-stash
+     * collision), draft mode throws — matching the #154 contract that
+     * draft exits non-zero when publish would fail.
+     *
+     * @param root          workspace root directory
+     * @param sorted        subprojects in topological order
+     * @param sourceBranch  the branch we're leaving
+     * @param targetBranch  the branch we're arriving at
+     * @param draft         whether this is a draft (report) or publish run
+     * @throws MojoException on preflight failure
+     */
+    private void runAutoStashPreflight(File root, List&lt;String&gt; sorted,
+                                       String sourceBranch, String targetBranch,
+                                       boolean draft) throws MojoException {
+        // 1) user.email configured (workspace root is the reference point)
+        String email;
+        try {
+<span class="fc" id="L363">            email = VcsOperations.userEmail(root);</span>
+<span class="nc" id="L364">        } catch (MojoException e) {</span>
+<span class="nc" id="L365">            throw new MojoException(</span>
+                    &quot;ws:switch requires git user.email. Set it with &quot;
+                            + &quot;`git config --global user.email &lt;your-email&gt;`.&quot;);
+<span class="fc" id="L368">        }</span>
+<span class="fc" id="L369">        String slug = VcsOperations.userSlug(email);</span>
+
+        // 2) Per-subproject checks: source-stash collision + target-stash probe
+<span class="fc" id="L372">        List&lt;String&gt; collisions = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L373">        List&lt;String&gt; targetStashes = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L374">        List&lt;String&gt; unreachable = new ArrayList&lt;&gt;();</span>
+
+<span class="fc bfc" id="L376" title="All 2 branches covered.">        for (String name : sorted) {</span>
+<span class="fc" id="L377">            File dir = new File(root, name);</span>
+<span class="pc bpc" id="L378" title="1 of 2 branches missed.">            if (!new File(dir, &quot;.git&quot;).exists()) continue;</span>
+
+<span class="pc bpc" id="L380" title="1 of 2 branches missed.">            boolean hasWip = !VcsOperations.isClean(dir);</span>
+<span class="pc bpc" id="L381" title="1 of 2 branches missed.">            if (hasWip) {</span>
+<span class="nc" id="L382">                String sourceRef = stashRef(slug, sourceBranch);</span>
+                try {
+<span class="nc bnc" id="L384" title="All 2 branches missed.">                    if (VcsOperations.remoteRefExists(dir, STASH_REMOTE, sourceRef)) {</span>
+<span class="nc" id="L385">                        collisions.add(name + &quot; (&quot; + sourceRef + &quot;)&quot;);</span>
+                    }
+<span class="nc" id="L387">                } catch (MojoException e) {</span>
+<span class="nc" id="L388">                    unreachable.add(name);</span>
+<span class="nc" id="L389">                }</span>
+            }
+
+<span class="fc" id="L392">            String targetRef = stashRef(slug, targetBranch);</span>
+            try {
+<span class="nc bnc" id="L394" title="All 2 branches missed.">                if (VcsOperations.remoteRefExists(dir, STASH_REMOTE, targetRef)) {</span>
+<span class="nc" id="L395">                    targetStashes.add(name);</span>
+                }
+<span class="fc" id="L397">            } catch (MojoException e) {</span>
+<span class="pc bpc" id="L398" title="1 of 2 branches missed.">                if (!unreachable.contains(name)) unreachable.add(name);</span>
+<span class="nc" id="L399">            }</span>
+<span class="fc" id="L400">        }</span>
+
+        // 3) Report findings
+<span class="pc bpc" id="L403" title="1 of 2 branches missed.">        if (!targetStashes.isEmpty()) {</span>
+<span class="nc" id="L404">            getLog().info(&quot;  Target-branch stashes found (will be applied): &quot;</span>
+<span class="nc" id="L405">                    + targetStashes.size() + &quot; subproject(s)&quot;);</span>
+        }
+<span class="pc bpc" id="L407" title="1 of 2 branches missed.">        if (!unreachable.isEmpty()) {</span>
+<span class="fc" id="L408">            getLog().warn(&quot;  &quot; + Ansi.yellow(&quot;⚠ &quot;) + &quot;Could not reach &quot;</span>
+                    + STASH_REMOTE + &quot; for: &quot; + unreachable);
+<span class="fc" id="L410">            getLog().warn(&quot;    The switch will proceed but stash operations &quot;</span>
+                    + &quot;may fail mid-flight.&quot;);
+        }
+
+<span class="pc bpc" id="L414" title="1 of 2 branches missed.">        if (!collisions.isEmpty()) {</span>
+<span class="nc" id="L415">            String msg = &quot;Refusing to switch: pre-existing stash ref(s) would &quot;</span>
+                    + &quot;be overwritten:\n&quot;
+<span class="nc" id="L417">                    + collisions.stream()</span>
+<span class="nc" id="L418">                            .reduce((a, b) -&gt; a + &quot;\n  &quot; + b)</span>
+<span class="nc" id="L419">                            .map(s -&gt; &quot;  &quot; + s)</span>
+<span class="nc" id="L420">                            .orElse(&quot;&quot;)</span>
+                    + &quot;\n\nResolve manually (per subproject):\n&quot;
+                    + &quot;  # recover the old stash:\n&quot;
+<span class="nc" id="L423">                    + &quot;  git fetch origin &quot; + stashRef(slug, sourceBranch) + &quot;:&quot;</span>
+<span class="nc" id="L424">                    + stashRef(slug, sourceBranch) + &quot;\n&quot;</span>
+<span class="nc" id="L425">                    + &quot;  git stash apply &quot; + stashRef(slug, sourceBranch) + &quot;\n&quot;</span>
+                    + &quot;  # OR, if the old stash is obsolete:\n&quot;
+<span class="nc" id="L427">                    + &quot;  git push origin :&quot; + stashRef(slug, sourceBranch) + &quot;\n&quot;</span>
+                    + &quot;\nThen retry ws:switch.&quot;;
+<span class="nc bnc" id="L429" title="All 2 branches missed.">            if (draft) {</span>
+<span class="nc" id="L430">                getLog().warn(&quot;&quot;);</span>
+<span class="nc" id="L431">                getLog().warn(msg);</span>
+<span class="nc" id="L432">                getLog().warn(&quot;&quot;);</span>
+<span class="nc" id="L433">                throw new MojoException(</span>
+                        &quot;ws:switch preflight failed — source-branch stash &quot;
+                                + &quot;collision. See warnings above.&quot;);
+            } else {
+<span class="nc" id="L437">                throw new MojoException(msg);</span>
+            }
+        }
+<span class="fc" id="L440">    }</span>
+
+    /**
+     * Present an interactive menu of available branches and prompt for selection.
+     *
+     * @param branchSubprojects map of branch name to subprojects that have it
+     * @param currentBranch     the current majority branch
+     * @return the selected branch name
+     * @throws MojoException if no console or invalid selection
+     */
+    private String promptForBranch(Map&lt;String, Set&lt;String&gt;&gt; branchSubprojects,
+                                    String currentBranch)
+            throws MojoException {
+<span class="fc" id="L453">        List&lt;String&gt; branches = new ArrayList&lt;&gt;(branchSubprojects.keySet());</span>
+
+<span class="fc" id="L455">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L456">        getLog().info(header(&quot;Switch&quot;));</span>
+<span class="fc" id="L457">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+<span class="fc" id="L458">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L459">        getLog().info(&quot;  Available branches:&quot;);</span>
+<span class="fc" id="L460">        getLog().info(&quot;&quot;);</span>
+<span class="fc bfc" id="L461" title="All 2 branches covered.">        for (int i = 0; i &lt; branches.size(); i++) {</span>
+<span class="fc" id="L462">            String b = branches.get(i);</span>
+<span class="fc" id="L463">            int count = branchSubprojects.get(b).size();</span>
+<span class="fc bfc" id="L464" title="All 2 branches covered.">            String current = b.equals(currentBranch) ? &quot; (current)&quot; : &quot;&quot;;</span>
+<span class="fc" id="L465">            getLog().info(&quot;    &quot; + (i + 1) + &quot;. &quot; + b</span>
+<span class="pc bpc" id="L466" title="1 of 2 branches missed.">                    + &quot; (&quot; + count + &quot; subproject&quot; + (count == 1 ? &quot;&quot; : &quot;s&quot;) + &quot;)&quot;</span>
+                    + current);
+        }
+<span class="fc" id="L469">        getLog().info(&quot;&quot;);</span>
+
+        // Resolve via requireParam — accepts either an index (1..N) or a
+        // typed branch name. The prompt label becomes the property hint
+        // a non-interactive caller would see.
+<span class="pc" id="L474">        String input = requireParam(null, &quot;branch&quot;,</span>
+<span class="fc" id="L475">                &quot;Select branch [1-&quot; + branches.size() + &quot;] or branch name&quot;);</span>
+
+        try {
+<span class="nc" id="L478">            int idx = Integer.parseInt(input.trim()) - 1;</span>
+<span class="nc bnc" id="L479" title="All 4 branches missed.">            if (idx &lt; 0 || idx &gt;= branches.size()) {</span>
+<span class="nc" id="L480">                throw new MojoException(</span>
+<span class="nc" id="L481">                        &quot;Invalid selection: &quot; + input + &quot;. Expected 1-&quot; + branches.size());</span>
+            }
+<span class="nc" id="L483">            return branches.get(idx);</span>
+<span class="nc" id="L484">        } catch (NumberFormatException e) {</span>
+            // Allow typing the branch name directly
+<span class="nc" id="L486">            String typed = input.trim();</span>
+<span class="nc bnc" id="L487" title="All 4 branches missed.">            if (branchSubprojects.containsKey(typed) || &quot;main&quot;.equals(typed)) {</span>
+<span class="nc" id="L488">                return typed;</span>
+            }
+<span class="nc" id="L490">            throw new MojoException(</span>
+<span class="nc" id="L491">                    &quot;Unknown branch: &quot; + typed + &quot;. Available: &quot; + branchSubprojects.keySet());</span>
+        }
+    }
+
+    /**
+     * Update workspace.yaml branch fields and commit the change.
+     */
+    private void updateWorkspaceYaml(List&lt;String&gt; subprojects, String targetBranch)
+            throws MojoException {
+        try {
+<span class="fc" id="L501">            Path manifestPath = resolveManifest();</span>
+<span class="fc" id="L502">            Map&lt;String, String&gt; updates = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc bfc" id="L503" title="All 2 branches covered.">            for (String name : subprojects) {</span>
+<span class="fc" id="L504">                updates.put(name, targetBranch);</span>
+<span class="fc" id="L505">            }</span>
+<span class="fc" id="L506">            ManifestWriter.updateBranches(manifestPath, updates);</span>
+<span class="fc" id="L507">            getLog().info(&quot;  Updated workspace.yaml branches → &quot; + targetBranch);</span>
+<span class="nc" id="L508">        } catch (IOException e) {</span>
+<span class="nc" id="L509">            getLog().warn(&quot;  Could not update workspace.yaml: &quot; + e.getMessage());</span>
+<span class="fc" id="L510">        }</span>
+<span class="fc" id="L511">    }</span>
+
+    /**
+     * Switch the workspace repo itself to the target branch and commit
+     * the workspace.yaml update.
+     */
+    private void switchWorkspaceRepo(String targetBranch) throws MojoException {
+        try {
+<span class="fc" id="L519">            Path manifestPath = resolveManifest();</span>
+<span class="fc" id="L520">            File wsRoot = manifestPath.getParent().toFile();</span>
+<span class="pc bpc" id="L521" title="1 of 2 branches missed.">            if (!new File(wsRoot, &quot;.git&quot;).exists()) return;</span>
+
+<span class="nc" id="L523">            String wsBranch = VcsOperations.currentBranch(wsRoot);</span>
+<span class="nc bnc" id="L524" title="All 2 branches missed.">            if (!wsBranch.equals(targetBranch)) {</span>
+                // Check if target branch exists locally in workspace repo
+<span class="nc" id="L526">                List&lt;String&gt; localBranches = VcsOperations.localBranches(wsRoot, &quot;&quot;);</span>
+<span class="nc bnc" id="L527" title="All 4 branches missed.">                if (localBranches.contains(targetBranch) || &quot;main&quot;.equals(targetBranch)) {</span>
+<span class="nc" id="L528">                    getLog().info(&quot;  Workspace repo: &quot; + wsBranch + &quot; → &quot; + targetBranch);</span>
+<span class="nc" id="L529">                    VcsOperations.checkout(wsRoot, getLog(), targetBranch);</span>
+                }
+            }
+
+            // Stage and commit workspace.yaml if changed
+<span class="nc" id="L534">            network.ike.plugin.ReleaseSupport.exec(</span>
+<span class="nc" id="L535">                    wsRoot, getLog(), &quot;git&quot;, &quot;add&quot;, &quot;workspace.yaml&quot;);</span>
+<span class="nc bnc" id="L536" title="All 2 branches missed.">            if (VcsOperations.hasStagedChanges(wsRoot)) {</span>
+<span class="nc" id="L537">                VcsOperations.commit(wsRoot, getLog(),</span>
+                        &quot;workspace: switch branches to &quot; + targetBranch);
+            }
+
+<span class="nc" id="L541">            VcsOperations.writeVcsState(wsRoot, VcsState.Action.SWITCH);</span>
+<span class="nc" id="L542">        } catch (MojoException e) {</span>
+<span class="nc" id="L543">            getLog().warn(&quot;  Could not switch workspace repo: &quot; + e.getMessage());</span>
+<span class="nc" id="L544">        }</span>
+<span class="nc" id="L545">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

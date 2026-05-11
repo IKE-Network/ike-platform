@@ -394,9 +394,22 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
             String workspaceVersion = workspaceCurrent.replace("-SNAPSHOT", "");
             try {
                 String mvn = findMvn(root);
+                // -DnonRecursiveSite=true on the workspace root release:
+                // the workspace pom is an aggregator and every subproject
+                // inherits a per-artifactId <site> URL with no common
+                // ancestor, so running site:stage with the full reactor
+                // active causes sibling modules to overwrite each other
+                // at the same target/staging/ root. The last-built
+                // subproject wins and the workspace's own staged content
+                // is lost — publishProjectSiteToGhPages then ships
+                // whichever subproject's content was last to land.
+                // -N restricts the workspace's site build to its own
+                // pom only; subprojects already published their own
+                // sites in step 6 above. ike-issues#356.
                 ReleaseSupport.exec(root, getLog(),
                         mvn, "ike:release-publish",
                         "-DpushRelease=" + push,
+                        "-DnonRecursiveSite=true",
                         "-B");
                 released.add("(workspace root)");
                 releasedVersions.put("(workspace root)", workspaceVersion);

@@ -64,10 +64,15 @@ public enum PreflightCondition {
             var sb = new StringBuilder();
             sb.append(uncommitted.size())
                     .append(" subproject(s) have uncommitted changes:\n");
+            boolean anyGhPagesLeak = false;
             for (String name : uncommitted) {
                 File dir = WORKSPACE_ROOT_NAME.equals(name)
                         ? root : new File(root, name);
-                String files = gitStatus(dir).lines()
+                String status = gitStatus(dir);
+                if (containsGhPagesLeakPattern(status)) {
+                    anyGhPagesLeak = true;
+                }
+                String files = status.lines()
                         .map(l -> "      " + l.strip())
                         .reduce((a, b) -> a + "\n" + b)
                         .orElse("");
@@ -78,6 +83,21 @@ public enum PreflightCondition {
             sb.append("    mvn ws:commit"
                     + " -Dmessage=\"<your message>\"\n");
             sb.append("  Or stash changes in each affected subproject.");
+            if (anyGhPagesLeak) {
+                sb.append("\n");
+                sb.append("  ⚠ Some entries above match gh-pages-style site\n");
+                sb.append("    output (paths like <artifactId>/<artifactId>/\n");
+                sb.append("    or examples/<name>/, containing bom.json,\n");
+                sb.append("    built-with.html, dependencies.html, etc.).\n");
+                sb.append("    These do NOT belong in main — the canonical\n");
+                sb.append("    published content lives on each repo's\n");
+                sb.append("    gh-pages branch. Delete them and add\n");
+                sb.append("    .gitignore entries to prevent recurrence.\n");
+                sb.append("    NEVER use `git add -A` or `git add .` to\n");
+                sb.append("    stage cascade bump commits — these sweep\n");
+                sb.append("    such leaks into main. Use explicit paths:\n");
+                sb.append("    `git add pom.xml`. ike-issues#358.");
+            }
             return Optional.of(sb.toString());
         }
     },
@@ -407,6 +427,40 @@ public enum PreflightCondition {
         } catch (MojoException e) {
             return "";
         }
+    }
+
+    /**
+     * Return {@code true} when the given {@code git status --porcelain}
+     * output mentions paths matching a gh-pages-style site output
+     * layout: {@code <something>/<same>/<site files>} doubling, or
+     * {@code examples/<name>/<site files>}. The signal files we look
+     * for ({@code bom.json}, {@code built-with.html},
+     * {@code dependencies.html}, {@code dependency-management.html},
+     * {@code distribution-management.html}, {@code project-info.html})
+     * are emitted by maven-project-info-reports-plugin during
+     * site:stage and don't belong in source control.
+     *
+     * <p>Used by {@link #WORKING_TREE_CLEAN} to amplify the diagnostic
+     * when an operator is about to bump a workspace whose main tree
+     * contains leaked gh-pages content. ike-issues#358.
+     *
+     * @param porcelain raw {@code git status --porcelain} output
+     * @return {@code true} when at least one entry matches
+     */
+    static boolean containsGhPagesLeakPattern(String porcelain) {
+        if (porcelain == null || porcelain.isBlank()) return false;
+        for (String line : porcelain.split("\n")) {
+            String path = line.length() > 3 ? line.substring(3).trim() : "";
+            if (path.endsWith("/bom.json")
+                    || path.endsWith("/built-with.html")
+                    || path.endsWith("/dependencies.html")
+                    || path.endsWith("/dependency-management.html")
+                    || path.endsWith("/distribution-management.html")
+                    || path.endsWith("/project-info.html")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

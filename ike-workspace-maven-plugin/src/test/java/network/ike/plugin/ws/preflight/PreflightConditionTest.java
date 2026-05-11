@@ -189,4 +189,44 @@ class PreflightConditionTest {
                 """;
         assertThat(PreflightCondition.extractParentVersion(pom)).isNull();
     }
+
+    // ── containsGhPagesLeakPattern (ike-issues#358) ──────────────────
+
+    @Test
+    void containsGhPagesLeakPattern_doubledArtifactWithBomJson_true() {
+        String porcelain =
+                " M ike-example-its/ike-example-its/bom.json\n"
+                + " M ike-example-its/ike-example-its/dependencies.html";
+        assertThat(PreflightCondition.containsGhPagesLeakPattern(porcelain))
+                .isTrue();
+    }
+
+    @Test
+    void containsGhPagesLeakPattern_examplesDoubledPath_true() {
+        String porcelain = "?? examples/doc-example/built-with.html";
+        assertThat(PreflightCondition.containsGhPagesLeakPattern(porcelain))
+                .isTrue();
+    }
+
+    @Test
+    void containsGhPagesLeakPattern_distributionManagementHtml_true() {
+        String porcelain = " M ike-example-ws/ike-example-ws/distribution-management.html";
+        assertThat(PreflightCondition.containsGhPagesLeakPattern(porcelain))
+                .isTrue();
+    }
+
+    @Test
+    void containsGhPagesLeakPattern_onlyPomEdit_false() {
+        String porcelain = " M pom.xml\n M src/site/site.xml";
+        assertThat(PreflightCondition.containsGhPagesLeakPattern(porcelain))
+                .isFalse();
+    }
+
+    @Test
+    void containsGhPagesLeakPattern_emptyOrNull_false() {
+        assertThat(PreflightCondition.containsGhPagesLeakPattern(""))
+                .isFalse();
+        assertThat(PreflightCondition.containsGhPagesLeakPattern(null))
+                .isFalse();
+    }
 }

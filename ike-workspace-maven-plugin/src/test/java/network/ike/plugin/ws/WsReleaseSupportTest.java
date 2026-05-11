@@ -1,5 +1,7 @@
 package network.ike.plugin.ws;
 
+import network.ike.plugin.PomRewriter;
+
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 

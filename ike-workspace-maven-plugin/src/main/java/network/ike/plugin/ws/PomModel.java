@@ -1,5 +1,7 @@
 package network.ike.plugin.ws;
 
+import network.ike.plugin.PomRewriter;
+
 import org.apache.maven.api.model.Build;
 import org.apache.maven.api.model.Dependency;
 import org.apache.maven.api.model.DependencyManagement;

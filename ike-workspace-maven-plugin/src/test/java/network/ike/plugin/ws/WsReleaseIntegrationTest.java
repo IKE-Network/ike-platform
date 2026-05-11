@@ -1,5 +1,7 @@
 package network.ike.plugin.ws;
 
+import network.ike.plugin.PomRewriter;
+
 import network.ike.plugin.ReleaseSupport;
 import org.apache.maven.api.plugin.MojoException;
 import org.junit.jupiter.api.BeforeEach;

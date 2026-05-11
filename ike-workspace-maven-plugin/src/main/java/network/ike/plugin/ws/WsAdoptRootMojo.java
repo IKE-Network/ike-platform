@@ -1,5 +1,7 @@
 package network.ike.plugin.ws;
 
+import network.ike.plugin.PomRewriter;
+
 import network.ike.plugin.ReleaseSupport;
 import network.ike.plugin.ws.vcs.VcsOperations;
 import network.ike.workspace.Manifest;

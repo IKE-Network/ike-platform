@@ -1,5 +1,7 @@
 package network.ike.plugin.ws;
 
+import network.ike.plugin.PomRewriter;
+
 import org.apache.maven.api.model.Parent;
 
 import java.io.IOException;

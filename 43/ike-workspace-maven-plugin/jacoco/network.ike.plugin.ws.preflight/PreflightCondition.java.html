@@ -1,0 +1,610 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>PreflightCondition.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws.preflight</a> &gt; <span class="el_source">PreflightCondition.java</span></div><h1>PreflightCondition.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws.preflight;
+
+import network.ike.plugin.ReleaseSupport;
+import network.ike.plugin.SnapshotScanner;
+import network.ike.plugin.ws.WsGoal;
+
+import org.apache.maven.api.plugin.Log;
+import org.apache.maven.api.plugin.MojoException;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
+
+/**
+ * Closed vocabulary of preflight checks that {@code ws:*} goals can
+ * require before they mutate workspace state. Each entry declares a
+ * human-readable description and a {@link #check(PreflightContext)}
+ * implementation that returns {@link Optional#empty()} on success or a
+ * remediation message on failure.
+ *
+ * &lt;p&gt;Drafts and publishes invoke the same {@code PreflightCondition}
+ * sequence via {@link Preflight}; whether failure is a warning (draft)
+ * or a hard error (publish) is decided at the call site via
+ * {@link PreflightResult#requirePassed(WsGoal)} vs
+ * {@link PreflightResult#warnIfFailed(Log, WsGoal)}.
+ *
+ * &lt;p&gt;New conditions are added here as goals adopt the contract from
+ * issue #154. Each new entry must stay self-contained: it does not
+ * depend on the mojo instance, only on the shared {@link PreflightContext}.
+ */
+<span class="fc" id="L36">public enum PreflightCondition {</span>
+
+    /**
+     * Every subproject working tree (and the workspace root itself, if
+     * it is a git repo) must have no uncommitted changes. Any draft or
+     * publish goal that creates branches, edits POMs, or otherwise
+     * mutates files requires this.
+     */
+<span class="fc" id="L44">    WORKING_TREE_CLEAN(&quot;All subproject working trees are clean&quot;) {</span>
+        @Override
+        public Optional&lt;String&gt; check(PreflightContext ctx) {
+<span class="fc" id="L47">            File root = ctx.workspaceRoot();</span>
+<span class="fc" id="L48">            List&lt;String&gt; uncommitted = new ArrayList&lt;&gt;();</span>
+
+<span class="pc bpc" id="L50" title="1 of 2 branches missed.">            if (new File(root, &quot;.git&quot;).exists()</span>
+<span class="nc bnc" id="L51" title="All 2 branches missed.">                    &amp;&amp; !gitStatus(root).isEmpty()) {</span>
+<span class="nc" id="L52">                uncommitted.add(WORKSPACE_ROOT_NAME);</span>
+            }
+<span class="fc bfc" id="L54" title="All 2 branches covered.">            for (String name : ctx.subprojects()) {</span>
+<span class="fc" id="L55">                File dir = new File(root, name);</span>
+<span class="pc bpc" id="L56" title="1 of 2 branches missed.">                if (!new File(dir, &quot;.git&quot;).exists()) continue;</span>
+<span class="fc bfc" id="L57" title="All 2 branches covered.">                if (!gitStatus(dir).isEmpty()) {</span>
+<span class="fc" id="L58">                    uncommitted.add(name);</span>
+                }
+<span class="fc" id="L60">            }</span>
+
+<span class="fc bfc" id="L62" title="All 2 branches covered.">            if (uncommitted.isEmpty()) return Optional.empty();</span>
+
+<span class="fc" id="L64">            var sb = new StringBuilder();</span>
+<span class="fc" id="L65">            sb.append(uncommitted.size())</span>
+<span class="fc" id="L66">                    .append(&quot; subproject(s) have uncommitted changes:\n&quot;);</span>
+<span class="fc" id="L67">            boolean anyGhPagesLeak = false;</span>
+<span class="fc bfc" id="L68" title="All 2 branches covered.">            for (String name : uncommitted) {</span>
+<span class="pc bpc" id="L69" title="1 of 2 branches missed.">                File dir = WORKSPACE_ROOT_NAME.equals(name)</span>
+<span class="pc" id="L70">                        ? root : new File(root, name);</span>
+<span class="fc" id="L71">                String status = gitStatus(dir);</span>
+<span class="pc bpc" id="L72" title="1 of 2 branches missed.">                if (containsGhPagesLeakPattern(status)) {</span>
+<span class="nc" id="L73">                    anyGhPagesLeak = true;</span>
+                }
+<span class="fc" id="L75">                String files = status.lines()</span>
+<span class="fc" id="L76">                        .map(l -&gt; &quot;      &quot; + l.strip())</span>
+<span class="pc" id="L77">                        .reduce((a, b) -&gt; a + &quot;\n&quot; + b)</span>
+<span class="fc" id="L78">                        .orElse(&quot;&quot;);</span>
+<span class="fc" id="L79">                sb.append(&quot;    • &quot;).append(name).append(&quot;:\n&quot;)</span>
+<span class="fc" id="L80">                  .append(files).append(&quot;\n&quot;);</span>
+<span class="fc" id="L81">            }</span>
+<span class="fc" id="L82">            sb.append(&quot;  To resolve:\n&quot;);</span>
+<span class="fc" id="L83">            sb.append(&quot;    mvn ws:commit&quot;</span>
+                    + &quot; -Dmessage=\&quot;&lt;your message&gt;\&quot;\n&quot;);
+<span class="fc" id="L85">            sb.append(&quot;  Or stash changes in each affected subproject.&quot;);</span>
+<span class="pc bpc" id="L86" title="1 of 2 branches missed.">            if (anyGhPagesLeak) {</span>
+<span class="nc" id="L87">                sb.append(&quot;\n&quot;);</span>
+<span class="nc" id="L88">                sb.append(&quot;  ⚠ Some entries above match gh-pages-style site\n&quot;);</span>
+<span class="nc" id="L89">                sb.append(&quot;    output (paths like &lt;artifactId&gt;/&lt;artifactId&gt;/\n&quot;);</span>
+<span class="nc" id="L90">                sb.append(&quot;    or examples/&lt;name&gt;/, containing bom.json,\n&quot;);</span>
+<span class="nc" id="L91">                sb.append(&quot;    built-with.html, dependencies.html, etc.).\n&quot;);</span>
+<span class="nc" id="L92">                sb.append(&quot;    These do NOT belong in main — the canonical\n&quot;);</span>
+<span class="nc" id="L93">                sb.append(&quot;    published content lives on each repo's\n&quot;);</span>
+<span class="nc" id="L94">                sb.append(&quot;    gh-pages branch. Delete them and add\n&quot;);</span>
+<span class="nc" id="L95">                sb.append(&quot;    .gitignore entries to prevent recurrence.\n&quot;);</span>
+<span class="nc" id="L96">                sb.append(&quot;    NEVER use `git add -A` or `git add .` to\n&quot;);</span>
+<span class="nc" id="L97">                sb.append(&quot;    stage cascade bump commits — these sweep\n&quot;);</span>
+<span class="nc" id="L98">                sb.append(&quot;    such leaks into main. Use explicit paths:\n&quot;);</span>
+<span class="nc" id="L99">                sb.append(&quot;    `git add pom.xml`. ike-issues#358.&quot;);</span>
+            }
+<span class="fc" id="L101">            return Optional.of(sb.toString());</span>
+        }
+    },
+
+    /**
+     * No {@code &lt;properties&gt;} entry in any subproject root POM may hold a
+     * value ending in {@code -SNAPSHOT}. Maven 4's consumer POM flattener
+     * resolves properties and promotes {@code &lt;pluginManagement&gt;} into
+     * {@code &lt;plugins&gt;} when writing the released artifact — a SNAPSHOT
+     * property value would then be baked in as a literal and break
+     * downstream consumers (e.g. {@code &lt;ike-tooling.version&gt;112-SNAPSHOT}
+     * leaking into released {@code ike-parent-105.pom}). This check
+     * forces the release operator to bump the property to a released
+     * version before cutting the release.
+     */
+<span class="fc" id="L116">    NO_SNAPSHOT_PROPERTIES(&quot;No subproject root POM carries -SNAPSHOT property values&quot;) {</span>
+        @Override
+        public Optional&lt;String&gt; check(PreflightContext ctx) {
+<span class="fc" id="L119">            File root = ctx.workspaceRoot();</span>
+<span class="fc" id="L120">            List&lt;SnapshotScanner.Violation&gt; all = new ArrayList&lt;&gt;();</span>
+
+<span class="fc bfc" id="L122" title="All 2 branches covered.">            for (String name : ctx.subprojects()) {</span>
+<span class="fc" id="L123">                File pom = new File(new File(root, name), &quot;pom.xml&quot;);</span>
+<span class="pc bpc" id="L124" title="1 of 2 branches missed.">                if (!pom.isFile()) continue;</span>
+<span class="fc" id="L125">                all.addAll(SnapshotScanner.scanSourceProperties(pom));</span>
+<span class="fc" id="L126">            }</span>
+
+<span class="pc bpc" id="L128" title="1 of 2 branches missed.">            if (all.isEmpty()) return Optional.empty();</span>
+
+<span class="nc" id="L130">            return Optional.of(SnapshotScanner.formatViolations(all, root,</span>
+<span class="nc" id="L131">                    all.size() + &quot; SNAPSHOT property value(s) would leak into&quot;</span>
+                            + &quot; released POMs:&quot;,
+                    &quot;  These values are substituted by Maven 4's consumer POM\n&quot;
+                    + &quot;  flattener and baked into released artifacts. Bump each\n&quot;
+                    + &quot;  property to a released (non-SNAPSHOT) version before\n&quot;
+                    + &quot;  re-running the release.&quot;));
+        }
+    },
+
+    /**
+     * No {@code .mvn/jvm.config} file in the workspace root or any
+     * subproject may contain a line starting with {@code #}.
+     *
+     * &lt;p&gt;Maven parses {@code .mvn/jvm.config} as raw JVM arguments —
+     * one token per line, with no comment syntax. A {@code #} at
+     * column 0 is passed to the JVM launcher as a main-class name and
+     * IntelliJ surfaces it as
+     * {@code Error: Could not find or load main class #}. The fix is
+     * to delete the offending line; comments belong in
+     * {@code .mvn/jvm.config.notes} or similar adjacent files.
+     *
+     * &lt;p&gt;This is the gate referenced in ike-issues#217. The check fires
+     * before the bad file can propagate to git or Syncthing — Maven's
+     * own {@code validate} phase can't catch this in the project that
+     * contains the bad file because the JVM dies before plugin code
+     * runs.
+     */
+<span class="fc" id="L158">    JVM_CONFIG_NO_HASH_COMMENTS(</span>
+            &quot;No .mvn/jvm.config file contains a # comment line&quot;) {
+        @Override
+        public Optional&lt;String&gt; check(PreflightContext ctx) {
+<span class="nc" id="L162">            File root = ctx.workspaceRoot();</span>
+<span class="nc" id="L163">            List&lt;String&gt; violations = new ArrayList&lt;&gt;();</span>
+
+<span class="nc" id="L165">            collectJvmConfigViolations(root, WORKSPACE_ROOT_NAME, violations);</span>
+<span class="nc bnc" id="L166" title="All 2 branches missed.">            for (String name : ctx.subprojects()) {</span>
+<span class="nc" id="L167">                collectJvmConfigViolations(new File(root, name), name,</span>
+                        violations);
+<span class="nc" id="L169">            }</span>
+
+<span class="nc bnc" id="L171" title="All 2 branches missed.">            if (violations.isEmpty()) return Optional.empty();</span>
+
+<span class="nc" id="L173">            var sb = new StringBuilder();</span>
+<span class="nc" id="L174">            sb.append(violations.size())</span>
+<span class="nc" id="L175">                    .append(&quot; .mvn/jvm.config file(s) contain # comment lines:\n&quot;);</span>
+<span class="nc bnc" id="L176" title="All 2 branches missed.">            for (String v : violations) {</span>
+<span class="nc" id="L177">                sb.append(&quot;    • &quot;).append(v).append('\n');</span>
+<span class="nc" id="L178">            }</span>
+<span class="nc" id="L179">            sb.append(&quot;  Maven parses .mvn/jvm.config as raw JVM arguments\n&quot;);</span>
+<span class="nc" id="L180">            sb.append(&quot;  — '#' at column 0 is passed to the JVM launcher as a\n&quot;);</span>
+<span class="nc" id="L181">            sb.append(&quot;  main-class name and crashes the build. Delete the\n&quot;);</span>
+<span class="nc" id="L182">            sb.append(&quot;  offending line; put commentary in an adjacent file.&quot;);</span>
+<span class="nc" id="L183">            return Optional.of(sb.toString());</span>
+        }
+    },
+
+    /**
+     * Every workspace subproject's root POM must either declare
+     * {@code &lt;distributionManagement&gt;} locally or have a {@code &lt;parent&gt;}
+     * block to inherit from (#346, surfaced by #343 when {@code its/}
+     * was missing both).
+     *
+     * &lt;p&gt;Site goals — specifically {@code site:stage}, which the
+     * workspace release cascade runs — fail with
+     * &lt;em&gt;&quot;Missing distribution management in project ...&quot;&lt;/em&gt; when
+     * neither is present. That failure surfaces deep inside the
+     * release flow, after some subprojects have already tagged. This
+     * preflight catches the missing declaration upfront so the
+     * release-draft is authoritative.
+     */
+<span class="fc" id="L201">    SUBPROJECT_HAS_DISTRIBUTION_MANAGEMENT(</span>
+            &quot;Every subproject root POM resolves &lt;distributionManagement&gt;&quot;) {
+        @Override
+        public Optional&lt;String&gt; check(PreflightContext ctx) {
+<span class="fc" id="L205">            File root = ctx.workspaceRoot();</span>
+<span class="fc" id="L206">            List&lt;String&gt; violations = new ArrayList&lt;&gt;();</span>
+
+<span class="fc bfc" id="L208" title="All 2 branches covered.">            for (String name : ctx.subprojects()) {</span>
+<span class="fc" id="L209">                File pom = new File(new File(root, name), &quot;pom.xml&quot;);</span>
+<span class="pc bpc" id="L210" title="1 of 2 branches missed.">                if (!pom.isFile()) continue;</span>
+                String content;
+                try {
+<span class="fc" id="L213">                    content = Files.readString(pom.toPath(),</span>
+                            StandardCharsets.UTF_8);
+<span class="nc" id="L215">                } catch (IOException e) {</span>
+                    // Best-effort — preflight does not fail on read errors
+<span class="nc" id="L217">                    continue;</span>
+<span class="fc" id="L218">                }</span>
+<span class="pc bpc" id="L219" title="1 of 2 branches missed.">                if (!hasDistributionManagementOrParent(content)) {</span>
+<span class="fc" id="L220">                    violations.add(name + &quot; (no &lt;distributionManagement&gt; &quot;</span>
+                            + &quot;or &lt;parent&gt; in its root POM)&quot;);
+                }
+<span class="fc" id="L223">            }</span>
+
+<span class="pc bpc" id="L225" title="1 of 2 branches missed.">            if (violations.isEmpty()) return Optional.empty();</span>
+
+<span class="fc" id="L227">            var sb = new StringBuilder();</span>
+<span class="fc" id="L228">            sb.append(violations.size())</span>
+<span class="fc" id="L229">                    .append(&quot; subproject(s) missing &lt;distributionManagement&gt;:\n&quot;);</span>
+<span class="fc bfc" id="L230" title="All 2 branches covered.">            for (String v : violations) {</span>
+<span class="fc" id="L231">                sb.append(&quot;    • &quot;).append(v).append('\n');</span>
+<span class="fc" id="L232">            }</span>
+<span class="fc" id="L233">            sb.append(&quot;  site:stage during the workspace release cascade\n&quot;);</span>
+<span class="fc" id="L234">            sb.append(&quot;  will fail with \&quot;Missing distribution management in\n&quot;);</span>
+<span class="fc" id="L235">            sb.append(&quot;  project ...\&quot;. Either declare\n&quot;);</span>
+<span class="fc" id="L236">            sb.append(&quot;  &lt;distributionManagement&gt;&lt;site&gt;...&lt;/site&gt;... directly\n&quot;);</span>
+<span class="fc" id="L237">            sb.append(&quot;  on the subproject's root POM, or add a &lt;parent&gt;\n&quot;);</span>
+<span class="fc" id="L238">            sb.append(&quot;  block inheriting from one of the IKE parents (e.g.\n&quot;);</span>
+<span class="fc" id="L239">            sb.append(&quot;  network.ike.platform:ike-parent).&quot;);</span>
+<span class="fc" id="L240">            return Optional.of(sb.toString());</span>
+        }
+    },
+
+    /**
+     * No subproject's {@code &lt;properties&gt;} block may declare a
+     * locally-overriding value for any IKE-foundation property name
+     * (#346, surfaced by the {@code its/} pom property-shadowing in
+     * the v150 cascade).
+     *
+     * &lt;p&gt;Foundation properties (
+     * {@code ike-tooling.version},
+     * {@code ike-docs.version},
+     * {@code ike-platform.version}) are set by {@code ike-parent}'s
+     * inheritance chain. Local overrides silently shadow the
+     * workspace's intended versions and pin plugins to old releases
+     * that may lack newer goals. Preferred discipline: namespace
+     * local overrides under {@code it.*}, {@code local.*}, or a
+     * project-specific prefix that doesn't collide with the
+     * foundation set.
+     */
+<span class="fc" id="L261">    NO_FOUNDATION_PROPERTY_SHADOWING(</span>
+            &quot;No subproject overrides ike-foundation property names&quot;) {
+        @Override
+        public Optional&lt;String&gt; check(PreflightContext ctx) {
+<span class="fc" id="L265">            File root = ctx.workspaceRoot();</span>
+<span class="fc" id="L266">            List&lt;String&gt; violations = new ArrayList&lt;&gt;();</span>
+
+<span class="fc bfc" id="L268" title="All 2 branches covered.">            for (String name : ctx.subprojects()) {</span>
+<span class="fc" id="L269">                File pom = new File(new File(root, name), &quot;pom.xml&quot;);</span>
+<span class="pc bpc" id="L270" title="1 of 2 branches missed.">                if (!pom.isFile()) continue;</span>
+                String content;
+                try {
+<span class="fc" id="L273">                    content = Files.readString(pom.toPath(),</span>
+                            StandardCharsets.UTF_8);
+<span class="nc" id="L275">                } catch (IOException e) {</span>
+<span class="nc" id="L276">                    continue;</span>
+<span class="fc" id="L277">                }</span>
+<span class="fc bfc" id="L278" title="All 2 branches covered.">                for (String prop : FOUNDATION_PROPERTY_NAMES) {</span>
+<span class="pc bpc" id="L279" title="1 of 2 branches missed.">                    if (shadowsProperty(content, prop)) {</span>
+<span class="nc" id="L280">                        violations.add(name + &quot;/pom.xml shadows &lt;&quot; + prop</span>
+                                + &quot;&gt; (inherited from ike-parent)&quot;);
+                    }
+<span class="fc" id="L283">                }</span>
+<span class="fc" id="L284">            }</span>
+
+<span class="pc bpc" id="L286" title="1 of 2 branches missed.">            if (violations.isEmpty()) return Optional.empty();</span>
+
+<span class="nc" id="L288">            var sb = new StringBuilder();</span>
+<span class="nc" id="L289">            sb.append(violations.size())</span>
+<span class="nc" id="L290">                    .append(&quot; IKE-foundation property shadow(s):\n&quot;);</span>
+<span class="nc bnc" id="L291" title="All 2 branches missed.">            for (String v : violations) {</span>
+<span class="nc" id="L292">                sb.append(&quot;    • &quot;).append(v).append('\n');</span>
+<span class="nc" id="L293">            }</span>
+<span class="nc" id="L294">            sb.append(&quot;  These property names control plugin resolution for\n&quot;);</span>
+<span class="nc" id="L295">            sb.append(&quot;  every project inheriting ike-parent. Local overrides\n&quot;);</span>
+<span class="nc" id="L296">            sb.append(&quot;  pin plugins to whatever version the subproject\n&quot;);</span>
+<span class="nc" id="L297">            sb.append(&quot;  declares, often pre-dating goals the release cycle\n&quot;);</span>
+<span class="nc" id="L298">            sb.append(&quot;  expects (e.g. ike-tooling 126 lacks #335's\n&quot;);</span>
+<span class="nc" id="L299">            sb.append(&quot;  render-spdx-licenses). Rename the local property to\n&quot;);</span>
+<span class="nc" id="L300">            sb.append(&quot;  an `it.*` / `local.*` namespace and update any\n&quot;);</span>
+<span class="nc" id="L301">            sb.append(&quot;  references to use the new name.&quot;);</span>
+<span class="nc" id="L302">            return Optional.of(sb.toString());</span>
+        }
+    },
+
+    /**
+     * When a subproject's {@code &lt;parent&gt;} declares the same GA as the
+     * workspace aggregator's own {@code &lt;parent&gt;}, enforce the two
+     * coherence rules from #324:
+     *
+     * &lt;ol&gt;
+     *   &lt;li&gt;{@code &lt;parent&gt;&lt;version&gt;} matches the workspace's.&lt;/li&gt;
+     *   &lt;li&gt;{@code &lt;parent&gt;} block includes an empty
+     *       {@code &lt;relativePath/&gt;} to prevent the Maven 4
+     *       parent-cycle error.&lt;/li&gt;
+     * &lt;/ol&gt;
+     *
+     * &lt;p&gt;This preflight is the release-gate analog of
+     * {@code ws:verify}'s coherence check (#324). The verify check
+     * warns; the preflight blocks. Composed via Preflight so
+     * release-draft surfaces it as a warning and release-publish
+     * promotes it to a hard error.
+     */
+<span class="fc" id="L324">    PARENT_COHERENCE(</span>
+            &quot;Subprojects sharing the workspace's parent GA have &quot;
+                    + &quot;matching version + &lt;relativePath/&gt;&quot;) {
+        @Override
+        public Optional&lt;String&gt; check(PreflightContext ctx) {
+<span class="fc" id="L329">            File root = ctx.workspaceRoot();</span>
+<span class="fc" id="L330">            File workspacePom = new File(root, &quot;pom.xml&quot;);</span>
+<span class="pc bpc" id="L331" title="1 of 2 branches missed.">            if (!workspacePom.isFile()) return Optional.empty();</span>
+
+            String workspaceContent;
+            try {
+<span class="nc" id="L335">                workspaceContent = Files.readString(workspacePom.toPath(),</span>
+                        StandardCharsets.UTF_8);
+<span class="nc" id="L337">            } catch (IOException e) {</span>
+<span class="nc" id="L338">                return Optional.empty();</span>
+<span class="nc" id="L339">            }</span>
+
+<span class="nc" id="L341">            String wsParentGA = extractParentGa(workspaceContent);</span>
+<span class="nc" id="L342">            String wsParentVersion = extractParentVersion(workspaceContent);</span>
+<span class="nc bnc" id="L343" title="All 2 branches missed.">            if (wsParentGA == null) return Optional.empty();</span>
+
+<span class="nc" id="L345">            List&lt;String&gt; violations = new ArrayList&lt;&gt;();</span>
+
+<span class="nc bnc" id="L347" title="All 2 branches missed.">            for (String name : ctx.subprojects()) {</span>
+<span class="nc" id="L348">                File pom = new File(new File(root, name), &quot;pom.xml&quot;);</span>
+<span class="nc bnc" id="L349" title="All 2 branches missed.">                if (!pom.isFile()) continue;</span>
+                String content;
+                try {
+<span class="nc" id="L352">                    content = Files.readString(pom.toPath(),</span>
+                            StandardCharsets.UTF_8);
+<span class="nc" id="L354">                } catch (IOException e) {</span>
+<span class="nc" id="L355">                    continue;</span>
+<span class="nc" id="L356">                }</span>
+<span class="nc" id="L357">                String subParentGA = extractParentGa(content);</span>
+<span class="nc" id="L358">                String subParentVersion = extractParentVersion(content);</span>
+<span class="nc bnc" id="L359" title="All 2 branches missed.">                if (subParentGA == null</span>
+<span class="nc bnc" id="L360" title="All 2 branches missed.">                        || !subParentGA.equals(wsParentGA)) {</span>
+<span class="nc" id="L361">                    continue; // out of scope — different parent</span>
+                }
+
+<span class="nc bnc" id="L364" title="All 2 branches missed.">                if (wsParentVersion != null</span>
+<span class="nc bnc" id="L365" title="All 2 branches missed.">                        &amp;&amp; !wsParentVersion.equals(subParentVersion)) {</span>
+<span class="nc" id="L366">                    violations.add(name + &quot; parent &quot; + subParentGA + &quot;:&quot;</span>
+                            + subParentVersion + &quot; != workspace &quot; + wsParentGA
+                            + &quot;:&quot; + wsParentVersion + &quot; (#324)&quot;);
+<span class="nc" id="L369">                    continue;</span>
+                }
+
+<span class="nc" id="L372">                if (!network.ike.plugin.ws.PomParentSupport</span>
+<span class="nc bnc" id="L373" title="All 2 branches missed.">                        .hasEmptyRelativePathInContent(content)) {</span>
+<span class="nc" id="L374">                    violations.add(name + &quot; parent &quot; + subParentGA + &quot;:&quot;</span>
+                            + subParentVersion + &quot; missing empty &quot;
+                            + &quot;&lt;relativePath/&gt; (#324 cycle prevention)&quot;);
+                }
+<span class="nc" id="L378">            }</span>
+
+<span class="nc bnc" id="L380" title="All 2 branches missed.">            if (violations.isEmpty()) return Optional.empty();</span>
+
+<span class="nc" id="L382">            var sb = new StringBuilder();</span>
+<span class="nc" id="L383">            sb.append(violations.size())</span>
+<span class="nc" id="L384">                    .append(&quot; parent-coherence violation(s):\n&quot;);</span>
+<span class="nc bnc" id="L385" title="All 2 branches missed.">            for (String v : violations) {</span>
+<span class="nc" id="L386">                sb.append(&quot;    • &quot;).append(v).append('\n');</span>
+<span class="nc" id="L387">            }</span>
+<span class="nc" id="L388">            sb.append(&quot;  Subprojects sharing the workspace's parent GA must\n&quot;);</span>
+<span class="nc" id="L389">            sb.append(&quot;  agree on parent version AND declare an empty\n&quot;);</span>
+<span class="nc" id="L390">            sb.append(&quot;  &lt;relativePath/&gt; to prevent the Maven 4\n&quot;);</span>
+<span class="nc" id="L391">            sb.append(&quot;  \&quot;parents form a cycle\&quot; error. ws:verify reports\n&quot;);</span>
+<span class="nc" id="L392">            sb.append(&quot;  the same coherence check as a warning; the release\n&quot;);</span>
+<span class="nc" id="L393">            sb.append(&quot;  gate promotes it to a hard requirement.&quot;);</span>
+<span class="nc" id="L394">            return Optional.of(sb.toString());</span>
+        }
+    };
+
+    /** Special marker used when the workspace root itself has uncommitted changes. */
+    public static final String WORKSPACE_ROOT_NAME = &quot;workspace root&quot;;
+
+    private final String description;
+
+<span class="fc" id="L403">    PreflightCondition(String description) {</span>
+<span class="fc" id="L404">        this.description = description;</span>
+<span class="fc" id="L405">    }</span>
+
+    /** Short human description of what this condition enforces. */
+    public String description() {
+<span class="fc" id="L409">        return description;</span>
+    }
+
+    /**
+     * Evaluate the condition against the given context.
+     *
+     * @param ctx the preflight context
+     * @return {@link Optional#empty()} if the condition is satisfied;
+     *         a remediation message otherwise
+     */
+    public abstract Optional&lt;String&gt; check(PreflightContext ctx);
+
+    // ── Shared helpers ──────────────────────────────────────────────
+
+    static String gitStatus(File dir) {
+        try {
+<span class="fc" id="L425">            return ReleaseSupport.execCapture(dir,</span>
+<span class="fc" id="L426">                    &quot;git&quot;, &quot;status&quot;, &quot;--porcelain&quot;).trim();</span>
+<span class="nc" id="L427">        } catch (MojoException e) {</span>
+<span class="nc" id="L428">            return &quot;&quot;;</span>
+        }
+    }
+
+    /**
+     * Return {@code true} when the given {@code git status --porcelain}
+     * output mentions paths matching a gh-pages-style site output
+     * layout: {@code &lt;something&gt;/&lt;same&gt;/&lt;site files&gt;} doubling, or
+     * {@code examples/&lt;name&gt;/&lt;site files&gt;}. The signal files we look
+     * for ({@code bom.json}, {@code built-with.html},
+     * {@code dependencies.html}, {@code dependency-management.html},
+     * {@code distribution-management.html}, {@code project-info.html})
+     * are emitted by maven-project-info-reports-plugin during
+     * site:stage and don't belong in source control.
+     *
+     * &lt;p&gt;Used by {@link #WORKING_TREE_CLEAN} to amplify the diagnostic
+     * when an operator is about to bump a workspace whose main tree
+     * contains leaked gh-pages content. ike-issues#358.
+     *
+     * @param porcelain raw {@code git status --porcelain} output
+     * @return {@code true} when at least one entry matches
+     */
+    static boolean containsGhPagesLeakPattern(String porcelain) {
+<span class="fc bfc" id="L451" title="All 4 branches covered.">        if (porcelain == null || porcelain.isBlank()) return false;</span>
+<span class="fc bfc" id="L452" title="All 2 branches covered.">        for (String line : porcelain.split(&quot;\n&quot;)) {</span>
+<span class="pc bpc" id="L453" title="1 of 2 branches missed.">            String path = line.length() &gt; 3 ? line.substring(3).trim() : &quot;&quot;;</span>
+<span class="fc bfc" id="L454" title="All 2 branches covered.">            if (path.endsWith(&quot;/bom.json&quot;)</span>
+<span class="fc bfc" id="L455" title="All 2 branches covered.">                    || path.endsWith(&quot;/built-with.html&quot;)</span>
+<span class="pc bpc" id="L456" title="1 of 2 branches missed.">                    || path.endsWith(&quot;/dependencies.html&quot;)</span>
+<span class="pc bpc" id="L457" title="1 of 2 branches missed.">                    || path.endsWith(&quot;/dependency-management.html&quot;)</span>
+<span class="fc bfc" id="L458" title="All 2 branches covered.">                    || path.endsWith(&quot;/distribution-management.html&quot;)</span>
+<span class="pc bpc" id="L459" title="1 of 2 branches missed.">                    || path.endsWith(&quot;/project-info.html&quot;)) {</span>
+<span class="fc" id="L460">                return true;</span>
+            }
+        }
+<span class="fc" id="L463">        return false;</span>
+    }
+
+    /**
+     * If {@code dir/.mvn/jvm.config} exists and contains any line whose
+     * first non-empty character is {@code #}, append one entry per
+     * offending line to {@code accum}. Format:
+     * {@code &lt;displayName&gt;/.mvn/jvm.config:&lt;lineNo&gt;: &lt;text&gt;}.
+     *
+     * &lt;p&gt;Empty lines and whitespace-only lines are ignored. Quietly
+     * tolerates {@link IOException} — preflight is best-effort and
+     * shouldn't fail the gate over a transient read error.
+     *
+     * @param dir         the directory whose {@code .mvn/jvm.config} to scan
+     * @param displayName name shown in the violation list
+     *                    ({@link #WORKSPACE_ROOT_NAME} for the workspace
+     *                    root, otherwise the subproject name)
+     * @param accum       accumulator for formatted violation strings
+     */
+    static void collectJvmConfigViolations(File dir, String displayName,
+                                           List&lt;String&gt; accum) {
+<span class="fc" id="L484">        Path config = dir.toPath().resolve(&quot;.mvn&quot;).resolve(&quot;jvm.config&quot;);</span>
+<span class="fc bfc" id="L485" title="All 2 branches covered.">        if (!Files.isRegularFile(config)) return;</span>
+        try {
+<span class="fc" id="L487">            List&lt;String&gt; lines = Files.readAllLines(config, StandardCharsets.UTF_8);</span>
+<span class="fc bfc" id="L488" title="All 2 branches covered.">            for (int i = 0; i &lt; lines.size(); i++) {</span>
+<span class="fc" id="L489">                String line = lines.get(i);</span>
+<span class="fc" id="L490">                String trimmed = line.stripLeading();</span>
+<span class="fc bfc" id="L491" title="All 2 branches covered.">                if (trimmed.startsWith(&quot;#&quot;)) {</span>
+<span class="fc" id="L492">                    accum.add(displayName + &quot;/.mvn/jvm.config:&quot;</span>
+                            + (i + 1) + &quot;: &quot; + line);
+                }
+            }
+<span class="nc" id="L496">        } catch (IOException e) {</span>
+            // Best-effort — preflight does not fail on read errors.
+<span class="fc" id="L498">        }</span>
+<span class="fc" id="L499">    }</span>
+
+    /**
+     * IKE-foundation property names that
+     * {@link #NO_FOUNDATION_PROPERTY_SHADOWING} flags as illegal local
+     * overrides.
+     */
+<span class="fc" id="L506">    static final List&lt;String&gt; FOUNDATION_PROPERTY_NAMES = List.of(</span>
+            &quot;ike-tooling.version&quot;,
+            &quot;ike-docs.version&quot;,
+            &quot;ike-platform.version&quot;);
+
+    /**
+     * Return {@code true} when the POM content contains either a
+     * {@code &lt;distributionManagement&gt;} block or a {@code &lt;parent&gt;}
+     * block. Used by
+     * {@link #SUBPROJECT_HAS_DISTRIBUTION_MANAGEMENT} — site:stage
+     * needs at least one of these to resolve the deploy target.
+     *
+     * @param pomContent the POM XML as a string
+     * @return {@code true} when at least one block is present
+     */
+    static boolean hasDistributionManagementOrParent(String pomContent) {
+<span class="fc bfc" id="L522" title="All 2 branches covered.">        if (pomContent == null) return false;</span>
+<span class="fc" id="L523">        return DISTRIBUTION_MGMT_OR_PARENT.matcher(pomContent).find();</span>
+    }
+
+    /**
+     * Return {@code true} when the POM has a {@code &lt;properties&gt;} block
+     * containing an element whose tag name equals {@code propertyName}.
+     * Tolerates whitespace inside the tag value (including blank).
+     *
+     * @param pomContent   the POM XML as a string
+     * @param propertyName the property tag name to scan for
+     * @return {@code true} when the property is declared at the
+     *         project's top-level {@code &lt;properties&gt;}
+     */
+    static boolean shadowsProperty(String pomContent, String propertyName) {
+<span class="pc bpc" id="L537" title="2 of 4 branches missed.">        if (pomContent == null || propertyName == null) return false;</span>
+        // Scope to &lt;properties&gt;...&lt;/properties&gt; at top level — a
+        // &lt;properties&gt; nested inside a plugin &lt;configuration&gt; isn't
+        // a shadowing site.
+<span class="fc" id="L541">        var matcher = TOP_LEVEL_PROPERTIES_BLOCK.matcher(pomContent);</span>
+<span class="fc bfc" id="L542" title="All 2 branches covered.">        while (matcher.find()) {</span>
+<span class="fc" id="L543">            String block = matcher.group(1);</span>
+<span class="fc" id="L544">            if (java.util.regex.Pattern</span>
+<span class="fc" id="L545">                    .compile(&quot;&lt;&quot; + java.util.regex.Pattern.quote(propertyName)</span>
+                            + &quot;\\b&quot;)
+<span class="fc bfc" id="L547" title="All 2 branches covered.">                    .matcher(block).find()) {</span>
+<span class="fc" id="L548">                return true;</span>
+            }
+<span class="fc" id="L550">        }</span>
+<span class="fc" id="L551">        return false;</span>
+    }
+
+<span class="fc" id="L554">    private static final java.util.regex.Pattern DISTRIBUTION_MGMT_OR_PARENT =</span>
+<span class="fc" id="L555">            java.util.regex.Pattern.compile(</span>
+                    &quot;(?s)&lt;distributionManagement\\b|&lt;parent\\b&quot;);
+
+    /**
+     * Extract the parent {@code groupId:artifactId} from a POM string,
+     * or {@code null} when no {@code &lt;parent&gt;} block is present.
+     *
+     * @param pomContent the POM XML
+     * @return {@code &quot;groupId:artifactId&quot;} or {@code null}
+     */
+    static String extractParentGa(String pomContent) {
+<span class="pc bpc" id="L566" title="1 of 2 branches missed.">        if (pomContent == null) return null;</span>
+<span class="fc" id="L567">        var parentMatcher = java.util.regex.Pattern.compile(</span>
+<span class="fc" id="L568">                &quot;(?s)&lt;parent\\b[^&gt;]*&gt;(.*?)&lt;/parent&gt;&quot;).matcher(pomContent);</span>
+<span class="fc bfc" id="L569" title="All 2 branches covered.">        if (!parentMatcher.find()) return null;</span>
+<span class="fc" id="L570">        String block = parentMatcher.group(1);</span>
+<span class="fc" id="L571">        var gMatch = java.util.regex.Pattern.compile(</span>
+<span class="fc" id="L572">                &quot;&lt;groupId&gt;\\s*([^&lt;]+?)\\s*&lt;/groupId&gt;&quot;).matcher(block);</span>
+<span class="fc" id="L573">        var aMatch = java.util.regex.Pattern.compile(</span>
+<span class="fc" id="L574">                &quot;&lt;artifactId&gt;\\s*([^&lt;]+?)\\s*&lt;/artifactId&gt;&quot;).matcher(block);</span>
+<span class="pc bpc" id="L575" title="2 of 4 branches missed.">        if (!gMatch.find() || !aMatch.find()) return null;</span>
+<span class="fc" id="L576">        return gMatch.group(1).trim() + &quot;:&quot; + aMatch.group(1).trim();</span>
+    }
+
+    /**
+     * Extract the parent {@code &lt;version&gt;} from a POM string, or
+     * {@code null} when no {@code &lt;parent&gt;} block is present or it
+     * lacks an explicit version.
+     *
+     * @param pomContent the POM XML
+     * @return the version string or {@code null}
+     */
+    static String extractParentVersion(String pomContent) {
+<span class="pc bpc" id="L588" title="1 of 2 branches missed.">        if (pomContent == null) return null;</span>
+<span class="fc" id="L589">        var parentMatcher = java.util.regex.Pattern.compile(</span>
+<span class="fc" id="L590">                &quot;(?s)&lt;parent\\b[^&gt;]*&gt;(.*?)&lt;/parent&gt;&quot;).matcher(pomContent);</span>
+<span class="fc bfc" id="L591" title="All 2 branches covered.">        if (!parentMatcher.find()) return null;</span>
+<span class="fc" id="L592">        String block = parentMatcher.group(1);</span>
+<span class="fc" id="L593">        var vMatch = java.util.regex.Pattern.compile(</span>
+<span class="fc" id="L594">                &quot;&lt;version&gt;\\s*([^&lt;]+?)\\s*&lt;/version&gt;&quot;).matcher(block);</span>
+<span class="fc bfc" id="L595" title="All 2 branches covered.">        if (!vMatch.find()) return null;</span>
+<span class="fc" id="L596">        return vMatch.group(1).trim();</span>
+    }
+
+    /**
+     * Match the project's top-level {@code &lt;properties&gt;} block.
+     * Anchored to follow either {@code &lt;/artifactId&gt;},
+     * {@code &lt;/version&gt;}, or {@code &lt;/name&gt;} so it doesn't match
+     * nested {@code &lt;properties&gt;} inside plugin {@code &lt;configuration&gt;}
+     * blocks. Best-effort — handles the common shape of IKE POMs.
+     */
+<span class="fc" id="L606">    private static final java.util.regex.Pattern TOP_LEVEL_PROPERTIES_BLOCK =</span>
+<span class="fc" id="L607">            java.util.regex.Pattern.compile(</span>
+                    &quot;(?s)&lt;properties&gt;\\s*(.*?)\\s*&lt;/properties&gt;&quot;);
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

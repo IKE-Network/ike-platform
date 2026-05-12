@@ -13,7 +13,7 @@ How to ship a release of an IKE Network repo or a full workspace cascade. Read t
 | Flavor | When |
 | --- | --- |
 | Single-repo release (`mvn ike:release-publish`) | You’re inside one repo and want to ship just that repo’s artifact. Used for one-off promotions of a single workspace subproject, or when a single foundation repo has changes that need to ship in isolation. |
-| Foundation cascade (`mvn ws:cascade-foundation-publish`) | From any workspace, walk `ike-tooling → ike-docs → ike-platform` as siblings of the workspace and release each one that has unreleased changes. Skips repos that are up-to-date or not checked out. Pass `-DalsoReleaseWorkspace=true` to chain the workspace cascade after. ike-issues#375. |
+| Foundation cascade (`mvn ws:cascade-foundation-publish`) | From any workspace, walk `ike-tooling → ike-docs → ike-platform` as siblings of the workspace and release each one that has unreleased changes, then release the workspace itself. Skips foundation repos that are up-to-date or not checked out. Pass `-DskipWorkspace=true` for foundation-only (rare case). ike-issues#375. |
 | Workspace cascade (`mvn ws:release-publish`) | You’re inside a workspace aggregator (a `-ws` repo) and want to release every subproject whose source has changed since its last tag, in topological order. Each subproject runs through `ike:release-publish` internally; the workspace root tags itself last so the cycle has a single anchor. |
 
 ## [#cascade-order-across-the-ike-network](#cascade-order-across-the-ike-network)Cascade order across the IKE Network
@@ -60,11 +60,11 @@ The draft writes a markdown report and makes no on-disk changes. Both gate varia
 ### [#2-publish](#2-publish)2. Publish
 
 ```
-# Foundation + workspace, end to end:
-mvn ws:cascade-foundation-publish -DalsoReleaseWorkspace=true
-
-# Foundation only:
+# Foundation + workspace, end to end (default behavior):
 mvn ws:cascade-foundation-publish
+
+# Foundation only (skip workspace release):
+mvn ws:cascade-foundation-publish -DskipWorkspace=true
 
 # Workspace cascade (foundations assumed already released):
 mvn ws:release-publish

@@ -18,4 +18,4 @@ The following is the distribution management information used by this project.
 
 ## [Site - ike-site](#site---ike-site)
 
-[https://ike.network/ike-platform/45/ike-bom/](https://ike.network/ike-platform/45/ike-bom/)[3]
+[https://ike.network/ike-platform/46/ike-bom/](https://ike.network/ike-platform/46/ike-bom/)[3]

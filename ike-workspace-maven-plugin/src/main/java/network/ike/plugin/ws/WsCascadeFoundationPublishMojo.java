@@ -111,6 +111,31 @@ public class WsCascadeFoundationPublishMojo extends AbstractWorkspaceMojo {
     @Parameter(property = "pushRelease", defaultValue = "true")
     boolean pushRelease;
 
+    /**
+     * The running plugin's own version. Maven 4 injects this at
+     * mojo creation time. Used by {@link #invokeWorkspaceRelease}
+     * to build explicit-coords invocations of {@code ws:release-
+     * publish} that pin to THIS plugin version (instead of letting
+     * the workspace's {@code pluginManagement} pick — which, for a
+     * workspace still on an old {@code ike-parent}, would resolve
+     * to an old version that lacks the cascade-driven fixes).
+     * ike-issues#378.
+     */
+    @Parameter(defaultValue = "${plugin.version}", readonly = true)
+    String pluginVersion;
+
+    /**
+     * Skip the per-foundation pre-install step that seeds {@code
+     * ~/.m2} with the current SNAPSHOT before invoking
+     * {@code ike:release-publish}. Defaults to {@code false} (do
+     * the pre-install) because {@code ike-tooling}'s X-SNAPSHOT
+     * self-host pattern (#370) needs the current SNAPSHOT to be
+     * locally resolvable — otherwise Maven cannot even start the
+     * release goal. ike-issues#379.
+     */
+    @Parameter(property = "skipPreInstall", defaultValue = "false")
+    boolean skipPreInstall;
+
     /** Creates this goal instance. */
     public WsCascadeFoundationPublishMojo() {}
 
@@ -250,10 +275,38 @@ public class WsCascadeFoundationPublishMojo extends AbstractWorkspaceMojo {
         // release version.
         String releaseVersion = currentReleaseVersion(dir);
 
-        // Run ike:release-publish.
-        getLog().info("  Running mvn ike:release-publish...");
         String mvn = ReleaseSupport.resolveMavenWrapper(dir, getLog())
                 .getAbsolutePath();
+
+        // SNAPSHOT bootstrap (ike-issues#379). Between cycles, no
+        // process installs the freshly-bumped SNAPSHOT to ~/.m2 —
+        // the previous cycle's post-release-bump only edits the
+        // pom; nothing rebuilds. For reactors with the X-SNAPSHOT
+        // self-host pattern (ike-tooling per #370), Maven can't
+        // resolve the reactor's own plugin reference at the current
+        // SNAPSHOT, so `ike:release-publish` fails before its
+        // own `mvn clean install` can fix the gap.
+        //
+        // Seed ~/.m2 with a fast install. Tests skipped (the release
+        // flow's own pre-release verify runs them). Best-effort: a
+        // failure here usually points at a real build problem the
+        // operator should see, but we let the release flow run
+        // anyway so the operator gets the clearer error from there.
+        if (!skipPreInstall) {
+            getLog().info("  Seeding ~/.m2 with current SNAPSHOT...");
+            try {
+                ReleaseSupport.exec(dir, getLog(),
+                        mvn, "install", "-DskipTests", "-T", "4", "-B");
+            } catch (Exception e) {
+                getLog().warn("  Pre-install for " + name
+                        + " failed (continuing — release-publish will "
+                        + "surface the underlying error if it's real): "
+                        + e.getMessage());
+            }
+        }
+
+        // Run ike:release-publish.
+        getLog().info("  Running mvn ike:release-publish...");
         try {
             ReleaseSupport.exec(dir, getLog(),
                     mvn, "ike:release-publish",
@@ -430,13 +483,31 @@ public class WsCascadeFoundationPublishMojo extends AbstractWorkspaceMojo {
 
     /**
      * Chain {@code ws:release-publish} on the workspace.
+     *
+     * <p>Uses explicit self-version coordinates rather than the short
+     * {@code ws:release-publish} prefix (ike-issues#378). The short
+     * prefix resolves through the workspace's {@code pluginManagement}
+     * → {@code ike-parent} → ws-plugin pin; for a workspace still on
+     * an older {@code ike-parent}, this would load the OLDER ws-plugin
+     * even when the running cascade is a newer version. The classic
+     * chicken-and-egg: the cascade's fixes that ALIGN the workspace's
+     * parent to the current version can't take effect because they're
+     * gated on the workspace having already aligned. Pinning to
+     * {@link #pluginVersion} (the running plugin's own version)
+     * makes the cascade self-consistent: a v47 cascade always calls
+     * v47 ws:release-publish, regardless of what the workspace
+     * inherits.
      */
     Outcome invokeWorkspaceRelease(File wsRoot) {
         String mvn = ReleaseSupport.resolveMavenWrapper(wsRoot, getLog())
                 .getAbsolutePath();
+        String selfCoords = "network.ike.platform"
+                + ":ike-workspace-maven-plugin:"
+                + pluginVersion
+                + ":release-publish";
         try {
             ReleaseSupport.exec(wsRoot, getLog(),
-                    mvn, "ws:release-publish",
+                    mvn, selfCoords,
                     "-Dpush=" + pushRelease,
                     "-B");
             getLog().info("  ✓ Workspace release complete");

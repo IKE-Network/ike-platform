@@ -108,11 +108,13 @@ class WsCascadeFoundationPublishMojoTest {
 
     @Test
     void outcome_factoryMethodsCarryCorrectKind() {
-        var released = WsCascadeFoundationPublishMojo.Outcome.released("x");
+        var released = WsCascadeFoundationPublishMojo.Outcome.released(
+                "x", "164");
         assertThat(released.kind())
                 .isEqualTo(WsCascadeFoundationPublishMojo
                         .OutcomeKind.RELEASED);
-        assertThat(released.detail()).isNull();
+        assertThat(released.releasedAs()).isEqualTo("164");
+        assertThat(released.detail()).isEqualTo("v164");
 
         var upToDate = WsCascadeFoundationPublishMojo.Outcome.upToDate(
                 "x", "v42");
@@ -144,7 +146,10 @@ class WsCascadeFoundationPublishMojoTest {
                 WsCascadeFoundationPublishMojo.class);
 
         var outcome = mojo.walkOne(
-                new File("/does/not/exist/ike-tooling"), "ike-tooling");
+                new File("/does/not/exist/ike-tooling"),
+                "ike-tooling", new File("/does/not/exist"),
+                java.util.List.of("ike-tooling"),
+                new java.util.LinkedHashMap<>());
 
         assertThat(outcome.kind())
                 .isEqualTo(WsCascadeFoundationPublishMojo
@@ -157,7 +162,10 @@ class WsCascadeFoundationPublishMojoTest {
         WsCascadeFoundationPublishMojo mojo = TestLog.createMojo(
                 WsCascadeFoundationPublishMojo.class);
 
-        var outcome = mojo.walkOne(tmp.toFile(), "ike-tooling");
+        var outcome = mojo.walkOne(tmp.toFile(), "ike-tooling",
+                tmp.getParent().toFile(),
+                java.util.List.of("ike-tooling"),
+                new java.util.LinkedHashMap<>());
 
         assertThat(outcome.kind())
                 .isEqualTo(WsCascadeFoundationPublishMojo
@@ -172,11 +180,93 @@ class WsCascadeFoundationPublishMojoTest {
         WsCascadeFoundationPublishMojo mojo = TestLog.createMojo(
                 WsCascadeFoundationPublishMojo.class);
 
-        var outcome = mojo.walkOne(tmp.toFile(), "ike-tooling");
+        var outcome = mojo.walkOne(tmp.toFile(), "ike-tooling",
+                tmp.getParent().toFile(),
+                java.util.List.of("ike-tooling"),
+                new java.util.LinkedHashMap<>());
 
         assertThat(outcome.kind())
                 .isEqualTo(WsCascadeFoundationPublishMojo
                         .OutcomeKind.SKIPPED);
         assertThat(outcome.detail()).contains("no pom.xml");
+    }
+
+    // ── extractPropertyValue ─────────────────────────────────────
+
+    @Test
+    void extractPropertyValue_present() {
+        String pom = "<project><properties>"
+                + "<ike-tooling.version>163</ike-tooling.version>"
+                + "</properties></project>";
+        assertThat(WsCascadeFoundationPublishMojo.extractPropertyValue(
+                pom, "ike-tooling.version")).isEqualTo("163");
+    }
+
+    @Test
+    void extractPropertyValue_missing() {
+        assertThat(WsCascadeFoundationPublishMojo.extractPropertyValue(
+                "<project/>", "ike-tooling.version")).isNull();
+        assertThat(WsCascadeFoundationPublishMojo.extractPropertyValue(
+                null, "ike-tooling.version")).isNull();
+    }
+
+    // ── resolveTargetVersion ─────────────────────────────────────
+
+    @Test
+    void resolveTargetVersion_prefersCycleRelease(@TempDir Path tmp) {
+        var cycle = new java.util.LinkedHashMap<String, String>();
+        cycle.put("ike-tooling", "164");
+        assertThat(WsCascadeFoundationPublishMojo.resolveTargetVersion(
+                "ike-tooling", tmp.toFile(), cycle))
+                .isEqualTo("164");
+    }
+
+    @Test
+    void resolveTargetVersion_missingFromCycleAndDisk_null(@TempDir Path tmp) {
+        assertThat(WsCascadeFoundationPublishMojo.resolveTargetVersion(
+                "ike-tooling", tmp.toFile(),
+                new java.util.LinkedHashMap<>()))
+                .isNull();
+    }
+
+    // ── currentReleaseVersion ────────────────────────────────────
+
+    @Test
+    void currentReleaseVersion_stripsSnapshot(@TempDir Path tmp)
+            throws IOException {
+        Path pom = tmp.resolve("pom.xml");
+        Files.writeString(pom, """
+                <project>
+                  <artifactId>x</artifactId>
+                  <version>42-SNAPSHOT</version>
+                </project>
+                """);
+        assertThat(WsCascadeFoundationPublishMojo.currentReleaseVersion(
+                tmp.toFile())).isEqualTo("42");
+    }
+
+    @Test
+    void currentReleaseVersion_skipsParentVersion(@TempDir Path tmp)
+            throws IOException {
+        Path pom = tmp.resolve("pom.xml");
+        Files.writeString(pom, """
+                <project>
+                  <parent>
+                    <groupId>g</groupId>
+                    <artifactId>p</artifactId>
+                    <version>1</version>
+                  </parent>
+                  <artifactId>x</artifactId>
+                  <version>42-SNAPSHOT</version>
+                </project>
+                """);
+        assertThat(WsCascadeFoundationPublishMojo.currentReleaseVersion(
+                tmp.toFile())).isEqualTo("42");
+    }
+
+    @Test
+    void currentReleaseVersion_noPom_null(@TempDir Path tmp) {
+        assertThat(WsCascadeFoundationPublishMojo.currentReleaseVersion(
+                tmp.toFile())).isNull();
     }
 }

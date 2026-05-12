@@ -1,5 +1,6 @@
 package network.ike.plugin.ws;
 
+import network.ike.plugin.PomRewriter;
 import network.ike.plugin.ReleaseSupport;
 
 import org.apache.maven.api.plugin.MojoException;
@@ -7,9 +8,14 @@ import org.apache.maven.api.plugin.annotations.Mojo;
 import org.apache.maven.api.plugin.annotations.Parameter;
 
 import java.io.File;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Pattern;
 
 /**
@@ -126,10 +132,19 @@ public class WsCascadeFoundationPublishMojo extends AbstractWorkspaceMojo {
         getLog().info("");
 
         List<Outcome> outcomes = new ArrayList<>();
+        // Track this-cycle releases so downstream foundations bump
+        // their <X.version> properties to the just-shipped version
+        // before they release. Mirrors ws:release-publish's catch-up
+        // alignment for workspace subprojects (#375 followup).
+        Map<String, String> releasedVersions = new LinkedHashMap<>();
         for (String name : names) {
             File dir = new File(baseDir, name);
-            Outcome outcome = walkOne(dir, name);
+            Outcome outcome = walkOne(dir, name, baseDir, names,
+                    releasedVersions);
             outcomes.add(outcome);
+            if (outcome.kind == OutcomeKind.RELEASED && outcome.releasedAs != null) {
+                releasedVersions.put(name, outcome.releasedAs);
+            }
             if (outcome.kind == OutcomeKind.FAILED) {
                 reportAndMaybeFail(outcomes, name);
             }
@@ -154,13 +169,21 @@ public class WsCascadeFoundationPublishMojo extends AbstractWorkspaceMojo {
     }
 
     /**
-     * Process one foundation: detect git state, optionally release.
+     * Process one foundation: detect git state, align upstream-version
+     * properties, optionally release.
      *
-     * @param dir  foundation repo directory (may not exist)
-     * @param name foundation repo name (used in messages)
+     * @param dir              foundation repo directory (may not exist)
+     * @param name             foundation repo name (used in messages)
+     * @param baseDir          directory containing all foundations
+     * @param cascade          full cascade order — upstream candidates
+     *                         are the entries before {@code name}
+     * @param releasedVersions versions released earlier in this cycle,
+     *                         indexed by foundation name
      * @return outcome capturing what happened
      */
-    Outcome walkOne(File dir, String name) {
+    Outcome walkOne(File dir, String name, File baseDir,
+                     List<String> cascade,
+                     Map<String, String> releasedVersions) {
         getLog().info("─── " + name + " ─────────────────────────────────────");
         if (!dir.isDirectory()) {
             getLog().info("  Not checked out at " + dir);
@@ -182,6 +205,16 @@ public class WsCascadeFoundationPublishMojo extends AbstractWorkspaceMojo {
             return Outcome.skipped(name, "no pom.xml at " + dir);
         }
 
+        // Catch-up alignment: bump every upstream <X.version> in this
+        // foundation's pom to whatever X has shipped — either earlier
+        // in this cycle (via releasedVersions) or in a prior cycle
+        // (via X's latest release tag on disk). The alignment commits
+        // by itself BECOME meaningful commits, so a foundation that
+        // had no other source changes still releases once a property
+        // needs catching up.
+        alignUpstreamProperties(dir, name, baseDir, cascade,
+                releasedVersions);
+
         // Detect unreleased changes the same way ws:release-publish does:
         // latest release tag + commits since that aren't release-cadence.
         String tag = latestReleaseTag(dir);
@@ -200,6 +233,12 @@ public class WsCascadeFoundationPublishMojo extends AbstractWorkspaceMojo {
                     + " meaningful commit(s) since.");
         }
 
+        // Read the about-to-release version so the cascade can record
+        // it for downstream alignment. ike:release-publish strips
+        // -SNAPSHOT from the current pom version to produce the
+        // release version.
+        String releaseVersion = currentReleaseVersion(dir);
+
         // Run ike:release-publish.
         getLog().info("  Running mvn ike:release-publish...");
         String mvn = findMvn(dir);
@@ -208,14 +247,172 @@ public class WsCascadeFoundationPublishMojo extends AbstractWorkspaceMojo {
                     mvn, "ike:release-publish",
                     "-DpushRelease=" + pushRelease,
                     "-B");
-            getLog().info("  ✓ Released " + name);
+            getLog().info("  ✓ Released " + name
+                    + (releaseVersion != null ? " " + releaseVersion : ""));
             getLog().info("");
-            return Outcome.released(name);
+            return Outcome.released(name, releaseVersion);
         } catch (Exception e) {
             getLog().error("  ✗ Failed to release " + name + ": "
                     + e.getMessage());
             getLog().info("");
             return Outcome.failed(name, e.getMessage());
+        }
+    }
+
+    /**
+     * Update upstream-foundation {@code <X.version>} properties in
+     * {@code dir}/pom.xml to the latest released version of each X.
+     * Each property bump that lands a real change is committed
+     * individually so the per-bump intent is visible in the git log.
+     *
+     * <p>Upstream candidates are the foundations earlier in the
+     * cascade order. "Latest released version" is the cycle-released
+     * version when available (from {@code releasedVersions}), else the
+     * tip of {@code v*} tags on the upstream repo, else nothing.
+     *
+     * <p>Mirrors {@code WsReleaseDraftMojo}'s {@code updateParentVersions}
+     * approach: read once, apply all updates, write once, commit once.
+     * Uses {@link PomRewriter#updateProperty} so the rewrite goes
+     * through OpenRewrite's LST instead of regex.
+     *
+     * @param dir              foundation repo dir
+     * @param name             foundation name
+     * @param baseDir          directory containing all foundations
+     * @param cascade          full cascade order
+     * @param releasedVersions versions released earlier this cycle
+     */
+    void alignUpstreamProperties(File dir, String name, File baseDir,
+                                  List<String> cascade,
+                                  Map<String, String> releasedVersions) {
+        File pomFile = new File(dir, "pom.xml");
+        if (!pomFile.isFile()) return;
+
+        String content;
+        try {
+            content = Files.readString(pomFile.toPath(),
+                    StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            getLog().warn("  Could not read pom.xml for alignment: "
+                    + e.getMessage());
+            return;
+        }
+
+        String original = content;
+        List<String> bumps = new ArrayList<>();
+
+        for (String upstream : cascade) {
+            if (upstream.equals(name)) break; // stop at self
+            String target = resolveTargetVersion(upstream, baseDir,
+                    releasedVersions);
+            if (target == null) continue;
+            String propertyName = upstream + ".version";
+            String currentValue = extractPropertyValue(content,
+                    propertyName);
+            if (currentValue == null || target.equals(currentValue)) {
+                continue;
+            }
+            String after = PomRewriter.updateProperty(content,
+                    propertyName, target);
+            if (!after.equals(content)) {
+                content = after;
+                bumps.add("<" + propertyName + ">: "
+                        + currentValue + " -> " + target);
+            }
+        }
+
+        if (content.equals(original)) {
+            getLog().debug("  Upstream alignment: no bumps needed.");
+            return;
+        }
+
+        try {
+            Files.writeString(pomFile.toPath(), content,
+                    StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            getLog().warn("  Could not write aligned pom.xml: "
+                    + e.getMessage());
+            return;
+        }
+
+        getLog().info("  Catch-up alignment:");
+        for (String b : bumps) {
+            getLog().info("    " + b);
+        }
+
+        try {
+            ReleaseSupport.exec(dir, getLog(),
+                    "git", "add", "pom.xml");
+            ReleaseSupport.exec(dir, getLog(),
+                    "git", "commit", "-m",
+                    "chore: align upstream versions before release");
+        } catch (Exception e) {
+            getLog().warn("  Alignment commit failed: "
+                    + e.getMessage());
+        }
+    }
+
+    /**
+     * Resolve the target version for {@code upstream}: prefer this-
+     * cycle release, else the foundation's tip {@code v*} tag.
+     */
+    static String resolveTargetVersion(String upstream, File baseDir,
+                                        Map<String, String> releasedVersions) {
+        String fromCycle = releasedVersions.get(upstream);
+        if (fromCycle != null) return fromCycle;
+        File upstreamDir = new File(baseDir, upstream);
+        if (!upstreamDir.isDirectory()) return null;
+        String tag = latestReleaseTag(upstreamDir);
+        if (tag == null) return null;
+        return tag.startsWith("v") ? tag.substring(1) : tag;
+    }
+
+    /**
+     * Pure-string extract of a {@code <properties>}-block value by
+     * name. Returns {@code null} when the property is absent. Used
+     * for the "is this property already at the target version?"
+     * pre-check so we don't rewrite-and-commit a no-op.
+     */
+    static String extractPropertyValue(String pomContent, String propertyName) {
+        if (pomContent == null) return null;
+        String openTag = "<" + propertyName + ">";
+        int open = pomContent.indexOf(openTag);
+        if (open < 0) return null;
+        int valueStart = open + openTag.length();
+        int close = pomContent.indexOf("</" + propertyName + ">",
+                valueStart);
+        if (close < 0) return null;
+        return pomContent.substring(valueStart, close).trim();
+    }
+
+    /**
+     * Read the current pom version and strip {@code -SNAPSHOT} so the
+     * cascade can record what the next release will be tagged as.
+     * Returns {@code null} when the pom can't be read.
+     */
+    static String currentReleaseVersion(File dir) {
+        File pomFile = new File(dir, "pom.xml");
+        if (!pomFile.isFile()) return null;
+        try {
+            String content = Files.readString(pomFile.toPath(),
+                    StandardCharsets.UTF_8);
+            // Skip <parent>...</parent> so the project's own version wins.
+            int searchFrom = 0;
+            int parentOpen = content.indexOf("<parent>");
+            if (parentOpen >= 0) {
+                int parentClose = content.indexOf("</parent>", parentOpen);
+                if (parentClose > parentOpen) {
+                    searchFrom = parentClose + "</parent>".length();
+                }
+            }
+            int open = content.indexOf("<version>", searchFrom);
+            if (open < 0) return null;
+            int valueStart = open + "<version>".length();
+            int close = content.indexOf("</version>", valueStart);
+            if (close < 0) return null;
+            String v = content.substring(valueStart, close).trim();
+            return v.replaceFirst("-SNAPSHOT$", "");
+        } catch (IOException e) {
+            return null;
         }
     }
 
@@ -230,7 +427,7 @@ public class WsCascadeFoundationPublishMojo extends AbstractWorkspaceMojo {
                     "-Dpush=" + pushRelease,
                     "-B");
             getLog().info("  ✓ Workspace release complete");
-            return Outcome.released("(workspace)");
+            return Outcome.released("(workspace)", null);
         } catch (Exception e) {
             getLog().error("  ✗ Workspace release failed: "
                     + e.getMessage());
@@ -350,23 +547,29 @@ public class WsCascadeFoundationPublishMojo extends AbstractWorkspaceMojo {
     /**
      * Outcome record for one foundation step.
      *
-     * @param name   foundation repo name
-     * @param kind   what happened
-     * @param detail human-readable explanation for SKIPPED/FAILED;
-     *               {@code null} for RELEASED/UP_TO_DATE
+     * @param name        foundation repo name
+     * @param kind        what happened
+     * @param detail      human-readable explanation; {@code null} when
+     *                    RELEASED with no extra context
+     * @param releasedAs  the released version, populated only for
+     *                    {@link OutcomeKind#RELEASED}; used by the
+     *                    cascade to drive downstream property alignment
      */
-    record Outcome(String name, OutcomeKind kind, String detail) {
-        static Outcome released(String name) {
-            return new Outcome(name, OutcomeKind.RELEASED, null);
+    record Outcome(String name, OutcomeKind kind, String detail,
+                    String releasedAs) {
+        static Outcome released(String name, String version) {
+            return new Outcome(name, OutcomeKind.RELEASED,
+                    version != null ? "v" + version : null, version);
         }
         static Outcome upToDate(String name, String tag) {
-            return new Outcome(name, OutcomeKind.UP_TO_DATE, "at " + tag);
+            return new Outcome(name, OutcomeKind.UP_TO_DATE,
+                    "at " + tag, null);
         }
         static Outcome skipped(String name, String reason) {
-            return new Outcome(name, OutcomeKind.SKIPPED, reason);
+            return new Outcome(name, OutcomeKind.SKIPPED, reason, null);
         }
         static Outcome failed(String name, String reason) {
-            return new Outcome(name, OutcomeKind.FAILED, reason);
+            return new Outcome(name, OutcomeKind.FAILED, reason, null);
         }
     }
 }

@@ -1,0 +1,409 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>OverviewWorkspaceMojo.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">OverviewWorkspaceMojo.java</span></div><h1>OverviewWorkspaceMojo.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.workspace.Subproject;
+import network.ike.workspace.Dependency;
+import network.ike.workspace.WorkspaceGraph;
+import network.ike.plugin.ws.vcs.VcsOperations;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
+
+import java.io.File;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
+
+/**
+ * Consolidated workspace overview — manifest, graph, status, cascade.
+ *
+ * &lt;p&gt;Replaces the former separate {@code ws:dashboard}, {@code ws:status},
+ * and {@code ws:graph} goals with a single command. Loads the manifest
+ * once and presents four sections:
+ *
+ * &lt;ol&gt;
+ *   &lt;li&gt;&lt;b&gt;Manifest&lt;/b&gt; — subproject count, consistency check&lt;/li&gt;
+ *   &lt;li&gt;&lt;b&gt;Graph&lt;/b&gt; — dependency order with direct dependencies&lt;/li&gt;
+ *   &lt;li&gt;&lt;b&gt;Status&lt;/b&gt; — branch, SHA, clean/uncommitted per subproject&lt;/li&gt;
+ *   &lt;li&gt;&lt;b&gt;Cascade&lt;/b&gt; — downstream rebuild impact of components with
+ *       uncommitted changes&lt;/li&gt;
+ * &lt;/ol&gt;
+ *
+ * &lt;p&gt;Use {@code -Dformat=dot} to output Graphviz DOT format instead
+ * of the overview (delegates to graph rendering).
+ *
+ * &lt;pre&gt;{@code
+ * mvn ws:overview
+ * mvn ws:overview -Dformat=dot
+ * }&lt;/pre&gt;
+ */
+@Mojo(name = &quot;overview&quot;, projectRequired = false, aggregator = true)
+public class OverviewWorkspaceMojo extends AbstractWorkspaceMojo {
+
+    /** Creates this goal instance. */
+<span class="fc" id="L45">    public OverviewWorkspaceMojo() {}</span>
+
+    /** Output format: &quot;overview&quot; (default) or &quot;dot&quot; (Graphviz DOT). */
+    @Parameter(property = &quot;format&quot;, defaultValue = &quot;overview&quot;)
+    String format;
+
+    @Override
+    public void execute() throws MojoException {
+<span class="fc" id="L53">        WorkspaceGraph graph = loadGraph();</span>
+
+        // DOT mode — delegate to graph-only output
+<span class="pc bpc" id="L56" title="1 of 2 branches missed.">        if (&quot;dot&quot;.equalsIgnoreCase(format)) {</span>
+<span class="nc" id="L57">            printDot(graph);</span>
+<span class="nc" id="L58">            return;</span>
+        }
+
+<span class="fc" id="L61">        File root = workspaceRoot();</span>
+
+<span class="fc" id="L63">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L64">        getLog().info(header(&quot;Overview&quot;));</span>
+<span class="fc" id="L65">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+
+        // ── Section 1: Manifest ─────────────────────────────────────
+<span class="fc" id="L68">        List&lt;String&gt; errors = graph.verify();</span>
+<span class="fc" id="L69">        getLog().info(&quot;&quot;);</span>
+<span class="pc bpc" id="L70" title="1 of 2 branches missed.">        if (errors.isEmpty()) {</span>
+<span class="fc" id="L71">            getLog().info(Ansi.green(&quot;  ✓ &quot;) + &quot;Manifest: &quot;</span>
+<span class="fc" id="L72">                    + graph.manifest().subprojects().size()</span>
+                    + &quot; components — consistent&quot;);
+        } else {
+<span class="nc" id="L75">            getLog().warn(Ansi.red(&quot;  ✗ &quot;) + &quot;Manifest: &quot;</span>
+<span class="nc" id="L76">                    + errors.size() + &quot; error(s)&quot;);</span>
+<span class="nc bnc" id="L77" title="All 2 branches missed.">            for (String error : errors) {</span>
+<span class="nc" id="L78">                getLog().warn(&quot;    &quot; + error);</span>
+<span class="nc" id="L79">            }</span>
+        }
+
+        // ── Section 2: Dependency Graph ─────────────────────────────
+<span class="fc" id="L83">        List&lt;String&gt; sorted = graph.topologicalSort();</span>
+<span class="fc" id="L84">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L85">        getLog().info(&quot;  Graph (dependency order)&quot;);</span>
+<span class="fc" id="L86">        getLog().info(&quot;  ──────────────────────────────────────────────────────&quot;);</span>
+
+<span class="fc" id="L88">        List&lt;String[]&gt; graphRows = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L89" title="All 2 branches covered.">        for (int i = 0; i &lt; sorted.size(); i++) {</span>
+<span class="fc" id="L90">            String name = sorted.get(i);</span>
+<span class="fc" id="L91">            Subproject sub = graph.manifest().subprojects().get(name);</span>
+<span class="fc bfc" id="L92" title="All 2 branches covered.">            String deps = sub.dependsOn().isEmpty() ? &quot;—&quot;</span>
+<span class="fc" id="L93">                    : sub.dependsOn().stream()</span>
+<span class="fc" id="L94">                        .map(Dependency::subproject)</span>
+<span class="fc" id="L95">                        .collect(Collectors.joining(&quot;, &quot;));</span>
+
+<span class="fc" id="L97">            getLog().info(String.format(&quot;  %2d. %-24s → %s&quot;,</span>
+<span class="fc" id="L98">                    i + 1, name, deps));</span>
+<span class="fc" id="L99">            graphRows.add(new String[]{String.valueOf(i + 1), name, deps});</span>
+        }
+
+        // ── Section 3: Subproject Status ─────────────────────────────
+<span class="fc" id="L103">        Set&lt;String&gt; targets = graph.manifest().subprojects().keySet();</span>
+
+<span class="fc" id="L105">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L106">        getLog().info(&quot;  Status&quot;);</span>
+<span class="fc" id="L107">        getLog().info(&quot;  ──────────────────────────────────────────────────────&quot;);</span>
+<span class="fc" id="L108">        getLog().info(String.format(&quot;  %-24s %-24s %-8s %s&quot;,</span>
+                &quot;COMPONENT&quot;, &quot;BRANCH&quot;, &quot;SHA&quot;, &quot;&quot;));
+
+<span class="fc" id="L111">        List&lt;String&gt; modifiedComponents = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L112">        List&lt;String[]&gt; statusRows = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L113">        int cloned = 0;</span>
+<span class="fc" id="L114">        int notCloned = 0;</span>
+
+<span class="fc bfc" id="L116" title="All 2 branches covered.">        for (String name : targets) {</span>
+<span class="fc" id="L117">            Subproject sub = graph.manifest().subprojects().get(name);</span>
+<span class="fc" id="L118">            File dir = new File(root, name);</span>
+
+<span class="pc bpc" id="L120" title="1 of 2 branches missed.">            if (!dir.exists()) {</span>
+<span class="nc" id="L121">                notCloned++;</span>
+<span class="nc" id="L122">                getLog().info(String.format(&quot;  %-24s %-24s %-8s %s&quot;,</span>
+                        name, &quot;—&quot;, &quot;—&quot;, &quot;not cloned&quot;));
+<span class="nc" id="L124">                statusRows.add(new String[]{name, &quot;—&quot;, &quot;—&quot;, &quot;not cloned&quot;});</span>
+<span class="nc" id="L125">                continue;</span>
+            }
+
+<span class="fc" id="L128">            cloned++;</span>
+<span class="fc" id="L129">            String branch = gitBranch(dir);</span>
+<span class="fc" id="L130">            String sha = gitShortSha(dir);</span>
+<span class="fc" id="L131">            String status = gitStatus(dir);</span>
+
+            String marker;
+<span class="fc bfc" id="L134" title="All 2 branches covered.">            if (status.isEmpty()) {</span>
+<span class="fc" id="L135">                marker = Ansi.green(&quot;✓&quot;);</span>
+            } else {
+<span class="fc" id="L137">                long count = status.lines().count();</span>
+<span class="fc" id="L138">                marker = Ansi.red(&quot;✗&quot;) + &quot; &quot; + count + &quot; changed&quot;;</span>
+<span class="fc" id="L139">                modifiedComponents.add(name);</span>
+            }
+
+<span class="fc" id="L142">            String branchCol = branch;</span>
+<span class="pc bpc" id="L143" title="2 of 4 branches missed.">            if (sub.branch() != null &amp;&amp; !branch.equals(sub.branch())) {</span>
+<span class="nc" id="L144">                branchCol = branch + Ansi.yellow(&quot; ⚠&quot;);</span>
+            }
+
+<span class="fc" id="L147">            getLog().info(String.format(&quot;  %-24s %-24s %-8s %s&quot;,</span>
+                    name, branchCol, sha, marker));
+<span class="fc" id="L149">            statusRows.add(new String[]{name, branch, sha,</span>
+<span class="fc bfc" id="L150" title="All 2 branches covered.">                    status.isEmpty() ? &quot;clean&quot;</span>
+<span class="fc" id="L151">                            : &quot;uncommitted (&quot; + status.lines().count() + &quot; files)&quot;});</span>
+<span class="fc" id="L152">        }</span>
+
+<span class="fc" id="L154">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L155">        getLog().info(&quot;  &quot; + cloned + &quot; cloned, &quot; + notCloned + &quot; not cloned, &quot;</span>
+<span class="fc" id="L156">                + modifiedComponents.size() + &quot; with uncommitted changes&quot;);</span>
+
+        // ── Section 4: Feature Branch Divergence ────────────────────
+        // If any subproject is on a feature branch, show how far it has
+        // diverged from main — helps developers keep long-lived branches
+        // up to date.
+<span class="fc" id="L162">        List&lt;String[]&gt; divergenceRows = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L163">        boolean anyOnFeature = false;</span>
+<span class="fc" id="L164">        int warnThreshold = 20;</span>
+
+<span class="fc bfc" id="L166" title="All 2 branches covered.">        for (String name : targets) {</span>
+<span class="fc" id="L167">            File dir = new File(root, name);</span>
+<span class="pc bpc" id="L168" title="2 of 4 branches missed.">            if (!dir.exists() || !new File(dir, &quot;.git&quot;).exists()) continue;</span>
+
+<span class="fc" id="L170">            String branch = gitBranch(dir);</span>
+<span class="pc bpc" id="L171" title="1 of 2 branches missed.">            if (!branch.startsWith(&quot;feature/&quot;)) continue;</span>
+
+<span class="nc" id="L173">            anyOnFeature = true;</span>
+            try {
+<span class="nc" id="L175">                List&lt;String&gt; behind = VcsOperations.commitLog(dir, branch, &quot;main&quot;);</span>
+<span class="nc" id="L176">                List&lt;String&gt; ahead = VcsOperations.commitLog(dir, &quot;main&quot;, branch);</span>
+
+                String divergence;
+                String marker;
+<span class="nc bnc" id="L180" title="All 2 branches missed.">                if (behind.isEmpty()) {</span>
+<span class="nc" id="L181">                    divergence = &quot;up to date&quot;;</span>
+<span class="nc" id="L182">                    marker = Ansi.green(&quot;✓&quot;);</span>
+<span class="nc bnc" id="L183" title="All 2 branches missed.">                } else if (behind.size() &gt;= warnThreshold) {</span>
+<span class="nc" id="L184">                    divergence = behind.size() + &quot; behind, &quot;</span>
+<span class="nc" id="L185">                            + ahead.size() + &quot; ahead&quot;;</span>
+<span class="nc" id="L186">                    marker = Ansi.red(&quot;⚠&quot;) + &quot; consider ws:update-feature&quot;;</span>
+                } else {
+<span class="nc" id="L188">                    divergence = behind.size() + &quot; behind, &quot;</span>
+<span class="nc" id="L189">                            + ahead.size() + &quot; ahead&quot;;</span>
+<span class="nc" id="L190">                    marker = Ansi.yellow(&quot;·&quot;);</span>
+                }
+
+<span class="nc" id="L193">                divergenceRows.add(new String[]{name, branch,</span>
+<span class="nc" id="L194">                        String.valueOf(behind.size()),</span>
+<span class="nc" id="L195">                        String.valueOf(ahead.size()), divergence});</span>
+
+<span class="nc bnc" id="L197" title="All 2 branches missed.">                if (!anyOnFeature) continue; // skip printing header until first</span>
+<span class="nc" id="L198">            } catch (MojoException e) {</span>
+                // Can't determine divergence (no main branch, etc.) — skip
+<span class="nc" id="L200">                divergenceRows.add(new String[]{name, branch,</span>
+                        &quot;?&quot;, &quot;?&quot;, &quot;unknown&quot;});
+<span class="nc" id="L202">            }</span>
+<span class="nc" id="L203">        }</span>
+
+<span class="pc bpc" id="L205" title="1 of 2 branches missed.">        if (anyOnFeature) {</span>
+<span class="nc" id="L206">            getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L207">            getLog().info(&quot;  Feature Branch Divergence (from main)&quot;);</span>
+<span class="nc" id="L208">            getLog().info(&quot;  ──────────────────────────────────────────────────────&quot;);</span>
+
+<span class="nc bnc" id="L210" title="All 2 branches missed.">            for (String[] row : divergenceRows) {</span>
+<span class="nc" id="L211">                String name = row[0];</span>
+<span class="nc bnc" id="L212" title="All 2 branches missed.">                int behind = &quot;?&quot;.equals(row[2]) ? -1 : Integer.parseInt(row[2]);</span>
+<span class="nc bnc" id="L213" title="All 2 branches missed.">                int ahead = &quot;?&quot;.equals(row[3]) ? -1 : Integer.parseInt(row[3]);</span>
+
+                String marker;
+                String detail;
+<span class="nc bnc" id="L217" title="All 2 branches missed.">                if (behind == 0) {</span>
+<span class="nc" id="L218">                    marker = Ansi.green(&quot;✓&quot;);</span>
+<span class="nc" id="L219">                    detail = &quot;up to date&quot;;</span>
+<span class="nc bnc" id="L220" title="All 2 branches missed.">                } else if (behind &lt; 0) {</span>
+<span class="nc" id="L221">                    marker = &quot;?&quot;;</span>
+<span class="nc" id="L222">                    detail = &quot;unknown&quot;;</span>
+<span class="nc bnc" id="L223" title="All 2 branches missed.">                } else if (behind &gt;= warnThreshold) {</span>
+<span class="nc" id="L224">                    marker = Ansi.red(&quot;⚠&quot;);</span>
+<span class="nc" id="L225">                    detail = behind + &quot; commit(s) behind main, &quot;</span>
+                            + ahead + &quot; ahead — consider ws:update-feature&quot;;
+                } else {
+<span class="nc" id="L228">                    marker = Ansi.yellow(&quot;·&quot;);</span>
+<span class="nc" id="L229">                    detail = behind + &quot; commit(s) behind main, &quot; + ahead + &quot; ahead&quot;;</span>
+                }
+
+<span class="nc" id="L232">                getLog().info(String.format(&quot;  %-24s %s %s&quot;,</span>
+                        name, marker, detail));
+<span class="nc" id="L234">            }</span>
+        }
+
+        // ── Section 5: Cascade ──────────────────────────────────────
+<span class="fc" id="L238">        List&lt;String[]&gt; cascadeRows = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L239" title="All 2 branches covered.">        if (!modifiedComponents.isEmpty()) {</span>
+<span class="fc" id="L240">            Set&lt;String&gt; allAffected = new LinkedHashSet&lt;&gt;();</span>
+<span class="fc bfc" id="L241" title="All 2 branches covered.">            for (String sub : modifiedComponents) {</span>
+<span class="fc" id="L242">                allAffected.addAll(graph.cascade(sub));</span>
+<span class="fc" id="L243">            }</span>
+<span class="fc" id="L244">            allAffected.removeAll(modifiedComponents);</span>
+
+<span class="pc bpc" id="L246" title="1 of 2 branches missed.">            if (!allAffected.isEmpty()) {</span>
+<span class="fc" id="L247">                getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L248">                getLog().info(&quot;  Cascade — components needing rebuild:&quot;);</span>
+<span class="fc" id="L249">                getLog().info(&quot;  ──────────────────────────────────────────────────────&quot;);</span>
+
+<span class="fc" id="L251">                List&lt;String&gt; buildOrder = graph.topologicalSort(</span>
+                        new LinkedHashSet&lt;&gt;(allAffected));
+<span class="fc bfc" id="L253" title="All 2 branches covered.">                for (String name : buildOrder) {</span>
+<span class="fc" id="L254">                    List&lt;String&gt; triggeredBy = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L255">                    Subproject sub = graph.manifest().subprojects().get(name);</span>
+<span class="pc bpc" id="L256" title="1 of 2 branches missed.">                    if (sub != null) {</span>
+<span class="fc bfc" id="L257" title="All 2 branches covered.">                        for (Dependency dep : sub.dependsOn()) {</span>
+<span class="fc bfc" id="L258" title="All 2 branches covered.">                            if (modifiedComponents.contains(dep.subproject())</span>
+<span class="pc bpc" id="L259" title="1 of 2 branches missed.">                                    || allAffected.contains(dep.subproject())) {</span>
+<span class="fc" id="L260">                                triggeredBy.add(dep.subproject());</span>
+                            }
+<span class="fc" id="L262">                        }</span>
+                    }
+<span class="fc" id="L264">                    String triggers = String.join(&quot;, &quot;, triggeredBy);</span>
+<span class="fc" id="L265">                    getLog().info(&quot;    &quot; + name + &quot; ← &quot; + triggers);</span>
+<span class="fc" id="L266">                    cascadeRows.add(new String[]{name, triggers});</span>
+<span class="fc" id="L267">                }</span>
+            }
+        }
+
+<span class="fc" id="L271">        getLog().info(&quot;&quot;);</span>
+
+        // Structured markdown report
+<span class="fc" id="L274">        writeReport(WsGoal.OVERVIEW, buildMarkdownReport(</span>
+                errors, graphRows, statusRows, divergenceRows, cascadeRows,
+<span class="fc" id="L276">                cloned, notCloned, modifiedComponents.size(), graph));</span>
+<span class="fc" id="L277">    }</span>
+
+    // ── Markdown report ─────────────────────────────────────────────
+
+    private String buildMarkdownReport(List&lt;String&gt; manifestErrors,
+                                        List&lt;String[]&gt; graphRows,
+                                        List&lt;String[]&gt; statusRows,
+                                        List&lt;String[]&gt; divergenceRows,
+                                        List&lt;String[]&gt; cascadeRows,
+                                        int cloned, int notCloned,
+                                        int modified,
+                                        WorkspaceGraph graph) {
+<span class="fc" id="L289">        var sb = new StringBuilder();</span>
+
+        // Manifest
+<span class="pc bpc" id="L292" title="1 of 2 branches missed.">        if (manifestErrors.isEmpty()) {</span>
+<span class="fc" id="L293">            sb.append(&quot;**Manifest:** consistent.\n\n&quot;);</span>
+        } else {
+<span class="nc" id="L295">            sb.append(&quot;**Manifest:** &quot;).append(manifestErrors.size())</span>
+<span class="nc" id="L296">              .append(&quot; error(s).\n\n&quot;);</span>
+        }
+
+        // Graph table
+<span class="fc" id="L300">        sb.append(&quot;### Dependency Graph\n\n&quot;);</span>
+<span class="fc" id="L301">        sb.append(&quot;| # | Subproject | Dependencies |\n&quot;);</span>
+<span class="fc" id="L302">        sb.append(&quot;|---|-----------|--------------|\n&quot;);</span>
+<span class="fc bfc" id="L303" title="All 2 branches covered.">        for (String[] row : graphRows) {</span>
+<span class="fc" id="L304">            sb.append(&quot;| &quot;).append(row[0])</span>
+<span class="fc" id="L305">              .append(&quot; | &quot;).append(row[1])</span>
+<span class="fc" id="L306">              .append(&quot; | &quot;).append(row[2])</span>
+<span class="fc" id="L307">              .append(&quot; |\n&quot;);</span>
+<span class="fc" id="L308">        }</span>
+
+        // Mermaid graph
+<span class="fc" id="L311">        sb.append('\n');</span>
+<span class="fc" id="L312">        sb.append(buildMermaidGraph(graph));</span>
+
+        // Status table
+<span class="fc" id="L315">        sb.append(&quot;\n### Status\n\n&quot;);</span>
+<span class="fc" id="L316">        sb.append(cloned).append(&quot; cloned, &quot;).append(notCloned)</span>
+<span class="fc" id="L317">          .append(&quot; not cloned, &quot;).append(modified).append(&quot; with uncommitted changes.\n\n&quot;);</span>
+<span class="fc" id="L318">        sb.append(&quot;| Subproject | Branch | SHA | Status |\n&quot;);</span>
+<span class="fc" id="L319">        sb.append(&quot;|-----------|--------|-----|--------|\n&quot;);</span>
+<span class="fc bfc" id="L320" title="All 2 branches covered.">        for (String[] row : statusRows) {</span>
+<span class="fc" id="L321">            sb.append(&quot;| &quot;).append(row[0])</span>
+<span class="fc" id="L322">              .append(&quot; | &quot;).append(row[1])</span>
+<span class="fc" id="L323">              .append(&quot; | &quot;).append(row[2])</span>
+<span class="fc" id="L324">              .append(&quot; | &quot;).append(row[3])</span>
+<span class="fc" id="L325">              .append(&quot; |\n&quot;);</span>
+<span class="fc" id="L326">        }</span>
+
+        // Divergence
+<span class="pc bpc" id="L329" title="1 of 2 branches missed.">        if (!divergenceRows.isEmpty()) {</span>
+<span class="nc" id="L330">            sb.append(&quot;\n### Feature Branch Divergence\n\n&quot;);</span>
+<span class="nc" id="L331">            sb.append(&quot;| Subproject | Branch | Behind | Ahead | Status |\n&quot;);</span>
+<span class="nc" id="L332">            sb.append(&quot;|-----------|--------|--------|-------|--------|\n&quot;);</span>
+<span class="nc bnc" id="L333" title="All 2 branches missed.">            for (String[] row : divergenceRows) {</span>
+<span class="nc" id="L334">                sb.append(&quot;| &quot;).append(row[0])</span>
+<span class="nc" id="L335">                  .append(&quot; | &quot;).append(row[1])</span>
+<span class="nc" id="L336">                  .append(&quot; | &quot;).append(row[2])</span>
+<span class="nc" id="L337">                  .append(&quot; | &quot;).append(row[3])</span>
+<span class="nc" id="L338">                  .append(&quot; | &quot;).append(row[4])</span>
+<span class="nc" id="L339">                  .append(&quot; |\n&quot;);</span>
+<span class="nc" id="L340">            }</span>
+        }
+
+        // Cascade
+<span class="fc bfc" id="L344" title="All 2 branches covered.">        if (!cascadeRows.isEmpty()) {</span>
+<span class="fc" id="L345">            sb.append(&quot;\n### Cascade\n\n&quot;);</span>
+<span class="fc" id="L346">            sb.append(&quot;| Subproject | Triggered By |\n&quot;);</span>
+<span class="fc" id="L347">            sb.append(&quot;|-----------|-------------|\n&quot;);</span>
+<span class="fc bfc" id="L348" title="All 2 branches covered.">            for (String[] row : cascadeRows) {</span>
+<span class="fc" id="L349">                sb.append(&quot;| &quot;).append(row[0])</span>
+<span class="fc" id="L350">                  .append(&quot; | &quot;).append(row[1])</span>
+<span class="fc" id="L351">                  .append(&quot; |\n&quot;);</span>
+<span class="fc" id="L352">            }</span>
+        }
+
+<span class="fc" id="L355">        return sb.toString();</span>
+    }
+
+    // ── Mermaid graph ───────────────────────────────────────────────
+
+    private String buildMermaidGraph(WorkspaceGraph graph) {
+<span class="fc" id="L361">        List&lt;String&gt; sorted = graph.topologicalSort();</span>
+<span class="fc" id="L362">        var sb = new StringBuilder();</span>
+<span class="fc" id="L363">        sb.append(&quot;```mermaid\ngraph TD\n&quot;);</span>
+
+<span class="fc bfc" id="L365" title="All 2 branches covered.">        for (String name : sorted) {</span>
+<span class="fc" id="L366">            String id = name.replace(&quot;-&quot;, &quot;_&quot;);</span>
+<span class="fc" id="L367">            sb.append(&quot;    &quot;).append(id)</span>
+<span class="fc" id="L368">              .append(&quot;[\&quot;&quot;).append(name).append(&quot;\&quot;]\n&quot;);</span>
+<span class="fc" id="L369">        }</span>
+<span class="fc" id="L370">        sb.append('\n');</span>
+
+<span class="fc bfc" id="L372" title="All 2 branches covered.">        for (String name : sorted) {</span>
+<span class="fc" id="L373">            Subproject sub = graph.manifest().subprojects().get(name);</span>
+<span class="fc" id="L374">            String sourceId = name.replace(&quot;-&quot;, &quot;_&quot;);</span>
+<span class="fc bfc" id="L375" title="All 2 branches covered.">            for (Dependency dep : sub.dependsOn()) {</span>
+<span class="fc" id="L376">                String targetId = dep.subproject().replace(&quot;-&quot;, &quot;_&quot;);</span>
+<span class="pc bpc" id="L377" title="1 of 2 branches missed.">                if (&quot;content&quot;.equals(dep.relationship())) {</span>
+<span class="nc" id="L378">                    sb.append(&quot;    &quot;).append(sourceId)</span>
+<span class="nc" id="L379">                      .append(&quot; -.-&gt; &quot;).append(targetId).append('\n');</span>
+                } else {
+<span class="fc" id="L381">                    sb.append(&quot;    &quot;).append(sourceId)</span>
+<span class="fc" id="L382">                      .append(&quot; --&gt; &quot;).append(targetId).append('\n');</span>
+                }
+<span class="fc" id="L384">            }</span>
+<span class="fc" id="L385">        }</span>
+
+<span class="fc" id="L387">        sb.append(&quot;```\n&quot;);</span>
+<span class="fc" id="L388">        return sb.toString();</span>
+    }
+
+    // ── DOT output ──────────────────────────────────────────────────
+
+    private void printDot(WorkspaceGraph graph) {
+<span class="nc" id="L394">        String dot = GraphWorkspaceMojo.buildDotGraph(&quot;workspace&quot;,</span>
+<span class="nc" id="L395">                graph.manifest().subprojects().values().stream()</span>
+<span class="nc" id="L396">                        .map(Subproject::name)</span>
+<span class="nc" id="L397">                        .toList(),</span>
+<span class="nc" id="L398">                graph.manifest().subprojects().values().stream()</span>
+<span class="nc bnc" id="L399" title="All 2 branches missed.">                        .filter(c -&gt; !c.dependsOn().isEmpty())</span>
+<span class="nc" id="L400">                        .collect(Collectors.toMap(Subproject::name,</span>
+<span class="nc" id="L401">                                c -&gt; c.dependsOn().stream()</span>
+<span class="nc" id="L402">                                        .map(d -&gt; new String[]{d.subproject(), d.relationship()})</span>
+<span class="nc" id="L403">                                        .toList())));</span>
+<span class="nc bnc" id="L404" title="All 2 branches missed.">        for (String line : dot.split(&quot;\n&quot;)) {</span>
+<span class="nc" id="L405">            getLog().info(line);</span>
+        }
+<span class="nc" id="L407">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

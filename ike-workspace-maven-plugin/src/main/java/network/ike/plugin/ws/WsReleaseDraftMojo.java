@@ -184,6 +184,7 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
         PreflightResult releasePreflight = Preflight.of(
                 List.of(PreflightCondition.WORKING_TREE_CLEAN,
                         PreflightCondition.NO_ON_DISK_GHPAGES_LEAK,
+                        PreflightCondition.NO_SCPEXE_SITE_URLS,
                         PreflightCondition.NO_SNAPSHOT_PROPERTIES,
                         PreflightCondition.SUBPROJECT_HAS_DISTRIBUTION_MANAGEMENT,
                         PreflightCondition.NO_FOUNDATION_PROPERTY_SHADOWING,

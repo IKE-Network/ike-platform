@@ -396,6 +396,58 @@ public enum PreflightCondition {
         }
     },
 
+    /**
+     * No subproject root POM (nor the workspace root) declares a
+     * {@code <distributionManagement><site><url>} starting with
+     * {@code scpexe://} — that wagon was retired in
+     * ike-issues#304 in favor of the GitHub Pages publish path
+     * ({@code https://ike.network/<repo>/} via the org CNAME).
+     *
+     * <p>A surviving {@code scpexe://} is a silent release-blocker:
+     * the goal that consumes the URL only fails at the step that
+     * tries to use the wagon, after subproject releases have
+     * already started. This check catches it at draft time so the
+     * operator fixes the URL before any tags ship.
+     *
+     * <p>ike-issues#372.
+     */
+    NO_SCPEXE_SITE_URLS(
+            "No POM declares a scpexe:// <site><url> "
+                    + "(retired in #304)") {
+        @Override
+        public Optional<String> check(PreflightContext ctx) {
+            File root = ctx.workspaceRoot();
+            List<String> violations = new ArrayList<>();
+
+            scanPomForScpexeSiteUrl(new File(root, "pom.xml"),
+                    "workspace root", violations);
+            for (String name : ctx.subprojects()) {
+                scanPomForScpexeSiteUrl(
+                        new File(new File(root, name), "pom.xml"),
+                        name, violations);
+            }
+
+            if (violations.isEmpty()) return Optional.empty();
+
+            var sb = new StringBuilder();
+            sb.append(violations.size())
+                    .append(" POM(s) declare a scpexe:// <site><url>:\n");
+            for (String v : violations) {
+                sb.append("    • ").append(v).append('\n');
+            }
+            sb.append("  scpexe:// was retired in ike-issues#304.\n");
+            sb.append("  Canonical site distribution is now GitHub Pages\n");
+            sb.append("  served at https://ike.network/<repo>/ via the\n");
+            sb.append("  org CNAME. Update each pom's\n");
+            sb.append("  <distributionManagement><site><url> to the\n");
+            sb.append("  https:// form (inheriting from ike-parent's\n");
+            sb.append("  https://ike.network/${project.artifactId}/\n");
+            sb.append("  default usually suffices — delete the override).\n");
+            sb.append("  ike-issues#372.");
+            return Optional.of(sb.toString());
+        }
+    },
+
     PARENT_COHERENCE(
             "Subprojects sharing the workspace's parent GA have "
                     + "matching version + <relativePath/>") {
@@ -604,6 +656,64 @@ public enum PreflightCondition {
         int close = pomContent.indexOf("</artifactId>", valueStart);
         if (close < 0) return null;
         return pomContent.substring(valueStart, close).trim();
+    }
+
+    /**
+     * Scan a single POM for a {@code <distributionManagement><site>}
+     * block whose {@code <url>} starts with {@code scpexe://}. Used
+     * by {@link #NO_SCPEXE_SITE_URLS}.
+     *
+     * <p>Quietly tolerates unreadable POMs — preflight is best-
+     * effort. The check is substring-based on the
+     * {@code <distributionManagement>...</distributionManagement>}
+     * block so it doesn't false-positive on a scpexe wagon
+     * reference outside the site URL (e.g., in a
+     * {@code <repository>} block, though that's also gone).
+     *
+     * @param pom         pom.xml to scan (may not exist)
+     * @param displayName label for the violation line
+     *                    ({@link #WORKSPACE_ROOT_NAME} or
+     *                    subproject name)
+     * @param accum       accumulator for formatted violations
+     */
+    static void scanPomForScpexeSiteUrl(File pom, String displayName,
+                                         List<String> accum) {
+        if (!pom.isFile()) return;
+        String content;
+        try {
+            content = Files.readString(pom.toPath(),
+                    StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            return; // best-effort
+        }
+        if (containsScpexeSiteUrl(content)) {
+            accum.add(displayName + " (pom.xml has scpexe:// "
+                    + "<site><url>)");
+        }
+    }
+
+    /**
+     * Pure-string test for an {@code scpexe://} URL inside a POM's
+     * {@code <distributionManagement>} block. Extracted so it's
+     * testable without filesystem fixtures.
+     *
+     * @param pomContent POM XML as a string
+     * @return {@code true} when a scpexe:// site URL is present
+     */
+    static boolean containsScpexeSiteUrl(String pomContent) {
+        if (pomContent == null) return false;
+        int dmOpen = pomContent.indexOf("<distributionManagement>");
+        if (dmOpen < 0) return false;
+        int dmClose = pomContent.indexOf("</distributionManagement>",
+                dmOpen);
+        if (dmClose < dmOpen) return false;
+        String block = pomContent.substring(dmOpen, dmClose);
+        int siteOpen = block.indexOf("<site>");
+        if (siteOpen < 0) return false;
+        int siteClose = block.indexOf("</site>", siteOpen);
+        if (siteClose < siteOpen) return false;
+        String siteBlock = block.substring(siteOpen, siteClose);
+        return siteBlock.contains("scpexe://");
     }
 
     /**

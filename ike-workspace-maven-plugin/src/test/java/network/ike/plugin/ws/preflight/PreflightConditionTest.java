@@ -341,4 +341,68 @@ class PreflightConditionTest {
 
         assertThat(hits).isEmpty();
     }
+
+    // ── containsScpexeSiteUrl (#372) ──────────────────────────────
+
+    @Test
+    void containsScpexeSiteUrl_scpexeInsideSiteBlock_true() {
+        String pom = """
+                <project>
+                  <distributionManagement>
+                    <site>
+                      <id>x</id>
+                      <url>scpexe://proxy/srv/ike-site/x/</url>
+                    </site>
+                  </distributionManagement>
+                </project>
+                """;
+        assertThat(PreflightCondition.containsScpexeSiteUrl(pom))
+                .isTrue();
+    }
+
+    @Test
+    void containsScpexeSiteUrl_httpsSiteUrl_false() {
+        String pom = """
+                <project>
+                  <distributionManagement>
+                    <site>
+                      <id>x</id>
+                      <url>https://ike.network/x/</url>
+                    </site>
+                  </distributionManagement>
+                </project>
+                """;
+        assertThat(PreflightCondition.containsScpexeSiteUrl(pom))
+                .isFalse();
+    }
+
+    @Test
+    void containsScpexeSiteUrl_scpexeOutsideSiteBlock_false() {
+        // scpexe:// elsewhere in the pom but not inside <site> — we
+        // only flag the site URL since that's the post-#304 retired
+        // path. Other references would already fail at their own
+        // resolution step.
+        String pom = """
+                <project>
+                  <distributionManagement>
+                    <repository>
+                      <url>scpexe://legacy/wherever/</url>
+                    </repository>
+                    <site>
+                      <url>https://ike.network/x/</url>
+                    </site>
+                  </distributionManagement>
+                </project>
+                """;
+        assertThat(PreflightCondition.containsScpexeSiteUrl(pom))
+                .isFalse();
+    }
+
+    @Test
+    void containsScpexeSiteUrl_noDistMgmt_false() {
+        assertThat(PreflightCondition.containsScpexeSiteUrl(
+                "<project/>")).isFalse();
+        assertThat(PreflightCondition.containsScpexeSiteUrl(null))
+                .isFalse();
+    }
 }

@@ -112,17 +112,23 @@ public class WsCascadeFoundationPublishMojo extends AbstractWorkspaceMojo {
     boolean pushRelease;
 
     /**
-     * The running plugin's own version. Maven 4 injects this at
-     * mojo creation time. Used by {@link #invokeWorkspaceRelease}
-     * to build explicit-coords invocations of {@code ws:release-
-     * publish} that pin to THIS plugin version (instead of letting
-     * the workspace's {@code pluginManagement} pick — which, for a
-     * workspace still on an old {@code ike-parent}, would resolve
-     * to an old version that lacks the cascade-driven fixes).
-     * ike-issues#378.
+     * The running plugin's own version, read from
+     * {@code META-INF/maven/.../pom.properties} on the classpath
+     * (see {@link #resolvePluginVersion}). Used by
+     * {@link #invokeWorkspaceRelease} to build explicit-coords
+     * invocations of {@code ws:release-publish} that pin to THIS
+     * plugin version instead of letting the workspace's
+     * {@code pluginManagement} pick (which, for a workspace still
+     * on an old {@code ike-parent}, would resolve to an old version
+     * that lacks the cascade-driven fixes). ike-issues#378.
+     *
+     * <p>Maven 4's {@code @Parameter(defaultValue = "${plugin.version}")}
+     * idiom does NOT work — Maven 4.0.0-rc-5 doesn't bind
+     * {@code PluginDescriptor} in the DI container (see WsHelpMojo
+     * for the same observation). The classpath-resource fallback
+     * is independent of the DI container and works reliably.
      */
-    @Parameter(defaultValue = "${plugin.version}", readonly = true)
-    String pluginVersion;
+    private String pluginVersion;
 
     /**
      * Skip the per-foundation pre-install step that seeds {@code
@@ -501,6 +507,9 @@ public class WsCascadeFoundationPublishMojo extends AbstractWorkspaceMojo {
     Outcome invokeWorkspaceRelease(File wsRoot) {
         String mvn = ReleaseSupport.resolveMavenWrapper(wsRoot, getLog())
                 .getAbsolutePath();
+        if (pluginVersion == null) {
+            pluginVersion = resolvePluginVersion();
+        }
         String selfCoords = "network.ike.platform"
                 + ":ike-workspace-maven-plugin:"
                 + pluginVersion
@@ -614,6 +623,36 @@ public class WsCascadeFoundationPublishMojo extends AbstractWorkspaceMojo {
     static String padRight(String s, int width) {
         if (s.length() >= width) return s;
         return s + " ".repeat(width - s.length());
+    }
+
+    /**
+     * Resolve this plugin's own version by reading
+     * {@code META-INF/maven/network.ike.platform/
+     * ike-workspace-maven-plugin/pom.properties} from the classpath.
+     * Maven generates this file at build time for every artifact, so
+     * it's a reliable self-version source independent of the Maven
+     * DI container's plugin-descriptor bindings (which Maven 4.0.0-rc-5
+     * doesn't reliably populate).
+     *
+     * @return this plugin's version, or {@code "UNKNOWN"} if the
+     *         pom.properties resource can't be read (a build error
+     *         that would prevent invocation entirely, so should
+     *         never happen at runtime).
+     */
+    static String resolvePluginVersion() {
+        String resource = "/META-INF/maven/network.ike.platform"
+                + "/ike-workspace-maven-plugin/pom.properties";
+        try (java.io.InputStream is =
+                     WsCascadeFoundationPublishMojo.class
+                             .getResourceAsStream(resource)) {
+            if (is == null) return "UNKNOWN";
+            java.util.Properties p = new java.util.Properties();
+            p.load(is);
+            String v = p.getProperty("version");
+            return v != null ? v : "UNKNOWN";
+        } catch (java.io.IOException e) {
+            return "UNKNOWN";
+        }
     }
 
     /** One foundation's outcome in the cascade summary. */

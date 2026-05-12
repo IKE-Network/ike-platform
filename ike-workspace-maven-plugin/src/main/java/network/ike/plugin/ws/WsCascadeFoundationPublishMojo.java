@@ -39,12 +39,13 @@ import java.util.regex.Pattern;
  * parent is the search root; non-checked-out foundations are skipped
  * with a clear "not found" entry in the report.
  *
- * <p>This goal does NOT run {@code ws:release-publish} on the workspace
- * itself. Pass {@code -DalsoReleaseWorkspace=true} to chain the
- * workspace cascade after the foundation cascade completes — useful
- * for "release everything" pipelines. Default is off so operators who
- * want a draft-only foundation update don't accidentally trigger the
- * workspace release.
+ * <p>After the foundation cascade succeeds, this goal also runs
+ * {@code ws:release-publish} on the current workspace by default —
+ * the operator is already in a workspace and almost always wants the
+ * whole loop closed (foundations + workspace) rather than foundations
+ * only. Pass {@code -DskipWorkspace=true} for the rarer
+ * foundation-only case (e.g., releasing foundations so a sibling
+ * workspace can pick them up, without touching this workspace yet).
  *
  * <p>No draft variant: foundation releases already have
  * {@code ike:release-draft} individually if the operator wants a
@@ -52,12 +53,12 @@ import java.util.regex.Pattern;
  *
  * <p>Usage:
  * <pre>
- * # From a workspace root, walk and release foundations that have
- * # unreleased changes:
+ * # Full loop: release foundations that have unreleased changes,
+ * # then release the workspace (default behavior):
  * mvn ws:cascade-foundation-publish
  *
- * # Same, plus run ws:release-publish on the workspace after:
- * mvn ws:cascade-foundation-publish -DalsoReleaseWorkspace=true
+ * # Foundations only (don't touch the workspace):
+ * mvn ws:cascade-foundation-publish -DskipWorkspace=true
  *
  * # Override the foundation set (rarely useful):
  * mvn ws:cascade-foundation-publish -Dfoundations=ike-tooling,ike-docs
@@ -85,12 +86,21 @@ public class WsCascadeFoundationPublishMojo extends AbstractWorkspaceMojo {
     File foundationsDir;
 
     /**
-     * Chain {@code ws:release-publish} on the current workspace after
-     * the foundation cascade completes. Defaults to {@code false} so
-     * this goal can be used as a foundation-only release driver.
+     * Skip the workspace's own {@code ws:release-publish} step at the
+     * end of the cascade. Defaults to {@code false} — the operator
+     * almost always wants the whole loop closed (foundations +
+     * workspace) since they're invoking from inside a workspace.
+     *
+     * <p>Pass {@code -DskipWorkspace=true} for the foundation-only
+     * case (e.g., releasing foundations so a sibling workspace can
+     * pick them up, without touching this workspace yet).
+     *
+     * <p>Replaces the inverted {@code alsoReleaseWorkspace} parameter
+     * (default false) — that default served the rare case, this one
+     * serves the common case.
      */
-    @Parameter(property = "alsoReleaseWorkspace", defaultValue = "false")
-    boolean alsoReleaseWorkspace;
+    @Parameter(property = "skipWorkspace", defaultValue = "false")
+    boolean skipWorkspace;
 
     /**
      * Forwarded to {@code ike:release-publish} on each foundation
@@ -128,7 +138,7 @@ public class WsCascadeFoundationPublishMojo extends AbstractWorkspaceMojo {
         getLog().info("  Base directory:  " + baseDir);
         getLog().info("  Foundations:     " + String.join(", ", names));
         getLog().info("  pushRelease:     " + pushRelease);
-        getLog().info("  alsoReleaseWorkspace: " + alsoReleaseWorkspace);
+        getLog().info("  skipWorkspace:   " + skipWorkspace);
         getLog().info("");
 
         List<Outcome> outcomes = new ArrayList<>();
@@ -150,9 +160,10 @@ public class WsCascadeFoundationPublishMojo extends AbstractWorkspaceMojo {
             }
         }
 
-        // Optional workspace cascade — only if all foundations cleared.
+        // Workspace cascade — default-on, opt out via -DskipWorkspace=true.
+        // Only runs if all foundations cleared (any failure aborts above).
         Outcome wsOutcome = null;
-        if (alsoReleaseWorkspace) {
+        if (!skipWorkspace) {
             getLog().info("");
             getLog().info("─── Workspace cascade ────────────────────────────");
             wsOutcome = invokeWorkspaceRelease(wsRoot);

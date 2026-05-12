@@ -30,6 +30,12 @@ public enum WsGoal {
             "Preview inter-subproject version alignment."),
     ALIGN_PUBLISH("align-publish", WsAlignPublishMojo.class,
             "Apply inter-subproject version alignment."),
+    CASCADE_FOUNDATION_PUBLISH("cascade-foundation-publish",
+            WsCascadeFoundationPublishMojo.class,
+            "Walk the IKE foundation cascade (ike-tooling, ike-docs, "
+                    + "ike-platform) and run ike:release-publish on any "
+                    + "that have unreleased changes. Optionally chain "
+                    + "ws:release-publish on the workspace after. #375."),
     CHECK_BRANCH("check-branch", CheckBranchMojo.class,
             "Warn when a subproject branch deviates from workspace.yaml."),
     CHECKPOINT_DRAFT("checkpoint-draft", WsCheckpointDraftMojo.class,

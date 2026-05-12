@@ -146,7 +146,7 @@ public class WsCascadeFoundationPublishMojo extends AbstractWorkspaceMojo {
                 releasedVersions.put(name, outcome.releasedAs);
             }
             if (outcome.kind == OutcomeKind.FAILED) {
-                reportAndMaybeFail(outcomes, name);
+                reportAndMaybeFail(outcomes, name, baseDir);
             }
         }
 
@@ -241,7 +241,8 @@ public class WsCascadeFoundationPublishMojo extends AbstractWorkspaceMojo {
 
         // Run ike:release-publish.
         getLog().info("  Running mvn ike:release-publish...");
-        String mvn = findMvn(dir);
+        String mvn = ReleaseSupport.resolveMavenWrapper(dir, getLog())
+                .getAbsolutePath();
         try {
             ReleaseSupport.exec(dir, getLog(),
                     mvn, "ike:release-publish",
@@ -420,7 +421,8 @@ public class WsCascadeFoundationPublishMojo extends AbstractWorkspaceMojo {
      * Chain {@code ws:release-publish} on the workspace.
      */
     Outcome invokeWorkspaceRelease(File wsRoot) {
-        String mvn = findMvn(wsRoot);
+        String mvn = ReleaseSupport.resolveMavenWrapper(wsRoot, getLog())
+                .getAbsolutePath();
         try {
             ReleaseSupport.exec(wsRoot, getLog(),
                     mvn, "ws:release-publish",
@@ -441,15 +443,19 @@ public class WsCascadeFoundationPublishMojo extends AbstractWorkspaceMojo {
      *
      * @param outcomes outcomes recorded so far
      * @param failedAt the name of the failed foundation
+     * @param baseDir  the resolved foundations base dir (NOT the
+     *                 {@link #foundationsDir} field, which may be
+     *                 null when the default of "parent of workspace"
+     *                 is in effect)
      * @throws MojoException always — release fails fast on first
      *                       foundation failure
      */
-    void reportAndMaybeFail(List<Outcome> outcomes, String failedAt)
-            throws MojoException {
+    void reportAndMaybeFail(List<Outcome> outcomes, String failedAt,
+                              File baseDir) throws MojoException {
         reportFinal(outcomes);
         getLog().info("");
         getLog().info("Resume after fixing " + failedAt + ":");
-        getLog().info("  cd " + foundationsDir + "/" + failedAt
+        getLog().info("  cd " + new File(baseDir, failedAt).getAbsolutePath()
                 + " && mvn ike:release-publish");
         getLog().info("Then re-run this cascade to continue with the "
                 + "remaining foundations.");
@@ -521,19 +527,6 @@ public class WsCascadeFoundationPublishMojo extends AbstractWorkspaceMojo {
         } catch (Exception e) {
             return -1;
         }
-    }
-
-    /**
-     * Locate {@code mvnw} in {@code dir}; fall back to PATH {@code mvn}.
-     * Mirrors {@link WsReleaseDraftMojo#findMvn} so both goals invoke
-     * mvn the same way.
-     */
-    static String findMvn(File dir) {
-        File mvnw = new File(dir, "mvnw");
-        if (mvnw.exists() && mvnw.canExecute()) {
-            return mvnw.getAbsolutePath();
-        }
-        return "mvn";
     }
 
     static String padRight(String s, int width) {

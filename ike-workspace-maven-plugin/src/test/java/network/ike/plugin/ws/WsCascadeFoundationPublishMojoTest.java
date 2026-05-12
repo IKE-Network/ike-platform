@@ -22,36 +22,6 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class WsCascadeFoundationPublishMojoTest {
 
-    // ── findMvn ──────────────────────────────────────────────────
-
-    @Test
-    void findMvn_picksLocalMvnwWhenExecutable(@TempDir Path tmp) throws IOException {
-        Path mvnw = tmp.resolve("mvnw");
-        Files.writeString(mvnw, "#!/bin/sh\nexec mvn \"$@\"\n");
-        mvnw.toFile().setExecutable(true);
-
-        assertThat(WsCascadeFoundationPublishMojo.findMvn(tmp.toFile()))
-                .isEqualTo(mvnw.toAbsolutePath().toString());
-    }
-
-    @Test
-    void findMvn_fallsBackToMvnOnPath(@TempDir Path tmp) {
-        // No mvnw file present.
-        assertThat(WsCascadeFoundationPublishMojo.findMvn(tmp.toFile()))
-                .isEqualTo("mvn");
-    }
-
-    @Test
-    void findMvn_existsButNotExecutable_fallsBack(@TempDir Path tmp)
-            throws IOException {
-        Path mvnw = tmp.resolve("mvnw");
-        Files.writeString(mvnw, "#!/bin/sh\nexec mvn \"$@\"\n");
-        // Deliberately not executable.
-
-        assertThat(WsCascadeFoundationPublishMojo.findMvn(tmp.toFile()))
-                .isEqualTo("mvn");
-    }
-
     // ── padRight ─────────────────────────────────────────────────
 
     @Test

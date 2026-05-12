@@ -384,13 +384,38 @@ public enum PreflightCondition {
                 sb.append("    • ").append(rel).append('\n');
             }
             sb.append("  These directories hold rendered Maven Site\n");
-            sb.append("  output (index.html + css/ + images/) that has\n");
-            sb.append("  escaped target/ during a release-flow `mvn site`\n");
-            sb.append("  or `mvn site:stage` invocation. .gitignore may\n");
+            sb.append("  output (index.html + css/ + images/) that\n");
+            sb.append("  escaped target/ during a release-flow\n");
+            sb.append("  `mvn site:stage` invocation. .gitignore may\n");
             sb.append("  already block them from being committed, but\n");
-            sb.append("  the files keep coming back on every release.\n");
-            sb.append("  Safe to delete — canonical published content\n");
-            sb.append("  lives on each repo's gh-pages branch.\n");
+            sb.append("  the files keep coming back. The underlying\n");
+            sb.append("  cause was fixed in ike-platform's ike-parent\n");
+            sb.append("  (see ike-issues#358 closing comment); when the\n");
+            sb.append("  next ike-platform release ships and this\n");
+            sb.append("  workspace bumps to it, the leak stops at the\n");
+            sb.append("  source. Until then, safe to delete the\n");
+            sb.append("  directories above — canonical published\n");
+            sb.append("  content lives on each repo's gh-pages branch.\n");
+            sb.append("  Copy-paste cleanup:\n");
+            for (Path leak : leaks) {
+                Path rel;
+                try {
+                    rel = root.toPath().relativize(leak);
+                } catch (IllegalArgumentException ignore) {
+                    rel = leak;
+                }
+                // Strip the trailing /<artifactId>/<artifactId> down to
+                // /<artifactId> so the rm wipes the whole top-level
+                // leak dir (which has nothing legitimate in it). For
+                // workspace-root leaks the path is <artifactId>/; for
+                // subproject leaks it's <subprojectDir>/<artifactId>/.
+                Path parent = rel.getParent();
+                if (parent != null) {
+                    sb.append("    rm -rf ").append(parent).append('\n');
+                } else {
+                    sb.append("    rm -rf ").append(rel).append('\n');
+                }
+            }
             sb.append("  ike-issues#358.");
             return Optional.of(sb.toString());
         }

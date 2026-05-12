@@ -1,6 +1,6 @@
 ---
-date_published: 2026-05-10
-date_modified: 2026-05-10
+date_published: 2026-05-11
+date_modified: 2026-05-11
 canonical_url: https://ike.network/ike-platform/distribution-management.html
 ---
 
@@ -18,4 +18,4 @@ The following is the distribution management information used by this project.
 
 ## [Site - ike-site](#site---ike-site)
 
-[https://ike.network/ike-platform/41/](https://ike.network/ike-platform/41/)[3]
+[https://ike.network/ike-platform/42/](https://ike.network/ike-platform/42/)[3]

@@ -321,6 +321,81 @@ public enum PreflightCondition {
      * release-draft surfaces it as a warning and release-publish
      * promotes it to a hard error.
      */
+    /**
+     * No on-disk gh-pages-style site output leaks at
+     * {@code <projectDir>/<artifactId>/<artifactId>/index.html} —
+     * whether or not git tracks them.
+     *
+     * <p>Why this exists despite {@link #WORKING_TREE_CLEAN} already
+     * detecting committed leaks: once an operator adds
+     * {@code .gitignore} entries (the standing workaround in
+     * ike-issues#358), the leak files are no longer reported by
+     * {@code git status}, so {@link #WORKING_TREE_CLEAN} thinks the
+     * tree is clean — but the files keep getting regenerated under
+     * the working tree on every release flow. This check scans the
+     * filesystem directly so the operator sees the leak even when
+     * git has been told to ignore it.
+     *
+     * <p>Pattern: a directory named exactly the same as a known
+     * cascade artifactId living inside another directory named the
+     * same, containing an {@code index.html} — signature of an
+     * {@code mvn site} render that escaped {@code target/}. We check
+     * both the workspace root (where workspace-root and subproject
+     * artifactIds can both shadow) and each subproject root.
+     * ike-issues#358.
+     */
+    NO_ON_DISK_GHPAGES_LEAK(
+            "No on-disk gh-pages-style site output leaks under any "
+                    + "project's working tree") {
+        @Override
+        public Optional<String> check(PreflightContext ctx) {
+            File root = ctx.workspaceRoot();
+            List<String> artifactIds = collectCascadeArtifactIds(ctx);
+            if (artifactIds.isEmpty()) return Optional.empty();
+
+            List<Path> leaks = new ArrayList<>();
+
+            // Workspace root: any artifactId in the cascade can shadow.
+            detectGhPagesLeakDirs(root, artifactIds, leaks);
+
+            // Each subproject root: typically just its own artifactId,
+            // but cheap to check the full cascade set in case of
+            // cross-shadowing during a multi-module workspace run.
+            for (String name : ctx.subprojects()) {
+                File sub = new File(root, name);
+                if (!sub.isDirectory()) continue;
+                detectGhPagesLeakDirs(sub, artifactIds, leaks);
+            }
+
+            if (leaks.isEmpty()) return Optional.empty();
+
+            var sb = new StringBuilder();
+            sb.append(leaks.size())
+                    .append(" on-disk gh-pages leak director")
+                    .append(leaks.size() == 1 ? "y" : "ies")
+                    .append(" found:\n");
+            for (Path leak : leaks) {
+                Path rel;
+                try {
+                    rel = root.toPath().relativize(leak);
+                } catch (IllegalArgumentException ignore) {
+                    rel = leak;
+                }
+                sb.append("    • ").append(rel).append('\n');
+            }
+            sb.append("  These directories hold rendered Maven Site\n");
+            sb.append("  output (index.html + css/ + images/) that has\n");
+            sb.append("  escaped target/ during a release-flow `mvn site`\n");
+            sb.append("  or `mvn site:stage` invocation. .gitignore may\n");
+            sb.append("  already block them from being committed, but\n");
+            sb.append("  the files keep coming back on every release.\n");
+            sb.append("  Safe to delete — canonical published content\n");
+            sb.append("  lives on each repo's gh-pages branch.\n");
+            sb.append("  ike-issues#358.");
+            return Optional.of(sb.toString());
+        }
+    },
+
     PARENT_COHERENCE(
             "Subprojects sharing the workspace's parent GA have "
                     + "matching version + <relativePath/>") {
@@ -461,6 +536,103 @@ public enum PreflightCondition {
             }
         }
         return false;
+    }
+
+    /**
+     * Read every {@code pom.xml} reachable via the workspace root or any
+     * subproject in the context, extracting each one's {@code <artifactId>}.
+     * Used to seed on-disk gh-pages leak detection — the leak directory
+     * names always equal one of these.
+     *
+     * <p>Best-effort: unreadable POMs are silently skipped. Returns a
+     * de-duplicated list in encounter order (workspace first, then
+     * subprojects in their declared order).
+     *
+     * @param ctx the preflight context
+     * @return distinct artifactIds discovered across the workspace
+     */
+    static List<String> collectCascadeArtifactIds(PreflightContext ctx) {
+        File root = ctx.workspaceRoot();
+        var seen = new java.util.LinkedHashSet<String>();
+        addArtifactIdIfPresent(new File(root, "pom.xml"), seen);
+        for (String name : ctx.subprojects()) {
+            addArtifactIdIfPresent(new File(new File(root, name), "pom.xml"),
+                    seen);
+        }
+        return new ArrayList<>(seen);
+    }
+
+    private static void addArtifactIdIfPresent(File pom,
+                                               java.util.Set<String> accum) {
+        if (!pom.isFile()) return;
+        try {
+            String content = Files.readString(pom.toPath(),
+                    StandardCharsets.UTF_8);
+            String artifactId = extractTopLevelArtifactId(content);
+            if (artifactId != null && !artifactId.isBlank()) {
+                accum.add(artifactId);
+            }
+        } catch (IOException ignore) {
+            // best-effort
+        }
+    }
+
+    /**
+     * Extract the top-level {@code <artifactId>} from POM XML — the
+     * project's own artifactId, not a {@code <parent>} or
+     * {@code <dependency>} reference. Uses a tag-after-tag scan so it
+     * doesn't drag in an XML parser dependency.
+     *
+     * @param pomContent POM XML as a string
+     * @return the top-level artifactId, or {@code null} if not found
+     */
+    static String extractTopLevelArtifactId(String pomContent) {
+        if (pomContent == null) return null;
+        // Skip any leading <parent>...</parent> block so we don't return
+        // the parent's artifactId.
+        int searchFrom = 0;
+        int parentOpen = pomContent.indexOf("<parent>");
+        if (parentOpen >= 0) {
+            int parentClose = pomContent.indexOf("</parent>", parentOpen);
+            if (parentClose > parentOpen) {
+                searchFrom = parentClose + "</parent>".length();
+            }
+        }
+        int open = pomContent.indexOf("<artifactId>", searchFrom);
+        if (open < 0) return null;
+        int valueStart = open + "<artifactId>".length();
+        int close = pomContent.indexOf("</artifactId>", valueStart);
+        if (close < 0) return null;
+        return pomContent.substring(valueStart, close).trim();
+    }
+
+    /**
+     * Within {@code projectDir}, look for {@code <id>/<id>/index.html}
+     * for each {@code id} in {@code artifactIds}. Each hit is added to
+     * {@code accum} as the directory containing the {@code index.html}
+     * (i.e., {@code projectDir/<id>/<id>}).
+     *
+     * <p>{@code index.html} is the signal we trust — the maven-site
+     * render always produces it, and we want to avoid flagging legit
+     * subdirectories that happen to share a name. The doubled-name
+     * pattern eliminates almost all collisions on its own; requiring
+     * {@code index.html} closes the rest.
+     *
+     * @param projectDir  directory to search
+     * @param artifactIds candidate names to probe
+     * @param accum       accumulator for hit paths
+     */
+    static void detectGhPagesLeakDirs(File projectDir,
+                                       List<String> artifactIds,
+                                       List<Path> accum) {
+        if (projectDir == null || !projectDir.isDirectory()) return;
+        Path base = projectDir.toPath();
+        for (String id : artifactIds) {
+            Path probe = base.resolve(id).resolve(id);
+            if (Files.isRegularFile(probe.resolve("index.html"))) {
+                accum.add(probe);
+            }
+        }
     }
 
     /**

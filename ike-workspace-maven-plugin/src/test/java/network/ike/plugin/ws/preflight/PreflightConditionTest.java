@@ -1,6 +1,14 @@
 package network.ike.plugin.ws.preflight;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -228,5 +236,109 @@ class PreflightConditionTest {
                 .isFalse();
         assertThat(PreflightCondition.containsGhPagesLeakPattern(null))
                 .isFalse();
+    }
+
+    // ── extractTopLevelArtifactId (skip <parent>) ─────────────────
+
+    @Test
+    void extractTopLevelArtifactId_skipsParentBlock() {
+        String pom = """
+                <project>
+                  <parent>
+                    <groupId>network.ike.platform</groupId>
+                    <artifactId>ike-parent</artifactId>
+                    <version>43</version>
+                  </parent>
+                  <artifactId>ike-example-ws</artifactId>
+                </project>
+                """;
+        assertThat(PreflightCondition.extractTopLevelArtifactId(pom))
+                .isEqualTo("ike-example-ws");
+    }
+
+    @Test
+    void extractTopLevelArtifactId_noParent() {
+        String pom = "<project><artifactId>solo</artifactId></project>";
+        assertThat(PreflightCondition.extractTopLevelArtifactId(pom))
+                .isEqualTo("solo");
+    }
+
+    @Test
+    void extractTopLevelArtifactId_missing_null() {
+        assertThat(PreflightCondition.extractTopLevelArtifactId(
+                "<project/>")).isNull();
+        assertThat(PreflightCondition.extractTopLevelArtifactId(null))
+                .isNull();
+    }
+
+    // ── detectGhPagesLeakDirs (filesystem probe) ──────────────────
+
+    @Test
+    void detectGhPagesLeakDirs_doubledNameWithIndexHtml_detected(
+            @TempDir Path tmp) throws IOException {
+        Path leak = tmp.resolve("foo").resolve("foo");
+        Files.createDirectories(leak);
+        Files.writeString(leak.resolve("index.html"), "<html/>");
+
+        List<Path> hits = new ArrayList<>();
+        PreflightCondition.detectGhPagesLeakDirs(
+                tmp.toFile(), List.of("foo"), hits);
+
+        assertThat(hits).containsExactly(leak);
+    }
+
+    @Test
+    void detectGhPagesLeakDirs_doubledNameButNoIndex_notDetected(
+            @TempDir Path tmp) throws IOException {
+        Files.createDirectories(tmp.resolve("foo").resolve("foo"));
+        // No index.html — could be a legitimate nested dir; don't flag.
+
+        List<Path> hits = new ArrayList<>();
+        PreflightCondition.detectGhPagesLeakDirs(
+                tmp.toFile(), List.of("foo"), hits);
+
+        assertThat(hits).isEmpty();
+    }
+
+    @Test
+    void detectGhPagesLeakDirs_singleNameNoNesting_notDetected(
+            @TempDir Path tmp) throws IOException {
+        Path subproject = tmp.resolve("foo");
+        Files.createDirectories(subproject);
+        Files.writeString(subproject.resolve("index.html"), "<html/>");
+        // Single layer — a real subproject directory, not a leak.
+
+        List<Path> hits = new ArrayList<>();
+        PreflightCondition.detectGhPagesLeakDirs(
+                tmp.toFile(), List.of("foo"), hits);
+
+        assertThat(hits).isEmpty();
+    }
+
+    @Test
+    void detectGhPagesLeakDirs_multipleArtifactIds_findsAllHits(
+            @TempDir Path tmp) throws IOException {
+        for (String id : List.of("ike-example-ws", "ike-example-its")) {
+            Path leak = tmp.resolve(id).resolve(id);
+            Files.createDirectories(leak);
+            Files.writeString(leak.resolve("index.html"), "<html/>");
+        }
+
+        List<Path> hits = new ArrayList<>();
+        PreflightCondition.detectGhPagesLeakDirs(
+                tmp.toFile(),
+                List.of("ike-example-ws", "ike-example-its"),
+                hits);
+
+        assertThat(hits).hasSize(2);
+    }
+
+    @Test
+    void detectGhPagesLeakDirs_nonexistentDir_noNPE() {
+        List<Path> hits = new ArrayList<>();
+        PreflightCondition.detectGhPagesLeakDirs(
+                new File("/does/not/exist"), List.of("foo"), hits);
+
+        assertThat(hits).isEmpty();
     }
 }

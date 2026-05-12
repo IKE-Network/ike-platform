@@ -15,6 +15,7 @@ import network.ike.plugin.ws.preflight.PreflightCondition;
 import network.ike.plugin.ws.preflight.PreflightContext;
 import network.ike.plugin.ws.preflight.PreflightResult;
 
+import network.ike.workspace.ManifestWriter;
 import network.ike.workspace.Subproject;
 import network.ike.workspace.WorkspaceGraph;
 import org.apache.maven.api.plugin.MojoException;
@@ -332,6 +333,9 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
         List<String> released = new ArrayList<>();
         Map<String, String> releasedVersions = new LinkedHashMap<>();
 
+        // Capture (subproject name → post-release SNAPSHOT) so we can
+        // sync workspace.yaml after the cascade completes (#371).
+        Map<String, String> manifestVersionUpdates = new LinkedHashMap<>();
         for (String name : releaseOrder) {
             ReleaseCandidate rc = releasable.get(name);
             getLog().info("");
@@ -361,6 +365,26 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
                 released.add(rc.name);
                 releasedVersions.put(rc.name, releaseVersion);
                 getLog().info(Ansi.green("  ✓ ") + "Released " + rc.name + " " + releaseVersion);
+
+                // Capture the post-release SNAPSHOT for workspace.yaml
+                // sync (#371). ike:release-publish ended on a post-
+                // release bump, so reading the POM now yields the new
+                // -SNAPSHOT. Tolerate read failures: the release
+                // succeeded, so don't fail the cascade over a manifest
+                // sync hiccup — the gap will surface as a #371 warning
+                // on the next preflight.
+                try {
+                    String postReleaseVersion = currentVersion(rc.dir);
+                    if (postReleaseVersion != null
+                            && !postReleaseVersion.isBlank()) {
+                        manifestVersionUpdates.put(rc.name, postReleaseVersion);
+                    }
+                } catch (Exception readFail) {
+                    getLog().warn("  ⚠ Could not read post-release version "
+                            + "for " + rc.name + " — workspace.yaml "
+                            + "version: field will stay stale until the "
+                            + "next ws:fix. " + readFail.getMessage());
+                }
             } catch (Exception e) {
                 getLog().error(Ansi.red("  ✗ ") + "Failed to release " + rc.name + ": " + e.getMessage());
                 getLog().error("");
@@ -371,6 +395,17 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
                 throw new MojoException(
                         "Workspace release failed at " + rc.name, e);
             }
+        }
+
+        // ── 6a. Sync workspace.yaml version: fields (#371) ────────────
+        // Each ike:release-publish bumped its subproject's POM but had
+        // no visibility into the workspace manifest. Now that the
+        // cascade is complete, fold the new SNAPSHOTs back into
+        // workspace.yaml in one commit so the manifest stops drifting.
+        // Filter to changes only — idempotent re-run of an already-
+        // synced workspace writes nothing.
+        if (!manifestVersionUpdates.isEmpty()) {
+            syncWorkspaceVersions(root, manifestVersionUpdates);
         }
 
         // ── 6b. Release the workspace root last (#326, #328) ─────────
@@ -731,6 +766,86 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
         // workspace release isn't seen as "still needs releasing"
         // on a retry triggered by a downstream subproject failure.
         return meaningfulCommitsSinceTag(root, latestTag) > 0;
+    }
+
+    /**
+     * Write the post-cascade {@code version:} updates into
+     * {@code workspace.yaml} and commit. Filters out no-op entries
+     * (where the manifest already matches the new SNAPSHOT) so an
+     * idempotent re-run writes nothing — important because
+     * {@code WORKING_TREE_CLEAN} on the workspace root would otherwise
+     * fail on a re-run that "succeeded" but left a manifest dirty
+     * with no actual changes.
+     *
+     * <p>Failures are logged but do not abort the cascade: the
+     * subproject release tags + Nexus deploys have already shipped,
+     * so a manifest-sync hiccup is recoverable via {@code ws:fix}
+     * or the next release cycle. ike-issues#371.
+     *
+     * @param root              workspace root
+     * @param versionUpdates    subprojectName → new SNAPSHOT (full
+     *                          post-release pom version)
+     */
+    private void syncWorkspaceVersions(File root,
+                                        Map<String, String> versionUpdates) {
+        Path manifestPath = root.toPath().resolve("workspace.yaml");
+        if (!Files.isRegularFile(manifestPath)) {
+            getLog().debug("  No workspace.yaml at " + manifestPath
+                    + " — skipping manifest sync (#371)");
+            return;
+        }
+
+        String before;
+        try {
+            before = Files.readString(manifestPath, StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            getLog().warn("  ⚠ Could not read workspace.yaml for "
+                    + "manifest sync (#371): " + e.getMessage());
+            return;
+        }
+
+        String after = before;
+        for (Map.Entry<String, String> entry : versionUpdates.entrySet()) {
+            after = ManifestWriter.updateSubprojectField(
+                    after, entry.getKey(), "version", entry.getValue());
+        }
+
+        if (after.equals(before)) {
+            getLog().debug("  workspace.yaml already in sync — "
+                    + "no manifest write needed (#371)");
+            return;
+        }
+
+        try {
+            Files.writeString(manifestPath, after, StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            getLog().warn("  ⚠ Could not write workspace.yaml for "
+                    + "manifest sync (#371): " + e.getMessage());
+            return;
+        }
+
+        getLog().info("");
+        getLog().info("  Synced workspace.yaml version: fields for "
+                + versionUpdates.size() + " subproject(s) (#371)");
+
+        // Stage and commit on the workspace root only if it's a git
+        // repo. If staging or commit fails, the file write already
+        // happened — leave it for ws:commit to pick up rather than
+        // wedging the cascade.
+        if (!new File(root, ".git").exists()) {
+            return;
+        }
+        try {
+            ReleaseSupport.exec(root, getLog(),
+                    "git", "add", "workspace.yaml");
+            ReleaseSupport.exec(root, getLog(),
+                    "git", "commit", "-m",
+                    "post-release: sync workspace.yaml versions (#371)");
+        } catch (Exception e) {
+            getLog().warn("  ⚠ workspace.yaml updated on disk but "
+                    + "could not commit (#371): " + e.getMessage()
+                    + ". Pick it up with ws:commit.");
+        }
     }
 
     // ── Helper: read current POM version ─────────────────────────────

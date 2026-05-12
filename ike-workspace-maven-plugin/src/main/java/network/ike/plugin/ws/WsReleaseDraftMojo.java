@@ -205,6 +205,31 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
             RefreshMainSupport.refreshOrThrow(root, candidates, "main", getLog());
         }
 
+        // ── 1.5. Pre-release upstream alignment ──────────────────────────
+        // An ike-parent bump (or any foundation property bump) is a
+        // release-worthy change even when no source has been edited.
+        // Without this pass, ws:release-publish only saw the per-
+        // subproject source changes and skipped workspaces whose only
+        // diff vs. last release was "absorb the new foundations".
+        //
+        // For each subproject (and the workspace root), scan its pom
+        // for <parent> blocks and <X.version> properties referencing
+        // an IKE foundation. If a reference is older than the
+        // foundation's latest released version (resolved from the
+        // sibling repo's tip v* tag in the canonical ~/ike-dev/
+        // layout), bump via OpenRewrite and commit. The bump commit
+        // becomes a meaningful commit, so the existing
+        // meaningfulCommitsSinceTag detector includes the subproject
+        // in the release set automatically.
+        //
+        // Publish-only: drafts skip alignment because the goal is
+        // preview, not mutation. A draft will under-report
+        // workspaces with stale parents — accept that for now;
+        // an alignment dry-run mode is a follow-up.
+        if (publish) {
+            preReleaseUpstreamAlignment(graph, root);
+        }
+
         // ── 2a. Detect source-changed checked-out subprojects ────────────
         // First pass: gather the set of subprojects whose own commits
         // require a release. Cascade-only downstream is added in 2b.
@@ -741,6 +766,202 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
     public static boolean isReleaseCadenceCommit(String subject) {
         if (subject == null) return false;
         return RELEASE_CADENCE_PATTERN.matcher(subject.strip()).matches();
+    }
+
+    // ── Pre-release upstream alignment (#377) ─────────────────────────
+    // Foundation-tracking map used by preReleaseUpstreamAlignment.
+    // groupId → foundation name in ~/ike-dev/<name>/. Each foundation
+    // releases as a single Maven reactor whose tip v* tag is the
+    // version we'll align downstream consumers to.
+    static final Map<String, String> FOUNDATION_GROUP_TO_DIR = Map.of(
+            "network.ike.tooling", "ike-tooling",
+            "network.ike.docs", "ike-docs",
+            "network.ike.platform", "ike-platform");
+
+    // Property-name → groupId. Properties shaped <X.version> conventionally
+    // pin coordinates whose groupId starts with "network.ike.X" (with
+    // ike-platform handling both "platform" and "parent" because
+    // ike-parent ships from the ike-platform reactor).
+    static final Map<String, String> PROPERTY_TO_GROUP = Map.of(
+            "ike-tooling.version", "network.ike.tooling",
+            "ike-docs.version", "network.ike.docs",
+            "ike-platform.version", "network.ike.platform");
+
+    /**
+     * Before release detection runs, walk each subproject (and the
+     * workspace root) and bump any stale upstream-foundation references
+     * to the latest released version. An upstream is "stale" when the
+     * pom declares a {@code <parent>} or {@code <X.version>} property
+     * pinned older than the foundation's tip {@code v*} tag in the
+     * canonical {@code ~/ike-dev/<foundation>/} layout. Bumps land as
+     * "chore: align upstream versions before release" commits per
+     * subproject — those commits register as meaningful, so the
+     * {@link #meaningfulCommitsSinceTag} detector includes the
+     * subproject in the release set automatically.
+     *
+     * <p>This is what makes "ike-parent was released, so absorb it"
+     * a release-worthy change. Without it, ws:release-publish only
+     * saw per-subproject source edits and missed transitive-dependency
+     * upgrades entirely (ike-issues#377).
+     *
+     * <p>Non-fatal: failures (unreadable poms, git commit errors)
+     * log a warning and continue. Worst case the alignment doesn't
+     * commit and the release subsequently treats the subproject as
+     * "no meaningful commits" — same outcome as before this method
+     * existed, no regression.
+     *
+     * @param graph the loaded workspace graph
+     * @param root  the workspace root directory
+     */
+    private void preReleaseUpstreamAlignment(WorkspaceGraph graph, File root) {
+        File foundationsDir = root.getParentFile();
+        if (foundationsDir == null || !foundationsDir.isDirectory()) {
+            getLog().debug("  No siblings directory available for foundation lookup; "
+                    + "skipping pre-release alignment.");
+            return;
+        }
+
+        // Build groupId → latest released version once.
+        Map<String, String> groupIdToLatest = new LinkedHashMap<>();
+        for (var entry : FOUNDATION_GROUP_TO_DIR.entrySet()) {
+            File siblingDir = new File(foundationsDir, entry.getValue());
+            if (!siblingDir.isDirectory()) continue;
+            String tag = latestReleaseTag(siblingDir);
+            if (tag == null) continue;
+            String version = tag.startsWith("v") ? tag.substring(1) : tag;
+            groupIdToLatest.put(entry.getKey(), version);
+        }
+        if (groupIdToLatest.isEmpty()) {
+            getLog().debug("  No foundation tags found in " + foundationsDir
+                    + "; skipping pre-release alignment.");
+            return;
+        }
+
+        // Walk: workspace root + each subproject.
+        List<File> poms = new ArrayList<>();
+        poms.add(new File(root, "pom.xml"));
+        for (String name : graph.manifest().subprojects().keySet()) {
+            File sub = new File(new File(root, name), "pom.xml");
+            if (sub.isFile()) poms.add(sub);
+        }
+
+        int aligned = 0;
+        for (File pom : poms) {
+            if (alignPom(pom, groupIdToLatest)) aligned++;
+        }
+        if (aligned > 0) {
+            getLog().info("  Pre-release alignment: bumped upstream references in "
+                    + aligned + " pom(s) (#377).");
+        }
+    }
+
+    /**
+     * Apply alignment to one pom. Returns {@code true} when the pom
+     * was changed + committed; {@code false} when no change was
+     * needed (idempotent re-run).
+     *
+     * @param pomFile         the pom to align
+     * @param groupIdToLatest groupId → latest released version
+     * @return whether the pom was bumped
+     */
+    private boolean alignPom(File pomFile, Map<String, String> groupIdToLatest) {
+        String content;
+        try {
+            content = Files.readString(pomFile.toPath(), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            getLog().warn("  Could not read " + pomFile + " for alignment: "
+                    + e.getMessage());
+            return false;
+        }
+        String original = content;
+        List<String> bumps = new ArrayList<>();
+
+        // Align <parent> block.
+        try {
+            PomParentSupport.ParentInfo parent =
+                    PomParentSupport.readParent(pomFile.toPath());
+            if (parent != null) {
+                String target = groupIdToLatest.get(parent.groupId());
+                if (target != null && !target.equals(parent.version())) {
+                    content = PomParentSupport.updateParentVersion(content,
+                            parent.groupId(), parent.artifactId(), target);
+                    bumps.add("<parent>" + parent.groupId() + ":"
+                            + parent.artifactId() + ">: "
+                            + parent.version() + " → " + target);
+                }
+            }
+        } catch (IOException e) {
+            getLog().warn("  Could not read parent block of " + pomFile
+                    + ": " + e.getMessage());
+        }
+
+        // Align <X.version> properties.
+        for (var entry : PROPERTY_TO_GROUP.entrySet()) {
+            String propertyName = entry.getKey();
+            String groupId = entry.getValue();
+            String target = groupIdToLatest.get(groupId);
+            if (target == null) continue;
+            String current = extractPropertyValue(content, propertyName);
+            if (current == null) continue;
+            if (target.equals(current)) continue;
+            content = PomRewriter.updateProperty(content, propertyName, target);
+            bumps.add("<" + propertyName + ">: " + current + " → " + target);
+        }
+
+        if (content.equals(original)) {
+            return false;
+        }
+
+        try {
+            Files.writeString(pomFile.toPath(), content,
+                    StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            getLog().warn("  Could not write aligned " + pomFile
+                    + ": " + e.getMessage());
+            return false;
+        }
+
+        File pomDir = pomFile.getParentFile();
+        if (!new File(pomDir, ".git").isDirectory()) {
+            // No git repo here — leave the worktree edit for ws:commit
+            // (or a sibling tool) to pick up later. Same fail-soft
+            // pattern as #371 manifest sync.
+            getLog().info("  Pre-release alignment: " + pomDir.getName()
+                    + " (no .git — bumped on disk, not committed):");
+            for (String b : bumps) getLog().info("    " + b);
+            return false;
+        }
+        try {
+            ReleaseSupport.exec(pomDir, getLog(), "git", "add", "pom.xml");
+            ReleaseSupport.exec(pomDir, getLog(), "git", "commit", "-m",
+                    "chore: align upstream versions before release");
+        } catch (Exception e) {
+            getLog().warn("  Pre-release alignment commit failed for "
+                    + pomDir.getName() + ": " + e.getMessage());
+            return false;
+        }
+        getLog().info("  Pre-release alignment: " + pomDir.getName());
+        for (String b : bumps) getLog().info("    " + b);
+        return true;
+    }
+
+    /**
+     * Pure-string extract of a {@code <properties>}-block value by
+     * name. Returns {@code null} when absent. Mirrors the helper
+     * used in {@code WsCascadeFoundationPublishMojo} — keeping a
+     * local copy so the two goals don't tightly couple.
+     */
+    static String extractPropertyValue(String pomContent,
+                                                 String propertyName) {
+        if (pomContent == null) return null;
+        String openTag = "<" + propertyName + ">";
+        int open = pomContent.indexOf(openTag);
+        if (open < 0) return null;
+        int valueStart = open + openTag.length();
+        int close = pomContent.indexOf("</" + propertyName + ">",
+                valueStart);
+        if (close < 0) return null;
+        return pomContent.substring(valueStart, close).trim();
     }
 
     // ── Helper: workspace root has unreleased changes? ───────────────

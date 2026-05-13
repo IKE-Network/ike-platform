@@ -1,0 +1,409 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>WsSetParentDraftMojo.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">WsSetParentDraftMojo.java</span></div><h1>WsSetParentDraftMojo.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.plugin.ReleaseSupport;
+import network.ike.plugin.ws.preflight.Preflight;
+import network.ike.plugin.ws.preflight.PreflightCondition;
+import network.ike.plugin.ws.preflight.PreflightContext;
+import network.ike.plugin.ws.preflight.PreflightResult;
+import network.ike.workspace.Subproject;
+import network.ike.workspace.WorkspaceGraph;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Set the aggregator parent version (ike-parent) across the root POM and
+ * all subproject POMs in one operation.
+ *
+ * &lt;p&gt;This goal cascades the parent version from the root POM to every
+ * cloned subproject, including submodule POMs that reference the same
+ * parent. It does &lt;strong&gt;not&lt;/strong&gt; modify inter-subproject dependency
+ * versions — use {@code ws:align-publish} for that.
+ *
+ * &lt;p&gt;The target version is specified via {@code -Dparent.version}. If
+ * omitted, the goal reads the version already declared in the root POM
+ * and cascades it to components (useful after a manual root POM edit).
+ *
+ * &lt;pre&gt;{@code
+ * mvn ws:set-parent-draft -Dparent.version=92    # preview
+ * mvn ws:set-parent-publish -Dparent.version=92   # apply
+ * }&lt;/pre&gt;
+ *
+ * @see WsSetParentPublishMojo
+ * @see WsAlignDraftMojo
+ */
+@Mojo(name = &quot;set-parent-draft&quot;, projectRequired = false, aggregator = true)
+public class WsSetParentDraftMojo extends AbstractWorkspaceMojo {
+
+    /**
+     * When {@code true}, apply changes to POM files. When {@code false}
+     * (default), report what would change without modifying anything.
+     */
+    @Parameter(property = &quot;publish&quot;, defaultValue = &quot;false&quot;)
+    boolean publish;
+
+    /**
+     * Target parent version. If not supplied, reads the version from
+     * the root POM's {@code &lt;parent&gt;} block and cascades it.
+     */
+    @Parameter(property = &quot;parent.version&quot;)
+    String parentVersion;
+
+    /**
+     * Resolved parent artifactId from the root POM, populated during
+     * {@link #execute()}. Read by {@link WsSetParentPublishMojo} for
+     * the auto-commit default message.
+     */
+    String resolvedParentArtifactId;
+
+    /**
+     * Number of POMs that were (or would be) updated, populated during
+     * {@link #execute()}. Read by {@link WsSetParentPublishMojo} to
+     * skip the auto-commit when there is nothing to commit.
+     */
+    int resolvedChangeCount;
+
+    /** Creates this goal instance. */
+<span class="nc" id="L76">    public WsSetParentDraftMojo() {}</span>
+
+    @Override
+    public void execute() throws MojoException {
+<span class="nc bnc" id="L80" title="All 2 branches missed.">        boolean draft = !publish;</span>
+
+<span class="nc" id="L82">        WorkspaceGraph graph = loadGraph();</span>
+<span class="nc" id="L83">        File root = workspaceRoot();</span>
+
+        // --- Resolve target parent version ---
+<span class="nc" id="L86">        Path rootPomPath = root.toPath().resolve(&quot;pom.xml&quot;);</span>
+<span class="nc bnc" id="L87" title="All 2 branches missed.">        if (!Files.exists(rootPomPath)) {</span>
+<span class="nc" id="L88">            throw new MojoException(</span>
+                    &quot;No pom.xml in workspace root: &quot; + root);
+        }
+
+        PomParentSupport.ParentInfo rootParent;
+        try {
+<span class="nc" id="L94">            rootParent = PomParentSupport.readParent(rootPomPath);</span>
+<span class="nc" id="L95">        } catch (IOException e) {</span>
+<span class="nc" id="L96">            throw new MojoException(</span>
+<span class="nc" id="L97">                    &quot;Cannot read root POM parent: &quot; + e.getMessage(), e);</span>
+<span class="nc" id="L98">        }</span>
+<span class="nc bnc" id="L99" title="All 2 branches missed.">        if (rootParent == null) {</span>
+<span class="nc" id="L100">            throw new MojoException(</span>
+                    &quot;Root POM has no &lt;parent&gt; block — nothing to set.&quot;);
+        }
+
+<span class="nc" id="L104">        String targetVersion = requireParam(parentVersion,</span>
+                &quot;parent.version&quot;, &quot;Target parent version&quot;);
+<span class="nc" id="L106">        validateMavenVersion(targetVersion);</span>
+<span class="nc" id="L107">        parentVersion = targetVersion;</span>
+
+<span class="nc" id="L109">        String parentGroupId = rootParent.groupId();</span>
+<span class="nc" id="L110">        String parentArtifactId = rootParent.artifactId();</span>
+<span class="nc" id="L111">        this.resolvedParentArtifactId = parentArtifactId;</span>
+
+        // Preflight: all working trees must be clean (#132, #154)
+<span class="nc" id="L114">        PreflightResult preflight = Preflight.of(</span>
+<span class="nc" id="L115">                List.of(PreflightCondition.WORKING_TREE_CLEAN),</span>
+<span class="nc" id="L116">                PreflightContext.of(root, graph, graph.topologicalSort()));</span>
+<span class="nc bnc" id="L117" title="All 2 branches missed.">        if (draft) {</span>
+<span class="nc" id="L118">            preflight.warnIfFailed(getLog(), WsGoal.SET_PARENT_PUBLISH);</span>
+        } else {
+<span class="nc" id="L120">            preflight.requirePassed(WsGoal.SET_PARENT_PUBLISH);</span>
+        }
+
+        // --- Header ---
+<span class="nc" id="L124">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L125">        getLog().info(header(&quot;Set Parent&quot;));</span>
+<span class="nc" id="L126">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+<span class="nc" id="L127">        getLog().info(&quot;  Target: &quot; + rootParent.groupId() + &quot;:&quot;</span>
+                + parentArtifactId + &quot;:&quot; + targetVersion);
+<span class="nc bnc" id="L129" title="All 2 branches missed.">        getLog().info(&quot;  Mode:   &quot; + (draft ? &quot;DRAFT&quot; : &quot;PUBLISH&quot;));</span>
+<span class="nc" id="L130">        getLog().info(&quot;&quot;);</span>
+
+<span class="nc" id="L132">        List&lt;ParentChange&gt; changes = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L133">        List&lt;SkippedSubproject&gt; skipped = new ArrayList&lt;&gt;();</span>
+
+        // --- Root POM ---
+<span class="nc" id="L136">        String rootCurrentVersion = rootParent.version();</span>
+<span class="nc bnc" id="L137" title="All 2 branches missed.">        if (!targetVersion.equals(rootCurrentVersion)) {</span>
+<span class="nc" id="L138">            changes.add(new ParentChange(&quot;(root)&quot;, &quot;pom.xml&quot;,</span>
+                    rootCurrentVersion, targetVersion));
+<span class="nc bnc" id="L140" title="All 2 branches missed.">            if (!draft) {</span>
+<span class="nc" id="L141">                updateParentInPom(rootPomPath, parentGroupId,</span>
+                        parentArtifactId, targetVersion);
+            }
+        }
+
+        // --- Subproject POMs ---
+        for (Map.Entry&lt;String, Subproject&gt; entry
+<span class="nc bnc" id="L148" title="All 2 branches missed.">                : graph.manifest().subprojects().entrySet()) {</span>
+<span class="nc" id="L149">            String name = entry.getKey();</span>
+<span class="nc" id="L150">            File subprojectDir = new File(root, name);</span>
+<span class="nc" id="L151">            Path subprojectPom = subprojectDir.toPath().resolve(&quot;pom.xml&quot;);</span>
+
+<span class="nc bnc" id="L153" title="All 2 branches missed.">            if (!Files.exists(subprojectPom)) {</span>
+<span class="nc" id="L154">                getLog().debug(&quot;  &quot; + name + &quot;: not cloned — skipping&quot;);</span>
+<span class="nc" id="L155">                continue;</span>
+            }
+
+            // Read the subproject's root POM parent
+            PomParentSupport.ParentInfo compParent;
+            try {
+<span class="nc" id="L161">                compParent = PomParentSupport.readParent(subprojectPom);</span>
+<span class="nc" id="L162">            } catch (IOException e) {</span>
+<span class="nc" id="L163">                getLog().warn(&quot;  &quot; + name</span>
+<span class="nc" id="L164">                        + &quot;: cannot read parent — &quot; + e.getMessage());</span>
+<span class="nc" id="L165">                continue;</span>
+<span class="nc" id="L166">            }</span>
+
+<span class="nc bnc" id="L168" title="All 2 branches missed.">            if (compParent == null) {</span>
+<span class="nc" id="L169">                getLog().debug(&quot;  &quot; + name + &quot;: no &lt;parent&gt; — skipping&quot;);</span>
+<span class="nc" id="L170">                continue;</span>
+            }
+
+            // Only update POMs whose parent GAV fully matches the
+            // workspace root's parent GAV. Both groupId AND artifactId
+            // must match — see issue #241. A heterogeneous workspace
+            // may bundle subprojects that inherit from unrelated
+            // parents (e.g. network.ike.pipeline:ike-parent) that
+            // happen to share an artifactId with the workspace parent.
+<span class="nc bnc" id="L179" title="All 2 branches missed.">            if (!parentGroupId.equals(compParent.groupId())</span>
+<span class="nc bnc" id="L180" title="All 2 branches missed.">                    || !parentArtifactId.equals(compParent.artifactId())) {</span>
+<span class="nc" id="L181">                String actualGav = compParent.groupId() + &quot;:&quot;</span>
+<span class="nc" id="L182">                        + compParent.artifactId() + &quot;:&quot;</span>
+<span class="nc" id="L183">                        + compParent.version();</span>
+<span class="nc" id="L184">                getLog().info(&quot;  &quot; + Ansi.yellow(&quot;⊘ &quot;) + name</span>
+                        + &quot;: parent &quot; + actualGav
+                        + &quot; — skipped (workspace parent is &quot;
+                        + parentGroupId + &quot;:&quot; + parentArtifactId + &quot;)&quot;);
+<span class="nc" id="L188">                skipped.add(new SkippedSubproject(name, actualGav));</span>
+<span class="nc" id="L189">                continue;</span>
+            }
+
+<span class="nc" id="L192">            String currentVersion = compParent.version();</span>
+<span class="nc bnc" id="L193" title="All 2 branches missed.">            if (targetVersion.equals(currentVersion)) {</span>
+<span class="nc" id="L194">                continue;</span>
+            }
+
+<span class="nc" id="L197">            changes.add(new ParentChange(name, &quot;pom.xml&quot;,</span>
+                    currentVersion, targetVersion));
+
+<span class="nc bnc" id="L200" title="All 2 branches missed.">            if (!draft) {</span>
+<span class="nc" id="L201">                updateParentInPom(subprojectPom, parentGroupId,</span>
+                        parentArtifactId, targetVersion);
+
+                // Also update submodule POMs referencing the same parent
+                List&lt;File&gt; subPoms;
+                try {
+<span class="nc" id="L207">                    subPoms = ReleaseSupport.findPomFiles(subprojectDir);</span>
+<span class="nc" id="L208">                } catch (MojoException e) {</span>
+<span class="nc" id="L209">                    getLog().warn(&quot;  &quot; + name</span>
+<span class="nc" id="L210">                            + &quot;: cannot scan submodules — &quot; + e.getMessage());</span>
+<span class="nc" id="L211">                    continue;</span>
+<span class="nc" id="L212">                }</span>
+
+<span class="nc bnc" id="L214" title="All 2 branches missed.">                for (File subPom : subPoms) {</span>
+<span class="nc bnc" id="L215" title="All 2 branches missed.">                    if (subPom.toPath().equals(subprojectPom)) {</span>
+<span class="nc" id="L216">                        continue;</span>
+                    }
+                    try {
+<span class="nc" id="L219">                        String subContent = Files.readString(</span>
+<span class="nc" id="L220">                                subPom.toPath(), StandardCharsets.UTF_8);</span>
+<span class="nc" id="L221">                        String subUpdated =</span>
+<span class="nc" id="L222">                                PomParentSupport.updateParentVersion(</span>
+                                        subContent, parentGroupId,
+                                        parentArtifactId, targetVersion);
+<span class="nc bnc" id="L225" title="All 2 branches missed.">                        if (!subUpdated.equals(subContent)) {</span>
+<span class="nc" id="L226">                            Files.writeString(subPom.toPath(), subUpdated,</span>
+                                    StandardCharsets.UTF_8);
+<span class="nc" id="L228">                            String relPath = subprojectDir.toPath()</span>
+<span class="nc" id="L229">                                    .relativize(subPom.toPath()).toString();</span>
+<span class="nc" id="L230">                            getLog().debug(&quot;  &quot; + name + &quot;/&quot; + relPath</span>
+                                    + &quot;: submodule parent updated&quot;);
+                        }
+<span class="nc" id="L233">                    } catch (IOException e) {</span>
+<span class="nc" id="L234">                        getLog().warn(&quot;  &quot; + name + &quot;: submodule update failed — &quot;</span>
+<span class="nc" id="L235">                                + e.getMessage());</span>
+<span class="nc" id="L236">                    }</span>
+<span class="nc" id="L237">                }</span>
+            }
+<span class="nc" id="L239">        }</span>
+
+        // --- Output ---
+<span class="nc bnc" id="L242" title="All 2 branches missed.">        for (ParentChange c : changes) {</span>
+<span class="nc" id="L243">            getLog().info(&quot;  &quot; + padRight(c.subproject + &quot;/&quot; + c.pomRelPath, 40)</span>
+                    + c.fromVersion + &quot; → &quot; + c.toVersion);
+<span class="nc" id="L245">        }</span>
+<span class="nc" id="L246">        getLog().info(&quot;&quot;);</span>
+
+<span class="nc bnc" id="L248" title="All 2 branches missed.">        if (changes.isEmpty()) {</span>
+<span class="nc" id="L249">            getLog().info(&quot;  &quot; + Ansi.GREEN + &quot;✓ &quot; + Ansi.RESET</span>
+                    + &quot;All POMs already at &quot; + parentArtifactId
+                    + &quot;:&quot; + targetVersion);
+<span class="nc bnc" id="L252" title="All 2 branches missed.">        } else if (draft) {</span>
+<span class="nc" id="L253">            getLog().info(&quot;  &quot; + changes.size()</span>
+                    + &quot; POM(s) would be updated.&quot;);
+<span class="nc" id="L255">            getLog().info(&quot;  Use ws:set-parent-publish&quot;</span>
+<span class="nc bnc" id="L256" title="All 2 branches missed.">                    + (parentVersion != null</span>
+<span class="nc" id="L257">                    ? &quot; -Dparent.version=&quot; + targetVersion : &quot;&quot;)</span>
+                    + &quot; to apply changes.&quot;);
+        } else {
+<span class="nc" id="L260">            getLog().info(&quot;  &quot; + Ansi.GREEN + &quot;✓ &quot; + Ansi.RESET</span>
+<span class="nc" id="L261">                    + &quot;Updated &quot; + changes.size() + &quot; POM(s) to &quot;</span>
+                    + parentArtifactId + &quot;:&quot; + targetVersion);
+        }
+<span class="nc bnc" id="L264" title="All 2 branches missed.">        if (!skipped.isEmpty()) {</span>
+<span class="nc" id="L265">            getLog().info(&quot;  &quot; + skipped.size()</span>
+                    + &quot; subproject(s) skipped due to parent GAV mismatch&quot;
+                    + &quot; — see report for details.&quot;);
+        }
+<span class="nc" id="L269">        getLog().info(&quot;&quot;);</span>
+
+<span class="nc" id="L271">        this.resolvedChangeCount = changes.size();</span>
+
+        // --- Report ---
+<span class="nc bnc" id="L274" title="All 2 branches missed.">        writeReport(publish ? WsGoal.SET_PARENT_PUBLISH : WsGoal.SET_PARENT_DRAFT,</span>
+<span class="nc" id="L275">                buildMarkdownReport(parentArtifactId, targetVersion,</span>
+                        parentGroupId, changes, skipped, draft));
+<span class="nc" id="L277">    }</span>
+
+    // ── Helpers ─────────────────────────────────────────────────────
+
+    /**
+     * Update the parent version in a single POM file.
+     *
+     * @param pomPath          path to the POM file
+     * @param parentGroupId    the parent groupId to match
+     * @param parentArtifactId the parent artifactId to match
+     * @param newVersion       the new parent version
+     * @throws MojoException if the file cannot be read or written
+     */
+    private void updateParentInPom(Path pomPath, String parentGroupId,
+                                    String parentArtifactId,
+                                    String newVersion)
+            throws MojoException {
+        try {
+<span class="nc" id="L295">            String content = Files.readString(pomPath, StandardCharsets.UTF_8);</span>
+<span class="nc" id="L296">            String updated = PomParentSupport.updateParentVersion(</span>
+                    content, parentGroupId, parentArtifactId, newVersion);
+<span class="nc bnc" id="L298" title="All 2 branches missed.">            if (!updated.equals(content)) {</span>
+<span class="nc" id="L299">                Files.writeString(pomPath, updated, StandardCharsets.UTF_8);</span>
+            }
+<span class="nc" id="L301">        } catch (IOException e) {</span>
+<span class="nc" id="L302">            throw new MojoException(</span>
+                    &quot;Failed to update parent in &quot; + pomPath + &quot;: &quot;
+<span class="nc" id="L304">                            + e.getMessage(), e);</span>
+<span class="nc" id="L305">        }</span>
+<span class="nc" id="L306">    }</span>
+
+    /**
+     * Right-pad a string to the given width.
+     *
+     * @param s     the string to pad
+     * @param width the minimum width
+     * @return the padded string
+     */
+    private static String padRight(String s, int width) {
+<span class="nc bnc" id="L316" title="All 2 branches missed.">        return s.length() &gt;= width ? s + &quot; &quot;</span>
+<span class="nc" id="L317">                : s + &quot; &quot;.repeat(width - s.length());</span>
+    }
+
+    /**
+     * Build a structured markdown report.
+     *
+     * @param parentArtifactId parent artifact name
+     * @param targetVersion    target version
+     * @param parentGroupId    parent groupId (used for the skipped table)
+     * @param changes          list of changes
+     * @param skipped          subprojects whose parent GAV did not match
+     * @param draft            whether this is a draft run
+     * @return markdown content
+     */
+    private String buildMarkdownReport(String parentArtifactId,
+                                        String targetVersion,
+                                        String parentGroupId,
+                                        List&lt;ParentChange&gt; changes,
+                                        List&lt;SkippedSubproject&gt; skipped,
+                                        boolean draft) {
+<span class="nc" id="L337">        StringBuilder md = new StringBuilder();</span>
+
+<span class="nc" id="L339">        md.append(&quot;**Target:** `&quot;).append(parentGroupId)</span>
+<span class="nc" id="L340">          .append(':').append(parentArtifactId)</span>
+<span class="nc" id="L341">          .append(':').append(targetVersion).append(&quot;`\n\n&quot;);</span>
+
+<span class="nc bnc" id="L343" title="All 4 branches missed.">        if (changes.isEmpty() &amp;&amp; skipped.isEmpty()) {</span>
+<span class="nc" id="L344">            md.append(&quot;All POMs already at target version.\n&quot;);</span>
+<span class="nc" id="L345">            return md.toString();</span>
+        }
+
+<span class="nc bnc" id="L348" title="All 2 branches missed.">        if (!changes.isEmpty()) {</span>
+<span class="nc bnc" id="L349" title="All 2 branches missed.">            if (draft) {</span>
+<span class="nc" id="L350">                md.append(&quot;**Dry run** — &quot;).append(changes.size())</span>
+<span class="nc" id="L351">                  .append(&quot; POM(s) would be updated.\n\n&quot;);</span>
+            } else {
+<span class="nc" id="L353">                md.append(&quot;Updated &quot;).append(changes.size())</span>
+<span class="nc" id="L354">                  .append(&quot; POM(s).\n\n&quot;);</span>
+            }
+
+<span class="nc" id="L357">            md.append(&quot;| Subproject | POM | From | To |\n&quot;);</span>
+<span class="nc" id="L358">            md.append(&quot;|-----------|-----|------|----|\n&quot;);</span>
+<span class="nc bnc" id="L359" title="All 2 branches missed.">            for (ParentChange c : changes) {</span>
+<span class="nc" id="L360">                md.append(&quot;| &quot;).append(c.subproject)</span>
+<span class="nc" id="L361">                  .append(&quot; | &quot;).append(c.pomRelPath)</span>
+<span class="nc" id="L362">                  .append(&quot; | &quot;).append(c.fromVersion)</span>
+<span class="nc" id="L363">                  .append(&quot; | &quot;).append(c.toVersion)</span>
+<span class="nc" id="L364">                  .append(&quot; |\n&quot;);</span>
+<span class="nc" id="L365">            }</span>
+        }
+
+<span class="nc bnc" id="L368" title="All 2 branches missed.">        if (!skipped.isEmpty()) {</span>
+<span class="nc" id="L369">            md.append(&quot;\n## Skipped (parent GAV mismatch)\n\n&quot;);</span>
+<span class="nc" id="L370">            md.append(&quot;These subprojects inherit from a different parent GAV&quot;</span>
+                    + &quot; and were not touched. The workspace parent is `&quot;)
+<span class="nc" id="L372">              .append(parentGroupId).append(':').append(parentArtifactId)</span>
+<span class="nc" id="L373">              .append(&quot;`; each subproject's actual parent is shown below.\n\n&quot;);</span>
+<span class="nc" id="L374">            md.append(&quot;| Subproject | Actual Parent |\n&quot;);</span>
+<span class="nc" id="L375">            md.append(&quot;|-----------|---------------|\n&quot;);</span>
+<span class="nc bnc" id="L376" title="All 2 branches missed.">            for (SkippedSubproject s : skipped) {</span>
+<span class="nc" id="L377">                md.append(&quot;| &quot;).append(s.subproject)</span>
+<span class="nc" id="L378">                  .append(&quot; | `&quot;).append(s.actualParentGav)</span>
+<span class="nc" id="L379">                  .append(&quot;` |\n&quot;);</span>
+<span class="nc" id="L380">            }</span>
+        }
+
+<span class="nc" id="L383">        return md.toString();</span>
+    }
+
+    /**
+     * A single parent-version change for reporting.
+     *
+     * @param subproject  subproject name or &quot;(root)&quot;
+     * @param pomRelPath  relative POM path within subproject
+     * @param fromVersion current parent version
+     * @param toVersion   target parent version
+     */
+<span class="nc" id="L394">    private record ParentChange(String subproject, String pomRelPath,</span>
+                                 String fromVersion, String toVersion) {}
+
+    /**
+     * A subproject whose parent GAV did not match the workspace root's
+     * parent and was therefore skipped. Recorded for the report so the
+     * user can see exactly which subprojects were considered and why
+     * they were left untouched.
+     *
+     * @param subproject       subproject name from workspace.yaml
+     * @param actualParentGav  the subproject's parent {@code groupId:artifactId:version}
+     */
+<span class="nc" id="L406">    private record SkippedSubproject(String subproject,</span>
+                                      String actualParentGav) {}
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

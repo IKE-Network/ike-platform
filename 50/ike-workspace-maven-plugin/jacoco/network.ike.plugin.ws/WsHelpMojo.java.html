@@ -1,0 +1,191 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>WsHelpMojo.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">WsHelpMojo.java</span></div><h1>WsHelpMojo.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import org.apache.maven.api.di.Inject;
+import org.apache.maven.api.plugin.Log;
+import org.apache.maven.api.plugin.Mojo;
+import org.apache.maven.api.plugin.MojoException;
+
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Displays available ws: workspace goals, enumerated from the
+ * compile-time {@link WsGoal} registry.
+ *
+ * &lt;p&gt;Goal names and descriptions come from the {@link WsGoal} enum,
+ * which is the single source of truth for every {@code ws:} goal in
+ * this plugin. The compiler enforces that every mojo has a matching
+ * enum entry, so the help output cannot drift from the actual plugin.
+ *
+ * &lt;p&gt;This used to read from the Maven {@code PluginDescriptor}, but
+ * Maven 4.0.0-rc-5 does not bind {@code PluginDescriptor} in the DI
+ * container, causing a startup crash. Iterating the enum is also
+ * type-safe — no string lookups, no runtime resolution.
+ *
+ * &lt;p&gt;Goals are categorized by prefix convention:
+ * &lt;ul&gt;
+ *   &lt;li&gt;feature-*, update-feature-*, switch-* → Feature Branching&lt;/li&gt;
+ *   &lt;li&gt;set-parent-*, align-* → Parent &amp;amp; Version Alignment&lt;/li&gt;
+ *   &lt;li&gt;release-*, checkpoint-*, post-release → Release &amp;amp; Checkpoint&lt;/li&gt;
+ *   &lt;li&gt;commit, push, sync, check-branch → VCS Bridge&lt;/li&gt;
+ *   &lt;li&gt;cleanup-* → Branch Cleanup&lt;/li&gt;
+ *   &lt;li&gt;Everything else → Workspace Management&lt;/li&gt;
+ * &lt;/ul&gt;
+ *
+ * @see &lt;a href=&quot;https://github.com/IKE-Network/ike-platform&quot;&gt;IKE Platform&lt;/a&gt;
+ */
+@org.apache.maven.api.plugin.annotations.Mojo(name = &quot;help&quot;, projectRequired = false, aggregator = true)
+public class WsHelpMojo implements Mojo {
+
+    /** Maven logger, injected by the Maven 4 DI container. */
+    @Inject
+    private Log log;
+
+    /** Creates this goal instance. */
+<span class="nc" id="L48">    public WsHelpMojo() {}</span>
+
+    /** Access the Maven logger. */
+<span class="nc" id="L51">    private Log getLog() { return log; }</span>
+
+    @Override
+    public void execute() throws MojoException {
+<span class="nc" id="L55">        List&lt;GoalInfo&gt; goals = discoverGoals();</span>
+
+<span class="nc" id="L57">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L58">        getLog().info(&quot;IKE Workspace Tools — Available Goals&quot;);</span>
+<span class="nc" id="L59">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+
+<span class="nc" id="L61">        Map&lt;String, List&lt;GoalInfo&gt;&gt; categories = categorize(goals);</span>
+
+<span class="nc bnc" id="L63" title="All 2 branches missed.">        for (Map.Entry&lt;String, List&lt;GoalInfo&gt;&gt; entry : categories.entrySet()) {</span>
+<span class="nc" id="L64">            getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L65">            getLog().info(&quot;  ── &quot; + entry.getKey() + &quot; &quot;</span>
+<span class="nc" id="L66">                    + &quot;─&quot;.repeat(Math.max(1,</span>
+<span class="nc" id="L67">                    56 - entry.getKey().length())) + &quot;─&quot;);</span>
+<span class="nc bnc" id="L68" title="All 2 branches missed.">            for (GoalInfo g : entry.getValue()) {</span>
+<span class="nc" id="L69">                String goalName = &quot;ws:&quot; + g.name;</span>
+<span class="nc" id="L70">                String padding = &quot; &quot;.repeat(</span>
+<span class="nc" id="L71">                        Math.max(1, 46 - goalName.length()));</span>
+<span class="nc" id="L72">                getLog().info(&quot;  &quot; + goalName + padding + g.summary);</span>
+<span class="nc" id="L73">            }</span>
+<span class="nc" id="L74">        }</span>
+
+<span class="nc" id="L76">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L77">        printOptions();</span>
+<span class="nc" id="L78">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L79">    }</span>
+
+    // ── Goal discovery ──────────────────────────────────────────
+
+    /**
+     * Enumerate goal names and descriptions from the {@link WsGoal}
+     * registry. Each enum entry carries its own one-line description,
+     * so no parsing is required.
+     *
+     * @return list of discovered goals, sorted by name
+     */
+    private static List&lt;GoalInfo&gt; discoverGoals() {
+<span class="nc" id="L91">        List&lt;GoalInfo&gt; goals = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L92" title="All 2 branches missed.">        for (WsGoal goal : WsGoal.values()) {</span>
+<span class="nc" id="L93">            goals.add(new GoalInfo(goal.goalName(), goal.description()));</span>
+        }
+<span class="nc" id="L95">        goals.sort(Comparator.comparing(g -&gt; g.name));</span>
+<span class="nc" id="L96">        return goals;</span>
+    }
+
+    // ── Categorization ──────────────────────────────────────────
+
+    /**
+     * Group goals into named categories based on prefix conventions.
+     *
+     * @param goals sorted list of goals
+     * @return ordered map of category name to goals
+     */
+    private static Map&lt;String, List&lt;GoalInfo&gt;&gt; categorize(
+            List&lt;GoalInfo&gt; goals) {
+<span class="nc" id="L109">        Map&lt;String, List&lt;GoalInfo&gt;&gt; categories = new LinkedHashMap&lt;&gt;();</span>
+<span class="nc" id="L110">        categories.put(&quot;Workspace Management&quot;, new ArrayList&lt;&gt;());</span>
+<span class="nc" id="L111">        categories.put(&quot;Parent &amp; Version Alignment&quot;, new ArrayList&lt;&gt;());</span>
+<span class="nc" id="L112">        categories.put(&quot;Feature Branching&quot;, new ArrayList&lt;&gt;());</span>
+<span class="nc" id="L113">        categories.put(&quot;Release &amp; Checkpoint&quot;, new ArrayList&lt;&gt;());</span>
+<span class="nc" id="L114">        categories.put(&quot;VCS Bridge&quot;, new ArrayList&lt;&gt;());</span>
+<span class="nc" id="L115">        categories.put(&quot;Branch Cleanup&quot;, new ArrayList&lt;&gt;());</span>
+
+<span class="nc bnc" id="L117" title="All 2 branches missed.">        for (GoalInfo g : goals) {</span>
+<span class="nc" id="L118">            categories.get(categoryOf(g.name)).add(g);</span>
+<span class="nc" id="L119">        }</span>
+
+        // Remove empty categories
+<span class="nc" id="L122">        categories.values().removeIf(List::isEmpty);</span>
+<span class="nc" id="L123">        return categories;</span>
+    }
+
+    /**
+     * Determine the category for a goal name.
+     *
+     * @param name goal name (without ws: prefix)
+     * @return category name
+     */
+    private static String categoryOf(String name) {
+<span class="nc bnc" id="L133" title="All 4 branches missed.">        if (name.startsWith(&quot;feature-&quot;) || name.startsWith(&quot;update-feature&quot;)</span>
+<span class="nc bnc" id="L134" title="All 2 branches missed.">                || name.startsWith(&quot;switch&quot;)) {</span>
+<span class="nc" id="L135">            return &quot;Feature Branching&quot;;</span>
+        }
+<span class="nc bnc" id="L137" title="All 4 branches missed.">        if (name.startsWith(&quot;release&quot;) || name.startsWith(&quot;checkpoint&quot;)</span>
+<span class="nc bnc" id="L138" title="All 4 branches missed.">                || name.equals(&quot;post-release&quot;) || name.equals(&quot;release-notes&quot;)) {</span>
+<span class="nc" id="L139">            return &quot;Release &amp; Checkpoint&quot;;</span>
+        }
+<span class="nc bnc" id="L141" title="All 4 branches missed.">        if (name.startsWith(&quot;set-parent&quot;) || name.startsWith(&quot;align&quot;)) {</span>
+<span class="nc" id="L142">            return &quot;Parent &amp; Version Alignment&quot;;</span>
+        }
+<span class="nc bnc" id="L144" title="All 4 branches missed.">        if (name.equals(&quot;commit&quot;) || name.equals(&quot;push&quot;)</span>
+<span class="nc bnc" id="L145" title="All 4 branches missed.">                || name.equals(&quot;sync&quot;) || name.equals(&quot;check-branch&quot;)) {</span>
+<span class="nc" id="L146">            return &quot;VCS Bridge&quot;;</span>
+        }
+<span class="nc bnc" id="L148" title="All 2 branches missed.">        if (name.startsWith(&quot;cleanup&quot;)) {</span>
+<span class="nc" id="L149">            return &quot;Branch Cleanup&quot;;</span>
+        }
+<span class="nc" id="L151">        return &quot;Workspace Management&quot;;</span>
+    }
+
+    // ── Options ─────────────────────────────────────────────────
+
+    /**
+     * Print common option groups. These remain static because they
+     * document cross-cutting parameters, not individual goal metadata.
+     */
+    private void printOptions() {
+<span class="nc" id="L161">        getLog().info(&quot;Common options:&quot;);</span>
+<span class="nc" id="L162">        getLog().info(&quot;  -Dworkspace.manifest=&lt;path&gt;   Path to workspace.yaml (auto-detected)&quot;);</span>
+<span class="nc" id="L163">        getLog().info(&quot;  -Dpublish=true                Execute (most goals default to draft)&quot;);</span>
+<span class="nc" id="L164">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L165">        getLog().info(&quot;Parent version:&quot;);</span>
+<span class="nc" id="L166">        getLog().info(&quot;  -Dparent.version=&lt;version&gt;    Target parent version (ws:set-parent)&quot;);</span>
+<span class="nc" id="L167">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L168">        getLog().info(&quot;Feature branching:&quot;);</span>
+<span class="nc" id="L169">        getLog().info(&quot;  -Dfeature=&lt;name&gt;              Feature name (branch: feature/&lt;name&gt;)&quot;);</span>
+<span class="nc" id="L170">        getLog().info(&quot;  -DskipVersion=true            Skip POM version qualification&quot;);</span>
+<span class="nc" id="L171">        getLog().info(&quot;  -DtargetBranch=&lt;name&gt;         Merge target (default: main)&quot;);</span>
+<span class="nc" id="L172">        getLog().info(&quot;  -DkeepBranch=true             Keep branch after merge&quot;);</span>
+<span class="nc" id="L173">        getLog().info(&quot;  -Dmessage=&lt;msg&gt;               Commit/squash message&quot;);</span>
+<span class="nc" id="L174">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L175">        getLog().info(&quot;Release &amp; checkpoint:&quot;);</span>
+<span class="nc" id="L176">        getLog().info(&quot;  -Dname=&lt;name&gt;                 Checkpoint name (auto-derived)&quot;);</span>
+<span class="nc" id="L177">        getLog().info(&quot;  -DdeploySite=true             Deploy site for each subproject&quot;);</span>
+<span class="nc" id="L178">        getLog().info(&quot;  -Dpush=true                   Push to origin&quot;);</span>
+<span class="nc" id="L179">    }</span>
+
+    // ── Internal record ─────────────────────────────────────────
+
+    /**
+     * A discovered goal with its name and summary description.
+     *
+     * @param name    goal name (without prefix)
+     * @param summary first sentence of the javadoc description
+     */
+<span class="nc" id="L189">    private record GoalInfo(String name, String summary) {}</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

@@ -89,12 +89,35 @@ pinning is gone. See
 [`ike-parent/src/site/asciidoc/index.adoc`](ike-parent/src/site/asciidoc/index.adoc)
 for the full design rationale.
 
+## Doc as Code + LLM-Friendly
+
+`ike-platform` is the IKE Network's parent-POM tier and follows
+the doc-as-code philosophy: build conventions, documentation
+standards, and AI-assistant guidance live as versioned Markdown
+files in
+[`ike-build-standards`](https://github.com/IKE-Network/ike-tooling/tree/main/ike-build-standards#readme)
+and are unpacked into every project that inherits `ike-parent`
+(into `.claude/standards/` at `validate` phase). When a developer —
+or Claude itself — opens an IKE project, the agent reads those
+standards and applies them automatically; contributors don't have
+to memorize the conventions.
+
+The standards most directly relevant to `ike-platform` are
+[`IKE-MAVEN.md`](https://github.com/IKE-Network/ike-tooling/blob/main/ike-build-standards/src/main/standards/IKE-MAVEN.md)
+(IKE-specific Maven conventions),
+[`IKE-RELEASE.md`](https://github.com/IKE-Network/ike-tooling/blob/main/ike-build-standards/src/main/standards/IKE-RELEASE.md)
+(cascade and recovery procedures), and
+[`IKE-CLASSIFIERS.md`](https://github.com/IKE-Network/ike-tooling/blob/main/ike-build-standards/src/main/standards/IKE-CLASSIFIERS.md)
+(artifact classifier conventions). See the
+[full inventory](https://github.com/IKE-Network/ike-tooling/tree/main/ike-build-standards#readme).
+
 ## Links
 
 - **Documentation:** [`https://ike.network/ike-platform/`](https://ike.network/ike-platform/)
   - [`ike-parent`](https://ike.network/ike-platform/ike-parent/) — parent POM rationale + reference
   - [`ike-workspace-maven-plugin`](https://ike.network/ike-platform/ike-workspace-maven-plugin/) — `ws:*` goal reference
   - [`ike-bom`](https://ike.network/ike-platform/ike-bom/) — BOM coordinates
+- **Build standards:** [`ike-build-standards`](https://ike.network/ike-tooling/ike-build-standards/)
 - **Issues:** [`IKE-Network/ike-issues`](https://github.com/IKE-Network/ike-issues) (cross-project tracker)
 - **Source:** [`IKE-Network/ike-platform`](https://github.com/IKE-Network/ike-platform)
 

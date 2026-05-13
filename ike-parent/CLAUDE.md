@@ -43,6 +43,43 @@ AsciiDoc documentation pipeline.
 - Projects inheriting `ike-parent` get managed versions
   automatically.
 
+## Inheriting projects MUST declare their own `<distributionManagement><site>`
+
+`ike-parent`'s `<distributionManagement><site>` URL is set to the
+**in-reactor** location:
+
+```xml
+<url>https://ike.network/ike-platform/${project.artifactId}/</url>
+```
+
+That URL is correct for the three submodules that publish under
+`ike-platform/`'s own `gh-pages` branch (`ike-parent`,
+`ike-workspace-maven-plugin`, `ike-bom`). It is **wrong** for
+external consumers like `doc-example`, `example-project`,
+`ike-example-ws`, `ike-example-its` — each of those publishes its
+own top-level gh-pages branch under `https://ike.network/<repo>/`.
+
+If you inherit `ike-parent` from outside the `ike-platform` reactor,
+you MUST declare your own `<site>` URL explicitly:
+
+```xml
+<distributionManagement>
+    <site>
+        <id>ike-site</id>
+        <url>https://ike.network/${project.artifactId}/</url>
+    </site>
+</distributionManagement>
+```
+
+The build enforcer (declared in ike-parent's `<build><plugins>`)
+fails when an inheriting project's effective site URL still starts
+with `https://ike.network/ike-platform/` and the project's
+`groupId` is not `network.ike.platform`. The error message points
+back here.
+
+Background: ike-issues#380 (URL realignment that created this
+constraint), ike-issues#383 (this footgun's tracking ticket).
+
 ## History
 
 Earlier revisions of this POM declared `ike-maven-plugin` and

@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>WsRefreshMainMojo.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">WsRefreshMainMojo.java</span></div><h1>WsRefreshMainMojo.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.workspace.WorkspaceGraph;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
+
+import java.io.File;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
+
+/**
+ * Refresh local main from {@code origin/main} across the workspace.
+ *
+ * &lt;p&gt;For each subproject, this goal fetches origin and reconciles local
+ * main with {@code origin/main}: fast-forward when behind, leave alone
+ * when purely ahead (unpushed work), auto-resolve via merge when
+ * diverged. The auto-resolve merge stays local until the user pushes
+ * via {@code ws:push} or {@code ws:sync}.
+ *
+ * &lt;p&gt;Use this when you want main current across the workspace without
+ * doing anything else &amp;mdash; before review, before starting a feature,
+ * after returning to a machine. The same logic runs as a precondition
+ * inside {@code ws:update-feature-*}, {@code ws:feature-finish-*},
+ * {@code ws:feature-start-*}, and {@code ws:sync}, so this goal is
+ * mostly a convenience wrapper.
+ *
+ * &lt;p&gt;If the auto-resolve merge would produce file conflicts (the rare
+ * &quot;two machines edited the same file on main without push/pull&quot; case),
+ * the goal hard-errors with the conflict list. The working tree is not
+ * touched.
+ *
+ * &lt;pre&gt;{@code
+ * mvn ws:refresh-main                       # refresh &quot;main&quot; from origin
+ * mvn ws:refresh-main -DmainBranch=trunk    # alternative branch name
+ * mvn ws:refresh-main -Dremote=upstream     # alternative remote name
+ * }&lt;/pre&gt;
+ *
+ * &lt;p&gt;See ike-issues#284.
+ */
+@Mojo(name = &quot;refresh-main&quot;, projectRequired = false, aggregator = true)
+public class WsRefreshMainMojo extends AbstractWorkspaceMojo {
+
+    /** Creates this goal instance. */
+<span class="nc" id="L46">    public WsRefreshMainMojo() {}</span>
+
+    /** The conceptual main branch to refresh. */
+    @Parameter(property = &quot;mainBranch&quot;, defaultValue = &quot;main&quot;)
+    String mainBranch;
+
+    /** The remote to refresh from. */
+    @Parameter(property = &quot;remote&quot;,
+            defaultValue = RefreshMainSupport.DEFAULT_REMOTE)
+    String remote;
+
+    @Override
+    public void execute() throws MojoException {
+<span class="nc bnc" id="L59" title="All 2 branches missed.">        if (!isWorkspaceMode()) {</span>
+<span class="nc" id="L60">            throw new MojoException(</span>
+                    &quot;ws:refresh-main requires a workspace (workspace.yaml).&quot;);
+        }
+
+<span class="nc" id="L64">        WorkspaceGraph graph = loadGraph();</span>
+<span class="nc" id="L65">        File root = workspaceRoot();</span>
+<span class="nc" id="L66">        Set&lt;String&gt; targets = graph.manifest().subprojects().keySet();</span>
+<span class="nc" id="L67">        List&lt;String&gt; sorted = graph.topologicalSort(new LinkedHashSet&lt;&gt;(targets));</span>
+
+<span class="nc" id="L69">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L70">        getLog().info(header(&quot;Refresh Main&quot;));</span>
+<span class="nc" id="L71">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+<span class="nc" id="L72">        getLog().info(&quot;  Branch:  &quot; + mainBranch);</span>
+<span class="nc" id="L73">        getLog().info(&quot;  Remote:  &quot; + remote);</span>
+<span class="nc" id="L74">        getLog().info(&quot;  Scope:   &quot; + sorted.size() + &quot; components&quot;);</span>
+<span class="nc" id="L75">        getLog().info(&quot;&quot;);</span>
+
+<span class="nc" id="L77">        List&lt;RefreshMainSupport.Outcome&gt; outcomes =</span>
+<span class="nc" id="L78">                RefreshMainSupport.refreshOrThrow(root, sorted, mainBranch, getLog());</span>
+
+<span class="nc" id="L80">        writeReport(WsGoal.REFRESH_MAIN, buildReport(outcomes));</span>
+
+<span class="nc" id="L82">        PostMutationSync.refresh(root, getLog());</span>
+<span class="nc" id="L83">    }</span>
+
+    private String buildReport(List&lt;RefreshMainSupport.Outcome&gt; outcomes) {
+<span class="nc" id="L86">        var sb = new StringBuilder();</span>
+<span class="nc" id="L87">        sb.append(&quot;**Branch:** `&quot;).append(mainBranch).append(&quot;` ← `&quot;)</span>
+<span class="nc" id="L88">          .append(remote).append(&quot;/&quot;).append(mainBranch).append(&quot;`\n\n&quot;);</span>
+<span class="nc" id="L89">        sb.append(&quot;| Subproject | Outcome |\n&quot;);</span>
+<span class="nc" id="L90">        sb.append(&quot;|-----------|---------|\n&quot;);</span>
+<span class="nc bnc" id="L91" title="All 2 branches missed.">        for (RefreshMainSupport.Outcome o : outcomes) {</span>
+<span class="nc" id="L92">            sb.append(&quot;| &quot;).append(o.component()).append(&quot; | &quot;)</span>
+<span class="nc" id="L93">              .append(outcomeLabel(o)).append(&quot; |\n&quot;);</span>
+<span class="nc" id="L94">        }</span>
+<span class="nc" id="L95">        sb.append(&quot;\n**&quot;).append(outcomes.size())</span>
+<span class="nc" id="L96">          .append(&quot;** subproject(s) refreshed.\n&quot;);</span>
+<span class="nc" id="L97">        return sb.toString();</span>
+    }
+
+    private static String outcomeLabel(RefreshMainSupport.Outcome o) {
+<span class="nc bnc" id="L101" title="All 7 branches missed.">        return switch (o) {</span>
+<span class="nc" id="L102">            case RefreshMainSupport.Skipped(var c, var r) -&gt; &quot;skipped (&quot; + r + &quot;)&quot;;</span>
+<span class="nc" id="L103">            case RefreshMainSupport.UpToDate(var c) -&gt; &quot;up to date&quot;;</span>
+<span class="nc bnc" id="L104" title="All 2 branches missed.">            case RefreshMainSupport.FastForwarded(var c, var n) -&gt;</span>
+<span class="nc bnc" id="L105" title="All 2 branches missed.">                    &quot;fast-forwarded &quot; + n + &quot; commit&quot; + (n == 1 ? &quot;&quot; : &quot;s&quot;);</span>
+<span class="nc" id="L106">            case RefreshMainSupport.CreatedFromRemote(var c) -&gt; &quot;created from remote&quot;;</span>
+<span class="nc bnc" id="L107" title="All 2 branches missed.">            case RefreshMainSupport.AheadOnly(var c, var n) -&gt;</span>
+<span class="nc bnc" id="L108" title="All 2 branches missed.">                    n + &quot; unpushed commit&quot; + (n == 1 ? &quot;&quot; : &quot;s&quot;) + &quot;, left as-is&quot;;</span>
+<span class="nc bnc" id="L109" title="All 4 branches missed.">            case RefreshMainSupport.AutoResolved(var c, var local, var remoteCount) -&gt;</span>
+<span class="nc" id="L110">                    &quot;auto-resolved (kept &quot; + local + &quot; local, merged &quot;</span>
+                            + remoteCount + &quot; from remote)&quot;;
+<span class="nc" id="L112">            case RefreshMainSupport.Conflicts(var c, var files) -&gt;</span>
+<span class="nc" id="L113">                    files.size() + &quot; conflict(s)&quot;;</span>
+        };
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

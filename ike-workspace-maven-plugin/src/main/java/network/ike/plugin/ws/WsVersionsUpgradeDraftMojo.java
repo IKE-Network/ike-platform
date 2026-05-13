@@ -9,6 +9,8 @@ import network.ike.workspace.PropertyVersionUpgrade;
 import network.ike.workspace.Subproject;
 import network.ike.workspace.VersionUpgradePlan;
 import network.ike.workspace.VersionUpgradePlanWriter;
+import network.ike.workspace.VersionUpgradeNoise;
+import network.ike.workspace.VersionUpgradeRule;
 import network.ike.workspace.VersionUpgradeRules;
 import network.ike.workspace.VersionUpgradeRulesException;
 import network.ike.workspace.VersionUpgradeRulesReader;
@@ -23,7 +25,10 @@ import org.apache.maven.api.plugin.annotations.Parameter;
 import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -135,7 +140,7 @@ public class WsVersionsUpgradeDraftMojo extends AbstractWorkspaceMojo {
         logSummary(plan, rulesPath, planPath, nodePoms.size());
 
         writeReport(WsGoal.VERSIONS_UPGRADE_DRAFT,
-                buildReport(plan, rulesPath, planPath));
+                buildReport(plan, rulesPath, planPath, rules));
     }
 
     /**
@@ -317,68 +322,341 @@ public class WsVersionsUpgradeDraftMojo extends AbstractWorkspaceMojo {
     }
 
     private String buildReport(VersionUpgradePlan plan, Path rulesPath,
-                               Path planPath) {
+                               Path planPath, VersionUpgradeRules rules) {
+        // Bucket every entry into one of three categories (#384):
+        //   READY     status=ready,   from!=to  → apply via publish
+        //   BLOCKED   status=blocked, from!=to  → user may add an
+        //                                         allow-rule to upgrade
+        //   WARNING   status=blocked, from==to,
+        //             reason != default-action  → conflict / ambiguity
+        // Everything else (status=ready/blocked with from==to AND
+        // default-action reason) is pure noise and filtered out.
+        List<ActionableEntry> ready = new ArrayList<>();
+        List<ActionableEntry> blocked = new ArrayList<>();
+        List<ActionableEntry> pending = new ArrayList<>();
+        List<ActionableEntry> warnings = new ArrayList<>();
+        for (Map.Entry<String, NodeVersionUpgrade> nodeEntry
+                : plan.nodes().entrySet()) {
+            collectActionable(nodeEntry.getKey(), nodeEntry.getValue(),
+                    ready, blocked, pending, warnings);
+        }
+
+        // Relative paths render as clickable markdown links in IntelliJ,
+        // GitHub, and most editors. Render relative to the workspace
+        // root (the report itself sits at the workspace root).
+        Path reportDir = planPath.getParent();
+        String planLink = reportDir == null ? planPath.toString()
+                : reportDir.relativize(planPath).toString();
+        String rulesLink = reportDir == null ? rulesPath.toString()
+                : reportDir.relativize(rulesPath).toString();
+
         StringBuilder sb = new StringBuilder();
         sb.append("**Workspace:** ").append(workspaceName()).append("\n");
         sb.append("**Scope:** workspace\n");
-        sb.append("**Ruleset:** `").append(rulesPath).append("`\n");
-        sb.append("**Plan:** `").append(planPath).append("`\n");
+        sb.append("**Files to edit:** [`")
+                .append(planLink).append("`](").append(planLink)
+                .append(") · [`")
+                .append(rulesLink).append("`](").append(rulesLink)
+                .append(")\n");
         if (plan.ikeToolingVersion() != null) {
             sb.append("**ike-tooling.version:** `")
                     .append(plan.ikeToolingVersion()).append("`\n");
         }
         sb.append("**Generated:** ").append(plan.generated()).append("\n");
-        sb.append("**Nodes:** ").append(plan.nodes().size()).append("\n\n");
+        sb.append("**Nodes:** ").append(plan.nodes().size())
+                .append("  ·  **Ready:** ").append(ready.size())
+                .append("  ·  **Blocked:** ").append(blocked.size())
+                .append("  ·  **Pending upstream:** ").append(pending.size())
+                .append("  ·  **Warnings:** ").append(warnings.size())
+                .append("\n\n");
 
-        for (Map.Entry<String, NodeVersionUpgrade> entry
-                : plan.nodes().entrySet()) {
-            appendNodeSection(sb, entry.getKey(), entry.getValue());
-        }
-
-        Counts counts = countActions(plan);
-        sb.append("## Summary\n");
-        sb.append("- ready:            ").append(counts.ready()).append("\n");
-        sb.append("- blocked:          ").append(counts.blocked()).append("\n");
-        sb.append("- pending-upstream: ").append(counts.pending()).append("\n");
-        sb.append("\n");
-        sb.append("Edit `").append(planPath.getFileName())
-                .append("` to refine, then run "
-                        + "`ws:versions-upgrade-publish`.\n");
+        appendNextSteps(sb, planLink, rulesLink,
+                ready.size(), blocked.size(), warnings.size());
+        appendActiveRules(sb, rules);
+        appendWarnings(sb, warnings);
+        appendReady(sb, ready);
+        appendBlockedGrouped(sb, blocked);
+        appendPending(sb, pending);
+        appendStandardsLink(sb);
         return sb.toString();
     }
 
-    private static void appendNodeSection(StringBuilder sb, String nodeName,
-                                          NodeVersionUpgrade node) {
-        sb.append("## ").append(nodeName).append("\n");
-        if (node.parent() != null) {
-            ParentVersionUpgrade p = node.parent();
-            sb.append("- parent `").append(p.groupId()).append(":")
-                    .append(p.artifactId()).append("`: ")
-                    .append(p.fromVersion()).append(" → ")
-                    .append(p.toVersion()).append(" [")
-                    .append(statusLabel(p.status())).append("]")
-                    .append(reasonSuffix(p.reason())).append("\n");
+    /** ike-issues#384: top-of-report numbered next-steps section. */
+    private static void appendNextSteps(StringBuilder sb,
+                                         String planLink, String rulesLink,
+                                         int readyCount, int blockedCount,
+                                         int warningCount) {
+        sb.append("## Next steps\n\n");
+        if (warningCount > 0) {
+            sb.append("1. **Resolve the ").append(warningCount)
+                    .append(" warning")
+                    .append(warningCount == 1 ? "" : "s")
+                    .append(" below** — conflicts / ambiguities that")
+                    .append(" block an upgrade even though no version")
+                    .append(" change is proposed.\n");
         }
-        for (PropertyVersionUpgrade prop : node.properties()) {
-            sb.append("- property `${").append(prop.propertyName())
-                    .append("}`: ").append(prop.fromVersion())
-                    .append(" → ").append(prop.toVersion()).append(" [")
-                    .append(statusLabel(prop.status())).append("]")
-                    .append(reasonSuffix(prop.reason())).append("\n");
+        sb.append(warningCount > 0 ? "2." : "1.")
+                .append(" **Review the ").append(readyCount)
+                .append(" ready upgrade")
+                .append(readyCount == 1 ? "" : "s")
+                .append("** in the Ready section.\n");
+        if (blockedCount > 0) {
+            sb.append(warningCount > 0 ? "3." : "2.")
+                    .append(" **(Optional) Allow more coordinates** —")
+                    .append(" the Blocked section groups ").append(blockedCount)
+                    .append(" entr").append(blockedCount == 1 ? "y" : "ies")
+                    .append(" by groupId with a copy-paste-ready")
+                    .append(" allow-rule. Paste any you want into")
+                    .append(" `").append(rulesLink).append("` and")
+                    .append(" re-draft to pick them up.\n");
         }
-        for (LiteralVersionUpgrade lit : node.literals()) {
-            sb.append("- literal `").append(lit.groupId()).append(":")
-                    .append(lit.artifactId()).append("`: ")
-                    .append(lit.fromVersion()).append(" → ")
-                    .append(lit.toVersion()).append(" [")
-                    .append(statusLabel(lit.status())).append("]")
-                    .append(reasonSuffix(lit.reason())).append("\n");
+        int step = (warningCount > 0 ? 3 : 2) + (blockedCount > 0 ? 1 : 0);
+        sb.append(step).append(". **Edit the plan** to remove or re-pin")
+                .append(" specific entries: [`").append(planLink)
+                .append("`](").append(planLink).append(").\n");
+        sb.append(step + 1).append(". **Apply** with")
+                .append(" `mvn ws:versions-upgrade-publish`.\n\n");
+    }
+
+    /** ike-issues#384: inline summary of the active rules. */
+    private static void appendActiveRules(StringBuilder sb,
+                                           VersionUpgradeRules rules) {
+        if (rules == null) return;
+        sb.append("## Active rules\n\n");
+        sb.append("From the ruleset, in declaration order (first match wins):\n\n");
+        for (VersionUpgradeRule rule : rules.rules()) {
+            sb.append("- `").append(rule.groupIdPattern()).append(":")
+                    .append(rule.artifactIdPattern()).append("`")
+                    .append(" → **").append(rule.action().name()
+                            .toLowerCase(Locale.ROOT))
+                    .append("**");
+            if (rule.pinnedVersion() != null
+                    && !rule.pinnedVersion().isEmpty()) {
+                sb.append(" (pin to `").append(rule.pinnedVersion())
+                        .append("`)");
+            }
+            if (rule.reason() != null && !rule.reason().isEmpty()) {
+                sb.append(" — ").append(rule.reason());
+            }
+            sb.append("\n");
         }
-        if (node.parent() == null
-                && node.properties().isEmpty()
-                && node.literals().isEmpty()) {
-            sb.append("- _no upgrades proposed_\n");
+        sb.append("- _(default)_ → **")
+                .append(rules.defaultAction().name()
+                        .toLowerCase(Locale.ROOT))
+                .append("**\n\n");
+    }
+
+    /** ike-issues#384: from==to entries with a meaningful reason. */
+    private static void appendWarnings(StringBuilder sb,
+                                        List<ActionableEntry> warnings) {
+        if (warnings.isEmpty()) return;
+        sb.append("## Warnings (").append(warnings.size()).append(")\n\n");
+        sb.append("These coordinates did **not** get an upgrade proposal,")
+                .append(" but the resolver flagged a real problem worth")
+                .append(" investigating.\n\n");
+        for (ActionableEntry w : warnings) {
+            sb.append("- **").append(w.node()).append("** · ")
+                    .append(w.coordLabel()).append(" stays at `")
+                    .append(w.fromVersion()).append("` — ")
+                    .append(w.reason()).append("\n");
         }
         sb.append("\n");
     }
+
+    /** ike-issues#384: ready upgrades, one row per node. */
+    private static void appendReady(StringBuilder sb,
+                                     List<ActionableEntry> ready) {
+        if (ready.isEmpty()) return;
+        sb.append("## Ready (").append(ready.size()).append(")\n\n");
+        sb.append("These will be applied by `ws:versions-upgrade-publish`")
+                .append(". Edit the plan file to drop or re-pin any.\n\n");
+        sb.append("| Node | Coordinate | From → To |\n");
+        sb.append("|---|---|---|\n");
+        for (ActionableEntry r : ready) {
+            sb.append("| `").append(r.node()).append("` | ")
+                    .append(r.coordLabel()).append(" | `")
+                    .append(r.fromVersion()).append("` → `")
+                    .append(r.toVersion()).append("` |\n");
+        }
+        sb.append("\n");
+    }
+
+    /**
+     * ike-issues#384: blocked entries (newer version available, but
+     * ruleset blocks). Grouped by groupId with a suggested allow-rule
+     * snippet ready to paste into the ruleset.
+     */
+    private static void appendBlockedGrouped(StringBuilder sb,
+                                              List<ActionableEntry> blocked) {
+        if (blocked.isEmpty()) return;
+        sb.append("## Blocked — newer available (")
+                .append(blocked.size()).append(")\n\n");
+        sb.append("Newer versions exist but the ruleset doesn't allow")
+                .append(" the groupId. To allow a group, paste its")
+                .append(" suggested rule into `versions-upgrade-rules.yaml`")
+                .append(" and re-draft.\n\n");
+
+        // Group by groupId, preserving first-seen order.
+        Map<String, List<ActionableEntry>> byGroup =
+                new LinkedHashMap<>();
+        for (ActionableEntry b : blocked) {
+            byGroup.computeIfAbsent(b.groupId(),
+                    k -> new ArrayList<>()).add(b);
+        }
+
+        sb.append("| GroupId | Coords in this workspace | Suggested rule |\n");
+        sb.append("|---|---|---|\n");
+        for (Map.Entry<String, List<ActionableEntry>> g
+                : byGroup.entrySet()) {
+            String groupId = g.getKey();
+            List<ActionableEntry> entries = g.getValue();
+            sb.append("| `").append(groupId).append("` | ")
+                    .append(coordSummary(entries)).append(" | ")
+                    .append("`- match: \"").append(groupId)
+                    .append(":*\"`<br>`  action: allow` |\n");
+        }
+        sb.append("\n");
+
+        // Collapsible detail per group for transparency.
+        sb.append("<details><summary>Detail — every blocked entry,")
+                .append(" grouped</summary>\n\n");
+        for (Map.Entry<String, List<ActionableEntry>> g
+                : byGroup.entrySet()) {
+            sb.append("**`").append(g.getKey()).append("`**\n");
+            for (ActionableEntry b : g.getValue()) {
+                sb.append("- `").append(b.node()).append("` · ")
+                        .append(b.coordLabel()).append(": `")
+                        .append(b.fromVersion()).append("` → `")
+                        .append(b.toVersion()).append("`");
+                if (b.reason() != null) {
+                    sb.append(" — ").append(b.reason());
+                }
+                sb.append("\n");
+            }
+            sb.append("\n");
+        }
+        sb.append("</details>\n\n");
+    }
+
+    /** ike-issues#384: pending-upstream entries (waiting on an upstream release). */
+    private static void appendPending(StringBuilder sb,
+                                       List<ActionableEntry> pending) {
+        if (pending.isEmpty()) return;
+        sb.append("## Pending upstream (").append(pending.size())
+                .append(")\n\n");
+        sb.append("Re-draft after the upstream releases — the resolver")
+                .append(" will pick up the new version.\n\n");
+        for (ActionableEntry p : pending) {
+            sb.append("- `").append(p.node()).append("` · ")
+                    .append(p.coordLabel()).append(": `")
+                    .append(p.fromVersion()).append("` → `")
+                    .append(p.toVersion()).append("`");
+            if (p.reason() != null) sb.append(" — ").append(p.reason());
+            sb.append("\n");
+        }
+        sb.append("\n");
+    }
+
+    /** ike-issues#384: link to the standards doc for conceptual context. */
+    private static void appendStandardsLink(StringBuilder sb) {
+        sb.append("---\n\n");
+        sb.append("See [`IKE-WORKSPACE.md`](https://github.com/IKE-Network/")
+                .append("ike-tooling/blob/main/ike-build-standards/")
+                .append("src/main/standards/IKE-WORKSPACE.md) for the")
+                .append(" workspace and versions-upgrade conventions.\n");
+    }
+
+    private static String coordSummary(List<ActionableEntry> entries) {
+        // Distinct artifact-or-property labels, joined; show a count
+        // suffix when there are many.
+        java.util.LinkedHashSet<String> seen = new java.util.LinkedHashSet<>();
+        for (ActionableEntry e : entries) {
+            seen.add(e.coordLabel());
+        }
+        int max = 3;
+        StringBuilder out = new StringBuilder();
+        int i = 0;
+        for (String label : seen) {
+            if (i > 0) out.append(", ");
+            out.append(label);
+            if (++i >= max && seen.size() > max) {
+                out.append(", … (")
+                        .append(seen.size() - max)
+                        .append(" more)");
+                break;
+            }
+        }
+        return out.toString();
+    }
+
+    /**
+     * ike-issues#384: classify each entry into ready / blocked /
+     * pending / warnings buckets, dropping pure-noise entries entirely.
+     */
+    private static void collectActionable(String nodeName,
+                                           NodeVersionUpgrade node,
+                                           List<ActionableEntry> ready,
+                                           List<ActionableEntry> blocked,
+                                           List<ActionableEntry> pending,
+                                           List<ActionableEntry> warnings) {
+        if (node.parent() != null) {
+            ParentVersionUpgrade p = node.parent();
+            classify(nodeName, p.groupId(),
+                    "parent `" + p.groupId() + ":" + p.artifactId() + "`",
+                    p.fromVersion(), p.toVersion(),
+                    p.status(), p.reason(),
+                    ready, blocked, pending, warnings);
+        }
+        for (PropertyVersionUpgrade prop : node.properties()) {
+            classify(nodeName, "<property>",
+                    "property `${" + prop.propertyName() + "}`",
+                    prop.fromVersion(), prop.toVersion(),
+                    prop.status(), prop.reason(),
+                    ready, blocked, pending, warnings);
+        }
+        for (LiteralVersionUpgrade lit : node.literals()) {
+            classify(nodeName, lit.groupId(),
+                    "literal `" + lit.groupId() + ":" + lit.artifactId() + "`",
+                    lit.fromVersion(), lit.toVersion(),
+                    lit.status(), lit.reason(),
+                    ready, blocked, pending, warnings);
+        }
+    }
+
+    private static void classify(String nodeName, String groupId,
+                                  String coordLabel,
+                                  String fromVersion, String toVersion,
+                                  VersionUpgradeStatus status, String reason,
+                                  List<ActionableEntry> ready,
+                                  List<ActionableEntry> blocked,
+                                  List<ActionableEntry> pending,
+                                  List<ActionableEntry> warnings) {
+        if (VersionUpgradeNoise.isPureNoise(status, fromVersion,
+                toVersion, reason)) {
+            return;
+        }
+        ActionableEntry entry = new ActionableEntry(nodeName, groupId,
+                coordLabel, fromVersion, toVersion, status, reason);
+        if (VersionUpgradeNoise.isInformationalSameVersion(status,
+                fromVersion, toVersion, reason)) {
+            warnings.add(entry);
+            return;
+        }
+        switch (status) {
+            case READY -> ready.add(entry);
+            case BLOCKED -> blocked.add(entry);
+            case PENDING_UPSTREAM -> pending.add(entry);
+        }
+    }
+
+    /** Display record used by the redesigned report builder. */
+    private record ActionableEntry(
+            String node,
+            String groupId,
+            String coordLabel,
+            String fromVersion,
+            String toVersion,
+            VersionUpgradeStatus status,
+            String reason
+    ) {}
 }

@@ -1,6 +1,8 @@
 # IKE Platform
 
-**Documentation:** https://ike.network/ike-platform/
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
+[![Documentation](https://img.shields.io/badge/docs-ike.network%2Fike--platform-blue)](https://ike.network/ike-platform/)
+[![IKE Network](https://img.shields.io/badge/IKE-Network-green)](https://ike.network/)
 
 Parent POM, BOM, and workspace-orchestration plugin for the IKE
 Community build pipeline.
@@ -71,6 +73,15 @@ declarations. The cascade ordering is unchanged; the literal-version
 pinning is gone. See
 [`ike-parent/src/site/asciidoc/index.adoc`](ike-parent/src/site/asciidoc/index.adoc)
 for the full design rationale.
+
+## Links
+
+- **Documentation:** [`https://ike.network/ike-platform/`](https://ike.network/ike-platform/)
+  - [`ike-parent`](https://ike.network/ike-platform/ike-parent/) — parent POM rationale + reference
+  - [`ike-workspace-maven-plugin`](https://ike.network/ike-platform/ike-workspace-maven-plugin/) — `ws:*` goal reference
+  - [`ike-bom`](https://ike.network/ike-platform/ike-bom/) — BOM coordinates
+- **Issues:** [`IKE-Network/ike-issues`](https://github.com/IKE-Network/ike-issues) (cross-project tracker)
+- **Source:** [`IKE-Network/ike-platform`](https://github.com/IKE-Network/ike-platform)
 
 ## History
 

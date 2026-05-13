@@ -1,0 +1,265 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>WorkspaceReport.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">WorkspaceReport.java</span></div><h1>WorkspaceReport.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import org.apache.maven.api.plugin.Log;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.List;
+
+/**
+ * Per-goal report writer for {@code ws:*} goals.
+ *
+ * &lt;p&gt;Each goal writes its own file directly at the workspace root
+ * (alongside {@code workspace.yaml} and the aggregator {@code pom.xml}).
+ * Files are &lt;b&gt;overwritten&lt;/b&gt; on each run (not appended), so the
+ * content always reflects the latest execution.
+ *
+ * &lt;p&gt;Filenames use {@code ꞉} (U+A789 MODIFIER LETTER COLON) to cluster
+ * visually as {@code ws꞉goal-name.md} in IDE file browsers. For
+ * draft/publish goals, the filename includes the variant:
+ * {@code ws꞉feature-start-draft.md}, {@code ws꞉feature-start-publish.md}.
+ *
+ * &lt;p&gt;&lt;strong&gt;Self-healing gitignore:&lt;/strong&gt; before writing, this class
+ * ensures {@code ws꞉*.md} is listed in the {@code .gitignore} of the
+ * nearest {@code .git} ancestor. If the pattern is missing, it is
+ * appended. This keeps reports out of git without any manual setup —
+ * a fresh clone of a workspace becomes report-ready the first time a
+ * {@code ws:*} goal runs.
+ *
+ * &lt;p&gt;Parallels {@code network.ike.plugin.IkeReport} in the ike plugin;
+ * both writers now target their respective project roots.
+ */
+public final class WorkspaceReport {
+
+    /** U+A789 MODIFIER LETTER COLON — filesystem-safe visual colon. */
+    private static final char COLON = '\uA789';
+
+    /**
+     * Glob appended to {@code .gitignore} when missing. Matches every
+     * {@code ws꞉*.md} report at the workspace root.
+     */
+    static final String GITIGNORE_PATTERN = &quot;ws\uA789*.md&quot;;
+
+<span class="fc" id="L47">    private static final DateTimeFormatter TIMESTAMP_FMT =</span>
+<span class="fc" id="L48">            DateTimeFormatter.ofPattern(&quot;yyyy-MM-dd HH:mm:ss&quot;);</span>
+
+    private WorkspaceReport() {}
+
+    /**
+     * Write a goal's report to its per-goal file at the workspace root,
+     * overwriting any previous content. Self-heals the nearest
+     * {@code .gitignore} so the report does not land in git.
+     *
+     * @param workspaceRoot the workspace root directory
+     * @param goalName      the goal name including variant (e.g., &quot;ws:feature-start-draft&quot;)
+     * @param content       the markdown content to write
+     * @param log           Maven logger (warnings only; null-safe)
+     */
+    public static void write(Path workspaceRoot, String goalName,
+                              String content, Log log) {
+<span class="fc" id="L64">        String filename = &quot;ws&quot; + COLON + stripPrefix(goalName) + &quot;.md&quot;;</span>
+<span class="fc" id="L65">        Path reportFile = workspaceRoot.resolve(filename);</span>
+
+        try {
+<span class="fc" id="L68">            ensureGitignored(workspaceRoot, log);</span>
+
+<span class="fc" id="L70">            String timestamp = LocalDateTime.now().format(TIMESTAMP_FMT);</span>
+<span class="fc" id="L71">            String fullContent = &quot;# &quot; + goalName + &quot;\n&quot;</span>
+                    + &quot;_&quot; + timestamp + &quot; · ike-workspace-maven-plugin &quot;
+<span class="fc" id="L73">                    + pluginVersion() + &quot;_\n\n&quot;</span>
+<span class="fc" id="L74">                    + content.stripTrailing() + &quot;\n&quot;;</span>
+
+<span class="fc" id="L76">            Files.writeString(reportFile, fullContent, StandardCharsets.UTF_8);</span>
+<span class="nc" id="L77">        } catch (IOException e) {</span>
+<span class="nc bnc" id="L78" title="All 2 branches missed.">            if (log != null) {</span>
+<span class="nc" id="L79">                log.debug(&quot;Could not write report &quot; + filename + &quot;: &quot;</span>
+<span class="nc" id="L80">                        + e.getMessage());</span>
+            }
+<span class="fc" id="L82">        }</span>
+<span class="fc" id="L83">    }</span>
+
+    /**
+     * Resolve the report file path for a specific goal.
+     *
+     * @param workspaceRoot the workspace root directory
+     * @param goalName      the goal name (e.g., &quot;ws:overview&quot;)
+     * @return path to the report file at the workspace root (may not exist yet)
+     */
+    public static Path reportPath(Path workspaceRoot, String goalName) {
+<span class="fc" id="L93">        String filename = &quot;ws&quot; + COLON + stripPrefix(goalName) + &quot;.md&quot;;</span>
+<span class="fc" id="L94">        return workspaceRoot.resolve(filename);</span>
+    }
+
+    /**
+     * Delete a goal's report file if present. Used when a successful
+     * {@code -publish} run obsoletes the matching {@code -draft} report
+     * — the draft says \&quot;this would happen,\&quot; but it now has, and leaving
+     * the stale draft alongside the publish report misleads readers
+     * into thinking the operation hasn't completed.
+     *
+     * &lt;p&gt;No-op when the file doesn't exist. Errors (file locked, etc.)
+     * are logged at debug only — best-effort cleanup, never fatal.
+     *
+     * @param workspaceRoot the workspace root directory
+     * @param goalName      the goal name whose report file to delete
+     *                      (e.g., {@code &quot;ws:scaffold-upgrade-draft&quot;})
+     * @param log           Maven logger; may be null
+     */
+    public static void deleteReport(Path workspaceRoot, String goalName, Log log) {
+<span class="fc" id="L113">        Path reportFile = reportPath(workspaceRoot, goalName);</span>
+        try {
+<span class="pc bpc" id="L115" title="1 of 4 branches missed.">            if (Files.deleteIfExists(reportFile) &amp;&amp; log != null) {</span>
+<span class="fc" id="L116">                log.debug(&quot;ws: removed stale report &quot; + reportFile.getFileName());</span>
+            }
+<span class="nc" id="L118">        } catch (IOException e) {</span>
+<span class="nc bnc" id="L119" title="All 2 branches missed.">            if (log != null) {</span>
+<span class="nc" id="L120">                log.debug(&quot;Could not delete stale report &quot;</span>
+<span class="nc" id="L121">                        + reportFile.getFileName() + &quot;: &quot; + e.getMessage());</span>
+            }
+<span class="fc" id="L123">        }</span>
+<span class="fc" id="L124">    }</span>
+
+    /**
+     * Open the workspace root in the default file manager or IDE so
+     * the user can browse the {@code ws꞉*.md} reports alongside
+     * {@code workspace.yaml} and the aggregator {@code pom.xml}.
+     *
+     * @param workspaceRoot the workspace root directory
+     * @param log           Maven logger
+     * @return {@code true} if opened successfully
+     */
+    public static boolean openInBrowser(Path workspaceRoot, Log log) {
+<span class="nc bnc" id="L136" title="All 2 branches missed.">        if (!Files.isDirectory(workspaceRoot)) {</span>
+<span class="nc bnc" id="L137" title="All 2 branches missed.">            if (log != null) {</span>
+<span class="nc" id="L138">                log.warn(&quot;Workspace root not found: &quot; + workspaceRoot);</span>
+            }
+<span class="nc" id="L140">            return false;</span>
+        }
+
+        try {
+<span class="nc bnc" id="L144" title="All 2 branches missed.">            if (System.getProperty(&quot;os.name&quot;, &quot;&quot;).toLowerCase().contains(&quot;mac&quot;)) {</span>
+<span class="nc" id="L145">                new ProcessBuilder(&quot;open&quot;, workspaceRoot.toString()).start();</span>
+<span class="nc" id="L146">                return true;</span>
+            }
+<span class="nc bnc" id="L148" title="All 2 branches missed.">            if (java.awt.Desktop.isDesktopSupported()) {</span>
+<span class="nc" id="L149">                java.awt.Desktop.getDesktop().open(workspaceRoot.toFile());</span>
+<span class="nc" id="L150">                return true;</span>
+            }
+<span class="nc" id="L152">        } catch (IOException e) {</span>
+<span class="nc bnc" id="L153" title="All 2 branches missed.">            if (log != null) {</span>
+<span class="nc" id="L154">                log.warn(&quot;Could not open workspace root: &quot; + e.getMessage());</span>
+            }
+<span class="nc" id="L156">        }</span>
+<span class="nc" id="L157">        return false;</span>
+    }
+
+    /**
+     * Walk up from {@code workspaceRoot} looking for a {@code .git}
+     * directory; ensure its sibling {@code .gitignore} lists
+     * {@link #GITIGNORE_PATTERN}. If the file is missing, create it.
+     * If the pattern is missing, append it. No-op when no {@code .git}
+     * ancestor is found (e.g. the workspace is not yet in a git repo —
+     * pipeline-ws itself is a syncthing folder rather than a git repo).
+     *
+     * @param workspaceRoot the workspace root to search from
+     * @param log           Maven logger (null-safe)
+     * @throws IOException if the gitignore file cannot be read or written
+     */
+    static void ensureGitignored(Path workspaceRoot, Log log)
+            throws IOException {
+<span class="fc" id="L174">        Path gitRoot = findGitRoot(workspaceRoot);</span>
+<span class="fc bfc" id="L175" title="All 2 branches covered.">        if (gitRoot == null) return;</span>
+
+<span class="fc" id="L177">        Path gitignore = gitRoot.resolve(&quot;.gitignore&quot;);</span>
+<span class="pc bpc" id="L178" title="1 of 2 branches missed.">        if (Files.exists(gitignore)) {</span>
+<span class="fc" id="L179">            List&lt;String&gt; lines = Files.readAllLines(gitignore,</span>
+                    StandardCharsets.UTF_8);
+<span class="fc bfc" id="L181" title="All 2 branches covered.">            for (String line : lines) {</span>
+<span class="pc bpc" id="L182" title="1 of 2 branches missed.">                if (matchesPattern(line.trim(), GITIGNORE_PATTERN)) {</span>
+<span class="nc" id="L183">                    return;</span>
+                }
+<span class="fc" id="L185">            }</span>
+<span class="fc" id="L186">            String existing = Files.readString(gitignore,</span>
+                    StandardCharsets.UTF_8);
+<span class="pc bpc" id="L188" title="1 of 2 branches missed.">            String appended = existing.endsWith(&quot;\n&quot;) ? existing</span>
+<span class="pc" id="L189">                    : existing + &quot;\n&quot;;</span>
+<span class="fc" id="L190">            Files.writeString(gitignore,</span>
+                    appended + &quot;\n# ws:* goal reports\n&quot;
+                            + GITIGNORE_PATTERN + &quot;\n&quot;,
+                    StandardCharsets.UTF_8);
+<span class="fc" id="L194">        } else {</span>
+<span class="nc" id="L195">            Files.writeString(gitignore,</span>
+                    &quot;# ws:* goal reports\n&quot;
+                            + GITIGNORE_PATTERN + &quot;\n&quot;,
+                    StandardCharsets.UTF_8);
+        }
+<span class="pc bpc" id="L200" title="1 of 2 branches missed.">        if (log != null) {</span>
+<span class="fc" id="L201">            log.info(&quot;Added &quot; + GITIGNORE_PATTERN</span>
+<span class="fc" id="L202">                    + &quot; to &quot; + gitRoot.relativize(gitignore));</span>
+        }
+<span class="fc" id="L204">    }</span>
+
+    /**
+     * Walk up from {@code start} looking for a directory that contains
+     * a {@code .git} entry (directory or file — the latter for
+     * worktrees and submodules).
+     *
+     * @param start the starting directory for the search
+     * @return the git root directory, or {@code null} if none is found
+     */
+    private static Path findGitRoot(Path start) {
+<span class="fc" id="L215">        Path current = start.toAbsolutePath();</span>
+<span class="fc bfc" id="L216" title="All 2 branches covered.">        while (current != null) {</span>
+<span class="fc bfc" id="L217" title="All 2 branches covered.">            if (Files.exists(current.resolve(&quot;.git&quot;))) return current;</span>
+<span class="fc" id="L218">            current = current.getParent();</span>
+        }
+<span class="fc" id="L220">        return null;</span>
+    }
+
+    /**
+     * Test whether a {@code .gitignore} line matches the given pattern
+     * after normalizing leading slashes and skipping comments or blanks.
+     *
+     * @param line    the {@code .gitignore} line, already trimmed
+     * @param pattern the normalized pattern to match against
+     * @return {@code true} if the line covers the pattern
+     */
+    private static boolean matchesPattern(String line, String pattern) {
+<span class="pc bpc" id="L232" title="2 of 4 branches missed.">        if (line.isEmpty() || line.startsWith(&quot;#&quot;)) return false;</span>
+<span class="pc bpc" id="L233" title="1 of 2 branches missed.">        String normalized = line.startsWith(&quot;/&quot;) ? line.substring(1) : line;</span>
+<span class="fc" id="L234">        return normalized.equals(pattern);</span>
+    }
+
+    /**
+     * Read the plugin version from the JAR manifest's
+     * {@code Implementation-Version} attribute (set by
+     * {@code maven-jar-plugin}'s {@code addDefaultImplementationEntries}).
+     * Reports persist across plugin upgrades, so embedding the version
+     * in the header lets a reader tell which release generated an old
+     * file when the goal's output format or semantics has shifted.
+     *
+     * @return the plugin version, or {@code &quot;(unknown)&quot;} when the
+     *         manifest attribute is absent (e.g. during in-IDE test runs)
+     */
+    static String pluginVersion() {
+<span class="fc" id="L249">        String v = WorkspaceReport.class.getPackage()</span>
+<span class="fc" id="L250">                .getImplementationVersion();</span>
+<span class="pc bpc" id="L251" title="1 of 2 branches missed.">        return v != null ? v : &quot;(unknown)&quot;;</span>
+    }
+
+    /**
+     * Strip the &quot;ws:&quot; prefix from a goal name for use in filenames.
+     * &quot;ws:overview&quot; → &quot;overview&quot;, &quot;ws:feature-start-draft&quot; → &quot;feature-start-draft&quot;
+     */
+    private static String stripPrefix(String goalName) {
+<span class="pc bpc" id="L259" title="1 of 2 branches missed.">        if (goalName.startsWith(&quot;ws:&quot;)) {</span>
+<span class="fc" id="L260">            return goalName.substring(3);</span>
+        }
+<span class="nc" id="L262">        return goalName;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

@@ -5,7 +5,7 @@
 [![IKE Network](https://img.shields.io/badge/IKE-Network-green)](https://ike.network/)
 
 Parent POM, BOM, and workspace-orchestration plugin for the IKE
-Community build pipeline.
+Network build pipeline.
 
 ## Modules
 
@@ -23,15 +23,25 @@ mvn clean install
 
 ## Usage
 
-Downstream projects inherit from `ike-parent`:
+Downstream projects inherit from `ike-parent` (check Nexus or the
+[GitHub releases](https://github.com/IKE-Network/ike-platform/releases)
+for the current version — replace `54` below):
 
 ```xml
 <parent>
     <groupId>network.ike.platform</groupId>
     <artifactId>ike-parent</artifactId>
-    <version>1</version>
+    <version>54</version>
 </parent>
 ```
+
+Inheriting projects MUST also declare their own
+`<distributionManagement><site>` URL — the inherited template
+resolves to the in-reactor location and is wrong for external
+consumers. See [`ike-parent/CLAUDE.md`](ike-parent/CLAUDE.md) and
+[`IKE-Network/ike-issues#383`](https://github.com/IKE-Network/ike-issues/issues/383)
+for the override pattern. A build enforcer fails projects that
+miss this.
 
 Consumers who do not want to inherit `ike-parent`'s build conventions
 can still align dependency versions by importing the BOM:
@@ -42,7 +52,7 @@ can still align dependency versions by importing the BOM:
         <dependency>
             <groupId>network.ike.platform</groupId>
             <artifactId>ike-bom</artifactId>
-            <version>1</version>
+            <version>54</version>
             <type>pom</type>
             <scope>import</scope>
         </dependency>
@@ -53,8 +63,13 @@ can still align dependency versions by importing the BOM:
 ## Release Cascade
 
 ```
-ike-tooling → ike-docs → [ike-platform] → { doc-example, example-project } → ike-example-ws
+ike-tooling → ike-docs → [ike-platform] → { doc-example, example-project, ike-example-its } → ike-example-ws
 ```
+
+The cascade is orchestrated end-to-end by
+`ike-workspace-maven-plugin:cascade-foundation-publish`. See
+[`cutting-a-release.adoc`](https://ike.network/ike-platform/cutting-a-release.html)
+for the full procedure.
 
 Release order is structurally upstream-first: `ike-parent`'s
 `<pluginManagement>` declares `ike-maven-plugin` at

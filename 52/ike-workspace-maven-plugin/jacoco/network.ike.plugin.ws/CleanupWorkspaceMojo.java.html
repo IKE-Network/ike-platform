@@ -1,0 +1,224 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>CleanupWorkspaceMojo.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">CleanupWorkspaceMojo.java</span></div><h1>CleanupWorkspaceMojo.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.workspace.WorkspaceGraph;
+import network.ike.plugin.ws.vcs.VcsOperations;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
+
+import java.io.File;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
+
+/**
+ * Scan all workspace subprojects for merged feature branches and offer
+ * interactive deletion.
+ *
+ * &lt;p&gt;Lists feature branches across all subprojects, classifies each as
+ * merged (into the target branch) or active, and displays last-commit
+ * timestamps. In draft mode (default), only reports. In publish mode,
+ * prompts for deletion.
+ *
+ * &lt;pre&gt;{@code
+ * mvn ws:cleanup                          # list stale branches (draft)
+ * mvn ws:cleanup-publish                  # prompt for deletion
+ * mvn ws:cleanup -DtargetBranch=develop   # check against develop
+ * }&lt;/pre&gt;
+ */
+@Mojo(name = &quot;cleanup-draft&quot;, projectRequired = false, aggregator = true)
+public class CleanupWorkspaceMojo extends AbstractWorkspaceMojo {
+
+    /** Creates this goal instance. */
+<span class="nc" id="L37">    public CleanupWorkspaceMojo() {}</span>
+
+    /** Branch to check merge status against. */
+    @Parameter(property = &quot;targetBranch&quot;, defaultValue = &quot;main&quot;)
+    String targetBranch;
+
+    /** Execute deletions (true) or just report (false). */
+    @Parameter(property = &quot;publish&quot;, defaultValue = &quot;false&quot;)
+    boolean publish;
+
+    @Override
+    public void execute() throws MojoException {
+<span class="nc" id="L49">        WorkspaceGraph graph = loadGraph();</span>
+<span class="nc" id="L50">        File root = workspaceRoot();</span>
+
+<span class="nc bnc" id="L52" title="All 2 branches missed.">        boolean draft = !publish;</span>
+<span class="nc" id="L53">        List&lt;String&gt; sorted = graph.topologicalSort(</span>
+<span class="nc" id="L54">                new LinkedHashSet&lt;&gt;(graph.manifest().subprojects().keySet()));</span>
+
+<span class="nc" id="L56">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L57">        getLog().info(header(&quot;Cleanup&quot;));</span>
+<span class="nc" id="L58">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+<span class="nc" id="L59">        getLog().info(&quot;  Target: &quot; + targetBranch);</span>
+<span class="nc bnc" id="L60" title="All 2 branches missed.">        if (draft) getLog().info(&quot;  Mode:   DRAFT — listing only&quot;);</span>
+<span class="nc" id="L61">        getLog().info(&quot;&quot;);</span>
+
+        // Collect merged and active feature branches per subproject
+<span class="nc" id="L64">        Map&lt;String, List&lt;String&gt;&gt; mergedBySubproject = new LinkedHashMap&lt;&gt;();</span>
+<span class="nc" id="L65">        Map&lt;String, List&lt;String&gt;&gt; activeBySubproject = new LinkedHashMap&lt;&gt;();</span>
+<span class="nc" id="L66">        Set&lt;String&gt; allMerged = new TreeSet&lt;&gt;();</span>
+<span class="nc" id="L67">        Set&lt;String&gt; allActive = new TreeSet&lt;&gt;();</span>
+
+<span class="nc bnc" id="L69" title="All 2 branches missed.">        for (String name : sorted) {</span>
+<span class="nc" id="L70">            File dir = new File(root, name);</span>
+<span class="nc bnc" id="L71" title="All 2 branches missed.">            if (!new File(dir, &quot;.git&quot;).exists()) continue;</span>
+
+<span class="nc" id="L73">            List&lt;String&gt; merged = VcsOperations.mergedBranches(</span>
+                    dir, targetBranch, &quot;feature/&quot;);
+<span class="nc" id="L75">            List&lt;String&gt; allFeature = VcsOperations.localBranches(dir, &quot;feature/&quot;);</span>
+<span class="nc" id="L76">            List&lt;String&gt; active = allFeature.stream()</span>
+<span class="nc bnc" id="L77" title="All 2 branches missed.">                    .filter(b -&gt; !merged.contains(b))</span>
+<span class="nc" id="L78">                    .toList();</span>
+
+<span class="nc bnc" id="L80" title="All 2 branches missed.">            if (!merged.isEmpty()) {</span>
+<span class="nc" id="L81">                mergedBySubproject.put(name, merged);</span>
+<span class="nc" id="L82">                allMerged.addAll(merged);</span>
+            }
+<span class="nc bnc" id="L84" title="All 2 branches missed.">            if (!active.isEmpty()) {</span>
+<span class="nc" id="L85">                activeBySubproject.put(name, active);</span>
+<span class="nc" id="L86">                allActive.addAll(active);</span>
+            }
+<span class="nc" id="L88">        }</span>
+
+        // Report merged branches
+<span class="nc bnc" id="L91" title="All 2 branches missed.">        if (allMerged.isEmpty()) {</span>
+<span class="nc" id="L92">            getLog().info(&quot;  No merged feature branches found.&quot;);</span>
+        } else {
+<span class="nc" id="L94">            getLog().info(&quot;  Merged branches (safe to delete):&quot;);</span>
+<span class="nc bnc" id="L95" title="All 2 branches missed.">            for (String branch : allMerged) {</span>
+<span class="nc" id="L96">                int count = (int) mergedBySubproject.values().stream()</span>
+<span class="nc" id="L97">                        .filter(list -&gt; list.contains(branch))</span>
+<span class="nc" id="L98">                        .count();</span>
+                // Get last commit date from first subproject
+<span class="nc" id="L100">                String date = &quot;unknown&quot;;</span>
+<span class="nc bnc" id="L101" title="All 2 branches missed.">                for (var entry : mergedBySubproject.entrySet()) {</span>
+<span class="nc bnc" id="L102" title="All 2 branches missed.">                    if (entry.getValue().contains(branch)) {</span>
+<span class="nc" id="L103">                        date = VcsOperations.branchLastCommitDate(</span>
+<span class="nc" id="L104">                                new File(root, entry.getKey()), branch);</span>
+<span class="nc" id="L105">                        break;</span>
+                    }
+<span class="nc" id="L107">                }</span>
+<span class="nc" id="L108">                getLog().info(Ansi.green(&quot;    ✓ &quot;) + branch + &quot; (&quot; + count</span>
+<span class="nc bnc" id="L109" title="All 2 branches missed.">                        + &quot; subproject&quot; + (count == 1 ? &quot;&quot; : &quot;s&quot;)</span>
+                        + &quot;, last commit: &quot; + date + &quot;)&quot;);
+<span class="nc" id="L111">            }</span>
+        }
+
+        // Report active branches
+<span class="nc bnc" id="L115" title="All 2 branches missed.">        if (!allActive.isEmpty()) {</span>
+<span class="nc" id="L116">            getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L117">            getLog().info(&quot;  Active branches (not fully merged):&quot;);</span>
+<span class="nc bnc" id="L118" title="All 2 branches missed.">            for (String branch : allActive) {</span>
+<span class="nc" id="L119">                int count = (int) activeBySubproject.values().stream()</span>
+<span class="nc" id="L120">                        .filter(list -&gt; list.contains(branch))</span>
+<span class="nc" id="L121">                        .count();</span>
+<span class="nc" id="L122">                String date = &quot;unknown&quot;;</span>
+<span class="nc bnc" id="L123" title="All 2 branches missed.">                for (var entry : activeBySubproject.entrySet()) {</span>
+<span class="nc bnc" id="L124" title="All 2 branches missed.">                    if (entry.getValue().contains(branch)) {</span>
+<span class="nc" id="L125">                        date = VcsOperations.branchLastCommitDate(</span>
+<span class="nc" id="L126">                                new File(root, entry.getKey()), branch);</span>
+<span class="nc" id="L127">                        break;</span>
+                    }
+<span class="nc" id="L129">                }</span>
+<span class="nc" id="L130">                getLog().info(Ansi.yellow(&quot;    · &quot;) + branch + &quot; (&quot; + count</span>
+<span class="nc bnc" id="L131" title="All 2 branches missed.">                        + &quot; subproject&quot; + (count == 1 ? &quot;&quot; : &quot;s&quot;)</span>
+                        + &quot;, last commit: &quot; + date + &quot;)&quot;);
+<span class="nc" id="L133">            }</span>
+        }
+
+<span class="nc" id="L136">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L137">        getLog().info(&quot;  Summary: &quot; + allMerged.size() + &quot; merged, &quot;</span>
+<span class="nc" id="L138">                + allActive.size() + &quot; active&quot;);</span>
+
+        // In publish mode, delete merged branches
+<span class="nc bnc" id="L141" title="All 4 branches missed.">        if (publish &amp;&amp; !allMerged.isEmpty()) {</span>
+<span class="nc" id="L142">            getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L143">            int deleted = 0;</span>
+<span class="nc bnc" id="L144" title="All 2 branches missed.">            for (var entry : mergedBySubproject.entrySet()) {</span>
+<span class="nc" id="L145">                File dir = new File(root, entry.getKey());</span>
+<span class="nc bnc" id="L146" title="All 2 branches missed.">                for (String branch : entry.getValue()) {</span>
+                    try {
+<span class="nc" id="L148">                        VcsOperations.deleteBranch(dir, getLog(), branch);</span>
+<span class="nc" id="L149">                        getLog().info(Ansi.green(&quot;    ✓ &quot;) + &quot;deleted: &quot;</span>
+<span class="nc" id="L150">                                + entry.getKey() + &quot;/&quot; + branch);</span>
+<span class="nc" id="L151">                        deleted++;</span>
+
+                        // Also clean up stale remote-tracking refs
+                        try {
+<span class="nc" id="L155">                            new ProcessBuilder(&quot;git&quot;, &quot;remote&quot;, &quot;prune&quot;, &quot;origin&quot;)</span>
+<span class="nc" id="L156">                                    .directory(dir).start().waitFor();</span>
+<span class="nc" id="L157">                        } catch (Exception ignored) {}</span>
+<span class="nc" id="L158">                    } catch (MojoException e) {</span>
+<span class="nc" id="L159">                        getLog().warn(Ansi.red(&quot;    ✗ &quot;) + entry.getKey()</span>
+<span class="nc" id="L160">                                + &quot;/&quot; + branch + &quot; — &quot; + e.getMessage());</span>
+<span class="nc" id="L161">                    }</span>
+<span class="nc" id="L162">                }</span>
+<span class="nc" id="L163">            }</span>
+<span class="nc" id="L164">            getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L165">            getLog().info(&quot;  Deleted &quot; + deleted + &quot; branch reference&quot;</span>
+<span class="nc bnc" id="L166" title="All 2 branches missed.">                    + (deleted == 1 ? &quot;&quot; : &quot;s&quot;) + &quot;.&quot;);</span>
+        }
+
+<span class="nc" id="L169">        getLog().info(&quot;&quot;);</span>
+
+<span class="nc bnc" id="L171" title="All 2 branches missed.">        writeReport(publish ? WsGoal.CLEANUP_PUBLISH : WsGoal.CLEANUP_DRAFT, buildCleanupReport(</span>
+                allMerged, allActive, mergedBySubproject, root));
+<span class="nc" id="L173">    }</span>
+
+    private String buildCleanupReport(Set&lt;String&gt; merged, Set&lt;String&gt; active,
+                                       Map&lt;String, List&lt;String&gt;&gt; mergedBySubproject,
+                                       File root) {
+<span class="nc" id="L178">        var sb = new StringBuilder();</span>
+<span class="nc" id="L179">        sb.append(merged.size()).append(&quot; merged, &quot;)</span>
+<span class="nc" id="L180">          .append(active.size()).append(&quot; active feature branch&quot;)</span>
+<span class="nc bnc" id="L181" title="All 2 branches missed.">          .append(active.size() == 1 ? &quot;&quot; : &quot;es&quot;)</span>
+<span class="nc" id="L182">          .append(&quot;.\n\n&quot;);</span>
+
+<span class="nc bnc" id="L184" title="All 2 branches missed.">        if (!merged.isEmpty()) {</span>
+<span class="nc" id="L185">            sb.append(&quot;### Merged (safe to delete)\n\n&quot;);</span>
+<span class="nc" id="L186">            sb.append(&quot;| Branch | Subprojects | Last Commit |\n&quot;);</span>
+<span class="nc" id="L187">            sb.append(&quot;|--------|-------------|-------------|\n&quot;);</span>
+<span class="nc bnc" id="L188" title="All 2 branches missed.">            for (String branch : merged) {</span>
+<span class="nc" id="L189">                int count = (int) mergedBySubproject.values().stream()</span>
+<span class="nc" id="L190">                        .filter(list -&gt; list.contains(branch))</span>
+<span class="nc" id="L191">                        .count();</span>
+<span class="nc" id="L192">                String date = &quot;unknown&quot;;</span>
+<span class="nc bnc" id="L193" title="All 2 branches missed.">                for (var entry : mergedBySubproject.entrySet()) {</span>
+<span class="nc bnc" id="L194" title="All 2 branches missed.">                    if (entry.getValue().contains(branch)) {</span>
+<span class="nc" id="L195">                        date = VcsOperations.branchLastCommitDate(</span>
+<span class="nc" id="L196">                                new File(root, entry.getKey()), branch);</span>
+<span class="nc" id="L197">                        break;</span>
+                    }
+<span class="nc" id="L199">                }</span>
+<span class="nc" id="L200">                sb.append(&quot;| &quot;).append(branch)</span>
+<span class="nc" id="L201">                  .append(&quot; | &quot;).append(count)</span>
+<span class="nc" id="L202">                  .append(&quot; | &quot;).append(date)</span>
+<span class="nc" id="L203">                  .append(&quot; |\n&quot;);</span>
+<span class="nc" id="L204">            }</span>
+        }
+
+<span class="nc bnc" id="L207" title="All 2 branches missed.">        if (!active.isEmpty()) {</span>
+<span class="nc" id="L208">            sb.append(&quot;\n### Active\n\n&quot;);</span>
+<span class="nc" id="L209">            sb.append(&quot;| Branch | Subprojects |\n&quot;);</span>
+<span class="nc" id="L210">            sb.append(&quot;|--------|-------------|\n&quot;);</span>
+<span class="nc bnc" id="L211" title="All 2 branches missed.">            for (String branch : active) {</span>
+<span class="nc" id="L212">                int count = (int) mergedBySubproject.values().stream()</span>
+<span class="nc" id="L213">                        .filter(list -&gt; list.contains(branch))</span>
+<span class="nc" id="L214">                        .count();</span>
+<span class="nc" id="L215">                sb.append(&quot;| &quot;).append(branch)</span>
+<span class="nc" id="L216">                  .append(&quot; | &quot;).append(count)</span>
+<span class="nc" id="L217">                  .append(&quot; |\n&quot;);</span>
+<span class="nc" id="L218">            }</span>
+        }
+
+<span class="nc" id="L221">        return sb.toString();</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

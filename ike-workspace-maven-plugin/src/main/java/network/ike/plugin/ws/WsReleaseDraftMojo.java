@@ -160,6 +160,59 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
 
         boolean draft = !publish;
 
+        // Refresh local main from origin/main before any release work —
+        // the cascade picks up parent versions and property bumps off
+        // local main, and Syncthing-paired workflows can leave local
+        // main stale (ike-issues#284). Same invariant the feature
+        // flows establish; releases need it for the same reason.
+        if (publish) {
+            RefreshMainSupport.refreshOrThrow(root, candidates, "main", getLog());
+        }
+
+        // ── 1.5. Pre-release upstream alignment ──────────────────────────
+        // An ike-parent bump (or any foundation property bump) is a
+        // release-worthy change even when no source has been edited.
+        // Without this pass, ws:release-publish only saw per-subproject
+        // source changes and skipped workspaces whose only diff vs.
+        // last release was "absorb the new foundations".
+        //
+        // For each subproject (and the workspace root), scan its pom
+        // for <parent> blocks and <X.version> properties referencing
+        // an IKE foundation. If a reference is older than the
+        // foundation's latest released version (resolved from the
+        // sibling repo's tip v* tag in the canonical ~/ike-dev/
+        // layout), bump via OpenRewrite and commit. The bump commit
+        // becomes a meaningful commit, so the existing
+        // meaningfulCommitsSinceTag detector includes the subproject
+        // in the release set automatically.
+        //
+        // Also clean any on-disk gh-pages leak directories
+        // (<pomDir>/<artifactId>/<artifactId>/index.html — the #358
+        // signature). Those are produced by a stale ike-parent's
+        // broken <site><url> inheritance; once alignment bumps the
+        // parent to a fixed version (v45+), they stop being produced,
+        // but the existing dirs remain on disk until somebody
+        // explicitly removes them. Doing it here avoids the
+        // chicken-and-egg where the NO_ON_DISK_GHPAGES_LEAK preflight
+        // would block on a leak that alignment is about to fix at
+        // the source — a stale workspace on its first cascade after
+        // the fix shipped.
+        //
+        // Runs BEFORE preflight (rather than after) for the same
+        // reason: alignment and the leak cleanup it triggers are
+        // exactly what makes the preflight checks pass. WORKING_TREE_CLEAN
+        // is unaffected — alignment commits its own changes, leaving
+        // worktree clean from git's POV; gitignored leak dirs were
+        // never counted by `git status --porcelain` anyway.
+        //
+        // Publish-only: drafts skip alignment because the goal is
+        // preview, not mutation. A draft will under-report
+        // workspaces with stale parents — accept that for now;
+        // an alignment dry-run mode is a follow-up.
+        if (publish) {
+            preReleaseUpstreamAlignment(graph, root);
+        }
+
         // ── Preflight: all working trees clean, no POM-shape gotchas ──
         // (Javadoc cleanliness is checked per-module by ike:release
         //  preflight — see ReleaseDraftMojo — so every entry point
@@ -194,40 +247,6 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
             releasePreflight.warnIfFailed(getLog(), WsGoal.RELEASE_PUBLISH);
         } else {
             releasePreflight.requirePassed(WsGoal.RELEASE_PUBLISH);
-        }
-
-        // Refresh local main from origin/main before the release loop —
-        // the cascade picks up parent versions and property bumps off
-        // local main, and Syncthing-paired workflows can leave local
-        // main stale (ike-issues#284). Same invariant the feature
-        // flows establish; releases need it for the same reason.
-        if (publish) {
-            RefreshMainSupport.refreshOrThrow(root, candidates, "main", getLog());
-        }
-
-        // ── 1.5. Pre-release upstream alignment ──────────────────────────
-        // An ike-parent bump (or any foundation property bump) is a
-        // release-worthy change even when no source has been edited.
-        // Without this pass, ws:release-publish only saw the per-
-        // subproject source changes and skipped workspaces whose only
-        // diff vs. last release was "absorb the new foundations".
-        //
-        // For each subproject (and the workspace root), scan its pom
-        // for <parent> blocks and <X.version> properties referencing
-        // an IKE foundation. If a reference is older than the
-        // foundation's latest released version (resolved from the
-        // sibling repo's tip v* tag in the canonical ~/ike-dev/
-        // layout), bump via OpenRewrite and commit. The bump commit
-        // becomes a meaningful commit, so the existing
-        // meaningfulCommitsSinceTag detector includes the subproject
-        // in the release set automatically.
-        //
-        // Publish-only: drafts skip alignment because the goal is
-        // preview, not mutation. A draft will under-report
-        // workspaces with stale parents — accept that for now;
-        // an alignment dry-run mode is a follow-up.
-        if (publish) {
-            preReleaseUpstreamAlignment(graph, root);
         }
 
         // ── 2a. Detect source-changed checked-out subprojects ────────────
@@ -846,12 +865,116 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
         }
 
         int aligned = 0;
+        int leaksCleaned = 0;
         for (File pom : poms) {
             if (alignPom(pom, groupIdToLatest)) aligned++;
+            if (cleanGhPagesLeak(pom)) leaksCleaned++;
         }
         if (aligned > 0) {
             getLog().info("  Pre-release alignment: bumped upstream references in "
                     + aligned + " pom(s) (#377).");
+        }
+        if (leaksCleaned > 0) {
+            getLog().info("  Pre-release alignment: removed gh-pages leak from "
+                    + leaksCleaned + " pom dir(s) (#358).");
+        }
+    }
+
+    /**
+     * Auto-clean any on-disk gh-pages leak directory under the given
+     * pom's project directory. The leak signature is exactly the one
+     * {@code PreflightCondition.NO_ON_DISK_GHPAGES_LEAK} detects:
+     * {@code <pomDir>/<artifactId>/<artifactId>/index.html} — produced
+     * by maven-site-plugin's site:stage when {@code ike-parent}'s
+     * site URL inheritance was broken (ike-issues#358; root cause
+     * fixed in ike-parent v45+). The directory always escapes
+     * {@code target/} and is gitignored, so {@code git status} doesn't
+     * see it — operators discover it only when the preflight blocks
+     * their release.
+     *
+     * <p>This pre-release step cleans the leak BEFORE the preflight
+     * runs, so a workspace inheriting a still-stale ike-parent (and
+     * therefore still producing leaks) can bootstrap to a newer
+     * ike-parent in the same cascade without the operator having to
+     * {@code rm -rf} by hand. After that one bootstrap cascade,
+     * future builds don't leak.
+     *
+     * <p>Per {@code feedback_workspace_ops_completion}: recoverable
+     * side effects default on.
+     *
+     * @param pomFile the pom whose project directory to inspect
+     * @return {@code true} when a leak was cleaned, {@code false} otherwise
+     */
+    private boolean cleanGhPagesLeak(File pomFile) {
+        File pomDir = pomFile.getParentFile();
+        if (pomDir == null) return false;
+        String artifactId;
+        try {
+            String content = Files.readString(pomFile.toPath(),
+                    StandardCharsets.UTF_8);
+            artifactId = extractArtifactId(content);
+        } catch (IOException e) {
+            return false;
+        }
+        if (artifactId == null || artifactId.isBlank()) return false;
+        java.nio.file.Path leakDir = pomDir.toPath()
+                .resolve(artifactId).resolve(artifactId);
+        java.nio.file.Path leakIndex = leakDir.resolve("index.html");
+        if (!Files.isRegularFile(leakIndex)) return false;
+        // The OUTER doubled dir is the one to remove; .resolve(artifactId)
+        // once gives us <pomDir>/<artifactId>/ which is what
+        // NO_ON_DISK_GHPAGES_LEAK's report prints as the rm-rf path.
+        java.nio.file.Path outerLeak = pomDir.toPath().resolve(artifactId);
+        try {
+            deleteRecursively(outerLeak);
+            getLog().info("    Cleaned gh-pages leak: " + pomDir.getName()
+                    + "/" + artifactId + "/ (#358)");
+            return true;
+        } catch (IOException e) {
+            getLog().warn("    Could not clean leak dir " + outerLeak
+                    + ": " + e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Extract the project's own {@code <artifactId>}. Skips a
+     * preceding {@code <parent>} block so we don't return the parent's
+     * artifactId. Same shape as the helper in
+     * {@code WsCascadeFoundationPublishMojo} and
+     * {@code RegisterSiteDraftMojo} — repeated here to keep the
+     * dependency direction (this mojo doesn't depend on those).
+     */
+    private static String extractArtifactId(String pomContent) {
+        if (pomContent == null) return null;
+        int searchFrom = 0;
+        int parentOpen = pomContent.indexOf("<parent>");
+        if (parentOpen >= 0) {
+            int parentClose = pomContent.indexOf("</parent>", parentOpen);
+            if (parentClose > parentOpen) {
+                searchFrom = parentClose + "</parent>".length();
+            }
+        }
+        int open = pomContent.indexOf("<artifactId>", searchFrom);
+        if (open < 0) return null;
+        int valueStart = open + "<artifactId>".length();
+        int close = pomContent.indexOf("</artifactId>", valueStart);
+        if (close < 0) return null;
+        return pomContent.substring(valueStart, close).trim();
+    }
+
+    /**
+     * Delete a directory tree recursively. Mirrors common helpers in
+     * the codebase but inlined to avoid coupling to a specific util.
+     */
+    private static void deleteRecursively(java.nio.file.Path path) throws IOException {
+        if (!Files.exists(path)) return;
+        try (var stream = Files.walk(path)) {
+            stream.sorted(java.util.Comparator.reverseOrder())
+                    .forEach(p -> {
+                        try { Files.delete(p); }
+                        catch (IOException ignore) { /* best effort */ }
+                    });
         }
     }
 

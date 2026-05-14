@@ -66,8 +66,6 @@ public enum WsGoal {
             "Preview starting a feature branch across subprojects."),
     FEATURE_START_PUBLISH("feature-start-publish", FeatureStartPublishMojo.class,
             "Start a feature branch across subprojects."),
-    FIX("fix", WsFixMojo.class,
-            "Sync denormalized fields in workspace.yaml."),
     GRAPH("graph", GraphWorkspaceMojo.class,
             "Emit a Mermaid dependency graph for the workspace."),
     HELP("help", WsHelpMojo.class,

@@ -1,6 +1,11 @@
 package network.ike.plugin.ws;
 
 import network.ike.plugin.ReleaseSupport;
+import network.ike.plugin.ws.reconcile.DriftReport;
+import network.ike.plugin.ws.reconcile.Reconciler;
+import network.ike.plugin.ws.reconcile.ReconcilerOptions;
+import network.ike.plugin.ws.reconcile.ReconcilerRegistry;
+import network.ike.plugin.ws.reconcile.WorkspaceContext;
 import network.ike.workspace.Subproject;
 import network.ike.workspace.WorkspaceGraph;
 import org.apache.maven.api.plugin.MojoException;
@@ -9,7 +14,9 @@ import org.apache.maven.api.plugin.annotations.Parameter;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Workspace-walking variant of {@code ike:scaffold-draft} (#350).
@@ -66,6 +73,13 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
         getLog().info("");
         getLog().info(publish ? "ws:scaffold-publish" : "ws:scaffold-draft");
         getLog().info("══════════════════════════════════════════════════════════════");
+
+        // Workspace-level reconcilers run first (#393). Each owns one
+        // dimension of workspace state (denormalized YAML fields,
+        // parent version, alignment, etc.) and is reported (draft) or
+        // applied (publish) before the per-subproject ike:scaffold
+        // delegation runs.
+        runWorkspaceReconcilers(graph, root);
 
         // Walk each subproject in topological order, then the
         // workspace root. Topological order isn't strictly needed
@@ -141,5 +155,67 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
             args.add("-Dike.scaffold.apply-foundation=true");
         }
         ReleaseSupport.exec(subDir, getLog(), args.toArray(new String[0]));
+    }
+
+    /**
+     * Run the workspace-level {@link Reconciler}s registered in
+     * {@link ReconcilerRegistry}. In draft mode each reconciler's
+     * {@link Reconciler#detect} result is printed; in publish mode
+     * {@link Reconciler#apply} is invoked (honoring opt-out flags).
+     *
+     * <p>Workspace-level reconcilers act on {@code workspace.yaml}
+     * and other cross-subproject state, complementing the
+     * per-subproject {@code ike:scaffold-*} pass that follows.
+     */
+    private void runWorkspaceReconcilers(WorkspaceGraph graph, File root)
+            throws MojoException {
+        WorkspaceContext ctx = new WorkspaceContext(
+                root, resolveManifest(), graph,
+                readReconcilerOptions(), getLog());
+        for (Reconciler reconciler : ReconcilerRegistry.all()) {
+            if (publish) {
+                reconciler.apply(ctx);
+            } else {
+                printDriftReport(reconciler.detect(ctx));
+            }
+        }
+    }
+
+    /**
+     * Collect all Maven system properties into a {@link ReconcilerOptions}
+     * bag so reconcilers can query their opt-out and pin flags
+     * (e.g., {@code -DupdateFields=false}, {@code -DparentVersion=55}).
+     */
+    private static ReconcilerOptions readReconcilerOptions() {
+        Map<String, String> flags = new HashMap<>();
+        for (String name : System.getProperties().stringPropertyNames()) {
+            flags.put(name, System.getProperty(name));
+        }
+        return new ReconcilerOptions(flags);
+    }
+
+    /**
+     * Render a {@link DriftReport} for {@code scaffold-draft} output
+     * with the copy-paste opt-out command inline.
+     */
+    private void printDriftReport(DriftReport report) {
+        getLog().info("");
+        if (!report.hasDrift()) {
+            getLog().info("  ✓ " + report.dimension());
+            return;
+        }
+        getLog().info("  ⚠ " + report.dimension());
+        if (!report.summary().isEmpty()) {
+            getLog().info("     " + report.summary());
+        }
+        for (String line : report.detailLines()) {
+            getLog().info("       " + line);
+        }
+        if (!report.defaultAction().isEmpty()) {
+            getLog().info("     Default: " + report.defaultAction());
+        }
+        if (!report.optOutCommand().isEmpty()) {
+            getLog().info("     Opt out: " + report.optOutCommand());
+        }
     }
 }

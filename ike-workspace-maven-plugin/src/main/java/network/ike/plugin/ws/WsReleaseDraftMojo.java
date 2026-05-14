@@ -428,7 +428,8 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
                     getLog().warn("  ⚠ Could not read post-release version "
                             + "for " + rc.name + " — workspace.yaml "
                             + "version: field will stay stale until the "
-                            + "next ws:fix. " + readFail.getMessage());
+                            + "next ws:scaffold-publish. "
+                            + readFail.getMessage());
                 }
             } catch (Exception e) {
                 getLog().error(Ansi.red("  ✗ ") + "Failed to release " + rc.name + ": " + e.getMessage());
@@ -1124,8 +1125,9 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
      *
      * <p>Failures are logged but do not abort the cascade: the
      * subproject release tags + Nexus deploys have already shipped,
-     * so a manifest-sync hiccup is recoverable via {@code ws:fix}
-     * or the next release cycle. ike-issues#371.
+     * so a manifest-sync hiccup is recoverable via
+     * {@code ws:scaffold-publish} or the next release cycle.
+     * ike-issues#371.
      *
      * @param root              workspace root
      * @param versionUpdates    subprojectName → new SNAPSHOT (full

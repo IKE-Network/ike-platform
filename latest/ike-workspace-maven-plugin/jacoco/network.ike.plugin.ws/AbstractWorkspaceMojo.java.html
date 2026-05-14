@@ -217,75 +217,58 @@ import java.util.List;
      * Prompt the user interactively for a required parameter when it
      * was not supplied on the command line.
      *
-     * &lt;p&gt;Delegates to the injected Maven 4 {@link Prompter} so the
-     * prompt label appears inline with the input cursor in both
-     * terminal sessions and IntelliJ's Maven runner. In batch mode
-     * (or when no Prompter is wired), throws a clear error directing
-     * the user to pass the property explicitly.
+     * &lt;p&gt;Delegates to the injected Maven 4 {@link Prompter} which
+     * renders the label inline with the input cursor in both terminal
+     * sessions and IntelliJ's Maven runner via the same jline-backed
+     * line renderer Maven uses for every other interactive surface.
+     * In batch mode (or when no Prompter is wired), throws a clear
+     * error directing the user to pass the property explicitly.
+     *
+     * &lt;p&gt;ike-issues#385: an earlier revision of this method called a
+     * {@code surfacePromptLabel} helper that emitted the label through
+     * {@code getLog().info()} before invoking the Prompter, which
+     * forced the label onto a separate line from the input. That
+     * workaround predated Maven 4's jline rewrite of the Prompter
+     * service; the current implementation talks to the Prompter
+     * directly with the full label as the prompt string, which the
+     * jline renderer displays inline.
      *
      * @param currentValue the value from the {@code @Parameter} field (may be null)
      * @param propertyName the {@code -D} property name (for the error message)
-     * @param promptLabel  human-readable label shown in the prompt
+     * @param promptLabel  human-readable label shown in the prompt; the
+     *                     Prompter appends its own &quot;: &quot; separator, so
+     *                     callers should not include trailing punctuation
      * @return the resolved value — either the original or user-supplied
      * @throws MojoException if no value can be obtained
      */
     protected String requireParam(String currentValue, String propertyName,
                                   String promptLabel) {
-<span class="pc bpc" id="L234" title="1 of 4 branches missed.">        if (currentValue != null &amp;&amp; !currentValue.isBlank()) {</span>
-<span class="fc" id="L235">            return currentValue.trim();</span>
+<span class="pc bpc" id="L246" title="1 of 4 branches missed.">        if (currentValue != null &amp;&amp; !currentValue.isBlank()) {</span>
+<span class="fc" id="L247">            return currentValue.trim();</span>
         }
 
-<span class="pc bpc" id="L238" title="1 of 2 branches missed.">        if (prompter == null) {</span>
-<span class="fc" id="L239">            throw new MojoException(</span>
+<span class="pc bpc" id="L250" title="1 of 2 branches missed.">        if (prompter == null) {</span>
+<span class="fc" id="L251">            throw new MojoException(</span>
                     propertyName + &quot; is required. Specify -D&quot; + propertyName
                             + &quot;=&lt;value&gt; (no Prompter wired in this context).&quot;);
         }
 
         try {
-            // Surface the label through getLog() and an explicit
-            // System.out flush. The Prompter's own write target is
-            // buffered separately in IntelliJ's Maven runner, so a
-            // label printed only by prompter.prompt(...) sits in the
-            // buffer behind earlier log output — the user types blind
-            // (ike-issues#301).
-<span class="nc" id="L251">            surfacePromptLabel(promptLabel + &quot;:&quot;);</span>
-<span class="nc" id="L252">            String input = prompter.prompt(&quot;&gt; &quot;);</span>
-<span class="nc bnc" id="L253" title="All 4 branches missed.">            if (input != null &amp;&amp; !input.isBlank()) {</span>
-<span class="nc" id="L254">                return input.trim();</span>
+<span class="nc" id="L257">            String input = prompter.prompt(promptLabel);</span>
+<span class="nc bnc" id="L258" title="All 4 branches missed.">            if (input != null &amp;&amp; !input.isBlank()) {</span>
+<span class="nc" id="L259">                return input.trim();</span>
             }
-<span class="nc" id="L256">        } catch (PrompterException e) {</span>
-<span class="nc" id="L257">            throw new MojoException(</span>
+<span class="nc" id="L261">        } catch (PrompterException e) {</span>
+<span class="nc" id="L262">            throw new MojoException(</span>
                     propertyName + &quot; is required. Specify -D&quot; + propertyName
                             + &quot;=&lt;value&gt; or run interactively. (&quot;
-<span class="nc" id="L260">                            + e.getMessage() + &quot;)&quot;);</span>
-<span class="nc" id="L261">        }</span>
+<span class="nc" id="L265">                            + e.getMessage() + &quot;)&quot;);</span>
+<span class="nc" id="L266">        }</span>
 
-<span class="nc" id="L263">        throw new MojoException(</span>
+<span class="nc" id="L268">        throw new MojoException(</span>
                 propertyName + &quot; is required. Specify -D&quot; + propertyName
                         + &quot;=&lt;value&gt; or run interactively.&quot;);
     }
-
-    /**
-     * Render the given label through the Maven logger pipeline and
-     * flush stdout/stderr before a {@link Prompter} read. Direct
-     * {@code prompter.prompt(label)} writes are buffered separately
-     * from the standard logger pipeline in IntelliJ's Maven runner;
-     * a label printed only via the Prompter can sit in the buffer
-     * past the read, leaving the user typing blind (ike-issues#301).
-     *
-     * &lt;p&gt;Use this anywhere a prompt is about to fire after preceding
-     * log output. Safe to call before every Prompter invocation —
-     * Maven's logger handles the output reliably across all runners.
-     *
-     * @param label the prompt label, including any trailing
-     *              punctuation the caller wants to display
-     */
-    private void surfacePromptLabel(String label) {
-<span class="nc" id="L284">        getLog().info(&quot;&quot;);</span>
-<span class="nc" id="L285">        getLog().info(&quot;  &quot; + label);</span>
-<span class="nc" id="L286">        System.out.flush();</span>
-<span class="nc" id="L287">        System.err.flush();</span>
-<span class="nc" id="L288">    }</span>
 
     /**
      * Validate a feature-name string with {@link FeatureName#of} and
@@ -304,9 +287,9 @@ import java.util.List;
      */
     protected static FeatureName validateFeatureName(String feature) {
         try {
-<span class="fc" id="L307">            return FeatureName.of(feature);</span>
-<span class="fc" id="L308">        } catch (IllegalArgumentException e) {</span>
-<span class="fc" id="L309">            throw new MojoException(e.getMessage());</span>
+<span class="fc" id="L290">            return FeatureName.of(feature);</span>
+<span class="fc" id="L291">        } catch (IllegalArgumentException e) {</span>
+<span class="fc" id="L292">            throw new MojoException(e.getMessage());</span>
         }
     }
 
@@ -324,9 +307,9 @@ import java.util.List;
      */
     protected static SubprojectName validateSubprojectName(String subproject) {
         try {
-<span class="fc" id="L327">            return SubprojectName.of(subproject);</span>
-<span class="nc" id="L328">        } catch (IllegalArgumentException e) {</span>
-<span class="nc" id="L329">            throw new MojoException(e.getMessage());</span>
+<span class="fc" id="L310">            return SubprojectName.of(subproject);</span>
+<span class="nc" id="L311">        } catch (IllegalArgumentException e) {</span>
+<span class="nc" id="L312">            throw new MojoException(e.getMessage());</span>
         }
     }
 
@@ -345,9 +328,9 @@ import java.util.List;
      */
     protected static MavenVersion validateMavenVersion(String version) {
         try {
-<span class="fc" id="L348">            return MavenVersion.of(version);</span>
-<span class="nc" id="L349">        } catch (IllegalArgumentException e) {</span>
-<span class="nc" id="L350">            throw new MojoException(e.getMessage());</span>
+<span class="fc" id="L331">            return MavenVersion.of(version);</span>
+<span class="nc" id="L332">        } catch (IllegalArgumentException e) {</span>
+<span class="nc" id="L333">            throw new MojoException(e.getMessage());</span>
         }
     }
 
@@ -362,23 +345,25 @@ import java.util.List;
      * @throws MojoException if no answer can be obtained
      */
     protected boolean confirm(String label, boolean defaultYes) {
-<span class="pc bpc" id="L365" title="1 of 2 branches missed.">        if (prompter == null) {</span>
-<span class="fc" id="L366">            return defaultYes;</span>
+<span class="pc bpc" id="L348" title="1 of 2 branches missed.">        if (prompter == null) {</span>
+<span class="fc" id="L349">            return defaultYes;</span>
         }
-<span class="nc bnc" id="L368" title="All 2 branches missed.">        String suffix = defaultYes ? &quot; [Y/n]&quot; : &quot; [y/N]&quot;;</span>
+<span class="nc bnc" id="L351" title="All 2 branches missed.">        String suffix = defaultYes ? &quot; [Y/n]&quot; : &quot; [y/N]&quot;;</span>
         try {
-            // Surface the label through getLog so it appears reliably
-            // in IntelliJ's Maven runner — see #301.
-<span class="nc" id="L372">            surfacePromptLabel(label + suffix);</span>
-<span class="nc bnc" id="L373" title="All 2 branches missed.">            String input = prompter.prompt(&quot;&gt; &quot;, defaultYes ? &quot;y&quot; : &quot;n&quot;);</span>
-<span class="nc bnc" id="L374" title="All 4 branches missed.">            if (input == null || input.isBlank()) {</span>
-<span class="nc" id="L375">                return defaultYes;</span>
+            // ike-issues#385: pass the full label to the Prompter so
+            // jline renders the question and the input cursor on the
+            // same line. The two-argument prompt form supplies the
+            // default reply when the user hits Enter without typing.
+<span class="nc" id="L357">            String input = prompter.prompt(label + suffix,</span>
+<span class="nc bnc" id="L358" title="All 2 branches missed.">                    defaultYes ? &quot;y&quot; : &quot;n&quot;);</span>
+<span class="nc bnc" id="L359" title="All 4 branches missed.">            if (input == null || input.isBlank()) {</span>
+<span class="nc" id="L360">                return defaultYes;</span>
             }
-<span class="nc" id="L377">            String trimmed = input.trim().toLowerCase();</span>
-<span class="nc bnc" id="L378" title="All 4 branches missed.">            return trimmed.equals(&quot;y&quot;) || trimmed.equals(&quot;yes&quot;);</span>
-<span class="nc" id="L379">        } catch (PrompterException e) {</span>
-<span class="nc" id="L380">            throw new MojoException(</span>
-<span class="nc" id="L381">                    &quot;Could not read confirmation: &quot; + e.getMessage());</span>
+<span class="nc" id="L362">            String trimmed = input.trim().toLowerCase();</span>
+<span class="nc bnc" id="L363" title="All 4 branches missed.">            return trimmed.equals(&quot;y&quot;) || trimmed.equals(&quot;yes&quot;);</span>
+<span class="nc" id="L364">        } catch (PrompterException e) {</span>
+<span class="nc" id="L365">            throw new MojoException(</span>
+<span class="nc" id="L366">                    &quot;Could not read confirmation: &quot; + e.getMessage());</span>
         }
     }
 
@@ -392,33 +377,36 @@ import java.util.List;
      * @throws MojoException if no valid choice can be obtained
      */
     protected String selectFromList(String label, List&lt;String&gt; options) {
-<span class="nc bnc" id="L395" title="All 4 branches missed.">        if (options == null || options.isEmpty()) {</span>
-<span class="nc" id="L396">            return null;</span>
+<span class="nc bnc" id="L380" title="All 4 branches missed.">        if (options == null || options.isEmpty()) {</span>
+<span class="nc" id="L381">            return null;</span>
         }
-<span class="nc bnc" id="L398" title="All 2 branches missed.">        if (prompter == null) {</span>
-<span class="nc" id="L399">            throw new MojoException(</span>
+<span class="nc bnc" id="L383" title="All 2 branches missed.">        if (prompter == null) {</span>
+<span class="nc" id="L384">            throw new MojoException(</span>
                     label + &quot;: no Prompter wired in this context&quot;);
         }
         try {
-            // Surface the menu via getLog — Prompter.showMessage is
-            // buffered the same way as Prompter.prompt's label and
-            // disappears in IntelliJ's Maven runner after preceding
-            // log output (#301).
-<span class="nc" id="L407">            getLog().info(&quot;&quot;);</span>
-<span class="nc" id="L408">            getLog().info(&quot;  &quot; + label + &quot;:&quot;);</span>
-<span class="nc" id="L409">            List&lt;String&gt; indices = new ArrayList&lt;&gt;(options.size());</span>
-<span class="nc bnc" id="L410" title="All 2 branches missed.">            for (int i = 0; i &lt; options.size(); i++) {</span>
-<span class="nc" id="L411">                getLog().info(&quot;    &quot; + (i + 1) + &quot;) &quot; + options.get(i));</span>
-<span class="nc" id="L412">                indices.add(String.valueOf(i + 1));</span>
+            // Print the numbered menu via getLog (each line is its own
+            // log entry so it threads correctly with surrounding INFO
+            // output) and then let the Prompter handle the actual
+            // selection input. ike-issues#385: pass the full
+            // &quot;Select [1-N]&quot; prompt to the Prompter so jline renders
+            // it inline with the input cursor.
+<span class="nc" id="L394">            getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L395">            getLog().info(&quot;  &quot; + label + &quot;:&quot;);</span>
+<span class="nc" id="L396">            List&lt;String&gt; indices = new ArrayList&lt;&gt;(options.size());</span>
+<span class="nc bnc" id="L397" title="All 2 branches missed.">            for (int i = 0; i &lt; options.size(); i++) {</span>
+<span class="nc" id="L398">                getLog().info(&quot;    &quot; + (i + 1) + &quot;) &quot; + options.get(i));</span>
+<span class="nc" id="L399">                indices.add(String.valueOf(i + 1));</span>
             }
-<span class="nc" id="L414">            surfacePromptLabel(&quot;Select [1-&quot; + options.size() + &quot;]:&quot;);</span>
-<span class="nc" id="L415">            String pick = prompter.prompt(&quot;&gt; &quot;, indices, &quot;1&quot;);</span>
-<span class="nc" id="L416">            int idx = Integer.parseInt(pick.trim()) - 1;</span>
-<span class="nc" id="L417">            return options.get(idx);</span>
-<span class="nc" id="L418">        } catch (PrompterException | NumberFormatException</span>
+<span class="nc" id="L401">            String pick = prompter.prompt(</span>
+<span class="nc" id="L402">                    &quot;Select [1-&quot; + options.size() + &quot;]&quot;,</span>
+                    indices, &quot;1&quot;);
+<span class="nc" id="L404">            int idx = Integer.parseInt(pick.trim()) - 1;</span>
+<span class="nc" id="L405">            return options.get(idx);</span>
+<span class="nc" id="L406">        } catch (PrompterException | NumberFormatException</span>
                  | IndexOutOfBoundsException e) {
-<span class="nc" id="L420">            throw new MojoException(</span>
-<span class="nc" id="L421">                    &quot;Could not read selection: &quot; + e.getMessage());</span>
+<span class="nc" id="L408">            throw new MojoException(</span>
+<span class="nc" id="L409">                    &quot;Could not read selection: &quot; + e.getMessage());</span>
         }
     }
 
@@ -430,14 +418,14 @@ import java.util.List;
      */
     protected String workspaceName() {
         try {
-<span class="fc" id="L433">            File rootPom = new File(workspaceRoot(), &quot;pom.xml&quot;);</span>
-<span class="pc bpc" id="L434" title="1 of 2 branches missed.">            if (rootPom.exists()) {</span>
-<span class="nc" id="L435">                return ReleaseSupport.readPomArtifactId(rootPom);</span>
+<span class="fc" id="L421">            File rootPom = new File(workspaceRoot(), &quot;pom.xml&quot;);</span>
+<span class="pc bpc" id="L422" title="1 of 2 branches missed.">            if (rootPom.exists()) {</span>
+<span class="nc" id="L423">                return ReleaseSupport.readPomArtifactId(rootPom);</span>
             }
-<span class="fc" id="L437">        } catch (Exception e) {</span>
+<span class="fc" id="L425">        } catch (Exception e) {</span>
             // Fall through
-<span class="fc" id="L439">        }</span>
-<span class="fc" id="L440">        return &quot;Workspace&quot;;</span>
+<span class="fc" id="L427">        }</span>
+<span class="fc" id="L428">        return &quot;Workspace&quot;;</span>
     }
 
     /**
@@ -448,7 +436,7 @@ import java.util.List;
      * @return the formatted header string
      */
     protected String header(String goalName) {
-<span class="fc" id="L451">        return workspaceName() + &quot; — &quot; + goalName;</span>
+<span class="fc" id="L439">        return workspaceName() + &quot; — &quot; + goalName;</span>
     }
 
     /**
@@ -464,23 +452,23 @@ import java.util.List;
      */
     protected void writeReport(WsGoal goal, String content) {
         try {
-<span class="fc" id="L467">            java.nio.file.Path root = workspaceRoot().toPath();</span>
-<span class="fc" id="L468">            WorkspaceReport.write(root, goal.qualified(), content, getLog());</span>
+<span class="fc" id="L455">            java.nio.file.Path root = workspaceRoot().toPath();</span>
+<span class="fc" id="L456">            WorkspaceReport.write(root, goal.qualified(), content, getLog());</span>
             // After a successful -publish, the matching -draft report is
             // now stale — it described what WOULD happen, but it has
             // happened. Leaving both files alongside each other misleads
             // readers (ike-issues#300). Best-effort delete; debug-log on
             // failure.
-<span class="fc bfc" id="L474" title="All 2 branches covered.">            if (goal.isPublish()) {</span>
-<span class="fc" id="L475">                goal.pair().ifPresent(draft -&gt;</span>
-<span class="fc" id="L476">                        WorkspaceReport.deleteReport(</span>
-<span class="fc" id="L477">                                root, draft.qualified(), getLog()));</span>
+<span class="fc bfc" id="L462" title="All 2 branches covered.">            if (goal.isPublish()) {</span>
+<span class="fc" id="L463">                goal.pair().ifPresent(draft -&gt;</span>
+<span class="fc" id="L464">                        WorkspaceReport.deleteReport(</span>
+<span class="fc" id="L465">                                root, draft.qualified(), getLog()));</span>
             }
-<span class="nc" id="L479">        } catch (MojoException e) {</span>
-<span class="nc" id="L480">            getLog().debug(&quot;Could not resolve workspace root for report: &quot;</span>
-<span class="nc" id="L481">                    + e.getMessage());</span>
-<span class="fc" id="L482">        }</span>
-<span class="fc" id="L483">    }</span>
+<span class="nc" id="L467">        } catch (MojoException e) {</span>
+<span class="nc" id="L468">            getLog().debug(&quot;Could not resolve workspace root for report: &quot;</span>
+<span class="nc" id="L469">                    + e.getMessage());</span>
+<span class="fc" id="L470">        }</span>
+<span class="fc" id="L471">    }</span>
 
     /**
      * Start capturing info-level log output for the workspace report.
@@ -491,9 +479,9 @@ import java.util.List;
      * @return a ReportLog that wraps the original logger and captures info output
      */
     protected ReportLog startReport() {
-<span class="fc" id="L494">        ReportLog report = new ReportLog(getLog());</span>
-<span class="fc" id="L495">        setLog(report);</span>
-<span class="fc" id="L496">        return report;</span>
+<span class="fc" id="L482">        ReportLog report = new ReportLog(getLog());</span>
+<span class="fc" id="L483">        setLog(report);</span>
+<span class="fc" id="L484">        return report;</span>
     }
 
     /**
@@ -503,10 +491,10 @@ import java.util.List;
      * @param reportLog the ReportLog from {@link #startReport()}
      */
     protected void finishReport(WsGoal goal, ReportLog reportLog) {
-<span class="fc" id="L506">        String content = reportLog.captured();</span>
-<span class="pc bpc" id="L507" title="1 of 2 branches missed.">        if (!content.isBlank()) {</span>
-<span class="fc" id="L508">            writeReport(goal, content);</span>
+<span class="fc" id="L494">        String content = reportLog.captured();</span>
+<span class="pc bpc" id="L495" title="1 of 2 branches missed.">        if (!content.isBlank()) {</span>
+<span class="fc" id="L496">            writeReport(goal, content);</span>
         }
-<span class="fc" id="L510">    }</span>
+<span class="fc" id="L498">    }</span>
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

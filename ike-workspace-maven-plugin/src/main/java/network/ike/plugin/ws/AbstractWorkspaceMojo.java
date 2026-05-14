@@ -217,15 +217,27 @@ abstract class AbstractWorkspaceMojo implements Mojo {
      * Prompt the user interactively for a required parameter when it
      * was not supplied on the command line.
      *
-     * <p>Delegates to the injected Maven 4 {@link Prompter} so the
-     * prompt label appears inline with the input cursor in both
-     * terminal sessions and IntelliJ's Maven runner. In batch mode
-     * (or when no Prompter is wired), throws a clear error directing
-     * the user to pass the property explicitly.
+     * <p>Delegates to the injected Maven 4 {@link Prompter} which
+     * renders the label inline with the input cursor in both terminal
+     * sessions and IntelliJ's Maven runner via the same jline-backed
+     * line renderer Maven uses for every other interactive surface.
+     * In batch mode (or when no Prompter is wired), throws a clear
+     * error directing the user to pass the property explicitly.
+     *
+     * <p>ike-issues#385: an earlier revision of this method called a
+     * {@code surfacePromptLabel} helper that emitted the label through
+     * {@code getLog().info()} before invoking the Prompter, which
+     * forced the label onto a separate line from the input. That
+     * workaround predated Maven 4's jline rewrite of the Prompter
+     * service; the current implementation talks to the Prompter
+     * directly with the full label as the prompt string, which the
+     * jline renderer displays inline.
      *
      * @param currentValue the value from the {@code @Parameter} field (may be null)
      * @param propertyName the {@code -D} property name (for the error message)
-     * @param promptLabel  human-readable label shown in the prompt
+     * @param promptLabel  human-readable label shown in the prompt; the
+     *                     Prompter appends its own ": " separator, so
+     *                     callers should not include trailing punctuation
      * @return the resolved value — either the original or user-supplied
      * @throws MojoException if no value can be obtained
      */
@@ -242,14 +254,7 @@ abstract class AbstractWorkspaceMojo implements Mojo {
         }
 
         try {
-            // Surface the label through getLog() and an explicit
-            // System.out flush. The Prompter's own write target is
-            // buffered separately in IntelliJ's Maven runner, so a
-            // label printed only by prompter.prompt(...) sits in the
-            // buffer behind earlier log output — the user types blind
-            // (ike-issues#301).
-            surfacePromptLabel(promptLabel + ":");
-            String input = prompter.prompt("> ");
+            String input = prompter.prompt(promptLabel);
             if (input != null && !input.isBlank()) {
                 return input.trim();
             }
@@ -263,28 +268,6 @@ abstract class AbstractWorkspaceMojo implements Mojo {
         throw new MojoException(
                 propertyName + " is required. Specify -D" + propertyName
                         + "=<value> or run interactively.");
-    }
-
-    /**
-     * Render the given label through the Maven logger pipeline and
-     * flush stdout/stderr before a {@link Prompter} read. Direct
-     * {@code prompter.prompt(label)} writes are buffered separately
-     * from the standard logger pipeline in IntelliJ's Maven runner;
-     * a label printed only via the Prompter can sit in the buffer
-     * past the read, leaving the user typing blind (ike-issues#301).
-     *
-     * <p>Use this anywhere a prompt is about to fire after preceding
-     * log output. Safe to call before every Prompter invocation —
-     * Maven's logger handles the output reliably across all runners.
-     *
-     * @param label the prompt label, including any trailing
-     *              punctuation the caller wants to display
-     */
-    private void surfacePromptLabel(String label) {
-        getLog().info("");
-        getLog().info("  " + label);
-        System.out.flush();
-        System.err.flush();
     }
 
     /**
@@ -367,10 +350,12 @@ abstract class AbstractWorkspaceMojo implements Mojo {
         }
         String suffix = defaultYes ? " [Y/n]" : " [y/N]";
         try {
-            // Surface the label through getLog so it appears reliably
-            // in IntelliJ's Maven runner — see #301.
-            surfacePromptLabel(label + suffix);
-            String input = prompter.prompt("> ", defaultYes ? "y" : "n");
+            // ike-issues#385: pass the full label to the Prompter so
+            // jline renders the question and the input cursor on the
+            // same line. The two-argument prompt form supplies the
+            // default reply when the user hits Enter without typing.
+            String input = prompter.prompt(label + suffix,
+                    defaultYes ? "y" : "n");
             if (input == null || input.isBlank()) {
                 return defaultYes;
             }
@@ -400,10 +385,12 @@ abstract class AbstractWorkspaceMojo implements Mojo {
                     label + ": no Prompter wired in this context");
         }
         try {
-            // Surface the menu via getLog — Prompter.showMessage is
-            // buffered the same way as Prompter.prompt's label and
-            // disappears in IntelliJ's Maven runner after preceding
-            // log output (#301).
+            // Print the numbered menu via getLog (each line is its own
+            // log entry so it threads correctly with surrounding INFO
+            // output) and then let the Prompter handle the actual
+            // selection input. ike-issues#385: pass the full
+            // "Select [1-N]" prompt to the Prompter so jline renders
+            // it inline with the input cursor.
             getLog().info("");
             getLog().info("  " + label + ":");
             List<String> indices = new ArrayList<>(options.size());
@@ -411,8 +398,9 @@ abstract class AbstractWorkspaceMojo implements Mojo {
                 getLog().info("    " + (i + 1) + ") " + options.get(i));
                 indices.add(String.valueOf(i + 1));
             }
-            surfacePromptLabel("Select [1-" + options.size() + "]:");
-            String pick = prompter.prompt("> ", indices, "1");
+            String pick = prompter.prompt(
+                    "Select [1-" + options.size() + "]",
+                    indices, "1");
             int idx = Integer.parseInt(pick.trim()) - 1;
             return options.get(idx);
         } catch (PrompterException | NumberFormatException

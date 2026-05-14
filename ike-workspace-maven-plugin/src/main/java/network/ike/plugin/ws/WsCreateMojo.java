@@ -607,15 +607,13 @@ public class WsCreateMojo implements Mojo {
                             + "=<value> (no Prompter wired in this context).");
         }
         try {
-            // Surface the label through getLog so the prompt appears
-            // reliably in IntelliJ's Maven runner — Prompter writes
-            // are buffered separately from the standard logger
-            // pipeline (ike-issues#301).
-            getLog().info("");
-            getLog().info("  " + label + ":");
-            System.out.flush();
-            System.err.flush();
-            String input = prompter.prompt("> ");
+            // ike-issues#385: pass the full label to the Prompter so
+            // jline renders the label and input cursor on the same
+            // line. An earlier revision split this across getLog().info
+            // (forced newline) and prompter.prompt("> ") — the
+            // surfacePromptLabel-style workaround predated Maven 4's
+            // jline rewrite and is no longer necessary.
+            String input = prompter.prompt(label);
             if (input != null && !input.isBlank()) {
                 return input.trim();
             }

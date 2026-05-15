@@ -91,7 +91,7 @@ This goal is the **local, single-process** execution model: one developer, all f
 On a **CI server (e.g. TeamCity)** the picture is different and this goal is generally **not** used:
 
 - Each foundation repo is its own build configuration with its own VCS checkout — there is no co-located sibling tree to walk.
-- The cascade **topology** is mirrored as CI build-chain dependencies (snapshot/artifact dependencies): `ike-docs’s build config depends on `ike-tooling’s, `ike-platform’s on both. `release-cascade.yaml` is the specification you build those edges from.
+- The cascade **topology** is mirrored as CI build-chain dependencies (snapshot/artifact dependencies): `ike-docs’s build config depends on `ike-tooling’s, `ike-platform’s on both. `release-cascade.yaml` is the specification you build those edges from — and you need not build them by hand: `ike:cascade-export` emits the topology as JSON or `.properties` for a CI meta-runner to generate the edges from (`mvn ike:cascade-export -Dformat=properties`). See IKE-Network/ike-issues#403.
 - Each build config runs the standalone `ike:release-publish`. That goal is **location-independent**: it identifies itself from its own reactor-root POM coordinates and reads the manifest via the `ike.release.cascade.manifest` property (resolvable from the unpacked `cascade` artifact, or a CI-set path). It prints the cascade footer naming the next repo — the signal a finish-build trigger acts on.
 - Artifact handoff between stages is via Nexus, not the filesystem: `ike-docs` resolves `ike-tooling’s **released** artifact from the repository, exactly as any consumer would.
 

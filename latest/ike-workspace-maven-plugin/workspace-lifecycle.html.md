@@ -1,6 +1,6 @@
 ---
-date_published: 2026-05-13
-date_modified: 2026-05-13
+date_published: 2026-05-14
+date_modified: 2026-05-14
 canonical_url: https://ike.network/ike-platform/ike-workspace-maven-plugin/workspace-lifecycle.html
 ---
 
@@ -33,11 +33,13 @@ A workspace is a directory containing `workspace.yaml` and one or more cloned su
 ```
 git clone git@github.com:IKE-Network/ike-example-ws.git
 cd ike-example-ws
-mvn ws:init                # clone every subproject in workspace.yaml
+mvn ws:scaffold-init       # clone every subproject in workspace.yaml
 mvn ws:overview            # see what you have
 ```
 
-If the subproject directories already exist on disk (e.g., Syncthing carried them over from another machine without their `.git/` directories), `ws:init` initializes git in place rather than cloning, preserving the working tree.
+`ws:scaffold-init` is idempotent — it can be re-run any time a new subproject is declared in `workspace.yaml` to clone the declared-but-missing one. If `workspace.yaml` is absent, the goal also bootstraps a minimal manifest from the current directory.
+
+If the subproject directories already exist on disk (e.g., Syncthing carried them over from another machine without their `.git/` directories), `ws:scaffold-init` initializes git in place rather than cloning, preserving the working tree.
 
 To add a new repo to an existing workspace:
 
@@ -112,7 +114,7 @@ Before kicking off a release, run inspection goals:
 
 ```
 mvn ws:overview                # broad health check
-mvn ws:verify                  # manifest consistency + git state
+mvn ws:scaffold-draft          # convergence drift: manifest, fields, parent, scaffold, alignment
 mvn ws:verify-convergence      # transitive dep convergence
 mvn ws:lint                    # preflight hygiene gate
 ```
@@ -169,21 +171,21 @@ mvn ws:align-draft             # preview
 mvn ws:align-publish           # apply
 ```
 
-To cascade a parent POM bump (e.g., `ike-parent` 19 → 20) across the workspace, the recommended approach depends on what you’re bumping to:
+To cascade a parent POM bump (e.g., `ike-parent` 19 → 20) across the workspace, use the convergence pattern:
 
 ```
 # Recommended: bump to the latest tested-together foundation
-# (parent + standard properties together). Reports drift now;
-# applies after #348 lands.
-mvn ike:scaffold-draft
-mvn ike:scaffold-publish              # (post-#348)
+# (parent + standard properties together, plus scaffold +
+# alignment in the same pass).
+mvn ws:scaffold-draft
+mvn ws:scaffold-publish
 
-# Override case: bump to a specific non-current version
-# (reproducibility test, partial-cycle rollback, etc.).
-mvn ws:set-parent-publish -DnewVersion=20
+# Override case: pin the parent cascade to a specific non-current
+# version (reproducibility test, partial-cycle rollback, etc.).
+mvn ws:scaffold-publish -DparentVersion=20
 ```
 
-`ws:set-parent` only touches the parent reference; it does **not** align inter-subproject dep versions or update standard properties. Pair with `ws:align-publish` afterward to converge both axes, or prefer `ike:scaffold-publish` once #348 ships — that handles parent + properties in one operation.
+`ws:scaffold-publish` drives the ReconcilerRegistry — it converges parent version, denormalized YAML fields, scaffold conventions, and inter-subproject alignment in a single operation. Each reconciler can be individually disabled (`-DupdateParent=false`, `-DupdateFields=false`, `-DupdateScaffold=false`, `-DupdateAlignment=false`) when you need to narrow the scope.
 
 For the rare case where `workspace.yaml’s recorded branch and the on-disk git checkout have drifted apart (e.g., a manual rebase moved some subprojects to a branch the YAML doesn’t know about), use the recovery goal:
 
@@ -201,7 +203,7 @@ Read-only goals are safe at any time. They are the right starting point for almo
 | Goal | When to reach for it |
 | --- | --- |
 | `ws:overview` | Default first command. Manifest + graph + status + cascade in one screen. |
-| `ws:verify` | Before you push. Catches manifest drift, broken refs. |
+| `ws:scaffold-draft` | Convergence drift report. Catches manifest drift, denormalized field mismatch, stale parent/scaffold, alignment skew — all in one pass. |
 | `ws:verify-convergence` | Before a release. Catches transitive dep version conflicts. |
 | `ws:lint` | Anytime. Surfaces hygiene problems (typo’d jvm.config, leaking SNAPSHOT properties). |
 | `ws:graph` | When the dep graph is what you want to see. `-Dformat=dot` for Graphviz. |
@@ -210,19 +212,23 @@ Read-only goals are safe at any time. They are the right starting point for almo
 
 ## [#upgrades-keeping-standards-current](#upgrades-keeping-standards-current)Upgrades: keeping standards current
 
-As workspace conventions and toolchain versions evolve, two upgrade goals pull a workspace forward:
+For routine "bring this workspace forward to the latest tested-together foundation" work — parent version, standard properties, gitignore, hooks, IDE configs, `.mvn/maven.config` — use the convergence pattern:
 
 ```
-# Build-tooling versions (parents, plugins, dependencies):
+mvn ws:scaffold-draft                 # drift report
+mvn ws:scaffold-publish               # apply
+```
+
+The ScaffoldConventionReconciler handles the scaffold layer (gitignore, hooks, `.mvn/maven.config`, IDE settings) and the ParentCascadeReconciler handles the parent version — both in the same pass, both driven by the scaffold manifest pinned at ike-tooling release time.
+
+For plan-driven version upgrades that the scaffold manifest does not cover (e.g., walking literal plugin/dependency versions across a workspace per a custom rule file), the standalone upgrade goals stay available:
+
+```
 mvn ws:versions-upgrade-draft         # writes versions-upgrade-plan.yaml
 mvn ws:versions-upgrade-publish       # applies the plan
-
-# Scaffold conventions (gitignore, hooks, IDE configs, .mvn/maven.config):
-mvn ws:scaffold-upgrade-draft         # preview
-mvn ws:scaffold-upgrade-publish       # apply
 ```
 
-Both goals are idempotent and safe to re-run. `versions-upgrade` uses OpenRewrite for POM edits — never sed/regex.
+All three goals are idempotent and safe to re-run. POM edits go through OpenRewrite — never sed/regex.
 
 ## [#when-git-fights-back](#when-git-fights-back)When git fights back
 

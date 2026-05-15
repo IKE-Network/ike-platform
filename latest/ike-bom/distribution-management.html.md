@@ -1,6 +1,6 @@
 ---
-date_published: 2026-05-13
-date_modified: 2026-05-13
+date_published: 2026-05-14
+date_modified: 2026-05-14
 canonical_url: https://ike.network/ike-platform/ike-bom/distribution-management.html
 ---
 

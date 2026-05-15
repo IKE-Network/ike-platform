@@ -1,6 +1,6 @@
 ---
-date_published: 2026-05-13
-date_modified: 2026-05-13
+date_published: 2026-05-14
+date_modified: 2026-05-14
 canonical_url: https://ike.network/ike-platform/summary.html
 ---
 
@@ -27,5 +27,5 @@ canonical_url: https://ike.network/ike-platform/summary.html
 | --- | --- |
 | GroupId | network.ike.platform |
 | ArtifactId | ike-platform |
-| Version | 57 |
+| Version | 58 |
 | Type | pom |

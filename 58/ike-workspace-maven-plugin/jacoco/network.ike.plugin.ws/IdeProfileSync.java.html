@@ -1,0 +1,245 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>IdeProfileSync.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">IdeProfileSync.java</span></div><h1>IdeProfileSync.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import org.apache.maven.api.model.Model;
+import org.apache.maven.api.model.Profile;
+import org.apache.maven.api.plugin.Log;
+import org.apache.maven.model.v4.MavenStaxReader;
+
+import java.io.File;
+import java.io.IOException;
+import java.io.StringReader;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Optional;
+
+/**
+ * Write the active {@code with-*} profile list into
+ * {@code .mvn/maven.config} so IntelliJ activates them on import.
+ *
+ * &lt;p&gt;&lt;b&gt;Why.&lt;/b&gt; Workspace aggregator POMs declare profiles like
+ * {@code &lt;profile&gt;&lt;id&gt;with-tinkar-core&lt;/id&gt;} activated by an
+ * {@code &lt;exists&gt;${project.basedir}/tinkar-core/pom.xml&lt;/exists&gt;}
+ * file-presence rule. The Maven CLI honors these reliably; IntelliJ's
+ * Maven importer does not, leaving the user to tick boxes by hand on
+ * every import. A {@code -P} arg in {@code .mvn/maven.config} is read
+ * by both the CLI and the IntelliJ importer at parse time, so the
+ * profiles activate without any IDE clicking.
+ *
+ * &lt;p&gt;&lt;b&gt;Owned-block format.&lt;/b&gt; The plugin manages exactly the lines
+ * between two markers, leaving everything else verbatim:
+ *
+ * &lt;pre&gt;{@code
+ * -T 1C
+ * -pl
+ * !.teamcity
+ * # &gt;&gt;&gt; ws:ide-sync managed &gt;&gt;&gt;
+ * -Pwith-tinkar-core,with-komet-bom
+ * # &lt;&lt;&lt; ws:ide-sync managed &lt;&lt;&lt;
+ * }&lt;/pre&gt;
+ *
+ * &lt;p&gt;If no {@code with-*} profiles are present-and-active, the block is
+ * removed entirely — leaving an empty file is fine. The {@code -P} arg
+ * is a single comma-joined token; spaces around the value would split
+ * into separate args under Maven 3.9+ line-based parsing.
+ *
+ * &lt;p&gt;Idempotent: running twice produces identical content.
+ *
+ * &lt;p&gt;See {@code IKE-Network/ike-issues#276}.
+ */
+final class IdeProfileSync {
+
+    static final String BEGIN_MARKER = &quot;# &gt;&gt;&gt; ws:ide-sync managed &gt;&gt;&gt;&quot;;
+    static final String END_MARKER = &quot;# &lt;&lt;&lt; ws:ide-sync managed &lt;&lt;&lt;&quot;;
+    private static final String PROFILE_PREFIX = &quot;with-&quot;;
+
+    private IdeProfileSync() {}
+
+    /**
+     * Sync the profile list for the workspace at {@code workspaceRoot}.
+     * No-op when the workspace POM declares no {@code with-*} profiles.
+     *
+     * @param workspaceRoot the workspace root directory (containing
+     *                      {@code pom.xml} and {@code workspace.yaml})
+     * @param log           plugin log for status messages
+     */
+    static void run(File workspaceRoot, Log log) {
+<span class="fc" id="L70">        Path pomPath = workspaceRoot.toPath().resolve(&quot;pom.xml&quot;);</span>
+<span class="pc bpc" id="L71" title="1 of 2 branches missed.">        if (!Files.isRegularFile(pomPath)) {</span>
+<span class="fc" id="L72">            log.debug(&quot;ide-sync: no pom.xml at &quot; + workspaceRoot</span>
+                    + &quot; — skipping&quot;);
+<span class="fc" id="L74">            return;</span>
+        }
+
+        List&lt;String&gt; activeProfiles;
+        try {
+<span class="nc" id="L79">            activeProfiles = computeActiveProfiles(workspaceRoot, pomPath);</span>
+<span class="nc" id="L80">        } catch (IOException e) {</span>
+<span class="nc" id="L81">            log.warn(&quot;ide-sync: cannot parse pom.xml — &quot; + e.getMessage());</span>
+<span class="nc" id="L82">            return;</span>
+<span class="nc" id="L83">        }</span>
+
+<span class="nc" id="L85">        Path mavenConfig = workspaceRoot.toPath()</span>
+<span class="nc" id="L86">                .resolve(&quot;.mvn&quot;).resolve(&quot;maven.config&quot;);</span>
+        try {
+<span class="nc bnc" id="L88" title="All 2 branches missed.">            String existing = Files.isRegularFile(mavenConfig)</span>
+<span class="nc" id="L89">                    ? Files.readString(mavenConfig, StandardCharsets.UTF_8)</span>
+<span class="nc" id="L90">                    : &quot;&quot;;</span>
+<span class="nc" id="L91">            String updated = rewriteOwnedBlock(existing, activeProfiles);</span>
+<span class="nc bnc" id="L92" title="All 2 branches missed.">            if (updated.equals(existing)) {</span>
+<span class="nc" id="L93">                log.debug(&quot;ide-sync: .mvn/maven.config already up to date&quot;);</span>
+<span class="nc" id="L94">                return;</span>
+            }
+<span class="nc" id="L96">            Files.createDirectories(mavenConfig.getParent());</span>
+<span class="nc" id="L97">            Files.writeString(mavenConfig, updated, StandardCharsets.UTF_8);</span>
+<span class="nc bnc" id="L98" title="All 2 branches missed.">            if (activeProfiles.isEmpty()) {</span>
+<span class="nc" id="L99">                log.info(&quot;  ide-sync: cleared .mvn/maven.config -P block&quot;);</span>
+            } else {
+<span class="nc" id="L101">                log.info(&quot;  ide-sync: .mvn/maven.config -P &quot;</span>
+<span class="nc" id="L102">                        + String.join(&quot;,&quot;, activeProfiles));</span>
+            }
+<span class="nc" id="L104">        } catch (IOException e) {</span>
+<span class="nc" id="L105">            log.warn(&quot;ide-sync: cannot update .mvn/maven.config — &quot;</span>
+<span class="nc" id="L106">                    + e.getMessage());</span>
+<span class="nc" id="L107">        }</span>
+<span class="nc" id="L108">    }</span>
+
+    /**
+     * Enumerate {@code &lt;profile&gt;&lt;id&gt;with-X&lt;/id&gt;&lt;/profile&gt;} entries in the
+     * workspace POM whose {@code &lt;activation&gt;&lt;file&gt;&lt;exists&gt;} target is
+     * present on disk. Returned in alphabetical order so the output is
+     * stable regardless of POM declaration order.
+     */
+    private static List&lt;String&gt; computeActiveProfiles(File workspaceRoot,
+                                                       Path pomPath)
+            throws IOException {
+        Model model;
+        try {
+<span class="nc" id="L121">            String content = Files.readString(pomPath, StandardCharsets.UTF_8);</span>
+<span class="nc" id="L122">            model = new MavenStaxReader().read(new StringReader(content));</span>
+<span class="nc" id="L123">        } catch (Exception e) {</span>
+<span class="nc" id="L124">            throw new IOException(&quot;Cannot parse &quot; + pomPath + &quot;: &quot;</span>
+<span class="nc" id="L125">                    + e.getMessage(), e);</span>
+<span class="nc" id="L126">        }</span>
+
+<span class="nc" id="L128">        List&lt;Profile&gt; profiles = model.getProfiles();</span>
+<span class="nc bnc" id="L129" title="All 4 branches missed.">        if (profiles == null || profiles.isEmpty()) {</span>
+<span class="nc" id="L130">            return List.of();</span>
+        }
+
+<span class="nc" id="L133">        List&lt;String&gt; active = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L134" title="All 2 branches missed.">        for (Profile p : profiles) {</span>
+<span class="nc" id="L135">            String id = p.getId();</span>
+<span class="nc bnc" id="L136" title="All 4 branches missed.">            if (id == null || !id.startsWith(PROFILE_PREFIX)) {</span>
+<span class="nc" id="L137">                continue;</span>
+            }
+<span class="nc" id="L139">            Optional&lt;String&gt; existsPath = activationFileExists(p);</span>
+<span class="nc bnc" id="L140" title="All 2 branches missed.">            if (existsPath.isEmpty()) {</span>
+<span class="nc" id="L141">                continue;</span>
+            }
+<span class="nc" id="L143">            String resolved = existsPath.get()</span>
+<span class="nc" id="L144">                    .replace(&quot;${project.basedir}&quot;, workspaceRoot.toString());</span>
+<span class="nc bnc" id="L145" title="All 2 branches missed.">            if (Files.exists(Path.of(resolved))) {</span>
+<span class="nc" id="L146">                active.add(id);</span>
+            }
+<span class="nc" id="L148">        }</span>
+<span class="nc" id="L149">        active.sort(Comparator.naturalOrder());</span>
+<span class="nc" id="L150">        return active;</span>
+    }
+
+    private static Optional&lt;String&gt; activationFileExists(Profile p) {
+<span class="nc bnc" id="L154" title="All 2 branches missed.">        if (p.getActivation() == null</span>
+<span class="nc bnc" id="L155" title="All 2 branches missed.">                || p.getActivation().getFile() == null) {</span>
+<span class="nc" id="L156">            return Optional.empty();</span>
+        }
+<span class="nc" id="L158">        String exists = p.getActivation().getFile().getExists();</span>
+<span class="nc bnc" id="L159" title="All 4 branches missed.">        return (exists == null || exists.isBlank())</span>
+<span class="nc" id="L160">                ? Optional.empty()</span>
+<span class="nc" id="L161">                : Optional.of(exists);</span>
+    }
+
+    /**
+     * Replace (or remove) the owned block in the existing
+     * {@code maven.config} content, preserving everything outside the
+     * markers verbatim.
+     *
+     * &lt;p&gt;If {@code activeProfiles} is empty, the entire block (including
+     * markers) is removed. Otherwise the block is rewritten with the
+     * current profile list.
+     *
+     * @param existing       current file content (may be empty)
+     * @param activeProfiles sorted list of profile ids to activate
+     * @return new file content, suitable to write back as-is
+     */
+    static String rewriteOwnedBlock(String existing,
+                                     List&lt;String&gt; activeProfiles) {
+<span class="fc" id="L179">        String[] lines = existing.split(&quot;\n&quot;, -1);</span>
+<span class="fc" id="L180">        StringBuilder out = new StringBuilder();</span>
+<span class="fc" id="L181">        boolean inBlock = false;</span>
+<span class="fc" id="L182">        boolean blockEmitted = false;</span>
+
+<span class="fc bfc" id="L184" title="All 2 branches covered.">        for (String line : lines) {</span>
+<span class="fc bfc" id="L185" title="All 4 branches covered.">            if (!inBlock &amp;&amp; line.equals(BEGIN_MARKER)) {</span>
+<span class="fc" id="L186">                inBlock = true;</span>
+<span class="fc bfc" id="L187" title="All 2 branches covered.">                if (!activeProfiles.isEmpty()) {</span>
+<span class="fc" id="L188">                    appendBlock(out, activeProfiles);</span>
+<span class="fc" id="L189">                    blockEmitted = true;</span>
+                }
+                continue;
+            }
+<span class="fc bfc" id="L193" title="All 2 branches covered.">            if (inBlock) {</span>
+<span class="fc bfc" id="L194" title="All 2 branches covered.">                if (line.equals(END_MARKER)) {</span>
+<span class="fc" id="L195">                    inBlock = false;</span>
+                }
+                continue;
+            }
+<span class="fc" id="L199">            out.append(line).append('\n');</span>
+        }
+
+        // Trailing newline from split is an empty token at end — strip the
+        // final \n we appended for it, then re-normalize.
+<span class="pc bpc" id="L204" title="2 of 4 branches missed.">        if (out.length() &gt; 0 &amp;&amp; out.charAt(out.length() - 1) == '\n') {</span>
+<span class="fc" id="L205">            out.setLength(out.length() - 1);</span>
+        }
+
+<span class="fc bfc" id="L208" title="All 4 branches covered.">        if (!blockEmitted &amp;&amp; !activeProfiles.isEmpty()) {</span>
+<span class="pc bpc" id="L209" title="1 of 4 branches missed.">            if (out.length() &gt; 0 &amp;&amp; out.charAt(out.length() - 1) != '\n') {</span>
+<span class="nc" id="L210">                out.append('\n');</span>
+            }
+<span class="fc" id="L212">            appendBlock(out, activeProfiles);</span>
+            // appendBlock leaves no trailing newline; add one for POSIX
+<span class="fc" id="L214">            out.append('\n');</span>
+<span class="fc bfc" id="L215" title="All 2 branches covered.">        } else if (out.length() &gt; 0</span>
+<span class="fc bfc" id="L216" title="All 2 branches covered.">                &amp;&amp; out.charAt(out.length() - 1) != '\n') {</span>
+<span class="fc" id="L217">            out.append('\n');</span>
+        }
+
+<span class="fc" id="L220">        return out.toString();</span>
+    }
+
+    private static void appendBlock(StringBuilder out,
+                                     List&lt;String&gt; activeProfiles) {
+<span class="pc bpc" id="L225" title="1 of 4 branches missed.">        if (out.length() &gt; 0 &amp;&amp; out.charAt(out.length() - 1) != '\n') {</span>
+<span class="nc" id="L226">            out.append('\n');</span>
+        }
+<span class="fc" id="L228">        out.append(BEGIN_MARKER).append('\n');</span>
+        // Maven 4 treats unknown profiles as a fatal error. When IntelliJ
+        // (or any reactor invocation scoped with -pl &lt;subproject&gt;) parses a
+        // subproject in isolation, the with-* profiles only declared in
+        // the workspace aggregator POM are absent — and the build aborts
+        // before importing. The Maven 4 &quot;?profileId&quot; prefix marks the
+        // activation as optional: present-and-active if the profile
+        // exists, soft-warning if it doesn't. See ike-issues#299.
+<span class="fc" id="L236">        out.append(&quot;-P&quot;);</span>
+<span class="fc bfc" id="L237" title="All 2 branches covered.">        for (int i = 0; i &lt; activeProfiles.size(); i++) {</span>
+<span class="fc bfc" id="L238" title="All 2 branches covered.">            if (i &gt; 0) out.append(',');</span>
+<span class="fc" id="L239">            out.append('?').append(activeProfiles.get(i));</span>
+        }
+<span class="fc" id="L241">        out.append('\n');</span>
+<span class="fc" id="L242">        out.append(END_MARKER);</span>
+<span class="fc" id="L243">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

@@ -1,177 +1,101 @@
 <?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>WsAlignDraftMojo.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">WsAlignDraftMojo.java</span></div><h1>WsAlignDraftMojo.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
 
-import network.ike.plugin.PomRewriter;
-
-import network.ike.plugin.ReleaseSupport;
 import network.ike.plugin.ws.preflight.Preflight;
 import network.ike.plugin.ws.preflight.PreflightCondition;
 import network.ike.plugin.ws.preflight.PreflightContext;
 import network.ike.plugin.ws.preflight.PreflightResult;
-import network.ike.workspace.Subproject;
-import network.ike.workspace.Dependency;
+import network.ike.plugin.ws.reconcile.AlignmentReconciler;
+import network.ike.plugin.ws.reconcile.DriftReport;
+import network.ike.plugin.ws.reconcile.ReconcilerOptions;
+import network.ike.plugin.ws.reconcile.WorkspaceContext;
 import network.ike.workspace.ManifestReader;
-import network.ike.workspace.ManifestWriter;
-import network.ike.workspace.PublishedArtifactSet;
 import network.ike.workspace.WorkspaceGraph;
-import org.apache.maven.api.model.Parent;
-import org.apache.maven.api.model.Plugin;
 import org.apache.maven.api.plugin.MojoException;
 import org.apache.maven.api.plugin.annotations.Mojo;
 import org.apache.maven.api.plugin.annotations.Parameter;
 
 import java.io.File;
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 /**
- * Align inter-subproject dependency versions in POM files (preview).
+ * Preview inter-subproject dependency, plugin, and parent version
+ * alignment across every cloned subproject.
  *
- * &lt;p&gt;This is the {@code ws:align-draft} goal. The corresponding
- * {@code ws:align-publish} applies the same changes. Daily-use, safe,
- * idempotent.
+ * &lt;p&gt;This is the {@code ws:align-draft} goal — a thin wrapper over
+ * {@link AlignmentReconciler}. The same reconciler is iterated from
+ * {@code ws:scaffold-{draft,publish}} (#393); this standalone goal
+ * exists for the &quot;I detected misalignment, run only that&quot; use case
+ * where iterating the full convergence pass would be needlessly
+ * broad.
  *
- * &lt;p&gt;For each subproject on disk, scans POM dependency declarations.
- * When a dependency's groupId matches another workspace subproject
- * and the declared version does not match that subproject's current
- * POM version, the dependency version is updated. Property-based
- * versions (e.g. {@code &lt;ike-bom.version&gt;}) are updated via
- * {@link PomModel#updateProperty}; direct {@code &lt;version&gt;} tags are
- * updated via {@link PomModel#updateDependencyVersion}.
+ * &lt;p&gt;This goal also serves as the designated entry point for the
+ * legacy schema migration ({@code components:} → {@code subprojects:},
+ * #150): it calls
+ * {@link ManifestReader#migrateLegacySchemaIfNeeded} before reading
+ * the graph so old manifests are rewritten in place.
  *
  * &lt;p&gt;Branch reconciliation (the rare &quot;manifest ↔ git state&quot; recovery
  * operation that used to share this goal as
- * {@code -Dscope=branches}) is now {@link WsReconcileBranchesDraftMojo}
- * ({@code ws:reconcile-branches-draft}) per the ike-issues#200 split.
+ * {@code -Dscope=branches}) moved to
+ * {@link WsReconcileBranchesDraftMojo} ({@code ws:reconcile-branches-draft})
+ * per the ike-issues#200 split. The {@code scope} parameter on this
+ * goal is retained only to emit a clear migration error for users
+ * with muscle memory.
  *
  * &lt;pre&gt;{@code
- * mvn ws:align-draft                # preview POM version updates
- * mvn ws:align-publish               # apply
+ * mvn ws:align-draft     # preview POM version updates
+ * mvn ws:align-publish   # apply
  * }&lt;/pre&gt;
  *
- * @see WsReconcileBranchesDraftMojo for branch-state recovery
+ * @see AlignmentReconciler
+ * @see WsReconcileBranchesDraftMojo
  */
 @Mojo(name = &quot;align-draft&quot;, projectRequired = false, aggregator = true)
 public class WsAlignDraftMojo extends AbstractWorkspaceMojo {
 
     /**
-     * When true, report changes without writing to POM files.
+     * When true, apply changes; when false (default), preview only.
+     * Package-private so {@link WsAlignPublishMojo} can flip it.
      */
     @Parameter(property = &quot;publish&quot;, defaultValue = &quot;false&quot;)
     boolean publish;
 
     /**
-     * What to align — only {@code poms} is accepted on the
-     * {@code ws:align-draft} / {@code ws:align-publish} pair after
-     * ike-issues#200. Branch reconciliation moved to the dedicated
-     * {@link WsReconcileBranchesDraftMojo} ({@code ws:reconcile-branches-draft})
-     * and its publish counterpart. Passing {@code -Dscope=branches} or
-     * {@code -Dscope=all} on either align goal throws with a pointer to
-     * the new goal.
-     *
-     * &lt;p&gt;The parameter is retained as a transitional migration aid so
-     * users with muscle memory get a clear error rather than a
-     * silently-changed default.
+     * Migration aid for the ike-issues#200 two-axis split. The only
+     * accepted value is {@code poms} (the new default). Passing
+     * {@code branches} or {@code all} throws with a pointer to
+     * {@code ws:reconcile-branches-{draft,publish}}, so users with
+     * muscle memory get a clear error rather than silent breakage.
      */
     @Parameter(property = &quot;scope&quot;, defaultValue = &quot;poms&quot;)
     String scope;
 
-    /**
-     * Branch-sync direction — only consulted when {@code scope}
-     * includes branches.
-     *
-     * &lt;ul&gt;
-     *   &lt;li&gt;{@code repos} (default) — read actual branches and update
-     *       {@code workspace.yaml}.&lt;/li&gt;
-     *   &lt;li&gt;{@code manifest} — run {@code git checkout} per subproject so
-     *       repos match the yaml.&lt;/li&gt;
-     *   &lt;li&gt;{@code workspace-head} — the workspace repo's current git
-     *       branch is authoritative; reconcile both the {@code branch:}
-     *       fields in {@code workspace.yaml} &lt;em&gt;and&lt;/em&gt; each subproject's
-     *       on-disk branch to that single value. Repairs branch drift
-     *       across the workspace (ike-issues#287).&lt;/li&gt;
-     * &lt;/ul&gt;
-     */
-    @Parameter(property = &quot;from&quot;, defaultValue = &quot;repos&quot;)
-    String from;
-
-    /**
-     * When true, allow branch checkout against subprojects with
-     * uncommitted changes. Only consulted with
-     * {@code scope=branches|all} and {@code from=manifest|workspace-head}.
-     * Default {@code false}.
-     */
-    @Parameter(property = &quot;force&quot;, defaultValue = &quot;false&quot;)
-    boolean force;
-
     /** Creates this goal instance. */
-<span class="fc" id="L114">    public WsAlignDraftMojo() {}</span>
-
-    /**
-     * Whether this goal may run the branch-axis reconciliation. False
-     * for {@code ws:align-draft} / {@code ws:align-publish} (POM-only
-     * after ike-issues#200); overridden to true by
-     * {@link WsReconcileBranchesDraftMojo} so the same implementation
-     * can serve both goal names without duplicating the cascade logic.
-     */
-    protected boolean isBranchScopeAllowed() {
-<span class="fc" id="L124">        return false;</span>
-    }
+<span class="fc" id="L77">    public WsAlignDraftMojo() {}</span>
 
     @Override
     public void execute() throws MojoException {
-<span class="fc bfc" id="L129" title="All 2 branches covered.">        boolean draft = !publish;</span>
+<span class="fc bfc" id="L81" title="All 2 branches covered.">        boolean draft = !publish;</span>
 
         // Migration gate (ike-issues#200): the align goals are POM-only.
         // Branch reconciliation moved to ws:reconcile-branches-{draft,publish}.
-<span class="fc bfc" id="L133" title="All 2 branches covered.">        if (!isBranchScopeAllowed()</span>
-<span class="pc bpc" id="L134" title="1 of 4 branches missed.">                &amp;&amp; (&quot;branches&quot;.equals(scope) || &quot;all&quot;.equals(scope))) {</span>
-<span class="fc bfc" id="L135" title="All 2 branches covered.">            String invokedGoal = &quot;ws:align-&quot; + (publish ? &quot;publish&quot; : &quot;draft&quot;);</span>
-<span class="fc" id="L136">            throw new MojoException(</span>
+<span class="pc bpc" id="L85" title="1 of 4 branches missed.">        if (&quot;branches&quot;.equals(scope) || &quot;all&quot;.equals(scope)) {</span>
+<span class="fc bfc" id="L86" title="All 2 branches covered.">            String invokedGoal = &quot;ws:align-&quot; + (publish ? &quot;publish&quot; : &quot;draft&quot;);</span>
+<span class="fc" id="L87">            throw new MojoException(</span>
                     invokedGoal + &quot; no longer supports -Dscope=&quot; + scope
                             + &quot; (ike-issues#200). Branch reconciliation moved to:\n&quot;
                             + &quot;  mvn ws:reconcile-branches-&quot;
-<span class="fc bfc" id="L140" title="All 2 branches covered.">                            + (publish ? &quot;publish&quot; : &quot;draft&quot;)</span>
-<span class="pc bpc" id="L141" title="3 of 4 branches missed.">                            + (from != null &amp;&amp; !&quot;repos&quot;.equals(from)</span>
-<span class="pc" id="L142">                                    ? &quot; -Dfrom=&quot; + from : &quot;&quot;)</span>
+<span class="fc bfc" id="L91" title="All 2 branches covered.">                            + (publish ? &quot;publish&quot; : &quot;draft&quot;)</span>
                             + &quot;\n  &quot; + invokedGoal
                             + &quot; is now POM-only — drop -Dscope=.&quot;);
         }
-
-<span class="pc bpc" id="L147" title="1 of 2 branches missed.">        boolean doPoms = !&quot;branches&quot;.equals(scope);</span>
-<span class="pc bpc" id="L148" title="2 of 4 branches missed.">        boolean doBranches = isBranchScopeAllowed() &amp;&amp; !&quot;poms&quot;.equals(scope);</span>
-<span class="pc bpc" id="L149" title="2 of 4 branches missed.">        if (!doPoms &amp;&amp; !doBranches) {</span>
-<span class="nc" id="L150">            throw new MojoException(</span>
-                    &quot;Invalid scope '&quot; + scope + &quot;' — expected poms|branches|all&quot;);
+<span class="nc bnc" id="L95" title="All 2 branches missed.">        if (!&quot;poms&quot;.equals(scope)) {</span>
+<span class="nc" id="L96">            throw new MojoException(</span>
+                    &quot;Invalid scope '&quot; + scope + &quot;' — expected poms&quot;);
         }
-<span class="pc bpc" id="L153" title="1 of 2 branches missed.">        if (doBranches</span>
-<span class="fc bfc" id="L154" title="All 2 branches covered.">                &amp;&amp; !&quot;repos&quot;.equals(from)</span>
-<span class="fc bfc" id="L155" title="All 2 branches covered.">                &amp;&amp; !&quot;manifest&quot;.equals(from)</span>
-<span class="fc bfc" id="L156" title="All 2 branches covered.">                &amp;&amp; !&quot;workspace-head&quot;.equals(from)) {</span>
-<span class="fc" id="L157">            throw new MojoException(</span>
-                    &quot;Invalid from '&quot; + from
-                            + &quot;' — expected repos|manifest|workspace-head&quot;);
-        }
-
-<span class="fc" id="L162">        getLog().info(&quot;&quot;);</span>
-<span class="fc" id="L163">        getLog().info(&quot;IKE Workspace Align — reconcile POM dependencies&quot;</span>
-                + &quot; and branch fields&quot;);
-<span class="fc" id="L165">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
-<span class="fc" id="L166">        getLog().info(&quot;  Scope: &quot; + scope);</span>
-<span class="pc bpc" id="L167" title="1 of 2 branches missed.">        if (doBranches) {</span>
-<span class="fc" id="L168">            getLog().info(&quot;  Branches: &quot; + describeFromMode());</span>
-        }
-
-<span class="fc bfc" id="L171" title="All 2 branches covered.">        if (draft) {</span>
-<span class="fc" id="L172">            getLog().info(&quot;  (draft — no files will be modified)&quot;);</span>
-        }
-<span class="fc" id="L174">        getLog().info(&quot;&quot;);</span>
 
         // #150 migration: ws:align-publish (and the draft variant) is the
         // designated entry point that rewrites legacy schemas in place.
@@ -179,935 +103,82 @@ public class WsAlignDraftMojo extends AbstractWorkspaceMojo {
         // users on an old workspace see a message pointing them at
         // ws:align-publish first. Do this BEFORE loadGraph() so graph
         // construction sees the migrated content.
-<span class="fc" id="L182">        Path manifestPath = resolveManifest();</span>
-<span class="fc" id="L183">        ManifestReader.migrateLegacySchemaIfNeeded(</span>
-<span class="nc" id="L184">                manifestPath, msg -&gt; getLog().info(&quot;  &quot; + msg));</span>
+<span class="nc" id="L106">        Path manifestPath = resolveManifest();</span>
+<span class="nc" id="L107">        ManifestReader.migrateLegacySchemaIfNeeded(</span>
+<span class="nc" id="L108">                manifestPath, msg -&gt; getLog().info(&quot;  &quot; + msg));</span>
 
-<span class="fc" id="L186">        WorkspaceGraph graph = loadGraph();</span>
-<span class="fc" id="L187">        File root = workspaceRoot();</span>
+<span class="nc" id="L110">        WorkspaceGraph graph = loadGraph();</span>
+<span class="nc" id="L111">        File root = workspaceRoot();</span>
 
-        // Preflight: POM alignment requires clean working trees (#132)
-        // so the rewrite commit doesn't bundle unrelated edits. Branch
-        // alignment does its own per-subproject uncommitted-changes check —
-        // in from=manifest mode it skips repos with uncommitted changes
-        // unless -Dforce; in from=repos mode it only reads, and the
-        // workspace root will itself have uncommitted changes once yaml
-        // is rewritten. So the strict preflight only fires when scope
-        // includes poms.
-<span class="pc bpc" id="L197" title="1 of 2 branches missed.">        if (doPoms) {</span>
-<span class="nc" id="L198">            List&lt;String&gt; sorted = graph.topologicalSort();</span>
-<span class="nc" id="L199">            PreflightResult preflight = Preflight.of(</span>
-<span class="nc" id="L200">                    List.of(PreflightCondition.WORKING_TREE_CLEAN),</span>
-<span class="nc" id="L201">                    PreflightContext.of(root, graph, sorted));</span>
-<span class="nc bnc" id="L202" title="All 2 branches missed.">            if (draft) {</span>
-<span class="nc" id="L203">                preflight.warnIfFailed(getLog(), WsGoal.ALIGN_PUBLISH);</span>
-            } else {
-<span class="nc" id="L205">                preflight.requirePassed(WsGoal.ALIGN_PUBLISH);</span>
-            }
+<span class="nc" id="L113">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L114">        getLog().info(&quot;IKE Workspace Align — reconcile inter-subproject versions&quot;);</span>
+<span class="nc" id="L115">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+<span class="nc bnc" id="L116" title="All 2 branches missed.">        if (draft) {</span>
+<span class="nc" id="L117">            getLog().info(&quot;  (draft — no files will be modified)&quot;);</span>
         }
+<span class="nc" id="L119">        getLog().info(&quot;&quot;);</span>
 
-        // Build lookup: groupId:artifactId → (subproject name, current POM version)
-<span class="pc bpc" id="L210" title="1 of 2 branches missed.">        Map&lt;String, ComponentVersion&gt; artifactIndex = doPoms</span>
-<span class="nc" id="L211">                ? buildArtifactIndex(graph, root)</span>
-<span class="fc" id="L212">                : new LinkedHashMap&lt;&gt;();</span>
-
-<span class="fc" id="L214">        int totalChanges = 0;</span>
-<span class="fc" id="L215">        List&lt;String&gt; changedComponents = new ArrayList&lt;&gt;();</span>
-<span class="fc" id="L216">        List&lt;AlignChange&gt; reportChanges = new ArrayList&lt;&gt;();</span>
-<span class="fc" id="L217">        List&lt;AlignCheck&gt; alignChecks = new ArrayList&lt;&gt;();</span>
-<span class="fc" id="L218">        List&lt;BranchChange&gt; branchChanges = new ArrayList&lt;&gt;();</span>
-
-<span class="pc bpc" id="L220" title="1 of 2 branches missed.">        if (doPoms) {</span>
-<span class="nc" id="L221">            totalChanges += alignPoms(graph, root, artifactIndex,</span>
-                    changedComponents, reportChanges, alignChecks, draft);
-        }
-
-<span class="pc bpc" id="L225" title="1 of 2 branches missed.">        if (doBranches) {</span>
-<span class="fc" id="L226">            totalChanges += alignBranches(graph, root, manifestPath,</span>
-                    branchChanges, draft);
-        }
-
-        // --- Summary ---
-<span class="fc" id="L231">        getLog().info(&quot;&quot;);</span>
-<span class="fc bfc" id="L232" title="All 2 branches covered.">        if (totalChanges == 0) {</span>
-<span class="fc" id="L233">            getLog().info(&quot;  Nothing to align  ✓&quot;);</span>
-<span class="fc bfc" id="L234" title="All 2 branches covered.">        } else if (draft) {</span>
-<span class="fc" id="L235">            getLog().info(&quot;  &quot; + totalChanges + &quot; change(s) would be applied&quot;);</span>
-<span class="fc" id="L236">            getLog().info(&quot;  Use ws:align-publish to apply changes.&quot;);</span>
+        // POM alignment requires clean working trees (#132) so the
+        // rewrite commit doesn't bundle unrelated edits.
+<span class="nc" id="L123">        List&lt;String&gt; sorted = graph.topologicalSort();</span>
+<span class="nc" id="L124">        PreflightResult preflight = Preflight.of(</span>
+<span class="nc" id="L125">                List.of(PreflightCondition.WORKING_TREE_CLEAN),</span>
+<span class="nc" id="L126">                PreflightContext.of(root, graph, sorted));</span>
+<span class="nc bnc" id="L127" title="All 2 branches missed.">        if (draft) {</span>
+<span class="nc" id="L128">            preflight.warnIfFailed(getLog(), WsGoal.ALIGN_PUBLISH);</span>
         } else {
-<span class="fc" id="L238">            getLog().info(&quot;  Applied &quot; + totalChanges + &quot; change(s)&quot;);</span>
+<span class="nc" id="L130">            preflight.requirePassed(WsGoal.ALIGN_PUBLISH);</span>
         }
-<span class="fc" id="L240">        getLog().info(&quot;&quot;);</span>
 
-        // --- Structured markdown report ---
-<span class="fc bfc" id="L243" title="All 2 branches covered.">        writeReport(publish ? WsGoal.ALIGN_PUBLISH : WsGoal.ALIGN_DRAFT,</span>
-<span class="fc" id="L244">                buildMarkdownReport(totalChanges, changedComponents,</span>
-                        reportChanges, alignChecks, branchChanges));
-<span class="fc" id="L246">    }</span>
+<span class="nc" id="L133">        WorkspaceContext ctx = new WorkspaceContext(</span>
+                root, manifestPath, graph,
+<span class="nc" id="L135">                readReconcilerOptions(), getLog());</span>
+<span class="nc" id="L136">        AlignmentReconciler reconciler = new AlignmentReconciler();</span>
 
-    /**
-     * Run POM-side alignment (dependency versions, parent versions,
-     * plugin literals). Returns the number of changes made or that
-     * would be made in draft mode.
-     */
-    private int alignPoms(WorkspaceGraph graph, File root,
-                          Map&lt;String, ComponentVersion&gt; artifactIndex,
-                          List&lt;String&gt; changedComponents,
-                          List&lt;AlignChange&gt; reportChanges,
-                          List&lt;AlignCheck&gt; alignChecks,
-                          boolean draft) throws MojoException {
-<span class="nc" id="L259">        int totalChanges = 0;</span>
-
-<span class="nc bnc" id="L261" title="All 2 branches missed.">        for (Map.Entry&lt;String, Subproject&gt; entry : graph.manifest().subprojects().entrySet()) {</span>
-<span class="nc" id="L262">            String name = entry.getKey();</span>
-<span class="nc" id="L263">            Subproject subproject = entry.getValue();</span>
-<span class="nc" id="L264">            File subprojectDir = new File(root, name);</span>
-
-<span class="nc bnc" id="L266" title="All 2 branches missed.">            if (!new File(subprojectDir, &quot;pom.xml&quot;).exists()) {</span>
-<span class="nc" id="L267">                getLog().debug(&quot;  &quot; + name + &quot;: not cloned — skipping&quot;);</span>
-<span class="nc" id="L268">                continue;</span>
-            }
-
-            // Find all POM files in this subproject
-            List&lt;File&gt; pomFiles;
-            try {
-<span class="nc" id="L274">                pomFiles = ReleaseSupport.findPomFiles(subprojectDir);</span>
-<span class="nc" id="L275">            } catch (MojoException e) {</span>
-<span class="nc" id="L276">                getLog().warn(&quot;  &quot; + name + &quot;: could not scan POM files — &quot;</span>
-<span class="nc" id="L277">                        + e.getMessage());</span>
-<span class="nc" id="L278">                continue;</span>
-<span class="nc" id="L279">            }</span>
-
-            // Also use the declared depends-on to find version-property hints
-<span class="nc" id="L282">            Map&lt;String, String&gt; versionPropertyMap = new LinkedHashMap&lt;&gt;();</span>
-<span class="nc bnc" id="L283" title="All 2 branches missed.">            for (Dependency dep : subproject.dependsOn()) {</span>
-<span class="nc bnc" id="L284" title="All 4 branches missed.">                if (dep.versionProperty() != null &amp;&amp; !dep.versionProperty().isEmpty()) {</span>
-<span class="nc" id="L285">                    Subproject target = graph.manifest().subprojects().get(dep.subproject());</span>
-<span class="nc bnc" id="L286" title="All 4 branches missed.">                    if (target != null &amp;&amp; target.groupId() != null</span>
-<span class="nc bnc" id="L287" title="All 2 branches missed.">                            &amp;&amp; !target.groupId().isEmpty()) {</span>
-<span class="nc" id="L288">                        versionPropertyMap.put(dep.subproject(), dep.versionProperty());</span>
-                    }
-                }
-<span class="nc" id="L291">            }</span>
-
-<span class="nc" id="L293">            int componentChanges = 0;</span>
-
-<span class="nc bnc" id="L295" title="All 2 branches missed.">            for (File pomFile : pomFiles) {</span>
-<span class="nc" id="L296">                int changes = alignPomDependencies(</span>
-                        name, pomFile, artifactIndex, versionPropertyMap,
-                        subprojectDir, graph, reportChanges);
-<span class="nc" id="L299">                changes += alignPomPlugins(</span>
-                        name, pomFile, artifactIndex,
-                        subprojectDir, reportChanges);
-<span class="nc" id="L302">                componentChanges += changes;</span>
-<span class="nc" id="L303">            }</span>
-
-            // Read POM version for the summary table
-<span class="nc" id="L306">            String pomVersion = &quot;—&quot;;</span>
-            try {
-<span class="nc" id="L308">                pomVersion = ReleaseSupport.readPomVersion(</span>
-                        new File(subprojectDir, &quot;pom.xml&quot;));
-<span class="nc" id="L310">            } catch (MojoException ignored) { }</span>
-
-<span class="nc bnc" id="L312" title="All 2 branches missed.">            if (componentChanges &gt; 0) {</span>
-<span class="nc" id="L313">                totalChanges += componentChanges;</span>
-<span class="nc" id="L314">                changedComponents.add(name);</span>
-<span class="nc" id="L315">                alignChecks.add(new AlignCheck(name, pomVersion, false));</span>
-            } else {
-<span class="nc" id="L317">                alignChecks.add(new AlignCheck(name, pomVersion, true));</span>
-            }
-<span class="nc" id="L319">        }</span>
-
-        // --- Parent version alignment (via Maven 4 Model API) ---
-<span class="nc bnc" id="L322" title="All 2 branches missed.">        for (Map.Entry&lt;String, Subproject&gt; entry : graph.manifest().subprojects().entrySet()) {</span>
-<span class="nc" id="L323">            String name = entry.getKey();</span>
-<span class="nc" id="L324">            Subproject subproject = entry.getValue();</span>
-<span class="nc" id="L325">            String parentSubprojectName = subproject.parent();</span>
-<span class="nc bnc" id="L326" title="All 2 branches missed.">            if (parentSubprojectName == null) continue;</span>
-
-<span class="nc" id="L328">            Subproject parentSubproject = graph.manifest().subprojects().get(parentSubprojectName);</span>
-<span class="nc bnc" id="L329" title="All 4 branches missed.">            if (parentSubproject == null || parentSubproject.version() == null) continue;</span>
-
-<span class="nc" id="L331">            File subprojectDir = new File(root, name);</span>
-<span class="nc" id="L332">            Path pomPath = subprojectDir.toPath().resolve(&quot;pom.xml&quot;);</span>
-<span class="nc bnc" id="L333" title="All 2 branches missed.">            if (!Files.exists(pomPath)) continue;</span>
-
-            try {
-<span class="nc" id="L336">                PomModel pom = PomModel.parse(pomPath);</span>
-<span class="nc" id="L337">                Parent parentInfo = pom.parent();</span>
-<span class="nc bnc" id="L338" title="All 2 branches missed.">                if (parentInfo == null) continue;</span>
-
-<span class="nc" id="L340">                String expectedVersion = parentSubproject.version();</span>
-<span class="nc" id="L341">                String currentVersion = parentInfo.getVersion();</span>
-<span class="nc bnc" id="L342" title="All 2 branches missed.">                if (currentVersion == null</span>
-<span class="nc bnc" id="L343" title="All 2 branches missed.">                        || expectedVersion.equals(currentVersion)) {</span>
-<span class="nc" id="L344">                    continue;</span>
-                }
-
-<span class="nc" id="L347">                String parentGid = parentInfo.getGroupId();</span>
-<span class="nc" id="L348">                String parentAid = parentInfo.getArtifactId();</span>
-<span class="nc bnc" id="L349" title="All 2 branches missed.">                if (draft) {</span>
-<span class="nc" id="L350">                    getLog().info(&quot;  &quot; + name + &quot;: parent &quot; + parentAid</span>
-                            + &quot; &quot; + currentVersion + &quot; → &quot; + expectedVersion
-                            + &quot; (draft)&quot;);
-                } else {
-                    // #241: match full GA, not artifactId alone
-<span class="nc" id="L355">                    String updated = PomModel.updateParentVersion(</span>
-<span class="nc" id="L356">                            pom.content(), parentGid, parentAid,</span>
-                            expectedVersion);
-<span class="nc" id="L358">                    Files.writeString(pomPath, updated, StandardCharsets.UTF_8);</span>
-<span class="nc" id="L359">                    getLog().info(&quot;  &quot; + name + &quot;: parent &quot; + parentAid</span>
-                            + &quot; &quot; + currentVersion + &quot; → &quot; + expectedVersion);
-
-                    // Also update submodule POMs that reference the same parent
-<span class="nc" id="L363">                    List&lt;File&gt; subPoms = ReleaseSupport.findPomFiles(subprojectDir);</span>
-<span class="nc bnc" id="L364" title="All 2 branches missed.">                    for (File subPom : subPoms) {</span>
-<span class="nc bnc" id="L365" title="All 2 branches missed.">                        if (subPom.toPath().equals(pomPath)) continue;</span>
-<span class="nc" id="L366">                        String subContent = Files.readString(</span>
-<span class="nc" id="L367">                                subPom.toPath(), StandardCharsets.UTF_8);</span>
-<span class="nc" id="L368">                        String subUpdated = PomModel.updateParentVersion(</span>
-                                subContent, parentGid, parentAid,
-                                expectedVersion);
-<span class="nc bnc" id="L371" title="All 2 branches missed.">                        if (!subUpdated.equals(subContent)) {</span>
-<span class="nc" id="L372">                            Files.writeString(subPom.toPath(), subUpdated,</span>
-                                    StandardCharsets.UTF_8);
-                        }
-<span class="nc" id="L375">                    }</span>
-                }
-<span class="nc" id="L377">                reportChanges.add(new AlignChange(</span>
-                        name, &quot;pom.xml&quot;, &quot;parent:&quot; + parentAid,
-                        currentVersion, expectedVersion));
-<span class="nc" id="L380">                totalChanges++;</span>
-<span class="nc bnc" id="L381" title="All 2 branches missed.">                if (!changedComponents.contains(name)) {</span>
-<span class="nc" id="L382">                    changedComponents.add(name);</span>
-                }
-<span class="nc" id="L384">            } catch (IOException e) {</span>
-<span class="nc" id="L385">                getLog().warn(&quot;  &quot; + name + &quot;: could not align parent version — &quot;</span>
-<span class="nc" id="L386">                        + e.getMessage());</span>
-<span class="nc" id="L387">            }</span>
-<span class="nc" id="L388">        }</span>
-
-        // --- POM alignment summary ---
-<span class="nc bnc" id="L391" title="All 2 branches missed.">        if (totalChanges == 0) {</span>
-<span class="nc" id="L392">            getLog().info(&quot;  POMs: all inter-subproject versions are aligned  ✓&quot;);</span>
-<span class="nc bnc" id="L393" title="All 2 branches missed.">        } else if (draft) {</span>
-<span class="nc" id="L394">            getLog().info(&quot;  POMs: &quot; + totalChanges + &quot; version(s) would be updated across &quot;</span>
-<span class="nc" id="L395">                    + changedComponents.size() + &quot; subproject(s)&quot;);</span>
+<span class="nc bnc" id="L138" title="All 2 branches missed.">        if (draft) {</span>
+<span class="nc" id="L139">            printDriftReport(reconciler.detect(ctx));</span>
         } else {
-<span class="nc" id="L397">            getLog().info(&quot;  POMs: updated &quot; + totalChanges + &quot; version(s) across &quot;</span>
-<span class="nc" id="L398">                    + changedComponents.size() + &quot; subproject(s)&quot;);</span>
+<span class="nc" id="L141">            reconciler.apply(ctx);</span>
         }
+<span class="nc" id="L143">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L144">    }</span>
 
-<span class="nc" id="L401">        return totalChanges;</span>
+    /**
+     * Collect Maven system properties into a {@link ReconcilerOptions}
+     * bag so the reconciler can query its opt-out flag
+     * ({@code -DupdateAlignment=false}).
+     */
+    private static ReconcilerOptions readReconcilerOptions() {
+<span class="nc" id="L152">        Map&lt;String, String&gt; flags = new HashMap&lt;&gt;();</span>
+<span class="nc bnc" id="L153" title="All 2 branches missed.">        for (String name : System.getProperties().stringPropertyNames()) {</span>
+<span class="nc" id="L154">            flags.put(name, System.getProperty(name));</span>
+<span class="nc" id="L155">        }</span>
+<span class="nc" id="L156">        return new ReconcilerOptions(flags);</span>
     }
 
     /**
-     * Reconcile {@code workspace.yaml} branch fields against on-disk
-     * git state. With {@code from=repos}, the yaml is updated to match
-     * actual branches; with {@code from=manifest}, each subproject is
-     * checked out to the declared branch (respecting uncommitted work
-     * unless {@code -Dforce=true}).
-     *
-     * @return the number of branch changes applied, or that would be
-     *         applied in draft mode
+     * Render a {@link DriftReport} for {@code ws:align-draft} output
+     * with the copy-paste opt-out command inline. Mirrors the format
+     * used by {@code ws:scaffold-draft}'s reconciler loop.
      */
-    private int alignBranches(WorkspaceGraph graph, File root,
-                              Path manifestPath,
-                              List&lt;BranchChange&gt; branchChanges,
-                              boolean draft) throws MojoException {
-<span class="fc bfc" id="L418" title="All 3 branches covered.">        return switch (from) {</span>
-            case &quot;manifest&quot; -&gt;
-<span class="fc" id="L420">                    alignBranchesFromManifest(graph, root, branchChanges, draft);</span>
-            case &quot;workspace-head&quot; -&gt;
-<span class="fc" id="L422">                    alignBranchesFromWorkspaceHead(graph, root, manifestPath,</span>
-                            branchChanges, draft);
-            default -&gt;
-<span class="fc" id="L425">                    alignBranchesFromRepos(graph, root, manifestPath,</span>
-                            branchChanges, draft);
-        };
-    }
-
-    /** Human-readable label for the active {@code from=...} mode. */
-    private String describeFromMode() {
-<span class="fc bfc" id="L432" title="All 3 branches covered.">        return switch (from) {</span>
-<span class="fc" id="L433">            case &quot;manifest&quot; -&gt; &quot;manifest → repos (git checkout)&quot;;</span>
-            case &quot;workspace-head&quot; -&gt;
-<span class="fc" id="L435">                    &quot;workspace HEAD → manifest + repos (authoritative branch)&quot;;</span>
-<span class="fc" id="L436">            default -&gt; &quot;repos → manifest (update yaml)&quot;;</span>
-        };
-    }
-
-    /**
-     * Read actual branches from each cloned subproject and update
-     * {@code workspace.yaml} so the declared branch fields match reality.
-     */
-    private int alignBranchesFromRepos(WorkspaceGraph graph, File root,
-                                       Path manifestPath,
-                                       List&lt;BranchChange&gt; branchChanges,
-                                       boolean draft) throws MojoException {
-<span class="fc" id="L448">        Map&lt;String, String&gt; updates = new LinkedHashMap&lt;&gt;();</span>
-
-<span class="fc bfc" id="L450" title="All 2 branches covered.">        for (Map.Entry&lt;String, Subproject&gt; entry : graph.manifest().subprojects().entrySet()) {</span>
-<span class="fc" id="L451">            String name = entry.getKey();</span>
-<span class="fc" id="L452">            Subproject subproject = entry.getValue();</span>
-<span class="fc" id="L453">            File dir = new File(root, name);</span>
-<span class="pc bpc" id="L454" title="1 of 2 branches missed.">            if (!new File(dir, &quot;.git&quot;).exists()) continue;</span>
-
-<span class="fc" id="L456">            String actual = gitBranch(dir);</span>
-<span class="fc" id="L457">            String declared = subproject.branch();</span>
-<span class="fc bfc" id="L458" title="All 2 branches covered.">            if (actual.equals(declared)) continue;</span>
-
-<span class="fc" id="L460">            updates.put(name, actual);</span>
-<span class="fc" id="L461">            branchChanges.add(new BranchChange(name, declared, actual, &quot;yaml&quot;));</span>
-<span class="fc" id="L462">            getLog().info(&quot;  branch: &quot; + name + &quot;: &quot; + declared</span>
-<span class="fc bfc" id="L463" title="All 2 branches covered.">                    + &quot; → &quot; + actual + (draft ? &quot; (draft)&quot; : &quot;&quot;));</span>
-<span class="fc" id="L464">        }</span>
-
-<span class="fc bfc" id="L466" title="All 2 branches covered.">        if (updates.isEmpty()) {</span>
-<span class="fc" id="L467">            getLog().info(&quot;  Branches: yaml already matches repos  ✓&quot;);</span>
-<span class="fc" id="L468">            return 0;</span>
+    private void printDriftReport(DriftReport report) {
+<span class="nc bnc" id="L165" title="All 2 branches missed.">        if (!report.hasDrift()) {</span>
+<span class="nc" id="L166">            getLog().info(&quot;  ✓ &quot; + report.dimension());</span>
+<span class="nc" id="L167">            return;</span>
         }
-
-<span class="fc bfc" id="L471" title="All 2 branches covered.">        if (!draft) {</span>
-            try {
-<span class="fc" id="L473">                ManifestWriter.updateBranches(manifestPath, updates);</span>
-<span class="fc" id="L474">                getLog().info(&quot;  Branches: updated workspace.yaml (&quot;</span>
-<span class="fc" id="L475">                        + updates.size() + &quot; change(s))&quot;);</span>
-                // Commit if workspace root is a git repo
-<span class="fc" id="L477">                File wsRoot = manifestPath.getParent().toFile();</span>
-<span class="pc bpc" id="L478" title="1 of 2 branches missed.">                if (new File(wsRoot, &quot;.git&quot;).exists()) {</span>
-<span class="fc" id="L479">                    ReleaseSupport.exec(wsRoot, getLog(),</span>
-                            &quot;git&quot;, &quot;add&quot;, &quot;workspace.yaml&quot;);
-<span class="fc" id="L481">                    ReleaseSupport.exec(wsRoot, getLog(),</span>
-                            &quot;git&quot;, &quot;commit&quot;, &quot;-m&quot;,
-                            &quot;workspace: align branch fields from repos&quot;);
-                }
-<span class="nc" id="L485">            } catch (IOException e) {</span>
-<span class="nc" id="L486">                throw new MojoException(</span>
-<span class="nc" id="L487">                        &quot;Failed to update workspace.yaml: &quot; + e.getMessage(), e);</span>
-<span class="fc" id="L488">            }</span>
+<span class="nc" id="L169">        getLog().info(&quot;  ⚠ &quot; + report.dimension());</span>
+<span class="nc bnc" id="L170" title="All 2 branches missed.">        if (!report.summary().isEmpty()) {</span>
+<span class="nc" id="L171">            getLog().info(&quot;     &quot; + report.summary());</span>
         }
-
-<span class="fc" id="L491">        return updates.size();</span>
-    }
-
-    /**
-     * Reconcile every subproject's {@code branch:} field &lt;em&gt;and&lt;/em&gt;
-     * on-disk git branch to the workspace repo's current HEAD.
-     *
-     * &lt;p&gt;This is the symmetric repair to {@code ws:add}'s
-     * branch-coherence rule (ike-issues#286): the workspace repo's
-     * branch is authoritative, and this mode brings everything else
-     * (YAML state, on-disk state) into agreement with it.
-     *
-     * &lt;p&gt;Behavior per subproject:
-     * &lt;ol&gt;
-     *   &lt;li&gt;If the YAML {@code branch:} != workspace HEAD → queue YAML
-     *       update.&lt;/li&gt;
-     *   &lt;li&gt;If the on-disk branch != workspace HEAD → queue checkout.
-     *       Subprojects with uncommitted changes are skipped unless
-     *       {@code -Dforce=true} (same semantics as
-     *       {@code from=manifest}).&lt;/li&gt;
-     * &lt;/ol&gt;
-     *
-     * &lt;p&gt;If a subproject's local repo doesn't yet have the workspace
-     * branch, {@code git checkout} will fall through to creating it
-     * from {@code origin/&lt;branch&gt;} (the standard tracking-branch path).
-     * If the branch isn't on origin either, the checkout fails — that
-     * case is the {@code ws:add}'s territory; this mode does not push
-     * new branches to subproject origins.
-     *
-     * @return the number of changes applied (or that would be in draft mode)
-     * @throws MojoException if the workspace dir is not a git repo, or
-     *                       any individual checkout fails
-     */
-    private int alignBranchesFromWorkspaceHead(WorkspaceGraph graph, File root,
-                                                Path manifestPath,
-                                                List&lt;BranchChange&gt; branchChanges,
-                                                boolean draft) throws MojoException {
-<span class="fc" id="L528">        File wsRoot = manifestPath.getParent().toFile();</span>
-<span class="fc bfc" id="L529" title="All 2 branches covered.">        if (!new File(wsRoot, &quot;.git&quot;).exists()) {</span>
-<span class="fc" id="L530">            throw new MojoException(</span>
-                    &quot;from=workspace-head requires the workspace directory to be &quot;
-<span class="fc" id="L532">                            + &quot;a git repository. &quot; + wsRoot.getAbsolutePath()</span>
-                            + &quot; has no .git directory.&quot;);
+<span class="nc bnc" id="L173" title="All 2 branches missed.">        for (String line : report.detailLines()) {</span>
+<span class="nc" id="L174">            getLog().info(&quot;       &quot; + line);</span>
+<span class="nc" id="L175">        }</span>
+<span class="nc bnc" id="L176" title="All 2 branches missed.">        if (!report.defaultAction().isEmpty()) {</span>
+<span class="nc" id="L177">            getLog().info(&quot;     Default: &quot; + report.defaultAction());</span>
         }
-<span class="fc" id="L535">        String wsBranch = gitBranch(wsRoot);</span>
-<span class="pc bpc" id="L536" title="3 of 6 branches missed.">        if (wsBranch == null || wsBranch.isBlank() || &quot;unknown&quot;.equals(wsBranch)) {</span>
-<span class="nc" id="L537">            throw new MojoException(</span>
-                    &quot;Could not read the workspace repo's current branch. &quot;
-                            + &quot;Ensure HEAD points at a named branch (not a &quot;
-                            + &quot;detached HEAD).&quot;);
+<span class="nc bnc" id="L179" title="All 2 branches missed.">        if (!report.optOutCommand().isEmpty()) {</span>
+<span class="nc" id="L180">            getLog().info(&quot;     Opt out: &quot; + report.optOutCommand());</span>
         }
-
-<span class="fc" id="L543">        getLog().info(&quot;  Workspace HEAD: &quot; + wsBranch);</span>
-
-<span class="fc" id="L545">        Map&lt;String, String&gt; yamlUpdates = new LinkedHashMap&lt;&gt;();</span>
-<span class="fc" id="L546">        int checkoutsPlanned = 0;</span>
-<span class="fc" id="L547">        int checkoutsApplied = 0;</span>
-<span class="fc" id="L548">        int skippedDirty = 0;</span>
-
-<span class="fc bfc" id="L550" title="All 2 branches covered.">        for (Map.Entry&lt;String, Subproject&gt; entry : graph.manifest().subprojects().entrySet()) {</span>
-<span class="fc" id="L551">            String name = entry.getKey();</span>
-<span class="fc" id="L552">            Subproject subproject = entry.getValue();</span>
-<span class="fc" id="L553">            File dir = new File(root, name);</span>
-
-            // YAML reconciliation runs whether or not the repo is cloned.
-<span class="fc" id="L556">            String declared = subproject.branch();</span>
-<span class="pc bpc" id="L557" title="1 of 4 branches missed.">            if (declared == null || !declared.equals(wsBranch)) {</span>
-<span class="fc" id="L558">                yamlUpdates.put(name, wsBranch);</span>
-<span class="fc" id="L559">                branchChanges.add(new BranchChange(</span>
-<span class="pc bpc" id="L560" title="1 of 2 branches missed.">                        name, declared == null ? &quot;(unset)&quot; : declared,</span>
-                        wsBranch, &quot;yaml&quot;));
-<span class="fc" id="L562">                getLog().info(&quot;  branch: &quot; + name + &quot; (yaml): &quot;</span>
-<span class="pc bpc" id="L563" title="1 of 2 branches missed.">                        + (declared == null ? &quot;(unset)&quot; : declared)</span>
-<span class="fc bfc" id="L564" title="All 2 branches covered.">                        + &quot; → &quot; + wsBranch + (draft ? &quot; (draft)&quot; : &quot;&quot;));</span>
-            }
-
-            // Checkout reconciliation only applies to cloned subprojects.
-<span class="pc bpc" id="L568" title="1 of 2 branches missed.">            if (!new File(dir, &quot;.git&quot;).exists()) continue;</span>
-<span class="fc" id="L569">            String actual = gitBranch(dir);</span>
-<span class="fc bfc" id="L570" title="All 2 branches covered.">            if (wsBranch.equals(actual)) continue;</span>
-
-<span class="fc" id="L572">            String status = gitStatus(dir);</span>
-<span class="pc bpc" id="L573" title="3 of 4 branches missed.">            if (!status.isEmpty() &amp;&amp; !force) {</span>
-<span class="nc" id="L574">                getLog().warn(&quot;  ⚠ &quot; + name + &quot;: uncommitted changes — skipping&quot;</span>
-                        + &quot; checkout (pass -Dforce=true to override)&quot;);
-<span class="nc" id="L576">                skippedDirty++;</span>
-<span class="nc" id="L577">                continue;</span>
-            }
-
-<span class="fc" id="L580">            checkoutsPlanned++;</span>
-<span class="fc" id="L581">            branchChanges.add(new BranchChange(name, actual, wsBranch, &quot;checkout&quot;));</span>
-<span class="fc" id="L582">            getLog().info(&quot;  branch: &quot; + name + &quot; (repo): &quot; + actual</span>
-<span class="fc bfc" id="L583" title="All 2 branches covered.">                    + &quot; → &quot; + wsBranch + (draft ? &quot; (draft)&quot; : &quot;&quot;));</span>
-
-<span class="fc bfc" id="L585" title="All 2 branches covered.">            if (!draft) {</span>
-                // If the branch already exists locally (or on origin),
-                // a plain checkout works — git will set up tracking.
-                // Otherwise create it from the current HEAD, mirroring
-                // ws:add's workspace-branch-coherence semantics.
-<span class="pc bpc" id="L590" title="1 of 2 branches missed.">                if (localBranchExists(dir, wsBranch)</span>
-<span class="pc bpc" id="L591" title="1 of 2 branches missed.">                        || originBranchExists(dir, wsBranch)) {</span>
-<span class="nc" id="L592">                    ReleaseSupport.exec(dir, getLog(),</span>
-                            &quot;git&quot;, &quot;checkout&quot;, wsBranch);
-                } else {
-<span class="fc" id="L595">                    getLog().info(&quot;    &quot; + name + &quot; has no '&quot; + wsBranch</span>
-                            + &quot;' locally or on origin — creating from &quot;
-                            + actual + &quot;.&quot;);
-<span class="fc" id="L598">                    ReleaseSupport.exec(dir, getLog(),</span>
-                            &quot;git&quot;, &quot;checkout&quot;, &quot;-b&quot;, wsBranch);
-                }
-<span class="fc" id="L601">                checkoutsApplied++;</span>
-            }
-<span class="fc" id="L603">        }</span>
-
-<span class="pc bpc" id="L605" title="2 of 6 branches missed.">        if (yamlUpdates.isEmpty() &amp;&amp; checkoutsPlanned == 0 &amp;&amp; skippedDirty == 0) {</span>
-<span class="fc" id="L606">            getLog().info(&quot;  Branches: workspace, manifest, and repos all agree  ✓&quot;);</span>
-<span class="fc" id="L607">            return 0;</span>
-        }
-
-<span class="pc bpc" id="L610" title="1 of 4 branches missed.">        if (!draft &amp;&amp; !yamlUpdates.isEmpty()) {</span>
-            try {
-<span class="fc" id="L612">                ManifestWriter.updateBranches(manifestPath, yamlUpdates);</span>
-<span class="fc" id="L613">                getLog().info(&quot;  Branches: updated workspace.yaml (&quot;</span>
-<span class="fc" id="L614">                        + yamlUpdates.size() + &quot; field(s))&quot;);</span>
-<span class="fc" id="L615">                ReleaseSupport.exec(wsRoot, getLog(),</span>
-                        &quot;git&quot;, &quot;add&quot;, &quot;workspace.yaml&quot;);
-<span class="fc" id="L617">                ReleaseSupport.exec(wsRoot, getLog(),</span>
-                        &quot;git&quot;, &quot;commit&quot;, &quot;-m&quot;,
-                        &quot;workspace: align branch fields to &quot; + wsBranch);
-<span class="nc" id="L620">            } catch (IOException e) {</span>
-<span class="nc" id="L621">                throw new MojoException(</span>
-<span class="nc" id="L622">                        &quot;Failed to update workspace.yaml: &quot; + e.getMessage(), e);</span>
-<span class="fc" id="L623">            }</span>
-        }
-
-<span class="fc bfc" id="L626" title="All 2 branches covered.">        if (draft) {</span>
-<span class="fc" id="L627">            getLog().info(&quot;  Branches: &quot; + (yamlUpdates.size() + checkoutsPlanned)</span>
-                    + &quot; change(s) would be applied&quot;
-<span class="pc bpc" id="L629" title="1 of 2 branches missed.">                    + (skippedDirty &gt; 0</span>
-<span class="nc" id="L630">                            ? &quot; (&quot; + skippedDirty + &quot; skipped — uncommitted)&quot;</span>
-<span class="fc" id="L631">                            : &quot;&quot;));</span>
-<span class="fc" id="L632">            return yamlUpdates.size() + checkoutsPlanned;</span>
-        }
-<span class="fc" id="L634">        getLog().info(&quot;  Branches: &quot; + yamlUpdates.size()</span>
-                + &quot; yaml update(s), &quot; + checkoutsApplied + &quot; checkout(s), &quot;
-                + skippedDirty + &quot; skipped (uncommitted)&quot;);
-<span class="fc" id="L637">        return yamlUpdates.size() + checkoutsApplied;</span>
-    }
-
-    /**
-     * Whether {@code refs/heads/&lt;branch&gt;} exists in the local repo.
-     */
-    private static boolean localBranchExists(File dir, String branch) {
-        try {
-<span class="fc" id="L645">            String out = ReleaseSupport.execCapture(dir,</span>
-                    &quot;git&quot;, &quot;branch&quot;, &quot;--list&quot;, branch);
-<span class="pc bpc" id="L647" title="2 of 4 branches missed.">            return out != null &amp;&amp; !out.trim().isEmpty();</span>
-<span class="nc" id="L648">        } catch (Exception e) {</span>
-<span class="nc" id="L649">            return false;</span>
-        }
-    }
-
-    /**
-     * Whether {@code refs/heads/&lt;branch&gt;} exists on the origin remote.
-     * Returns false on any failure (offline, no remote, etc.) — the
-     * caller treats that the same as \&quot;doesn't exist on origin\&quot; and
-     * creates the branch locally from the current HEAD.
-     */
-    private static boolean originBranchExists(File dir, String branch) {
-        try {
-<span class="nc" id="L661">            String out = ReleaseSupport.execCapture(dir,</span>
-                    &quot;git&quot;, &quot;ls-remote&quot;, &quot;--heads&quot;, &quot;origin&quot;, branch);
-<span class="nc bnc" id="L663" title="All 4 branches missed.">            return out != null &amp;&amp; !out.trim().isEmpty();</span>
-<span class="fc" id="L664">        } catch (Exception e) {</span>
-<span class="fc" id="L665">            return false;</span>
-        }
-    }
-
-    /**
-     * Read declared branches from {@code workspace.yaml} and run
-     * {@code git checkout} in each subproject whose current branch
-     * differs. Subprojects with uncommitted changes are skipped unless
-     * {@code -Dforce=true}.
-     */
-    private int alignBranchesFromManifest(WorkspaceGraph graph, File root,
-                                          List&lt;BranchChange&gt; branchChanges,
-                                          boolean draft) throws MojoException {
-<span class="fc" id="L678">        int switched = 0;</span>
-<span class="fc" id="L679">        int skippedDirty = 0;</span>
-
-<span class="fc bfc" id="L681" title="All 2 branches covered.">        for (Map.Entry&lt;String, Subproject&gt; entry : graph.manifest().subprojects().entrySet()) {</span>
-<span class="fc" id="L682">            String name = entry.getKey();</span>
-<span class="fc" id="L683">            Subproject subproject = entry.getValue();</span>
-<span class="fc" id="L684">            File dir = new File(root, name);</span>
-<span class="pc bpc" id="L685" title="1 of 2 branches missed.">            if (!new File(dir, &quot;.git&quot;).exists()) continue;</span>
-
-<span class="fc" id="L687">            String declared = subproject.branch();</span>
-<span class="pc bpc" id="L688" title="1 of 2 branches missed.">            if (declared == null) continue;</span>
-<span class="fc" id="L689">            String actual = gitBranch(dir);</span>
-<span class="fc bfc" id="L690" title="All 2 branches covered.">            if (actual.equals(declared)) continue;</span>
-
-<span class="fc" id="L692">            String status = gitStatus(dir);</span>
-<span class="pc bpc" id="L693" title="1 of 4 branches missed.">            if (!status.isEmpty() &amp;&amp; !force) {</span>
-<span class="fc" id="L694">                getLog().warn(&quot;  ⚠ &quot; + name + &quot;: uncommitted changes — skipping&quot;</span>
-                        + &quot; (pass -Dforce=true to override)&quot;);
-<span class="fc" id="L696">                skippedDirty++;</span>
-<span class="fc" id="L697">                continue;</span>
-            }
-
-<span class="fc" id="L700">            branchChanges.add(new BranchChange(name, actual, declared, &quot;checkout&quot;));</span>
-<span class="fc" id="L701">            getLog().info(&quot;  branch: &quot; + name + &quot;: &quot; + actual</span>
-<span class="pc bpc" id="L702" title="1 of 2 branches missed.">                    + &quot; → &quot; + declared + (draft ? &quot; (draft)&quot; : &quot;&quot;));</span>
-
-<span class="pc bpc" id="L704" title="1 of 2 branches missed.">            if (!draft) {</span>
-<span class="fc" id="L705">                ReleaseSupport.exec(dir, getLog(),</span>
-                        &quot;git&quot;, &quot;checkout&quot;, declared);
-<span class="fc" id="L707">                switched++;</span>
-            }
-<span class="fc" id="L709">        }</span>
-
-<span class="pc bpc" id="L711" title="1 of 6 branches missed.">        if (switched == 0 &amp;&amp; skippedDirty == 0 &amp;&amp; branchChanges.isEmpty()) {</span>
-<span class="fc" id="L712">            getLog().info(&quot;  Branches: repos already match yaml  ✓&quot;);</span>
-<span class="pc bpc" id="L713" title="1 of 2 branches missed.">        } else if (draft) {</span>
-<span class="nc" id="L714">            getLog().info(&quot;  Branches: &quot; + branchChanges.size()</span>
-                    + &quot; subproject(s) would be switched&quot;);
-        } else {
-<span class="fc" id="L717">            getLog().info(&quot;  Branches: switched &quot; + switched</span>
-                    + &quot;, skipped &quot; + skippedDirty + &quot; (uncommitted)&quot;);
-        }
-
-<span class="pc bpc" id="L721" title="1 of 2 branches missed.">        return draft ? branchChanges.size() : switched;</span>
-    }
-
-    /**
-     * Build a structured markdown report from collected alignment changes.
-     */
-    private String buildMarkdownReport(int totalChanges,
-                                        List&lt;String&gt; changedComponents,
-                                        List&lt;AlignChange&gt; changes,
-                                        List&lt;AlignCheck&gt; checks,
-                                        List&lt;BranchChange&gt; branches) {
-<span class="fc" id="L732">        StringBuilder md = new StringBuilder();</span>
-
-<span class="fc" id="L734">        md.append(&quot;**Scope:** &quot;).append(scope);</span>
-<span class="pc bpc" id="L735" title="1 of 2 branches missed.">        if (!&quot;poms&quot;.equals(scope)) {</span>
-<span class="fc" id="L736">            md.append(&quot; (branches: &quot;)</span>
-<span class="fc bfc" id="L737" title="All 2 branches covered.">              .append(&quot;manifest&quot;.equals(from) ? &quot;manifest → repos&quot; : &quot;repos → manifest&quot;)</span>
-<span class="fc" id="L738">              .append(&quot;)&quot;);</span>
-        }
-<span class="fc" id="L740">        md.append(&quot;\n\n&quot;);</span>
-
-<span class="fc bfc" id="L742" title="All 2 branches covered.">        if (totalChanges == 0) {</span>
-<span class="fc" id="L743">            md.append(&quot;Nothing to align.\n\n&quot;);</span>
-<span class="fc bfc" id="L744" title="All 2 branches covered.">        } else if (!publish) {</span>
-<span class="fc" id="L745">            md.append(&quot;**Dry run** — &quot;).append(totalChanges)</span>
-<span class="fc" id="L746">              .append(&quot; change(s) would be applied.\n\n&quot;);</span>
-        } else {
-<span class="fc" id="L748">            md.append(&quot;Applied &quot;).append(totalChanges)</span>
-<span class="fc" id="L749">              .append(&quot; change(s).\n\n&quot;);</span>
-        }
-
-<span class="pc bpc" id="L752" title="1 of 2 branches missed.">        if (!changes.isEmpty()) {</span>
-<span class="nc" id="L753">            md.append(&quot;### POM changes\n\n&quot;);</span>
-<span class="nc" id="L754">            md.append(&quot;| Subproject | POM | Artifact | From | To |\n&quot;);</span>
-<span class="nc" id="L755">            md.append(&quot;|-----------|-----|----------|------|----|\n&quot;);</span>
-<span class="nc bnc" id="L756" title="All 2 branches missed.">            for (AlignChange c : changes) {</span>
-<span class="nc" id="L757">                md.append(&quot;| &quot;).append(c.subproject)</span>
-<span class="nc" id="L758">                  .append(&quot; | &quot;).append(c.pomRelPath)</span>
-<span class="nc" id="L759">                  .append(&quot; | `&quot;).append(c.artifact).append('`')</span>
-<span class="nc" id="L760">                  .append(&quot; | &quot;).append(c.fromVersion)</span>
-<span class="nc" id="L761">                  .append(&quot; | &quot;).append(c.toVersion)</span>
-<span class="nc" id="L762">                  .append(&quot; |\n&quot;);</span>
-<span class="nc" id="L763">            }</span>
-<span class="nc" id="L764">            md.append('\n');</span>
-        }
-
-<span class="fc bfc" id="L767" title="All 2 branches covered.">        if (!branches.isEmpty()) {</span>
-<span class="fc" id="L768">            md.append(&quot;### Branch changes\n\n&quot;);</span>
-<span class="fc" id="L769">            md.append(&quot;| Subproject | From | To | Action |\n&quot;);</span>
-<span class="fc" id="L770">            md.append(&quot;|-----------|------|----|--------|\n&quot;);</span>
-<span class="fc bfc" id="L771" title="All 2 branches covered.">            for (BranchChange b : branches) {</span>
-<span class="fc" id="L772">                md.append(&quot;| &quot;).append(b.subproject)</span>
-<span class="fc" id="L773">                  .append(&quot; | &quot;).append(b.fromBranch)</span>
-<span class="fc" id="L774">                  .append(&quot; | &quot;).append(b.toBranch)</span>
-<span class="fc" id="L775">                  .append(&quot; | &quot;).append(b.action)</span>
-<span class="fc" id="L776">                  .append(&quot; |\n&quot;);</span>
-<span class="fc" id="L777">            }</span>
-<span class="fc" id="L778">            md.append('\n');</span>
-        }
-
-        // Always show alignment summary table
-<span class="pc bpc" id="L782" title="1 of 2 branches missed.">        if (!checks.isEmpty()) {</span>
-<span class="nc" id="L783">            md.append(&quot;| Subproject | Version | Status |\n&quot;);</span>
-<span class="nc" id="L784">            md.append(&quot;|-----------|---------|--------|\n&quot;);</span>
-<span class="nc bnc" id="L785" title="All 2 branches missed.">            for (AlignCheck c : checks) {</span>
-<span class="nc" id="L786">                md.append(&quot;| &quot;).append(c.subproject)</span>
-<span class="nc" id="L787">                  .append(&quot; | &quot;).append(c.version)</span>
-<span class="nc bnc" id="L788" title="All 2 branches missed.">                  .append(&quot; | &quot;).append(c.aligned ? &quot;✓ aligned&quot; : &quot;✗ needs update&quot;)</span>
-<span class="nc" id="L789">                  .append(&quot; |\n&quot;);</span>
-<span class="nc" id="L790">            }</span>
-        }
-
-<span class="fc" id="L793">        return md.toString();</span>
-    }
-
-    /** A single version alignment change for the report. */
-<span class="nc" id="L797">    private record AlignChange(String subproject, String pomRelPath,</span>
-                                String artifact, String fromVersion,
-                                String toVersion) {}
-
-    /** A subproject alignment check result for the summary table. */
-<span class="nc" id="L802">    private record AlignCheck(String subproject, String version,</span>
-                               boolean aligned) {}
-
-    /**
-     * A single branch-alignment change. The {@code action} is either
-     * {@code &quot;yaml&quot;} (workspace.yaml branch field rewritten) or
-     * {@code &quot;checkout&quot;} (repo switched via {@code git checkout}).
-     */
-<span class="fc" id="L810">    private record BranchChange(String subproject, String fromBranch,</span>
-                                 String toBranch, String action) {}
-
-    // ── Artifact index ───────────────────────────────────────────────
-
-    /**
-     * Build an index from {@code groupId:artifactId} to (subproject name,
-     * current POM version) for all cloned workspace subprojects.
-     *
-     * &lt;p&gt;Uses {@link PublishedArtifactSet#scan} to discover every
-     * artifact each subproject publishes, so components sharing a
-     * groupId (e.g., {@code dev.ikm.ike}) are correctly distinguished
-     * by artifactId.
-     */
-    private Map&lt;String, ComponentVersion&gt; buildArtifactIndex(
-            WorkspaceGraph graph, File root) throws MojoException {
-<span class="nc" id="L826">        Map&lt;String, ComponentVersion&gt; index = new LinkedHashMap&lt;&gt;();</span>
-
-<span class="nc bnc" id="L828" title="All 2 branches missed.">        for (Map.Entry&lt;String, Subproject&gt; entry : graph.manifest().subprojects().entrySet()) {</span>
-<span class="nc" id="L829">            String name = entry.getKey();</span>
-<span class="nc" id="L830">            File subprojectDir = new File(root, name);</span>
-
-<span class="nc bnc" id="L832" title="All 2 branches missed.">            if (!new File(subprojectDir, &quot;pom.xml&quot;).exists()) {</span>
-<span class="nc" id="L833">                continue;</span>
-            }
-
-            String pomVersion;
-            try {
-<span class="nc" id="L838">                pomVersion = ReleaseSupport.readPomVersion(</span>
-                        new File(subprojectDir, &quot;pom.xml&quot;));
-<span class="nc" id="L840">            } catch (MojoException e) {</span>
-<span class="nc" id="L841">                getLog().warn(&quot;  &quot; + name + &quot;: could not read POM version — &quot;</span>
-<span class="nc" id="L842">                        + e.getMessage());</span>
-<span class="nc" id="L843">                continue;</span>
-<span class="nc" id="L844">            }</span>
-
-            Set&lt;PublishedArtifactSet.Artifact&gt; published;
-            try {
-<span class="nc" id="L848">                published = PublishedArtifactSet.scan(subprojectDir.toPath());</span>
-<span class="nc" id="L849">            } catch (IOException e) {</span>
-<span class="nc" id="L850">                getLog().warn(&quot;  &quot; + name + &quot;: could not scan published artifacts — &quot;</span>
-<span class="nc" id="L851">                        + e.getMessage());</span>
-<span class="nc" id="L852">                continue;</span>
-<span class="nc" id="L853">            }</span>
-
-<span class="nc" id="L855">            ComponentVersion cv = new ComponentVersion(name, pomVersion);</span>
-<span class="nc bnc" id="L856" title="All 2 branches missed.">            for (PublishedArtifactSet.Artifact artifact : published) {</span>
-<span class="nc" id="L857">                String key = artifact.groupId() + &quot;:&quot; + artifact.artifactId();</span>
-<span class="nc" id="L858">                index.put(key, cv);</span>
-<span class="nc" id="L859">            }</span>
-<span class="nc" id="L860">        }</span>
-
-<span class="nc" id="L862">        return index;</span>
-    }
-
-    // ── POM dependency alignment ────────────────────────────────────
-
-    /**
-     * Scan a single POM file for dependencies whose {@code groupId:artifactId}
-     * matches a workspace subproject's published artifact, and update
-     * mismatched versions.
-     *
-     * &lt;p&gt;Uses Maven 4's {@link PomModel} for reading dependency coordinates
-     * (no regex for extraction). Writes go through {@link PomRewriter},
-     * which uses OpenRewrite's XML Lossless Semantic Tree to preserve
-     * whitespace, comments, and quote style — never regex or sed-style
-     * substitution. See {@code feedback_no_sed_on_poms} for the discipline.
-     *
-     * @return number of changes made (or that would be made in draft)
-     */
-    private int alignPomDependencies(String ownerName, File pomFile,
-                                     Map&lt;String, ComponentVersion&gt; artifactIndex,
-                                     Map&lt;String, String&gt; versionPropertyMap,
-                                     File subprojectDir, WorkspaceGraph graph,
-                                     List&lt;AlignChange&gt; reportChanges)
-            throws MojoException {
-        PomModel pom;
-        try {
-<span class="nc" id="L888">            pom = PomModel.parse(pomFile.toPath());</span>
-<span class="nc" id="L889">        } catch (IOException e) {</span>
-<span class="nc" id="L890">            getLog().debug(&quot;  &quot; + ownerName + &quot;: skipping &quot;</span>
-<span class="nc" id="L891">                    + pomFile.getName() + &quot; (empty or unparseable)&quot;);</span>
-<span class="nc" id="L892">            return 0;</span>
-<span class="nc" id="L893">        }</span>
-
-<span class="nc" id="L895">        String updated = pom.content();</span>
-<span class="nc" id="L896">        int changes = 0;</span>
-
-        // Iterate all dependencies using the Maven 4 Model API
-<span class="nc bnc" id="L899" title="All 2 branches missed.">        for (org.apache.maven.api.model.Dependency dep : pom.allDependencies()) {</span>
-<span class="nc" id="L900">            String depGroupId = dep.getGroupId();</span>
-<span class="nc" id="L901">            String depArtifactId = dep.getArtifactId();</span>
-<span class="nc" id="L902">            String currentVersion = dep.getVersion();</span>
-
-<span class="nc bnc" id="L904" title="All 6 branches missed.">            if (depGroupId == null || depArtifactId == null</span>
-                    || currentVersion == null) {
-<span class="nc" id="L906">                continue;</span>
-            }
-
-<span class="nc" id="L909">            String key = depGroupId + &quot;:&quot; + depArtifactId;</span>
-<span class="nc" id="L910">            ComponentVersion target = artifactIndex.get(key);</span>
-
-            // Skip if not a workspace artifact or self-reference
-<span class="nc bnc" id="L913" title="All 4 branches missed.">            if (target == null || target.name.equals(ownerName)) {</span>
-<span class="nc" id="L914">                continue;</span>
-            }
-
-<span class="nc bnc" id="L917" title="All 4 branches missed.">            if (currentVersion.startsWith(&quot;${&quot;) &amp;&amp; currentVersion.endsWith(&quot;}&quot;)) {</span>
-                // Property-based version — resolve via model properties
-<span class="nc" id="L919">                String propName = currentVersion.substring(2,</span>
-<span class="nc" id="L920">                        currentVersion.length() - 1);</span>
-<span class="nc" id="L921">                String propValue = pom.properties().get(propName);</span>
-<span class="nc bnc" id="L922" title="All 4 branches missed.">                if (propValue != null &amp;&amp; !propValue.equals(target.version)) {</span>
-<span class="nc" id="L923">                    String relPath = subprojectDir.toPath().relativize(</span>
-<span class="nc" id="L924">                            pomFile.toPath()).toString();</span>
-<span class="nc" id="L925">                    getLog().info(&quot;  &quot; + ownerName + &quot; (&quot; + relPath</span>
-                            + &quot;): property &lt;&quot; + propName + &quot;&gt; &quot;
-                            + propValue + &quot; → &quot; + target.version);
-<span class="nc" id="L928">                    reportChanges.add(new AlignChange(</span>
-                            ownerName, relPath,
-                            &quot;property:&quot; + propName,
-                            propValue, target.version));
-<span class="nc" id="L932">                    updated = PomModel.updateProperty(</span>
-                            updated, propName, target.version);
-<span class="nc" id="L934">                    changes++;</span>
-                }
-<span class="nc bnc" id="L936" title="All 2 branches missed.">            } else if (!currentVersion.equals(target.version)) {</span>
-                // Direct version mismatch — rewrite via OpenRewrite LST
-<span class="nc" id="L938">                String relPath = subprojectDir.toPath().relativize(</span>
-<span class="nc" id="L939">                        pomFile.toPath()).toString();</span>
-<span class="nc" id="L940">                getLog().info(&quot;  &quot; + ownerName + &quot; (&quot; + relPath + &quot;): &quot;</span>
-                        + key + &quot; &quot; + currentVersion
-                        + &quot; → &quot; + target.version);
-<span class="nc" id="L943">                reportChanges.add(new AlignChange(</span>
-                        ownerName, relPath, key,
-                        currentVersion, target.version));
-<span class="nc" id="L946">                updated = PomModel.updateDependencyVersion(</span>
-                        updated, depGroupId, depArtifactId, target.version);
-<span class="nc" id="L948">                changes++;</span>
-            }
-<span class="nc" id="L950">        }</span>
-
-        // Handle version-property updates declared in depends-on.
-        // Look up the target subproject's version by name (via the
-        // artifact index), not by groupId — avoids the collision.
-<span class="nc bnc" id="L955" title="All 2 branches missed.">        for (Map.Entry&lt;String, String&gt; vpEntry : versionPropertyMap.entrySet()) {</span>
-<span class="nc" id="L956">            String targetComponent = vpEntry.getKey();</span>
-<span class="nc" id="L957">            String versionProperty = vpEntry.getValue();</span>
-
-<span class="nc" id="L959">            ComponentVersion cv = findComponentVersion(</span>
-<span class="nc" id="L960">                    targetComponent, artifactIndex, workspaceRoot());</span>
-<span class="nc bnc" id="L961" title="All 2 branches missed.">            if (cv == null) continue;</span>
-
-            // Read current property value from the model
-<span class="nc" id="L964">            String currentValue = pom.properties().get(versionProperty);</span>
-<span class="nc bnc" id="L965" title="All 4 branches missed.">            if (currentValue != null &amp;&amp; !currentValue.equals(cv.version)) {</span>
-<span class="nc" id="L966">                String relPath = subprojectDir.toPath().relativize(</span>
-<span class="nc" id="L967">                        pomFile.toPath()).toString();</span>
-<span class="nc" id="L968">                getLog().info(&quot;  &quot; + ownerName + &quot; (&quot; + relPath</span>
-                        + &quot;): property &lt;&quot; + versionProperty + &quot;&gt; &quot;
-                        + currentValue + &quot; → &quot; + cv.version);
-<span class="nc" id="L971">                reportChanges.add(new AlignChange(</span>
-                        ownerName, relPath,
-                        &quot;property:&quot; + versionProperty,
-                        currentValue, cv.version));
-<span class="nc" id="L975">                updated = PomModel.updateProperty(</span>
-                        updated, versionProperty, cv.version);
-<span class="nc" id="L977">                changes++;</span>
-            }
-<span class="nc" id="L979">        }</span>
-
-        // Write if changed
-<span class="nc bnc" id="L982" title="All 6 branches missed.">        if (changes &gt; 0 &amp;&amp; publish &amp;&amp; !updated.equals(pom.content())) {</span>
-            try {
-<span class="nc" id="L984">                Files.writeString(pomFile.toPath(), updated,</span>
-                        StandardCharsets.UTF_8);
-<span class="nc" id="L986">            } catch (IOException e) {</span>
-<span class="nc" id="L987">                throw new MojoException(</span>
-                        &quot;Failed to write &quot; + pomFile + &quot;: &quot;
-<span class="nc" id="L989">                        + e.getMessage(), e);</span>
-<span class="nc" id="L990">            }</span>
-        }
-
-<span class="nc" id="L993">        return changes;</span>
-    }
-
-    /**
-     * Scan a single POM file for plugins whose {@code groupId:artifactId}
-     * matches a workspace subproject's published artifact, and update
-     * mismatched literal versions.
-     *
-     * &lt;p&gt;Uses Maven 4's {@link PomModel} for reading plugin coordinates.
-     * Writes use {@link PomModel#updatePluginVersion} (OpenRewrite LST)
-     * to preserve formatting.
-     *
-     * &lt;p&gt;Property-based plugin versions (e.g., {@code ${ike-tooling.version}})
-     * are skipped here — property alignment is handled by the dependency
-     * alignment pass via {@code versionProperty} declarations.
-     *
-     * @return number of changes made (or that would be made in draft)
-     */
-    private int alignPomPlugins(String ownerName, File pomFile,
-                                Map&lt;String, ComponentVersion&gt; artifactIndex,
-                                File subprojectDir,
-                                List&lt;AlignChange&gt; reportChanges)
-            throws MojoException {
-        PomModel pom;
-        try {
-<span class="nc" id="L1018">            pom = PomModel.parse(pomFile.toPath());</span>
-<span class="nc" id="L1019">        } catch (IOException e) {</span>
-<span class="nc" id="L1020">            return 0;</span>
-<span class="nc" id="L1021">        }</span>
-
-<span class="nc" id="L1023">        String updated = pom.content();</span>
-<span class="nc" id="L1024">        int changes = 0;</span>
-
-<span class="nc bnc" id="L1026" title="All 2 branches missed.">        for (Plugin plugin : pom.allPlugins()) {</span>
-<span class="nc" id="L1027">            String pluginGroupId = plugin.getGroupId();</span>
-<span class="nc" id="L1028">            String pluginArtifactId = plugin.getArtifactId();</span>
-<span class="nc" id="L1029">            String currentVersion = plugin.getVersion();</span>
-
-<span class="nc bnc" id="L1031" title="All 6 branches missed.">            if (pluginGroupId == null || pluginArtifactId == null</span>
-                    || currentVersion == null) {
-<span class="nc" id="L1033">                continue;</span>
-            }
-
-            // Skip property-based versions — handled by dependency/property alignment
-<span class="nc bnc" id="L1037" title="All 2 branches missed.">            if (currentVersion.startsWith(&quot;${&quot;)) {</span>
-<span class="nc" id="L1038">                continue;</span>
-            }
-
-<span class="nc" id="L1041">            String key = pluginGroupId + &quot;:&quot; + pluginArtifactId;</span>
-<span class="nc" id="L1042">            ComponentVersion target = artifactIndex.get(key);</span>
-
-<span class="nc bnc" id="L1044" title="All 4 branches missed.">            if (target == null || target.name().equals(ownerName)) {</span>
-<span class="nc" id="L1045">                continue;</span>
-            }
-
-<span class="nc bnc" id="L1048" title="All 2 branches missed.">            if (!currentVersion.equals(target.version())) {</span>
-<span class="nc" id="L1049">                String relPath = subprojectDir.toPath().relativize(</span>
-<span class="nc" id="L1050">                        pomFile.toPath()).toString();</span>
-<span class="nc" id="L1051">                getLog().info(&quot;  &quot; + ownerName + &quot; (&quot; + relPath + &quot;): plugin &quot;</span>
-                        + key + &quot; &quot; + currentVersion
-<span class="nc" id="L1053">                        + &quot; → &quot; + target.version());</span>
-<span class="nc" id="L1054">                reportChanges.add(new AlignChange(</span>
-                        ownerName, relPath, &quot;plugin:&quot; + key,
-<span class="nc" id="L1056">                        currentVersion, target.version()));</span>
-<span class="nc" id="L1057">                updated = PomModel.updatePluginVersion(</span>
-                        updated, pluginGroupId, pluginArtifactId,
-<span class="nc" id="L1059">                        target.version());</span>
-<span class="nc" id="L1060">                changes++;</span>
-            }
-<span class="nc" id="L1062">        }</span>
-
-<span class="nc bnc" id="L1064" title="All 6 branches missed.">        if (changes &gt; 0 &amp;&amp; publish &amp;&amp; !updated.equals(pom.content())) {</span>
-            try {
-<span class="nc" id="L1066">                Files.writeString(pomFile.toPath(), updated,</span>
-                        StandardCharsets.UTF_8);
-<span class="nc" id="L1068">            } catch (IOException e) {</span>
-<span class="nc" id="L1069">                throw new MojoException(</span>
-                        &quot;Failed to write &quot; + pomFile + &quot;: &quot;
-<span class="nc" id="L1071">                        + e.getMessage(), e);</span>
-<span class="nc" id="L1072">            }</span>
-        }
-
-<span class="nc" id="L1075">        return changes;</span>
-    }
-
-    /**
-     * Find a subproject's version by scanning its published artifacts
-     * and looking them up in the artifact index. Matches by subproject
-     * name (not groupId), so it handles groupId collisions.
-     */
-    private ComponentVersion findComponentVersion(
-            String subprojectName,
-            Map&lt;String, ComponentVersion&gt; artifactIndex, File root) {
-<span class="nc" id="L1086">        File subprojectDir = new File(root, subprojectName);</span>
-<span class="nc bnc" id="L1087" title="All 2 branches missed.">        if (!new File(subprojectDir, &quot;pom.xml&quot;).exists()) {</span>
-<span class="nc" id="L1088">            return null;</span>
-        }
-        try {
-<span class="nc" id="L1091">            Set&lt;PublishedArtifactSet.Artifact&gt; published =</span>
-<span class="nc" id="L1092">                    PublishedArtifactSet.scan(subprojectDir.toPath());</span>
-<span class="nc bnc" id="L1093" title="All 2 branches missed.">            for (PublishedArtifactSet.Artifact artifact : published) {</span>
-<span class="nc" id="L1094">                String key = artifact.groupId() + &quot;:&quot; + artifact.artifactId();</span>
-<span class="nc" id="L1095">                ComponentVersion cv = artifactIndex.get(key);</span>
-<span class="nc bnc" id="L1096" title="All 4 branches missed.">                if (cv != null &amp;&amp; cv.name.equals(subprojectName)) {</span>
-<span class="nc" id="L1097">                    return cv;</span>
-                }
-<span class="nc" id="L1099">            }</span>
-<span class="nc" id="L1100">        } catch (IOException e) {</span>
-            // Fall through
-<span class="nc" id="L1102">        }</span>
-<span class="nc" id="L1103">        return null;</span>
-    }
-
-    // ── Internal record ─────────────────────────────────────────────
-
-    /**
-     * Associates a subproject name with its current POM version.
-     */
-<span class="nc" id="L1111">    private record ComponentVersion(String name, String version) {}</span>
+<span class="nc" id="L182">    }</span>
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

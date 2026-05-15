@@ -26,7 +26,12 @@ public final class ReconcilerRegistry {
     public static List<Reconciler> all() {
         return List.of(
                 new FieldNormalizationReconciler(),
-                new ParentVersionReconciler()
+                new ParentVersionReconciler(),
+                // Scaffold-convention upgrades run after parent bumps so
+                // that any parent-cascade-driven POM rewrites happen
+                // first, and the scaffold layer reconciles against the
+                // updated POMs.
+                new ScaffoldConventionReconciler()
                 // Future reconcilers added here in the order they
                 // should run (see #393 for the full migration plan).
         );

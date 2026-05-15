@@ -17,15 +17,16 @@ import java.util.Properties;
  *       {@code .gitattributes} {@code *.cmd text eol=crlf} rule)</li>
  * </ul>
  *
- * <p>Used by {@code ws:init} when scaffolding a new workspace, and by
- * {@code ws:scaffold-upgrade-*}'s {@code mvnw-standard} step when any of the three
- * files is missing from an existing workspace.
+ * <p>Used by {@code ws:init} when scaffolding a new workspace, and
+ * by {@code ScaffoldConventionReconciler}'s {@code mvnw-standard}
+ * step (run as part of {@code ws:scaffold-publish}) when any of the
+ * three files is missing from an existing workspace.
  *
  * <p>All methods are <b>file-level idempotent</b>: they unconditionally
  * write the file at the given path. Callers are responsible for the
  * "install only if missing" check — see {@link #writeMissingFiles}.
  */
-final class MavenWrapper {
+public final class MavenWrapper {
 
     private MavenWrapper() {}
 
@@ -41,7 +42,7 @@ final class MavenWrapper {
      * @return the number of files created (0 when all three already exist)
      * @throws IOException if writing any of the files fails
      */
-    static int writeMissingFiles(Path wsDir, String mavenVersion) throws IOException {
+    public static int writeMissingFiles(Path wsDir, String mavenVersion) throws IOException {
         int written = 0;
 
         Path propsFile = wsDir.resolve(".mvn").resolve("wrapper").resolve("maven-wrapper.properties");
@@ -78,7 +79,7 @@ final class MavenWrapper {
      * @return the pinned Maven version, or null when not pinned
      * @throws IOException if the properties file exists but cannot be read
      */
-    static String readPinnedVersion(Path wsDir) throws IOException {
+    public static String readPinnedVersion(Path wsDir) throws IOException {
         Path propsFile = wsDir.resolve(".mvn").resolve("wrapper").resolve("maven-wrapper.properties");
         if (!Files.exists(propsFile)) {
             return null;

@@ -106,7 +106,7 @@ public final class WorkspaceReport {
      *
      * @param workspaceRoot the workspace root directory
      * @param goalName      the goal name whose report file to delete
-     *                      (e.g., {@code "ws:scaffold-upgrade-draft"})
+     *                      (e.g., {@code "ws:scaffold-draft"})
      * @param log           Maven logger; may be null
      */
     public static void deleteReport(Path workspaceRoot, String goalName, Log log) {

@@ -66,7 +66,7 @@ class WsGoalExhaustivenessTest {
      * {@code network.ike.pipeline:ike-parent}, this causes {@code ws:}
      * to bind to the OLD {@code network.ike.pipeline:ike-workspace-maven-plugin}
      * on subprojects — which then fails to resolve any goal renamed
-     * in the new plugin (e.g. {@code scaffold-upgrade-publish}).
+     * in the new plugin (e.g. {@code scaffold-publish}).
      *
      * <p>Marking every ws mojo as aggregator pins execution to the
      * reactor root, where {@code ws:} resolves to this plugin.

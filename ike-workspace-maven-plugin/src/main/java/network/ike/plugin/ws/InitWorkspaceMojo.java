@@ -567,11 +567,9 @@ public class InitWorkspaceMojo extends AbstractWorkspaceMojo {
                 | `ws:create` | Create a new workspace (scaffold + git init) |
                 | `ws:add` | Add a subproject repo (prompts for URL) |
                 | `ws:init` | Clone/initialize all subprojects |
-                | `ws:scaffold-publish` | Reconcile workspace state (versions, groupIds, etc.) from POM truth |
+                | `ws:scaffold-publish` | Reconcile workspace state (versions, groupIds, scaffold conventions) — subsumes the retired scaffold-upgrade goals |
                 | `ws:graph` | Print dependency graph (text or DOT format) |
                 | `ws:stignore` | Generate Syncthing ignore rules |
-                | `ws:scaffold-upgrade-draft` | Preview workspace scaffold upgrades |
-                | `ws:scaffold-upgrade-publish` | Apply scaffold upgrades |
                 | `ws:remove` | Remove a subproject (prompts for name) |
                 | `ws:help` | List all ws: goals with descriptions |
 
@@ -743,8 +741,7 @@ public class InitWorkspaceMojo extends AbstractWorkspaceMojo {
                 | `ws:scaffold-draft` | Check manifest, BOM cascade, VCS state (folds verify per #393) |
                 | `ws:verify-convergence` | Transitive dependency convergence (slow) |
                 | `ws:overview` | Dashboard: manifest, graph, status, cascade |
-                | `ws:scaffold-publish` | Apply workspace-level reconciliation (denormalized YAML field sync, etc.) |
-                | `ws:scaffold-upgrade-draft` / `-publish` | Scaffold upgrades for new plugin version |
+                | `ws:scaffold-publish` | Apply workspace-level reconciliation (denormalized YAML field sync, scaffold conventions, etc.) |
                 | `ws:pull` | Git pull --rebase across components |
 
                 ---

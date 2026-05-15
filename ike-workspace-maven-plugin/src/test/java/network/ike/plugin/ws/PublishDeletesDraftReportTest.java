@@ -30,11 +30,11 @@ class PublishDeletesDraftReportTest {
 
     @Test
     void deleteReport_removes_existing_file() throws Exception {
-        Path reportFile = tempDir.resolve("ws꞉scaffold-upgrade-draft.md");
+        Path reportFile = tempDir.resolve("ws꞉scaffold-draft.md");
         Files.writeString(reportFile, "# stale\n", StandardCharsets.UTF_8);
 
         WorkspaceReport.deleteReport(
-                tempDir, "ws:scaffold-upgrade-draft", log);
+                tempDir, "ws:scaffold-draft", log);
 
         assertThat(Files.exists(reportFile)).isFalse();
     }
@@ -43,20 +43,20 @@ class PublishDeletesDraftReportTest {
     void deleteReport_is_noop_when_file_absent() {
         // Just must not throw.
         WorkspaceReport.deleteReport(
-                tempDir, "ws:scaffold-upgrade-draft", log);
+                tempDir, "ws:scaffold-draft", log);
 
         assertThat(Files.exists(
-                tempDir.resolve("ws꞉scaffold-upgrade-draft.md")))
+                tempDir.resolve("ws꞉scaffold-draft.md")))
                 .isFalse();
     }
 
     @Test
     void publish_write_removes_companion_draft() throws Exception {
         // Write a stale draft report by hand to simulate a previous
-        // ws:scaffold-upgrade-draft run.
-        Path draftFile = tempDir.resolve("ws꞉scaffold-upgrade-draft.md");
+        // ws:scaffold-draft run.
+        Path draftFile = tempDir.resolve("ws꞉scaffold-draft.md");
         Files.writeString(draftFile, """
-                # ws:scaffold-upgrade-draft
+                # ws:scaffold-draft
                 _2026-05-06 13:43:44 · ike-workspace-maven-plugin 15_
 
                 **0** upgrade(s) applied, **9** already current.
@@ -64,16 +64,16 @@ class PublishDeletesDraftReportTest {
 
         // Publish completes, writes its report, and (per #300) cleans
         // up the now-stale draft.
-        WorkspaceReport.write(tempDir, "ws:scaffold-upgrade-publish",
+        WorkspaceReport.write(tempDir, "ws:scaffold-publish",
                 "applied 9", log);
         WorkspaceReport.deleteReport(
-                tempDir, "ws:scaffold-upgrade-draft", log);
+                tempDir, "ws:scaffold-draft", log);
 
         assertThat(Files.exists(draftFile))
                 .as("stale draft report should be removed by publish")
                 .isFalse();
         assertThat(Files.exists(
-                tempDir.resolve("ws꞉scaffold-upgrade-publish.md")))
+                tempDir.resolve("ws꞉scaffold-publish.md")))
                 .as("publish report should remain")
                 .isTrue();
     }
@@ -83,11 +83,11 @@ class PublishDeletesDraftReportTest {
         // Write a publish report (e.g., from the most recent successful
         // run). A subsequent draft run (preview of next planned upgrade)
         // must NOT delete the publish record.
-        Path publishFile = tempDir.resolve("ws꞉scaffold-upgrade-publish.md");
-        Files.writeString(publishFile, "# ws:scaffold-upgrade-publish\n",
+        Path publishFile = tempDir.resolve("ws꞉scaffold-publish.md");
+        Files.writeString(publishFile, "# ws:scaffold-publish\n",
                 StandardCharsets.UTF_8);
 
-        WorkspaceReport.write(tempDir, "ws:scaffold-upgrade-draft",
+        WorkspaceReport.write(tempDir, "ws:scaffold-draft",
                 "would apply 5", log);
         // Note: AbstractWorkspaceMojo only triggers deleteReport for
         // publish goals, so a draft write doesn't touch the publish

@@ -38,7 +38,7 @@ The workspace repo contains `pom.xml`, `workspace.yaml`, and file-activated prof
 Clone all components declared in `workspace.yaml`:
 
 ```
-mvn ws:init
+mvn ws:scaffold-init
 ```
 
 This clones every component into a subdirectory matching its `name` field in the manifest. Each clone lands on the branch declared in `workspace.yaml` (default: `main`).
@@ -46,7 +46,7 @@ This clones every component into a subdirectory matching its `name` field in the
 For a smaller initial checkout, use a group:
 
 ```
-mvn ws:init -Dgroup=core
+mvn ws:scaffold-init -Dgroup=core
 ```
 
 This clones only `ike-platform` and `tinkar-core` — enough to build the foundation and start working.
@@ -169,7 +169,7 @@ cd ike-workspace
 mvn ws:pull
 ```
 
-This syncs Git history for all components. `ws:init` is Syncthing-aware: if a directory already exists (synced files, but no `.git`), it runs `git init` + `git reset` instead of `git clone`.
+This syncs Git history for all components. `ws:scaffold-init` is Syncthing-aware: if a directory already exists (synced files, but no `.git`), it runs `git init` + `git reset` instead of `git clone`.
 
 ## [#troubleshooting](#troubleshooting)Troubleshooting
 
@@ -189,9 +189,9 @@ mvn ws:feature-finish-squash-publish -Dfeature=my-feature
 
 The goal detects already-merged components and skips them.
 
-### [#ws-init-on-a-syncthing-directory](#ws-init-on-a-syncthing-directory)`ws:init` on a Syncthing directory
+### [#ws-scaffold-init-on-a-syncthing-directory](#ws-scaffold-init-on-a-syncthing-directory)`ws:scaffold-init` on a Syncthing directory
 
-Handled automatically. When a component directory already exists but has no `.git` directory, `ws:init` runs `git init` followed by `git reset` to the manifest branch instead of cloning.
+Handled automatically. When a component directory already exists but has no `.git` directory, `ws:scaffold-init` runs `git init` followed by `git reset` to the manifest branch instead of cloning.
 
 ### [#plugin-not-found-ike-goals-fail](#plugin-not-found-ike-goals-fail)Plugin not found: `ike:*` goals fail
 
@@ -218,14 +218,14 @@ mvn ike:scaffold-publish   # apply (post-#348)
 
 The scaffold zip embeds the foundation versions ike-tooling captured at its release moment — parent, `ike-tooling.version`, `ike-docs.version`, `ike-platform.version` — so a single command bumps everything together.
 
-For specific-version overrides (testing against an older `ike-parent`, partial-cycle rollback), the legacy parent-only cascade is still available:
+For specific-version overrides (testing against an older `ike-parent`, partial-cycle rollback), pin the parent version explicitly on `ws:scaffold-publish`:
 
 ```
-mvn ws:set-parent-draft -DnewVersion=22    # preview parent bump only
-mvn ws:set-parent-publish -DnewVersion=22  # apply parent bump only
+mvn ws:scaffold-draft -DparentVersion=22    # preview cascade pinned to parent 22
+mvn ws:scaffold-publish -DparentVersion=22  # apply cascade pinned to parent 22
 ```
 
-`ws:set-parent` touches only the `<parent>` reference. Standard properties still need a separate `ws:versions-upgrade-publish` (or the post-`#348` `ike:scaffold-publish` collapses both into one command).
+`ws:scaffold-publish` reconciles the `<parent>` reference together with the standard properties in one converged cascade — no separate `ws:versions-upgrade-publish` step. Omit `-DparentVersion` to take the default cascade (the versions ike-tooling captured at its release moment).
 
 ### [#build-warnings-about-bom-imports](#build-warnings-about-bom-imports)Build warnings about BOM imports
 

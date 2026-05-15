@@ -1,0 +1,206 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>MavenWrapper.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">MavenWrapper.java</span></div><h1>MavenWrapper.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Properties;
+
+/**
+ * Shared generator for the three Maven Wrapper files that every workspace
+ * needs at the root:
+ *
+ * &lt;ul&gt;
+ *   &lt;li&gt;{@code .mvn/wrapper/maven-wrapper.properties}&lt;/li&gt;
+ *   &lt;li&gt;{@code mvnw} (POSIX launcher — must be LF; executable bit set)&lt;/li&gt;
+ *   &lt;li&gt;{@code mvnw.cmd} (Windows launcher — must be CRLF on Windows; see
+ *       {@code .gitattributes} {@code *.cmd text eol=crlf} rule)&lt;/li&gt;
+ * &lt;/ul&gt;
+ *
+ * &lt;p&gt;Used by {@code ws:scaffold-init} when scaffolding a new workspace,
+ * and by {@code ScaffoldConventionReconciler}'s {@code mvnw-standard}
+ * step (run as part of {@code ws:scaffold-publish}) when any of the
+ * three files is missing from an existing workspace.
+ *
+ * &lt;p&gt;All methods are &lt;b&gt;file-level idempotent&lt;/b&gt;: they unconditionally
+ * write the file at the given path. Callers are responsible for the
+ * &quot;install only if missing&quot; check — see {@link #writeMissingFiles}.
+ */
+public final class MavenWrapper {
+
+    private MavenWrapper() {}
+
+    /**
+     * Install any of the three wrapper files that are missing from the
+     * given workspace directory. Never overwrites an existing file — the
+     * user may have pinned a specific {@code maven.version} in
+     * {@code maven-wrapper.properties} or customized the launcher scripts.
+     *
+     * @param wsDir        workspace root
+     * @param mavenVersion Maven version to write into
+     *                     {@code maven-wrapper.properties} when creating it
+     * @return the number of files created (0 when all three already exist)
+     * @throws IOException if writing any of the files fails
+     */
+    public static int writeMissingFiles(Path wsDir, String mavenVersion) throws IOException {
+<span class="fc" id="L46">        int written = 0;</span>
+
+<span class="fc" id="L48">        Path propsFile = wsDir.resolve(&quot;.mvn&quot;).resolve(&quot;wrapper&quot;).resolve(&quot;maven-wrapper.properties&quot;);</span>
+<span class="fc bfc" id="L49" title="All 2 branches covered.">        if (!Files.exists(propsFile)) {</span>
+<span class="fc" id="L50">            writePropertiesFile(propsFile, mavenVersion);</span>
+<span class="fc" id="L51">            written++;</span>
+        }
+
+<span class="fc" id="L54">        Path mvnw = wsDir.resolve(&quot;mvnw&quot;);</span>
+<span class="fc bfc" id="L55" title="All 2 branches covered.">        if (!Files.exists(mvnw)) {</span>
+<span class="fc" id="L56">            writeMvnwScript(mvnw);</span>
+<span class="fc" id="L57">            written++;</span>
+        }
+
+<span class="fc" id="L60">        Path mvnwCmd = wsDir.resolve(&quot;mvnw.cmd&quot;);</span>
+<span class="fc bfc" id="L61" title="All 2 branches covered.">        if (!Files.exists(mvnwCmd)) {</span>
+<span class="fc" id="L62">            writeMvnwCmdScript(mvnwCmd);</span>
+<span class="fc" id="L63">            written++;</span>
+        }
+
+<span class="fc" id="L66">        return written;</span>
+    }
+
+    /**
+     * Read {@code maven.version} from an existing
+     * {@code .mvn/wrapper/maven-wrapper.properties}, or return null if the
+     * file does not exist or the property is missing.
+     *
+     * &lt;p&gt;Used by the {@code mvnw-standard} upgrade step to preserve a
+     * user's pinned Maven version when regenerating a missing launcher
+     * script next to an existing properties file.
+     *
+     * @param wsDir workspace root
+     * @return the pinned Maven version, or null when not pinned
+     * @throws IOException if the properties file exists but cannot be read
+     */
+    public static String readPinnedVersion(Path wsDir) throws IOException {
+<span class="fc" id="L83">        Path propsFile = wsDir.resolve(&quot;.mvn&quot;).resolve(&quot;wrapper&quot;).resolve(&quot;maven-wrapper.properties&quot;);</span>
+<span class="fc bfc" id="L84" title="All 2 branches covered.">        if (!Files.exists(propsFile)) {</span>
+<span class="fc" id="L85">            return null;</span>
+        }
+<span class="fc" id="L87">        Properties props = new Properties();</span>
+<span class="fc" id="L88">        try (var reader = Files.newBufferedReader(propsFile, StandardCharsets.UTF_8)) {</span>
+<span class="fc" id="L89">            props.load(reader);</span>
+        }
+<span class="fc" id="L91">        return props.getProperty(&quot;maven.version&quot;);</span>
+    }
+
+    /**
+     * Write {@code maven-wrapper.properties} with the canonical distribution
+     * URL for the given version. Creates the parent directory as needed.
+     *
+     * @param propsFile    target path (typically
+     *                     {@code .mvn/wrapper/maven-wrapper.properties})
+     * @param mavenVersion Maven version (e.g. {@code 4.0.0-rc-5})
+     * @throws IOException if writing fails
+     */
+    public static void writePropertiesFile(Path propsFile, String mavenVersion) throws IOException {
+<span class="fc" id="L104">        Files.createDirectories(propsFile.getParent());</span>
+<span class="fc" id="L105">        String props = &quot;# Maven Wrapper properties — managed by ws:scaffold-init from workspace.yaml\n&quot;</span>
+                + &quot;maven.version=&quot; + mavenVersion + &quot;\n&quot;
+                + &quot;distributionUrl=https://repo.maven.apache.org/maven2/org/apache/maven/&quot;
+                + &quot;apache-maven/&quot; + mavenVersion + &quot;/apache-maven-&quot; + mavenVersion
+                + &quot;-bin.zip\n&quot;;
+<span class="fc" id="L110">        Files.writeString(propsFile, props, StandardCharsets.UTF_8);</span>
+<span class="fc" id="L111">    }</span>
+
+    /**
+     * Write the POSIX {@code mvnw} launcher script and mark it executable.
+     * The script reads {@code maven.version} and {@code distributionUrl}
+     * from {@code .mvn/wrapper/maven-wrapper.properties} at runtime and
+     * downloads Maven on first use.
+     *
+     * @param mvnw target path (typically {@code mvnw} at workspace root)
+     * @throws IOException if writing fails
+     */
+    public static void writeMvnwScript(Path mvnw) throws IOException {
+<span class="fc" id="L123">        String script = &quot;&quot;&quot;</span>
+                #!/bin/sh
+                # Maven Wrapper launcher — installed by ws:scaffold-init
+                # Downloads and caches the Maven version specified in
+                # .mvn/wrapper/maven-wrapper.properties
+                #
+                # This is a minimal bootstrap. For the full-featured wrapper script,
+                # run: mvn wrapper:wrapper
+
+                set -e
+
+                PROPS_FILE=&quot;$(dirname &quot;$0&quot;)/.mvn/wrapper/maven-wrapper.properties&quot;
+                if [ ! -f &quot;$PROPS_FILE&quot; ]; then
+                    echo &quot;Error: $PROPS_FILE not found&quot; &gt;&amp;2
+                    exit 1
+                fi
+
+                DIST_URL=$(grep '^distributionUrl=' &quot;$PROPS_FILE&quot; | cut -d'=' -f2-)
+                MAVEN_VERSION=$(grep '^maven.version=' &quot;$PROPS_FILE&quot; | cut -d'=' -f2-)
+
+                WRAPPER_HOME=&quot;${HOME}/.m2/wrapper/dists/apache-maven-${MAVEN_VERSION}&quot;
+                MAVEN_HOME=&quot;${WRAPPER_HOME}/apache-maven-${MAVEN_VERSION}&quot;
+
+                if [ ! -d &quot;$MAVEN_HOME&quot; ]; then
+                    echo &quot;Downloading Maven ${MAVEN_VERSION}...&quot;
+                    mkdir -p &quot;$WRAPPER_HOME&quot;
+                    ZIP_FILE=&quot;${WRAPPER_HOME}/apache-maven-${MAVEN_VERSION}-bin.zip&quot;
+                    curl -fsSL -o &quot;$ZIP_FILE&quot; &quot;$DIST_URL&quot;
+                    unzip -qo &quot;$ZIP_FILE&quot; -d &quot;$WRAPPER_HOME&quot;
+                    rm -f &quot;$ZIP_FILE&quot;
+                    echo &quot;Maven ${MAVEN_VERSION} installed to ${MAVEN_HOME}&quot;
+                fi
+
+                exec &quot;$MAVEN_HOME/bin/mvn&quot; &quot;$@&quot;
+                &quot;&quot;&quot;;
+<span class="fc" id="L158">        Files.writeString(mvnw, script, StandardCharsets.UTF_8);</span>
+<span class="fc" id="L159">        mvnw.toFile().setExecutable(true);</span>
+<span class="fc" id="L160">    }</span>
+
+    /**
+     * Write the Windows {@code mvnw.cmd} launcher script. The workspace
+     * {@code .gitattributes} {@code *.cmd text eol=crlf} rule is what keeps
+     * this file usable on Windows after checkout — without it, cmd.exe
+     * chokes on LF line endings (IKE-Network/ike-issues#189).
+     *
+     * @param mvnwCmd target path (typically {@code mvnw.cmd} at workspace root)
+     * @throws IOException if writing fails
+     */
+    public static void writeMvnwCmdScript(Path mvnwCmd) throws IOException {
+<span class="fc" id="L172">        String script = &quot;&quot;&quot;</span>
+                @REM Maven Wrapper launcher — installed by ws:scaffold-init
+                @REM Downloads and caches the Maven version specified in
+                @REM .mvn/wrapper/maven-wrapper.properties
+                @echo off
+                setlocal
+
+                set &quot;PROPS_FILE=%~dp0.mvn\\wrapper\\maven-wrapper.properties&quot;
+                if not exist &quot;%PROPS_FILE%&quot; (
+                    echo Error: %PROPS_FILE% not found &gt;&amp;2
+                    exit /b 1
+                )
+
+                for /f &quot;tokens=1,* delims==&quot; %%a in ('findstr &quot;^maven.version=&quot; &quot;%PROPS_FILE%&quot;') do set &quot;MAVEN_VERSION=%%b&quot;
+                for /f &quot;tokens=1,* delims==&quot; %%a in ('findstr &quot;^distributionUrl=&quot; &quot;%PROPS_FILE%&quot;') do set &quot;DIST_URL=%%b&quot;
+
+                set &quot;WRAPPER_HOME=%USERPROFILE%\\.m2\\wrapper\\dists\\apache-maven-%MAVEN_VERSION%&quot;
+                set &quot;MAVEN_HOME=%WRAPPER_HOME%\\apache-maven-%MAVEN_VERSION%&quot;
+
+                if not exist &quot;%MAVEN_HOME%&quot; (
+                    echo Downloading Maven %MAVEN_VERSION%...
+                    mkdir &quot;%WRAPPER_HOME%&quot; 2&gt;nul
+                    set &quot;ZIP_FILE=%WRAPPER_HOME%\\apache-maven-%MAVEN_VERSION%-bin.zip&quot;
+                    powershell -Command &quot;Invoke-WebRequest -Uri '%DIST_URL%' -OutFile '%ZIP_FILE%'&quot;
+                    powershell -Command &quot;Expand-Archive -Path '%ZIP_FILE%' -DestinationPath '%WRAPPER_HOME%' -Force&quot;
+                    del &quot;%ZIP_FILE%&quot;
+                    echo Maven %MAVEN_VERSION% installed to %MAVEN_HOME%
+                )
+
+                &quot;%MAVEN_HOME%\\bin\\mvn.cmd&quot; %*
+                &quot;&quot;&quot;;
+<span class="fc" id="L203">        Files.writeString(mvnwCmd, script, StandardCharsets.UTF_8);</span>
+<span class="fc" id="L204">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

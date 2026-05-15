@@ -40,12 +40,12 @@ import java.time.LocalDate;
  * <p>After creation, use {@code ws:add} to add subproject repos,
  * then {@code ws:init} to clone them.
  *
- * <p>Required: {@code -Dgroup=<groupId>}. The pre-#183 placeholder
- * coordinates ({@code local.aggregate:<name>:1.0.0-SNAPSHOT}) are no
- * longer supported — every new workspace ships with real coordinates
- * so {@code ws:release-publish}, {@code ws:align-publish}, and site
- * deploy can address it. Existing workspaces stuck on the placeholder migrate
- * via {@code ws:adopt-root} (#184).
+ * <p>Required: {@code -Dgroup=<groupId>}. Every new workspace ships
+ * with real Maven coordinates so {@code ws:release-publish},
+ * {@code ws:align-publish}, and site deploy can address it. The
+ * pre-#183 placeholder coordinates ({@code local.aggregate:<name>:1.0.0-SNAPSHOT})
+ * are no longer supported and no longer present on any known
+ * workspace — the migration goal that handled them has been removed.
  *
  * <pre>{@code
  * mvn ws:create -Dname=my-workspace -Dgroup=network.ike.workspace
@@ -152,8 +152,9 @@ public class WsCreateMojo implements Mojo {
         }
 
         // -Dgroup is required for real coordinates (ike-issues#183).
-        // The placeholder local.aggregate:<name>:1.0.0-SNAPSHOT path is
-        // gone; existing workspaces stuck on it migrate via ws:adopt-root.
+        // The placeholder local.aggregate:<name>:1.0.0-SNAPSHOT path
+        // is gone — no known workspace still uses it, and the migration
+        // goal that handled the transition has been removed.
         if (group == null || group.isBlank()) {
             throw new MojoException(
                     "ws:create requires -Dgroup=<groupId> (e.g. "

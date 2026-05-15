@@ -1,0 +1,184 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>WsAlignDraftMojo.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">WsAlignDraftMojo.java</span></div><h1>WsAlignDraftMojo.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.plugin.ws.preflight.Preflight;
+import network.ike.plugin.ws.preflight.PreflightCondition;
+import network.ike.plugin.ws.preflight.PreflightContext;
+import network.ike.plugin.ws.preflight.PreflightResult;
+import network.ike.plugin.ws.reconcile.AlignmentReconciler;
+import network.ike.plugin.ws.reconcile.DriftReport;
+import network.ike.plugin.ws.reconcile.ReconcilerOptions;
+import network.ike.plugin.ws.reconcile.WorkspaceContext;
+import network.ike.workspace.ManifestReader;
+import network.ike.workspace.WorkspaceGraph;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
+
+import java.io.File;
+import java.nio.file.Path;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Preview inter-subproject dependency, plugin, and parent version
+ * alignment across every cloned subproject.
+ *
+ * &lt;p&gt;This is the {@code ws:align-draft} goal — a thin wrapper over
+ * {@link AlignmentReconciler}. The same reconciler is iterated from
+ * {@code ws:scaffold-{draft,publish}} (#393); this standalone goal
+ * exists for the &quot;I detected misalignment, run only that&quot; use case
+ * where iterating the full convergence pass would be needlessly
+ * broad.
+ *
+ * &lt;p&gt;This goal also serves as the designated entry point for the
+ * legacy schema migration ({@code components:} → {@code subprojects:},
+ * #150): it calls
+ * {@link ManifestReader#migrateLegacySchemaIfNeeded} before reading
+ * the graph so old manifests are rewritten in place.
+ *
+ * &lt;p&gt;Branch reconciliation (the rare &quot;manifest ↔ git state&quot; recovery
+ * operation that used to share this goal as
+ * {@code -Dscope=branches}) moved to
+ * {@link WsReconcileBranchesDraftMojo} ({@code ws:reconcile-branches-draft})
+ * per the ike-issues#200 split. The {@code scope} parameter on this
+ * goal is retained only to emit a clear migration error for users
+ * with muscle memory.
+ *
+ * &lt;pre&gt;{@code
+ * mvn ws:align-draft     # preview POM version updates
+ * mvn ws:align-publish   # apply
+ * }&lt;/pre&gt;
+ *
+ * @see AlignmentReconciler
+ * @see WsReconcileBranchesDraftMojo
+ */
+@Mojo(name = &quot;align-draft&quot;, projectRequired = false, aggregator = true)
+public class WsAlignDraftMojo extends AbstractWorkspaceMojo {
+
+    /**
+     * When true, apply changes; when false (default), preview only.
+     * Package-private so {@link WsAlignPublishMojo} can flip it.
+     */
+    @Parameter(property = &quot;publish&quot;, defaultValue = &quot;false&quot;)
+    boolean publish;
+
+    /**
+     * Migration aid for the ike-issues#200 two-axis split. The only
+     * accepted value is {@code poms} (the new default). Passing
+     * {@code branches} or {@code all} throws with a pointer to
+     * {@code ws:reconcile-branches-{draft,publish}}, so users with
+     * muscle memory get a clear error rather than silent breakage.
+     */
+    @Parameter(property = &quot;scope&quot;, defaultValue = &quot;poms&quot;)
+    String scope;
+
+    /** Creates this goal instance. */
+<span class="fc" id="L77">    public WsAlignDraftMojo() {}</span>
+
+    @Override
+    public void execute() throws MojoException {
+<span class="fc bfc" id="L81" title="All 2 branches covered.">        boolean draft = !publish;</span>
+
+        // Migration gate (ike-issues#200): the align goals are POM-only.
+        // Branch reconciliation moved to ws:reconcile-branches-{draft,publish}.
+<span class="pc bpc" id="L85" title="1 of 4 branches missed.">        if (&quot;branches&quot;.equals(scope) || &quot;all&quot;.equals(scope)) {</span>
+<span class="fc bfc" id="L86" title="All 2 branches covered.">            String invokedGoal = &quot;ws:align-&quot; + (publish ? &quot;publish&quot; : &quot;draft&quot;);</span>
+<span class="fc" id="L87">            throw new MojoException(</span>
+                    invokedGoal + &quot; no longer supports -Dscope=&quot; + scope
+                            + &quot; (ike-issues#200). Branch reconciliation moved to:\n&quot;
+                            + &quot;  mvn ws:reconcile-branches-&quot;
+<span class="fc bfc" id="L91" title="All 2 branches covered.">                            + (publish ? &quot;publish&quot; : &quot;draft&quot;)</span>
+                            + &quot;\n  &quot; + invokedGoal
+                            + &quot; is now POM-only — drop -Dscope=.&quot;);
+        }
+<span class="nc bnc" id="L95" title="All 2 branches missed.">        if (!&quot;poms&quot;.equals(scope)) {</span>
+<span class="nc" id="L96">            throw new MojoException(</span>
+                    &quot;Invalid scope '&quot; + scope + &quot;' — expected poms&quot;);
+        }
+
+        // #150 migration: ws:align-publish (and the draft variant) is the
+        // designated entry point that rewrites legacy schemas in place.
+        // Every other reader hits the hard-cut in ManifestReader.read, so
+        // users on an old workspace see a message pointing them at
+        // ws:align-publish first. Do this BEFORE loadGraph() so graph
+        // construction sees the migrated content.
+<span class="nc" id="L106">        Path manifestPath = resolveManifest();</span>
+<span class="nc" id="L107">        ManifestReader.migrateLegacySchemaIfNeeded(</span>
+<span class="nc" id="L108">                manifestPath, msg -&gt; getLog().info(&quot;  &quot; + msg));</span>
+
+<span class="nc" id="L110">        WorkspaceGraph graph = loadGraph();</span>
+<span class="nc" id="L111">        File root = workspaceRoot();</span>
+
+<span class="nc" id="L113">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L114">        getLog().info(&quot;IKE Workspace Align — reconcile inter-subproject versions&quot;);</span>
+<span class="nc" id="L115">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+<span class="nc bnc" id="L116" title="All 2 branches missed.">        if (draft) {</span>
+<span class="nc" id="L117">            getLog().info(&quot;  (draft — no files will be modified)&quot;);</span>
+        }
+<span class="nc" id="L119">        getLog().info(&quot;&quot;);</span>
+
+        // POM alignment requires clean working trees (#132) so the
+        // rewrite commit doesn't bundle unrelated edits.
+<span class="nc" id="L123">        List&lt;String&gt; sorted = graph.topologicalSort();</span>
+<span class="nc" id="L124">        PreflightResult preflight = Preflight.of(</span>
+<span class="nc" id="L125">                List.of(PreflightCondition.WORKING_TREE_CLEAN),</span>
+<span class="nc" id="L126">                PreflightContext.of(root, graph, sorted));</span>
+<span class="nc bnc" id="L127" title="All 2 branches missed.">        if (draft) {</span>
+<span class="nc" id="L128">            preflight.warnIfFailed(getLog(), WsGoal.ALIGN_PUBLISH);</span>
+        } else {
+<span class="nc" id="L130">            preflight.requirePassed(WsGoal.ALIGN_PUBLISH);</span>
+        }
+
+<span class="nc" id="L133">        WorkspaceContext ctx = new WorkspaceContext(</span>
+                root, manifestPath, graph,
+<span class="nc" id="L135">                readReconcilerOptions(), getLog());</span>
+<span class="nc" id="L136">        AlignmentReconciler reconciler = new AlignmentReconciler();</span>
+
+<span class="nc bnc" id="L138" title="All 2 branches missed.">        if (draft) {</span>
+<span class="nc" id="L139">            printDriftReport(reconciler.detect(ctx));</span>
+        } else {
+<span class="nc" id="L141">            reconciler.apply(ctx);</span>
+        }
+<span class="nc" id="L143">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L144">    }</span>
+
+    /**
+     * Collect Maven system properties into a {@link ReconcilerOptions}
+     * bag so the reconciler can query its opt-out flag
+     * ({@code -DupdateAlignment=false}).
+     */
+    private static ReconcilerOptions readReconcilerOptions() {
+<span class="nc" id="L152">        Map&lt;String, String&gt; flags = new HashMap&lt;&gt;();</span>
+<span class="nc bnc" id="L153" title="All 2 branches missed.">        for (String name : System.getProperties().stringPropertyNames()) {</span>
+<span class="nc" id="L154">            flags.put(name, System.getProperty(name));</span>
+<span class="nc" id="L155">        }</span>
+<span class="nc" id="L156">        return new ReconcilerOptions(flags);</span>
+    }
+
+    /**
+     * Render a {@link DriftReport} for {@code ws:align-draft} output
+     * with the copy-paste opt-out command inline. Mirrors the format
+     * used by {@code ws:scaffold-draft}'s reconciler loop.
+     */
+    private void printDriftReport(DriftReport report) {
+<span class="nc bnc" id="L165" title="All 2 branches missed.">        if (!report.hasDrift()) {</span>
+<span class="nc" id="L166">            getLog().info(&quot;  ✓ &quot; + report.dimension());</span>
+<span class="nc" id="L167">            return;</span>
+        }
+<span class="nc" id="L169">        getLog().info(&quot;  ⚠ &quot; + report.dimension());</span>
+<span class="nc bnc" id="L170" title="All 2 branches missed.">        if (!report.summary().isEmpty()) {</span>
+<span class="nc" id="L171">            getLog().info(&quot;     &quot; + report.summary());</span>
+        }
+<span class="nc bnc" id="L173" title="All 2 branches missed.">        for (String line : report.detailLines()) {</span>
+<span class="nc" id="L174">            getLog().info(&quot;       &quot; + line);</span>
+<span class="nc" id="L175">        }</span>
+<span class="nc bnc" id="L176" title="All 2 branches missed.">        if (!report.defaultAction().isEmpty()) {</span>
+<span class="nc" id="L177">            getLog().info(&quot;     Default: &quot; + report.defaultAction());</span>
+        }
+<span class="nc bnc" id="L179" title="All 2 branches missed.">        if (!report.optOutCommand().isEmpty()) {</span>
+<span class="nc" id="L180">            getLog().info(&quot;     Opt out: &quot; + report.optOutCommand());</span>
+        }
+<span class="nc" id="L182">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

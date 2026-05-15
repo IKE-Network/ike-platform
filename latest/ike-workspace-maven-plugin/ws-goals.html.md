@@ -461,7 +461,7 @@ The convergence pattern (ike-issues#393) collapses what used to be a half-dozen 
 
 Read-only convergence drift report. Walks the `ReconcilerRegistry` in declared order and asks each reconciler to surface drift between the workspace’s current state and its declared convention:
 
-- **FieldNormalizationReconciler** — `workspace.yaml` denormalized fields (groupIds, version, parent name) match each subproject POM’s authoritative truth (folds the retired `ws:fix`).
+- **FieldNormalizationReconciler** — `workspace.yaml` denormalized fields (groupIds, version, parent name) match each subproject POM’s authoritative truth (folds the retired `ws:fix`). Also collapses pre-existing duplicate subproject field keys to last-wins — the `#387` safety net (`#399`).
 - **WorkspaceVerifier** — manifest consistency, dependency reference resolution, cycle detection, valid subproject types, subproject git state, Syncthing health, environment presence (folds the retired `ws:verify`).
 - **ParentCascadeReconciler** — aggregator parent version matches the scaffold manifest’s `foundation:` pin across the root POM and every cloned subproject (folds the retired `ws:set-parent`).
 - **ScaffoldConventionReconciler** — gitignore blocks, git hooks, `.mvn/maven.config`, IDE settings against the scaffold manifest’s template files (folds the retired `ws:scaffold-upgrade`).

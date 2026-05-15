@@ -6,9 +6,11 @@ canonical_url: https://ike.network/ike-platform/ike-workspace-maven-plugin/casca
 
 # ws:cascade-foundation-publish
 
-Walk the canonical IKE foundation cascade — `ike-tooling → ike-docs → ike-platform` — in topological order. For each repo that has unreleased changes, align upstream-version properties to the latest-released upstreams, then run `ike:release-publish`. Optionally chain `ws:release-publish` on the current workspace after the foundation cascade completes.
+Walk the IKE foundation cascade — `ike-tooling → ike-docs → ike-platform` — in topological order. For each repo that has unreleased changes, align upstream-version properties to the latest-released upstreams, then run `ike:release-publish`. Optionally chain `ws:release-publish` on the current workspace after the foundation cascade completes.
 
-ike-issues#375.
+ike-issues#375; cascade order made declarative in ike-issues#402.
+
+The cascade order is read from the declarative `release-cascade.yaml` manifest (`ike-build-standards’s `cascade` classified artifact, unpacked by `ike-parent` to `target/release-cascade.yaml`). When the manifest cannot be found, the goal falls back to the built-in `ike-tooling,ike-docs,ike-platform` order. `-Dfoundations=<csv>` still overrides both. To change the cascade permanently, edit `release-cascade.yaml` — not this goal’s source. See ike-issues#402.
 
 ## [#tl-dr](#tl-dr)TL;DR
 
@@ -21,7 +23,7 @@ mvn ws:cascade-foundation-publish
 mvn ws:cascade-foundation-publish -DskipWorkspace=true
 
 # Override the foundations base directory:
-mvn ws:cascade-foundation-publish -DfoundationsDir=/path/to/foundations
+mvn ws:cascade-foundation-publish -Dike.release.cascade.basedir=/path/to/foundations
 
 # Override the cascade order (rare):
 mvn ws:cascade-foundation-publish -Dfoundations=ike-tooling,ike-platform
@@ -56,7 +58,44 @@ The goal:
 2. Uses the **parent of that workspace** as the foundations base directory — `~/ike-dev/` in the canonical layout.
 3. For each name in `-Dfoundations=` (default: `ike-tooling, ike-docs,ike-platform`), looks at `<baseDir>/<name>/` and treats it as a foundation repo.
 
+Step 3’s `<baseDir>/<name>/` resolution is overridable. The base directory is the `ike.release.cascade.basedir` property; an individual repo checked out somewhere else is pointed at with the `cascadeRepoDirs` map parameter (see [Local single-process walk vs. CI build chains](#local-vs-ci)).
+
 The workspace is just the **anchor** — the place the goal stands so it knows where to look. The foundations have no membership relationship with the workspace’s `workspace.yaml`. They are discovered by path, not by manifest.
+
+### [#local-single-process-walk-vs-ci-build-chains](#local-single-process-walk-vs-ci-build-chains)Local single-process walk vs. CI build chains
+
+The cascade has two parts, and only one of them is location-bound:
+
+- **Topology** — *which* repos, in *what* order. This lives in `release-cascade.yaml` (keyed off `groupId` + `artifactId`, [shipped by ike-build-standards](../../ike-tooling/ike-build-standards/)[1]). It is environment-neutral and identical everywhere.
+- **Execution** — *where* the repos are and *what process* drives them. This is environment-specific.
+
+This goal is the **local, single-process** execution model: one developer, all foundation repos checked out as siblings, one `mvn` invocation walking them. Location resolution is fully property-driven so it adapts to non-standard layouts:
+
+| `ike.release.cascade.basedir` | Base directory holding the foundation checkouts. Defaults to the parent of the current workspace. |
+| --- | --- |
+| `cascadeRepoDirs` (map parameter) | Per-repo absolute-path overrides for repos that are **not** co-located under the base directory. |
+
+```
+<plugin>
+  <groupId>network.ike.platform</groupId>
+  <artifactId>ike-workspace-maven-plugin</artifactId>
+  <configuration>
+    <cascadeRepoDirs>
+      <ike-tooling>/agent/work/a1/ike-tooling</ike-tooling>
+      <ike-docs>/agent/work/b2/ike-docs</ike-docs>
+    </cascadeRepoDirs>
+  </configuration>
+</plugin>
+```
+
+On a **CI server (e.g. TeamCity)** the picture is different and this goal is generally **not** used:
+
+- Each foundation repo is its own build configuration with its own VCS checkout — there is no co-located sibling tree to walk.
+- The cascade **topology** is mirrored as CI build-chain dependencies (snapshot/artifact dependencies): `ike-docs’s build config depends on `ike-tooling’s, `ike-platform’s on both. `release-cascade.yaml` is the specification you build those edges from.
+- Each build config runs the standalone `ike:release-publish`. That goal is **location-independent**: it identifies itself from its own reactor-root POM coordinates and reads the manifest via the `ike.release.cascade.manifest` property (resolvable from the unpacked `cascade` artifact, or a CI-set path). It prints the cascade footer naming the next repo — the signal a finish-build trigger acts on.
+- Artifact handoff between stages is via Nexus, not the filesystem: `ike-docs` resolves `ike-tooling’s **released** artifact from the repository, exactly as any consumer would.
+
+In short: the manifest is shared; `ws:cascade-foundation-publish` is the local walker; CI uses build-chain triggers over the same topology. See IKE-Network/ike-issues#402.
 
 ### [#cross-workspace-scope](#cross-workspace-scope)Cross-workspace scope
 
@@ -121,7 +160,7 @@ If `skipWorkspace=true`, only the foundations release. The current workspace sta
 | `ike:release-publish` (in a foundation dir) | Releasing a single foundation in isolation, with no cascade. Used manually when only one foundation has changes and you don’t want the workspace release. |
 | `ws:release-publish` (in a workspace) | Releasing the workspace’s subprojects assuming foundations are already at the desired versions. This is what `cascade-foundation-publish` chains to internally when `skipWorkspace=false`. |
 | `ws:align-publish` (in a workspace) | Bumping upstream `<X.version>` properties to current released versions WITHOUT releasing anything. Useful for "absorb new foundations into this workspace without cutting a workspace release right now." |
-| `ike:verify-release-published` | Post-release verification. Run after the cascade to confirm Nexus + gh-pages + GitHub release + org-site are all reachable. See [ike-tooling/ike-maven-plugin docs](https://ike.network/ike-tooling/ike-maven-plugin/index.html#verify-release-published)[1]. |
+| `ike:verify-release-published` | Post-release verification. Run after the cascade to confirm Nexus + gh-pages + GitHub release + org-site are all reachable. See [ike-tooling/ike-maven-plugin docs](https://ike.network/ike-tooling/ike-maven-plugin/index.html#verify-release-published)[2]. |
 
 ## [#bootstrap-invocation-during-the-v44-transition](#bootstrap-invocation-during-the-v44-transition)Bootstrap invocation (during the v44 transition)
 
@@ -160,9 +199,9 @@ If a foundation has uncommitted changes when the cascade reaches it, `ike:releas
 
 ## [#see-also](#see-also)See also
 
-- [ws:* Goal Reference](ws-goals.html)[2] — the full goal table.
-- [Workspace Lifecycle](workspace-lifecycle.html)[3] — narrative tour of how the goals fit together.
-- [Cutting a Release](https://ike.network/ike-platform/cutting-a-release.html)[4] — the operator runbook covering the full release flow.
+- [ws:* Goal Reference](ws-goals.html)[3] — the full goal table.
+- [Workspace Lifecycle](workspace-lifecycle.html)[4] — narrative tour of how the goals fit together.
+- [Cutting a Release](https://ike.network/ike-platform/cutting-a-release.html)[5] — the operator runbook covering the full release flow.
 - `ws:release-publish` — within-workspace cascade.
 - `ike:release-publish` — single-repo release.
 - `ws:align-publish` — property alignment without releasing.

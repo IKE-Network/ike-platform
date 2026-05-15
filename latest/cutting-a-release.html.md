@@ -26,6 +26,8 @@ Always upstream-first. `ike-docs` consumes `ike-tooling’s `ike-maven-plugin`. 
 
 This cascade is **structural**, not driven by extension-realm timing. See [Design rationale](index.html#design_rationale)[1] on the overview page for why no plugin in this ecosystem uses `<extensions>true</extensions>`.
 
+The order above is not maintained by hand. It is declared in `release-cascade.yaml` — authored in `ike-build-standards/src/main/cascade/` and shipped as the `ike-build-standards` `cascade` classified artifact, which `ike-parent` unpacks to `target/release-cascade.yaml`. `ike:release-draft` previews the downstream repos a release will make stale; `ike:release-publish` prints a footer naming the next cascade step; `ws:cascade-foundation-publish` walks the manifest order. To change the cascade, edit that one file — see IKE-Network/ike-issues#402.
+
 ## [#wall-clock-budget](#wall-clock-budget)Wall-clock budget
 
 Plan for **30–45 minutes** for a full foundation-plus-consumer cascade. The dominant time costs:

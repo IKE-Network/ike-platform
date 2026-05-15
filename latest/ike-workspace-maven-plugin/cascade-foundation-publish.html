@@ -87,13 +87,13 @@
 					<div class="header-title">IKE Workspace Maven Plugin</div>
 						<div class="header-subtitle">
 							<span class="version-prefix">Version</span>
-							<span class="version">59</span>
+							<span class="version">60</span>
 						</div>
 					</div>
 					<div class="navbar-brand header-xxs visible-xs">
 						<div class="header-title">IKE Workspace Maven Plugin</div>
 						<div class="header-subtitle">
-							Version <strong>59</strong>
+							Version <strong>60</strong>
 						</div>
 					</div>
 					<form class="navbar-form site-search site-search-xs visible-xs" ng-show="showSearchInput">
@@ -174,7 +174,7 @@
 
 					<div class="col-md-12">
 					<div class="page-header visible-print-block">
-							<h3><small>IKE Platform</small><br/>							IKE Workspace Maven Plugin 59
+							<h3><small>IKE Platform</small><br/>							IKE Workspace Maven Plugin 60
 							</h3>
 						</div>
 						<div class="parents hidden-xs">
@@ -200,8 +200,9 @@
 											</ul>
 						</div>
 <h1 id="ws-cascade-foundation-publish">ws:cascade-foundation-publish</h1>
-<p>Walk the canonical IKE foundation cascade — <code>ike-tooling → ike-docs → ike-platform</code> — in topological order. For each repo that has unreleased changes, align upstream-version properties to the latest-released upstreams, then run <code>ike:release-publish</code>. Optionally chain <code>ws:release-publish</code> on the current workspace after the foundation cascade completes.</p>
-<p>ike-issues#375.</p>
+<p>Walk the IKE foundation cascade — <code>ike-tooling → ike-docs → ike-platform</code> — in topological order. For each repo that has unreleased changes, align upstream-version properties to the latest-released upstreams, then run <code>ike:release-publish</code>. Optionally chain <code>ws:release-publish</code> on the current workspace after the foundation cascade completes.</p>
+<p>ike-issues#375; cascade order made declarative in ike-issues#402.</p>
+<p>The cascade order is read from the declarative <code>release-cascade.yaml</code> manifest (<code>ike-build-standards’s `cascade</code> classified artifact, unpacked by <code>ike-parent</code> to <code>target/release-cascade.yaml</code>). When the manifest cannot be found, the goal falls back to the built-in <code>ike-tooling,ike-docs,ike-platform</code> order. <code>-Dfoundations=&lt;csv&gt;</code> still overrides both. To change the cascade permanently, edit <code>release-cascade.yaml</code> — not this goal’s source. See ike-issues#402.</p>
 <div>
  <h2 id="tl-dr"><a href="#tl-dr"></a><a id="tldr"></a>TL;DR</h2>
  <div class="source">
@@ -213,7 +214,7 @@ mvn ws:cascade-foundation-publish
 mvn ws:cascade-foundation-publish -DskipWorkspace=true
 
 # Override the foundations base directory:
-mvn ws:cascade-foundation-publish -DfoundationsDir=/path/to/foundations
+mvn ws:cascade-foundation-publish -Dike.release.cascade.basedir=/path/to/foundations
 
 # Override the cascade order (rare):
 mvn ws:cascade-foundation-publish -Dfoundations=ike-tooling,ike-platform</code></pre>
@@ -245,7 +246,49 @@ mvn ws:cascade-foundation-publish -Dfoundations=ike-tooling,ike-platform</code><
    <li>Uses the <strong>parent of that workspace</strong> as the foundations base directory — <code>~/ike-dev/</code> in the canonical layout.</li>
    <li>For each name in <code>-Dfoundations=</code> (default: <code>ike-tooling, ike-docs,ike-platform</code>), looks at <code>&lt;baseDir&gt;/&lt;name&gt;/</code> and treats it as a foundation repo.</li>
   </ol>
+  <p>Step 3’s <code>&lt;baseDir&gt;/&lt;name&gt;/</code> resolution is overridable. The base directory is the <code>ike.release.cascade.basedir</code> property; an individual repo checked out somewhere else is pointed at with the <code>cascadeRepoDirs</code> map parameter (see <a href="#local-vs-ci" du-smooth-scroll="">Local single-process walk vs. CI build chains</a>).</p>
   <p>The workspace is just the <strong>anchor</strong> — the place the goal stands so it knows where to look. The foundations have no membership relationship with the workspace’s <code>workspace.yaml</code>. They are discovered by path, not by manifest.</p>
+ </div>
+ <div>
+  <h3 id="local-single-process-walk-vs-ci-build-chains"><a href="#local-single-process-walk-vs-ci-build-chains"></a><a id="local-vs-ci"></a>Local single-process walk vs. CI build chains</h3>
+  <p>The cascade has two parts, and only one of them is location-bound:</p>
+  <ul>
+   <li><strong>Topology</strong> — <em>which</em> repos, in <em>what</em> order. This lives in <code>release-cascade.yaml</code> (keyed off <code>groupId</code> + <code>artifactId</code>, <a href="../../ike-tooling/ike-build-standards/">shipped by <code>ike-build-standards</code></a><sup class="visible-print-inline">[1]</sup>). It is environment-neutral and identical everywhere.</li>
+   <li><strong>Execution</strong> — <em>where</em> the repos are and <em>what process</em> drives them. This is environment-specific.</li>
+  </ul>
+  <p>This goal is the <strong>local, single-process</strong> execution model: one developer, all foundation repos checked out as siblings, one <code>mvn</code> invocation walking them. Location resolution is fully property-driven so it adapts to non-standard layouts:</p>
+  <table class="bodyTable table table-striped table-hover" style="background: #FFFFFF">
+   <tbody>
+    <tr class="a">
+     <td style="text-align: left;"><code>ike.release.cascade.basedir</code></td>
+     <td>Base directory holding the foundation checkouts. Defaults to the parent of the current workspace.</td>
+    </tr>
+    <tr class="b">
+     <td style="text-align: left;"><code>cascadeRepoDirs</code> (map parameter)</td>
+     <td>Per-repo absolute-path overrides for repos that are <strong>not</strong> co-located under the base directory.</td>
+    </tr>
+   </tbody>
+  </table>
+  <div class="source">
+   <pre class="prettyprint" copy-to-clipboard=""><code><span class="tag">&lt;plugin&gt;</span>
+  <span class="tag">&lt;groupId&gt;</span>network.ike.platform<span class="tag">&lt;/groupId&gt;</span>
+  <span class="tag">&lt;artifactId&gt;</span>ike-workspace-maven-plugin<span class="tag">&lt;/artifactId&gt;</span>
+  <span class="tag">&lt;configuration&gt;</span>
+    <span class="tag">&lt;cascadeRepoDirs&gt;</span>
+      <span class="tag">&lt;ike-tooling&gt;</span>/agent/work/a1/ike-tooling<span class="tag">&lt;/ike-tooling&gt;</span>
+      <span class="tag">&lt;ike-docs&gt;</span>/agent/work/b2/ike-docs<span class="tag">&lt;/ike-docs&gt;</span>
+    <span class="tag">&lt;/cascadeRepoDirs&gt;</span>
+  <span class="tag">&lt;/configuration&gt;</span>
+<span class="tag">&lt;/plugin&gt;</span></code></pre>
+  </div>
+  <p>On a <strong>CI server (e.g. TeamCity)</strong> the picture is different and this goal is generally <strong>not</strong> used:</p>
+  <ul>
+   <li>Each foundation repo is its own build configuration with its own VCS checkout — there is no co-located sibling tree to walk.</li>
+   <li>The cascade <strong>topology</strong> is mirrored as CI build-chain dependencies (snapshot/artifact dependencies): <code>ike-docs’s build config depends on `ike-tooling’s, `ike-platform’s on both. `release-cascade.yaml</code> is the specification you build those edges from.</li>
+   <li>Each build config runs the standalone <code>ike:release-publish</code>. That goal is <strong>location-independent</strong>: it identifies itself from its own reactor-root POM coordinates and reads the manifest via the <code>ike.release.cascade.manifest</code> property (resolvable from the unpacked <code>cascade</code> artifact, or a CI-set path). It prints the cascade footer naming the next repo — the signal a finish-build trigger acts on.</li>
+   <li>Artifact handoff between stages is via Nexus, not the filesystem: <code>ike-docs</code> resolves `ike-tooling’s <strong>released</strong> artifact from the repository, exactly as any consumer would.</li>
+  </ul>
+  <p>In short: the manifest is shared; <code>ws:cascade-foundation-publish</code> is the local walker; CI uses build-chain triggers over the same topology. See IKE-Network/ike-issues#402.</p>
  </div>
  <div>
   <h3 id="cross-workspace-scope"><a href="#cross-workspace-scope"></a><a id="cross-workspace-scope"></a>Cross-workspace scope</h3>
@@ -349,7 +392,7 @@ Then re-run this cascade to continue with the remaining foundations.</code></pre
    </tr>
    <tr class="a">
     <td style="text-align: left;"><code>ike:verify-release-published</code></td>
-    <td>Post-release verification. Run after the cascade to confirm Nexus + gh-pages + GitHub release + org-site are all reachable. See <a href="https://ike.network/ike-tooling/ike-maven-plugin/index.html#verify-release-published">ike-tooling/ike-maven-plugin docs</a><sup class="visible-print-inline">[1]</sup>.</td>
+    <td>Post-release verification. Run after the cascade to confirm Nexus + gh-pages + GitHub release + org-site are all reachable. See <a href="https://ike.network/ike-tooling/ike-maven-plugin/index.html#verify-release-published">ike-tooling/ike-maven-plugin docs</a><sup class="visible-print-inline">[2]</sup>.</td>
    </tr>
   </tbody>
  </table>
@@ -387,9 +430,9 @@ network.ike.platform:ike-workspace-maven-plugin:43 ...</code></pre>
 <div>
  <h2 id="see-also"><a href="#see-also"></a><a id="see-also"></a>See also</h2>
  <ul>
-  <li><a href="ws-goals.html">ws:* Goal Reference</a><sup class="visible-print-inline">[2]</sup> — the full goal table.</li>
-  <li><a href="workspace-lifecycle.html">Workspace Lifecycle</a><sup class="visible-print-inline">[3]</sup> — narrative tour of how the goals fit together.</li>
-  <li><a href="https://ike.network/ike-platform/cutting-a-release.html">Cutting a Release</a><sup class="visible-print-inline">[4]</sup> — the operator runbook covering the full release flow.</li>
+  <li><a href="ws-goals.html">ws:* Goal Reference</a><sup class="visible-print-inline">[3]</sup> — the full goal table.</li>
+  <li><a href="workspace-lifecycle.html">Workspace Lifecycle</a><sup class="visible-print-inline">[4]</sup> — narrative tour of how the goals fit together.</li>
+  <li><a href="https://ike.network/ike-platform/cutting-a-release.html">Cutting a Release</a><sup class="visible-print-inline">[5]</sup> — the operator runbook covering the full release flow.</li>
   <li><code>ws:release-publish</code> — within-workspace cascade.</li>
   <li><code>ike:release-publish</code> — single-repo release.</li>
   <li><code>ws:align-publish</code> — property alignment without releasing.</li>
@@ -408,13 +451,14 @@ network.ike.platform:ike-workspace-maven-plugin:43 ...</code></pre>
 <div class="footnotes visible-print-block">
 								Links:
 								<ul class="list-unstyled">
-								<li>[1] https://ike.network/ike-tooling/ike-maven-plugin/index.html#verify-release-published</li>
-								<li>[2] ws-goals.html</li>
-								<li>[3] workspace-lifecycle.html</li>
-								<li>[4] https://ike.network/ike-platform/cutting-a-release.html</li>
+								<li>[1] ../../ike-tooling/ike-build-standards/</li>
+								<li>[2] https://ike.network/ike-tooling/ike-maven-plugin/index.html#verify-release-published</li>
+								<li>[3] ws-goals.html</li>
+								<li>[4] workspace-lifecycle.html</li>
+								<li>[5] https://ike.network/ike-platform/cutting-a-release.html</li>
 								</ul>
 							</div>
-<div class="date">Date: <strong>2026-05-15 08:43:49 -0700</strong></div>
+<div class="date">Date: <strong>2026-05-15 13:47:02 -0700</strong></div>
 						</div>
 						</div>
 					</div>
@@ -493,7 +537,7 @@ network.ike.platform:ike-workspace-maven-plugin:43 ...</code></pre>
 	<footer class="footer">
 
 		<p class="footer-title" ng-class="{'text-center': $matchMedia.size == 'xs'}">
-			<strong>IKE Workspace Maven Plugin 59</strong>
+			<strong>IKE Workspace Maven Plugin 60</strong>
 			<span class="hidden-xs">|</span><br class="hidden-sm hidden-md hidden-lg"/>
 			Documentation as of <strong><time datetime="2026-05-15">2026-05-15</time></strong>
 		</p>

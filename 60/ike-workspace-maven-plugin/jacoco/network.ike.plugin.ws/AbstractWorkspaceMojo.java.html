@@ -1,0 +1,500 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>AbstractWorkspaceMojo.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">AbstractWorkspaceMojo.java</span></div><h1>AbstractWorkspaceMojo.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.plugin.ReleaseSupport;
+
+import network.ike.workspace.FeatureName;
+import network.ike.workspace.Manifest;
+import network.ike.workspace.ManifestException;
+import network.ike.workspace.ManifestReader;
+import network.ike.workspace.MavenVersion;
+import network.ike.workspace.SubprojectName;
+import network.ike.workspace.WorkspaceGraph;
+import org.apache.maven.api.di.Inject;
+import org.apache.maven.api.plugin.Log;
+import org.apache.maven.api.plugin.Mojo;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Parameter;
+import org.apache.maven.api.services.Prompter;
+import org.apache.maven.api.services.PrompterException;
+
+import java.io.File;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Base class for workspace goals that read {@code workspace.yaml}.
+ *
+ * &lt;p&gt;Resolves the manifest by searching upward from the invocation
+ * directory for a file named {@code workspace.yaml}. All workspace
+ * goals inherit this resolution logic.
+ */
+<span class="fc" id="L32">abstract class AbstractWorkspaceMojo implements Mojo {</span>
+
+    /**
+     * Maven logger, injected by the Maven 4 DI container.
+     */
+    @Inject
+    private Log log;
+
+    /**
+     * Maven 4 prompter service, injected by the DI container. Used for
+     * all interactive prompts ({@link #requireParam}, {@link #confirm},
+     * {@link #selectFromList}). The Prompter coordinates stdout flushing
+     * and stdin reads correctly across terminal sessions, IntelliJ's
+     * Maven runner, and batch mode — replacing the older
+     * {@link System#console()} pattern, which silently fell through to
+     * &quot;no prompt at all&quot; in IntelliJ. Package-private setter is provided
+     * for test injection.
+     */
+    @Inject
+    private Prompter prompter;
+
+    /**
+     * Path to workspace.yaml. If not set, searches upward from the
+     * current directory. Package-private for test access.
+     */
+    @Parameter(property = &quot;workspace.manifest&quot;)
+    File manifest;
+
+    /**
+     * Access the Maven logger.
+     *
+     * @return the logger instance
+     */
+    protected Log getLog() {
+<span class="fc" id="L66">        return log;</span>
+    }
+
+    /**
+     * Replace the logger (used by {@link #startReport()} to install
+     * a capturing wrapper).
+     *
+     * @param log the replacement logger
+     */
+    protected void setLog(Log log) {
+<span class="fc" id="L76">        this.log = log;</span>
+<span class="fc" id="L77">    }</span>
+
+    /**
+     * Inject a {@link Prompter} (or a stub) for tests. Production code
+     * receives one via the Maven 4 DI container.
+     *
+     * @param prompter the prompter implementation to use
+     */
+    void setPrompter(Prompter prompter) {
+<span class="nc" id="L86">        this.prompter = prompter;</span>
+<span class="nc" id="L87">    }</span>
+
+    /**
+     * The injected {@link Prompter} for callers that need to pass it
+     * through to a static helper (e.g.,
+     * {@link FeatureFinishSupport#promptStaleBranchCleanup}).
+     *
+     * @return the prompter, or {@code null} when running in a context
+     *         without DI (some unit tests)
+     */
+    protected Prompter getPrompter() {
+<span class="fc" id="L98">        return prompter;</span>
+    }
+
+    /**
+     * Load the manifest and build the workspace graph.
+     *
+     * @return the workspace dependency graph
+     * @throws MojoException if the manifest cannot be read
+     */
+    protected WorkspaceGraph loadGraph() {
+<span class="fc" id="L108">        Path manifestPath = resolveManifest();</span>
+<span class="fc" id="L109">        getLog().debug(&quot;Reading manifest: &quot; + manifestPath);</span>
+        try {
+<span class="fc" id="L111">            Manifest m = ManifestReader.read(manifestPath);</span>
+<span class="fc" id="L112">            return new WorkspaceGraph(m);</span>
+<span class="nc" id="L113">        } catch (ManifestException e) {</span>
+<span class="nc" id="L114">            throw new MojoException(</span>
+<span class="nc" id="L115">                    &quot;Failed to read workspace manifest: &quot; + e.getMessage(), e);</span>
+        }
+    }
+
+    /**
+     * Resolve the manifest path — explicit parameter, or search upward.
+     *
+     * @return path to the workspace manifest file
+     * @throws MojoException if the manifest cannot be found
+     */
+    protected Path resolveManifest() {
+<span class="pc bpc" id="L126" title="1 of 4 branches missed.">        if (manifest != null &amp;&amp; manifest.exists()) {</span>
+<span class="fc" id="L127">            return manifest.toPath();</span>
+        }
+
+        // Search upward from current directory
+<span class="fc" id="L131">        Path dir = Path.of(System.getProperty(&quot;user.dir&quot;));</span>
+<span class="fc bfc" id="L132" title="All 2 branches covered.">        while (dir != null) {</span>
+<span class="fc" id="L133">            Path candidate = dir.resolve(&quot;workspace.yaml&quot;);</span>
+<span class="pc bpc" id="L134" title="1 of 2 branches missed.">            if (candidate.toFile().exists()) {</span>
+<span class="nc" id="L135">                return candidate;</span>
+            }
+<span class="fc" id="L137">            dir = dir.getParent();</span>
+<span class="fc" id="L138">        }</span>
+
+<span class="fc" id="L140">        throw new MojoException(</span>
+                &quot;Cannot find workspace.yaml. Specify -Dworkspace.manifest=&lt;path&gt; &quot;
+                        + &quot;or run from within a workspace directory.&quot;);
+    }
+
+    /**
+     * Resolve the workspace root directory (parent of workspace.yaml).
+     *
+     * @return the workspace root directory
+     * @throws MojoException if the manifest cannot be found
+     */
+    protected File workspaceRoot() {
+<span class="fc" id="L152">        return resolveManifest().getParent().toFile();</span>
+    }
+
+    /**
+     * Run {@code git status --porcelain} on a subproject directory and
+     * return the output (empty string = clean).
+     *
+     * @param subprojectDir the subproject directory to check
+     * @return git status output, empty if clean
+     */
+    protected String gitStatus(File subprojectDir) {
+        try {
+<span class="fc" id="L164">            return ReleaseSupport.execCapture(subprojectDir,</span>
+                    &quot;git&quot;, &quot;status&quot;, &quot;--porcelain&quot;);
+<span class="nc" id="L166">        } catch (Exception e) {</span>
+<span class="nc" id="L167">            return &quot;ERROR: &quot; + e.getMessage();</span>
+        }
+    }
+
+    /**
+     * Get the current branch of a subproject directory.
+     *
+     * @param subprojectDir the subproject directory to check
+     * @return the current branch name
+     */
+    protected String gitBranch(File subprojectDir) {
+        try {
+<span class="fc" id="L179">            return ReleaseSupport.execCapture(subprojectDir,</span>
+                    &quot;git&quot;, &quot;rev-parse&quot;, &quot;--abbrev-ref&quot;, &quot;HEAD&quot;);
+<span class="nc" id="L181">        } catch (Exception e) {</span>
+<span class="nc" id="L182">            return &quot;unknown&quot;;</span>
+        }
+    }
+
+    /**
+     * Get the short SHA of HEAD for a subproject directory.
+     *
+     * @param subprojectDir the subproject directory to check
+     * @return the short SHA of HEAD
+     */
+    protected String gitShortSha(File subprojectDir) {
+        try {
+<span class="fc" id="L194">            return ReleaseSupport.execCapture(subprojectDir,</span>
+                    &quot;git&quot;, &quot;rev-parse&quot;, &quot;--short&quot;, &quot;HEAD&quot;);
+<span class="nc" id="L196">        } catch (Exception e) {</span>
+<span class="nc" id="L197">            return &quot;???????&quot;;</span>
+        }
+    }
+
+    /**
+     * Check whether a workspace.yaml exists in the directory hierarchy.
+     * Does not throw — returns false if no manifest is found.
+     *
+     * @return true if running inside a workspace, false for a bare repo
+     */
+    protected boolean isWorkspaceMode() {
+        try {
+<span class="fc" id="L209">            resolveManifest();</span>
+<span class="fc" id="L210">            return true;</span>
+<span class="fc" id="L211">        } catch (MojoException e) {</span>
+<span class="fc" id="L212">            return false;</span>
+        }
+    }
+
+    /**
+     * Prompt the user interactively for a required parameter when it
+     * was not supplied on the command line.
+     *
+     * &lt;p&gt;Delegates to the injected Maven 4 {@link Prompter} which
+     * renders the label inline with the input cursor in both terminal
+     * sessions and IntelliJ's Maven runner via the same jline-backed
+     * line renderer Maven uses for every other interactive surface.
+     * In batch mode (or when no Prompter is wired), throws a clear
+     * error directing the user to pass the property explicitly.
+     *
+     * &lt;p&gt;ike-issues#385: an earlier revision of this method called a
+     * {@code surfacePromptLabel} helper that emitted the label through
+     * {@code getLog().info()} before invoking the Prompter, which
+     * forced the label onto a separate line from the input. That
+     * workaround predated Maven 4's jline rewrite of the Prompter
+     * service; the current implementation talks to the Prompter
+     * directly with the full label as the prompt string, which the
+     * jline renderer displays inline.
+     *
+     * @param currentValue the value from the {@code @Parameter} field (may be null)
+     * @param propertyName the {@code -D} property name (for the error message)
+     * @param promptLabel  human-readable label shown in the prompt; the
+     *                     Prompter appends its own &quot;: &quot; separator, so
+     *                     callers should not include trailing punctuation
+     * @return the resolved value — either the original or user-supplied
+     * @throws MojoException if no value can be obtained
+     */
+    protected String requireParam(String currentValue, String propertyName,
+                                  String promptLabel) {
+<span class="pc bpc" id="L246" title="1 of 4 branches missed.">        if (currentValue != null &amp;&amp; !currentValue.isBlank()) {</span>
+<span class="fc" id="L247">            return currentValue.trim();</span>
+        }
+
+<span class="pc bpc" id="L250" title="1 of 2 branches missed.">        if (prompter == null) {</span>
+<span class="fc" id="L251">            throw new MojoException(</span>
+                    propertyName + &quot; is required. Specify -D&quot; + propertyName
+                            + &quot;=&lt;value&gt; (no Prompter wired in this context).&quot;);
+        }
+
+        try {
+<span class="nc" id="L257">            String input = prompter.prompt(promptLabel);</span>
+<span class="nc bnc" id="L258" title="All 4 branches missed.">            if (input != null &amp;&amp; !input.isBlank()) {</span>
+<span class="nc" id="L259">                return input.trim();</span>
+            }
+<span class="nc" id="L261">        } catch (PrompterException e) {</span>
+<span class="nc" id="L262">            throw new MojoException(</span>
+                    propertyName + &quot; is required. Specify -D&quot; + propertyName
+                            + &quot;=&lt;value&gt; or run interactively. (&quot;
+<span class="nc" id="L265">                            + e.getMessage() + &quot;)&quot;);</span>
+<span class="nc" id="L266">        }</span>
+
+<span class="nc" id="L268">        throw new MojoException(</span>
+                propertyName + &quot; is required. Specify -D&quot; + propertyName
+                        + &quot;=&lt;value&gt; or run interactively.&quot;);
+    }
+
+    /**
+     * Validate a feature-name string with {@link FeatureName#of} and
+     * surface any rule violation as a clean {@link MojoException} (the
+     * raw {@code IllegalArgumentException} would otherwise bubble up
+     * as a Maven internal error). Use this anywhere a feature name
+     * leaves the {@code -Dfeature=} command-line boundary
+     * (ike-issues#205).
+     *
+     * @param feature the candidate feature name (must already be
+     *                resolved — i.e. non-null after
+     *                {@link #requireParam} or auto-detection)
+     * @return the validated {@link FeatureName} value
+     * @throws MojoException if {@code feature} fails the
+     *                       {@code FeatureName} syntax rules
+     */
+    protected static FeatureName validateFeatureName(String feature) {
+        try {
+<span class="fc" id="L290">            return FeatureName.of(feature);</span>
+<span class="fc" id="L291">        } catch (IllegalArgumentException e) {</span>
+<span class="fc" id="L292">            throw new MojoException(e.getMessage());</span>
+        }
+    }
+
+    /**
+     * Validate a subproject-name string with {@link SubprojectName#of}
+     * and surface any rule violation as a {@link MojoException}
+     * (ike-issues#295).
+     *
+     * @param subproject the candidate subproject name (already
+     *                   resolved — non-null after
+     *                   {@link #requireParam} or POM derivation)
+     * @return the validated {@link SubprojectName} value
+     * @throws MojoException if {@code subproject} fails the
+     *                       {@code SubprojectName} syntax rules
+     */
+    protected static SubprojectName validateSubprojectName(String subproject) {
+        try {
+<span class="nc" id="L310">            return SubprojectName.of(subproject);</span>
+<span class="nc" id="L311">        } catch (IllegalArgumentException e) {</span>
+<span class="nc" id="L312">            throw new MojoException(e.getMessage());</span>
+        }
+    }
+
+    /**
+     * Validate a Maven version string with {@link MavenVersion#of}
+     * and surface any rule violation as a {@link MojoException}
+     * (ike-issues#295). Per
+     * {@code feedback_no_semver_assumption} the validator accepts
+     * single-segment monotonic, semver-like, calendar-based, and
+     * branch-qualified versions; it does not enforce semver.
+     *
+     * @param version the candidate version string
+     * @return the validated {@link MavenVersion} value
+     * @throws MojoException if {@code version} fails the
+     *                       {@code MavenVersion} syntax rules
+     */
+    protected static MavenVersion validateMavenVersion(String version) {
+        try {
+<span class="nc" id="L331">            return MavenVersion.of(version);</span>
+<span class="nc" id="L332">        } catch (IllegalArgumentException e) {</span>
+<span class="nc" id="L333">            throw new MojoException(e.getMessage());</span>
+        }
+    }
+
+    /**
+     * Prompt the user with a yes/no question, accepting &quot;y&quot;/&quot;yes&quot;/&quot;n&quot;/&quot;no&quot;
+     * (case-insensitive). When invoked in a non-interactive context, the
+     * default is used.
+     *
+     * @param label      the question to display (without trailing punctuation)
+     * @param defaultYes whether {@code true} (yes) is the default
+     * @return {@code true} for yes, {@code false} for no
+     * @throws MojoException if no answer can be obtained
+     */
+    protected boolean confirm(String label, boolean defaultYes) {
+<span class="pc bpc" id="L348" title="1 of 2 branches missed.">        if (prompter == null) {</span>
+<span class="fc" id="L349">            return defaultYes;</span>
+        }
+<span class="nc bnc" id="L351" title="All 2 branches missed.">        String suffix = defaultYes ? &quot; [Y/n]&quot; : &quot; [y/N]&quot;;</span>
+        try {
+            // ike-issues#385: pass the full label to the Prompter so
+            // jline renders the question and the input cursor on the
+            // same line. The two-argument prompt form supplies the
+            // default reply when the user hits Enter without typing.
+<span class="nc" id="L357">            String input = prompter.prompt(label + suffix,</span>
+<span class="nc bnc" id="L358" title="All 2 branches missed.">                    defaultYes ? &quot;y&quot; : &quot;n&quot;);</span>
+<span class="nc bnc" id="L359" title="All 4 branches missed.">            if (input == null || input.isBlank()) {</span>
+<span class="nc" id="L360">                return defaultYes;</span>
+            }
+<span class="nc" id="L362">            String trimmed = input.trim().toLowerCase();</span>
+<span class="nc bnc" id="L363" title="All 4 branches missed.">            return trimmed.equals(&quot;y&quot;) || trimmed.equals(&quot;yes&quot;);</span>
+<span class="nc" id="L364">        } catch (PrompterException e) {</span>
+<span class="nc" id="L365">            throw new MojoException(</span>
+<span class="nc" id="L366">                    &quot;Could not read confirmation: &quot; + e.getMessage());</span>
+        }
+    }
+
+    /**
+     * Prompt the user to pick from a numbered list. Returns the chosen
+     * option, or {@code null} when the list is empty.
+     *
+     * @param label   prompt header (printed via the Prompter as a message)
+     * @param options ordered list of choices
+     * @return the chosen option, or {@code null} if {@code options} is empty
+     * @throws MojoException if no valid choice can be obtained
+     */
+    protected String selectFromList(String label, List&lt;String&gt; options) {
+<span class="nc bnc" id="L380" title="All 4 branches missed.">        if (options == null || options.isEmpty()) {</span>
+<span class="nc" id="L381">            return null;</span>
+        }
+<span class="nc bnc" id="L383" title="All 2 branches missed.">        if (prompter == null) {</span>
+<span class="nc" id="L384">            throw new MojoException(</span>
+                    label + &quot;: no Prompter wired in this context&quot;);
+        }
+        try {
+            // Print the numbered menu via getLog (each line is its own
+            // log entry so it threads correctly with surrounding INFO
+            // output) and then let the Prompter handle the actual
+            // selection input. ike-issues#385: pass the full
+            // &quot;Select [1-N]&quot; prompt to the Prompter so jline renders
+            // it inline with the input cursor.
+<span class="nc" id="L394">            getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L395">            getLog().info(&quot;  &quot; + label + &quot;:&quot;);</span>
+<span class="nc" id="L396">            List&lt;String&gt; indices = new ArrayList&lt;&gt;(options.size());</span>
+<span class="nc bnc" id="L397" title="All 2 branches missed.">            for (int i = 0; i &lt; options.size(); i++) {</span>
+<span class="nc" id="L398">                getLog().info(&quot;    &quot; + (i + 1) + &quot;) &quot; + options.get(i));</span>
+<span class="nc" id="L399">                indices.add(String.valueOf(i + 1));</span>
+            }
+<span class="nc" id="L401">            String pick = prompter.prompt(</span>
+<span class="nc" id="L402">                    &quot;Select [1-&quot; + options.size() + &quot;]&quot;,</span>
+                    indices, &quot;1&quot;);
+<span class="nc" id="L404">            int idx = Integer.parseInt(pick.trim()) - 1;</span>
+<span class="nc" id="L405">            return options.get(idx);</span>
+<span class="nc" id="L406">        } catch (PrompterException | NumberFormatException</span>
+                 | IndexOutOfBoundsException e) {
+<span class="nc" id="L408">            throw new MojoException(</span>
+<span class="nc" id="L409">                    &quot;Could not read selection: &quot; + e.getMessage());</span>
+        }
+    }
+
+    /**
+     * Read the workspace name from the root POM's artifactId.
+     * Falls back to &quot;Workspace&quot; if the POM cannot be read.
+     *
+     * @return the workspace name derived from the root POM artifactId
+     */
+    protected String workspaceName() {
+        try {
+<span class="fc" id="L421">            File rootPom = new File(workspaceRoot(), &quot;pom.xml&quot;);</span>
+<span class="pc bpc" id="L422" title="1 of 2 branches missed.">            if (rootPom.exists()) {</span>
+<span class="nc" id="L423">                return ReleaseSupport.readPomArtifactId(rootPom);</span>
+            }
+<span class="nc" id="L425">        } catch (Exception e) {</span>
+            // Fall through
+<span class="fc" id="L427">        }</span>
+<span class="fc" id="L428">        return &quot;Workspace&quot;;</span>
+    }
+
+    /**
+     * Format a goal header line using the workspace name.
+     * Example: &quot;komet-ws — Status&quot;
+     *
+     * @param goalName the goal name to display in the header
+     * @return the formatted header string
+     */
+    protected String header(String goalName) {
+<span class="fc" id="L439">        return workspaceName() + &quot; — &quot; + goalName;</span>
+    }
+
+    /**
+     * Write a goal's report to its per-goal file at the workspace root.
+     *
+     * &lt;p&gt;Overwrites any previous content for this goal. Filenames use
+     * {@code ꞉} (U+A789) to cluster as {@code ws꞉goal-name.md} in IDE file
+     * browsers. The nearest {@code .gitignore} is self-healed to include
+     * {@code ws꞉*.md} so reports never land in git.
+     *
+     * @param goal    the goal whose output is being reported
+     * @param content markdown content to write
+     */
+    protected void writeReport(WsGoal goal, String content) {
+        try {
+<span class="fc" id="L455">            java.nio.file.Path root = workspaceRoot().toPath();</span>
+<span class="fc" id="L456">            WorkspaceReport.write(root, goal.qualified(), content, getLog());</span>
+            // After a successful -publish, the matching -draft report is
+            // now stale — it described what WOULD happen, but it has
+            // happened. Leaving both files alongside each other misleads
+            // readers (ike-issues#300). Best-effort delete; debug-log on
+            // failure.
+<span class="fc bfc" id="L462" title="All 2 branches covered.">            if (goal.isPublish()) {</span>
+<span class="fc" id="L463">                goal.pair().ifPresent(draft -&gt;</span>
+<span class="fc" id="L464">                        WorkspaceReport.deleteReport(</span>
+<span class="fc" id="L465">                                root, draft.qualified(), getLog()));</span>
+            }
+<span class="nc" id="L467">        } catch (MojoException e) {</span>
+<span class="nc" id="L468">            getLog().debug(&quot;Could not resolve workspace root for report: &quot;</span>
+<span class="nc" id="L469">                    + e.getMessage());</span>
+<span class="fc" id="L470">        }</span>
+<span class="fc" id="L471">    }</span>
+
+    /**
+     * Start capturing info-level log output for the workspace report.
+     * Replaces the Mojo's logger with a tee that captures info output.
+     * Call {@link #finishReport(WsGoal, ReportLog)} at the end of
+     * {@code execute()} to write the captured output to the report file.
+     *
+     * @return a ReportLog that wraps the original logger and captures info output
+     */
+    protected ReportLog startReport() {
+<span class="fc" id="L482">        ReportLog report = new ReportLog(getLog());</span>
+<span class="fc" id="L483">        setLog(report);</span>
+<span class="fc" id="L484">        return report;</span>
+    }
+
+    /**
+     * Write captured log output to the workspace report file.
+     *
+     * @param goal      the goal whose output is being reported
+     * @param reportLog the ReportLog from {@link #startReport()}
+     */
+    protected void finishReport(WsGoal goal, ReportLog reportLog) {
+<span class="fc" id="L494">        String content = reportLog.captured();</span>
+<span class="pc bpc" id="L495" title="1 of 2 branches missed.">        if (!content.isBlank()) {</span>
+<span class="fc" id="L496">            writeReport(goal, content);</span>
+        }
+<span class="fc" id="L498">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

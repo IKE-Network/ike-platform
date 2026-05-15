@@ -1,0 +1,196 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>PushMojo.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">PushMojo.java</span></div><h1>PushMojo.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.plugin.ws.vcs.VcsOperations;
+import network.ike.plugin.ws.vcs.VcsState;
+import network.ike.workspace.WorkspaceGraph;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
+
+import java.io.File;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
+
+/**
+ * Push with a VCS bridge catch-up preamble.
+ *
+ * &lt;p&gt;When run from a workspace root (where {@code workspace.yaml} exists),
+ * iterates all subproject repositories in topological order and pushes each.
+ * When run from a single repository, operates on the current directory only.
+ *
+ * &lt;p&gt;Usage:
+ * &lt;pre&gt;{@code
+ * mvn ws:push
+ * }&lt;/pre&gt;
+ */
+@Mojo(name = &quot;push&quot;, projectRequired = false, aggregator = true)
+public class PushMojo extends AbstractWorkspaceMojo {
+
+    /** Creates this goal instance. */
+<span class="nc" id="L31">    public PushMojo() {}</span>
+
+    /**
+     * Remote name to push to.
+     */
+    @Parameter(property = &quot;remote&quot;, defaultValue = &quot;origin&quot;)
+    String remote;
+
+    /**
+     * When {@code true}, the first push failure (e.g. non-fast-forward,
+     * authentication error) halts the goal with a {@link MojoException}
+     * instead of warning and continuing. Default {@code false} preserves
+     * the per-subproject best-effort behavior; {@link WsSyncMojo} sets
+     * this to {@code true} so a non-fast-forward leaves the workspace
+     * in a known state for the user to resolve, rather than appearing
+     * to succeed for some subprojects and silently failing for others.
+     */
+    @Parameter(property = &quot;failFast&quot;, defaultValue = &quot;false&quot;)
+    boolean failFast;
+
+    @Override
+    public void execute() throws MojoException {
+<span class="nc bnc" id="L53" title="All 2 branches missed.">        if (isWorkspaceMode()) {</span>
+<span class="nc" id="L54">            executeWorkspace();</span>
+        } else {
+<span class="nc" id="L56">            executeSingleRepo(new File(System.getProperty(&quot;user.dir&quot;)));</span>
+        }
+<span class="nc" id="L58">    }</span>
+
+    private void executeWorkspace() throws MojoException {
+<span class="nc" id="L61">        WorkspaceGraph graph = loadGraph();</span>
+<span class="nc" id="L62">        File root = workspaceRoot();</span>
+
+<span class="nc" id="L64">        Set&lt;String&gt; targets = graph.manifest().subprojects().keySet();</span>
+
+<span class="nc" id="L66">        List&lt;String&gt; sorted = graph.topologicalSort(new LinkedHashSet&lt;&gt;(targets));</span>
+
+<span class="nc" id="L68">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L69">        getLog().info(header(&quot;Push&quot;));</span>
+<span class="nc" id="L70">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+<span class="nc" id="L71">        getLog().info(&quot;&quot;);</span>
+
+<span class="nc" id="L73">        int pushed = 0;</span>
+<span class="nc" id="L74">        int skipped = 0;</span>
+<span class="nc" id="L75">        int failed = 0;</span>
+<span class="nc" id="L76">        int uncommittedWarnings = 0;</span>
+
+        // Push workspace root if it has a .git directory
+<span class="nc bnc" id="L79" title="All 2 branches missed.">        if (new File(root, &quot;.git&quot;).exists()) {</span>
+            try {
+<span class="nc" id="L81">                VcsOperations.catchUp(root, getLog());</span>
+<span class="nc" id="L82">                String branch = VcsOperations.currentBranch(root);</span>
+<span class="nc" id="L83">                VcsOperations.push(root, getLog(), remote, branch);</span>
+<span class="nc" id="L84">                VcsOperations.writeVcsState(root, VcsState.Action.PUSH);</span>
+<span class="nc" id="L85">                getLog().info(Ansi.green(&quot;  ✓ &quot;) + &quot;workspace root → &quot;</span>
+                        + remote + &quot;/&quot; + branch);
+<span class="nc" id="L87">                pushed++;</span>
+<span class="nc bnc" id="L88" title="All 2 branches missed.">                if (!VcsOperations.isClean(root)) {</span>
+<span class="nc" id="L89">                    getLog().warn(Ansi.yellow(&quot;  ⚠ &quot;) + &quot;workspace root&quot;</span>
+                            + &quot; — has uncommitted changes (not pushed)&quot;);
+<span class="nc" id="L91">                    uncommittedWarnings++;</span>
+                }
+<span class="nc" id="L93">            } catch (MojoException e) {</span>
+<span class="nc bnc" id="L94" title="All 2 branches missed.">                if (failFast) {</span>
+<span class="nc" id="L95">                    throw new MojoException(&quot;push failed at workspace root: &quot;</span>
+<span class="nc" id="L96">                            + e.getMessage(), e);</span>
+                }
+<span class="nc" id="L98">                getLog().warn(Ansi.red(&quot;  ✗ &quot;) + &quot;workspace root — &quot;</span>
+<span class="nc" id="L99">                        + e.getMessage());</span>
+<span class="nc" id="L100">                failed++;</span>
+<span class="nc" id="L101">            }</span>
+        }
+
+<span class="nc bnc" id="L104" title="All 2 branches missed.">        for (String name : sorted) {</span>
+<span class="nc" id="L105">            File dir = new File(root, name);</span>
+<span class="nc" id="L106">            File gitDir = new File(dir, &quot;.git&quot;);</span>
+
+<span class="nc bnc" id="L108" title="All 2 branches missed.">            if (!gitDir.exists()) {</span>
+<span class="nc" id="L109">                getLog().debug(name + &quot; — not cloned, skipping&quot;);</span>
+<span class="nc" id="L110">                skipped++;</span>
+<span class="nc" id="L111">                continue;</span>
+            }
+
+            try {
+<span class="nc" id="L115">                VcsOperations.catchUp(dir, getLog());</span>
+
+<span class="nc" id="L117">                String branch = VcsOperations.currentBranch(dir);</span>
+                try {
+<span class="nc" id="L119">                    VcsOperations.push(dir, getLog(), remote, branch);</span>
+<span class="nc" id="L120">                } catch (MojoException e) {</span>
+                    // Handle missing upstream — retry with -u (#132)
+<span class="nc bnc" id="L122" title="All 2 branches missed.">                    if (e.getMessage() != null</span>
+<span class="nc bnc" id="L123" title="All 2 branches missed.">                            &amp;&amp; e.getMessage().contains(&quot;has no upstream&quot;)) {</span>
+<span class="nc" id="L124">                        getLog().info(&quot;  &quot; + name</span>
+                                + &quot; — setting upstream and pushing...&quot;);
+<span class="nc" id="L126">                        VcsOperations.pushWithUpstream(</span>
+<span class="nc" id="L127">                                dir, getLog(), remote, branch);</span>
+                    } else {
+<span class="nc" id="L129">                        throw e;</span>
+                    }
+<span class="nc" id="L131">                }</span>
+<span class="nc" id="L132">                VcsOperations.writeVcsState(dir, VcsState.Action.PUSH);</span>
+
+<span class="nc" id="L134">                getLog().info(Ansi.green(&quot;  ✓ &quot;) + name + &quot; → &quot;</span>
+                        + remote + &quot;/&quot; + branch);
+<span class="nc" id="L136">                pushed++;</span>
+
+                // Warn if repo has uncommitted changes (#132)
+<span class="nc bnc" id="L139" title="All 2 branches missed.">                if (!VcsOperations.isClean(dir)) {</span>
+<span class="nc" id="L140">                    getLog().warn(Ansi.yellow(&quot;  ⚠ &quot;) + name</span>
+                            + &quot; — has uncommitted changes (not pushed)&quot;);
+<span class="nc" id="L142">                    uncommittedWarnings++;</span>
+                }
+<span class="nc" id="L144">            } catch (MojoException e) {</span>
+<span class="nc bnc" id="L145" title="All 2 branches missed.">                if (failFast) {</span>
+<span class="nc" id="L146">                    throw new MojoException(&quot;push failed at &quot; + name + &quot;: &quot;</span>
+<span class="nc" id="L147">                            + e.getMessage(), e);</span>
+                }
+<span class="nc" id="L149">                getLog().warn(Ansi.red(&quot;  ✗ &quot;) + name + &quot; — &quot;</span>
+<span class="nc" id="L150">                        + e.getMessage());</span>
+<span class="nc" id="L151">                failed++;</span>
+<span class="nc" id="L152">            }</span>
+<span class="nc" id="L153">        }</span>
+
+<span class="nc" id="L155">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L156">        var summary = new StringBuilder();</span>
+<span class="nc" id="L157">        summary.append(pushed).append(&quot; pushed&quot;);</span>
+<span class="nc bnc" id="L158" title="All 2 branches missed.">        if (skipped &gt; 0) {</span>
+<span class="nc" id="L159">            summary.append(&quot;, &quot;).append(skipped).append(&quot; skipped&quot;);</span>
+        }
+<span class="nc bnc" id="L161" title="All 2 branches missed.">        if (uncommittedWarnings &gt; 0) {</span>
+<span class="nc" id="L162">            summary.append(&quot;, &quot;).append(uncommittedWarnings)</span>
+<span class="nc" id="L163">                    .append(&quot; with uncommitted changes&quot;);</span>
+        }
+<span class="nc bnc" id="L165" title="All 2 branches missed.">        if (failed &gt; 0) {</span>
+<span class="nc" id="L166">            summary.append(&quot;, &quot;).append(failed).append(&quot; failed&quot;);</span>
+        }
+<span class="nc" id="L168">        getLog().info(&quot;  Done: &quot; + summary);</span>
+<span class="nc" id="L169">        getLog().info(&quot;&quot;);</span>
+
+<span class="nc bnc" id="L171" title="All 2 branches missed.">        if (failed &gt; 0) {</span>
+<span class="nc" id="L172">            getLog().warn(&quot;  Some pushes failed — check output above for details.&quot;);</span>
+        }
+
+<span class="nc" id="L175">        writeReport(WsGoal.PUSH, summary + &quot;\n&quot;);</span>
+<span class="nc" id="L176">    }</span>
+
+    private void executeSingleRepo(File dir) throws MojoException {
+<span class="nc" id="L179">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L180">        getLog().info(&quot;IKE VCS Bridge — Push&quot;);</span>
+<span class="nc" id="L181">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+
+<span class="nc" id="L183">        VcsOperations.catchUp(dir, getLog());</span>
+
+<span class="nc" id="L185">        String branch = VcsOperations.currentBranch(dir);</span>
+<span class="nc" id="L186">        getLog().info(&quot;  Pushing to &quot; + remote + &quot;/&quot; + branch + &quot;...&quot;);</span>
+<span class="nc" id="L187">        VcsOperations.push(dir, getLog(), remote, branch);</span>
+
+<span class="nc" id="L189">        VcsOperations.writeVcsState(dir, VcsState.Action.PUSH);</span>
+
+<span class="nc" id="L191">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L192">        getLog().info(&quot;  Done.&quot;);</span>
+<span class="nc" id="L193">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L194">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

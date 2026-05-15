@@ -2,6 +2,7 @@ package network.ike.plugin.ws.bootstrap;
 
 import network.ike.plugin.ReleaseSupport;
 import network.ike.plugin.ws.Ansi;
+import network.ike.plugin.ws.MavenWrapper;
 import network.ike.plugin.ws.PostMutationSync;
 import network.ike.plugin.ws.WsGoal;
 import network.ike.plugin.ws.WorkspaceReport;
@@ -19,7 +20,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Properties;
 
 /**
  * Walks the subprojects declared in {@code workspace.yaml} and ensures
@@ -341,57 +341,47 @@ public final class SubprojectInitializer {
     }
 
     /**
-     * Shared wrapper-properties writer. Reads the existing version,
-     * skips when it already matches, otherwise rewrites the properties
-     * file and creates {@code mvnw} / {@code mvnw.cmd} when missing.
+     * Shared wrapper writer. Skips when the wrapper is already standard
+     * and pinned to the requested version; otherwise rewrites the
+     * properties file, creates {@code mvnw} / {@code mvnw.cmd} when
+     * missing, and replaces the legacy custom wrapper in full.
      */
     private boolean writeWrapperVersion(Path dir, String mavenVersion,
                                          String rootLabel) {
         try {
-            Path wrapperDir = dir.resolve(".mvn").resolve("wrapper");
-            Path propsFile = wrapperDir.resolve("maven-wrapper.properties");
+            String currentVersion = MavenWrapper.readPinnedVersion(dir);
+            boolean legacy = MavenWrapper.isLegacyWrapper(dir);
 
-            if (Files.exists(propsFile)) {
-                Properties existing = new Properties();
-                try (var reader = Files.newBufferedReader(propsFile, StandardCharsets.UTF_8)) {
-                    existing.load(reader);
-                }
-                String currentVersion = existing.getProperty("maven.version");
-                if (mavenVersion.equals(currentVersion)) {
-                    log.debug("    " + (rootLabel != null ? rootLabel + " " : "")
-                            + "Maven wrapper already at " + mavenVersion);
-                    return false;
-                }
-                if (rootLabel != null) {
-                    log.info("  ↻ " + rootLabel + " — updating Maven wrapper: "
-                            + currentVersion + " → " + mavenVersion);
-                } else {
-                    log.info("    Updating Maven wrapper: " + currentVersion
-                            + " → " + mavenVersion);
-                }
-            } else if (rootLabel != null) {
-                log.info("  + " + rootLabel + " — installing Maven wrapper for Maven "
-                        + mavenVersion);
-            } else {
-                log.info("    Installing Maven wrapper for Maven " + mavenVersion);
+            if (currentVersion != null && !legacy
+                    && mavenVersion.equals(currentVersion)) {
+                log.debug("    " + (rootLabel != null ? rootLabel + " " : "")
+                        + "Maven wrapper already at " + mavenVersion);
+                return false;
             }
 
-            Files.createDirectories(wrapperDir);
+            String prefix = rootLabel != null ? "  ↻ " + rootLabel + " — " : "    ";
+            if (legacy) {
+                log.info(prefix + "replacing legacy Maven wrapper (Maven "
+                        + mavenVersion + ")");
+            } else if (currentVersion != null) {
+                log.info(prefix + "updating Maven wrapper: " + currentVersion
+                        + " → " + mavenVersion);
+            } else {
+                log.info((rootLabel != null ? "  + " + rootLabel + " — " : "    ")
+                        + "installing Maven wrapper for Maven " + mavenVersion);
+            }
 
-            String props = "# Maven Wrapper properties — managed by ws:scaffold-init from workspace.yaml\n"
-                    + "maven.version=" + mavenVersion + "\n"
-                    + "distributionUrl=https://repo.maven.apache.org/maven2/org/apache/maven/"
-                    + "apache-maven/" + mavenVersion + "/apache-maven-" + mavenVersion
-                    + "-bin.zip\n";
-            Files.writeString(propsFile, props, StandardCharsets.UTF_8);
+            Path propsFile = dir.resolve(".mvn").resolve("wrapper")
+                    .resolve("maven-wrapper.properties");
+            MavenWrapper.writePropertiesFile(propsFile, mavenVersion);
 
             Path mvnw = dir.resolve("mvnw");
-            if (!Files.exists(mvnw)) {
-                network.ike.plugin.ws.MavenWrapper.writeMvnwScript(mvnw);
+            if (legacy || !Files.exists(mvnw)) {
+                MavenWrapper.writeMvnwScript(mvnw);
             }
             Path mvnwCmd = dir.resolve("mvnw.cmd");
-            if (!Files.exists(mvnwCmd)) {
-                network.ike.plugin.ws.MavenWrapper.writeMvnwCmdScript(mvnwCmd);
+            if (legacy || !Files.exists(mvnwCmd)) {
+                MavenWrapper.writeMvnwCmdScript(mvnwCmd);
             }
 
             return true;

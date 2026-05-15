@@ -1,10 +1,14 @@
 package network.ike.plugin.ws;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.Properties;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Shared generator for the three Maven Wrapper files that every workspace
@@ -17,24 +21,48 @@ import java.util.Properties;
  *       {@code .gitattributes} {@code *.cmd text eol=crlf} rule)</li>
  * </ul>
  *
- * <p>Used by {@code ws:scaffold-init} when scaffolding a new workspace,
- * and by {@code ScaffoldConventionReconciler}'s {@code mvnw-standard}
- * step (run as part of {@code ws:scaffold-publish}) when any of the
- * three files is missing from an existing workspace.
+ * <p>The {@code mvnw} / {@code mvnw.cmd} scripts are the <b>standard
+ * Apache Maven Wrapper</b> launchers, vendored verbatim as plugin
+ * resources under {@code wrapper/}. The {@code only-script} distribution
+ * type is used — the scripts download Maven themselves, so no
+ * {@code maven-wrapper.jar} binary is committed to a workspace repo.
+ * The properties file carries the standard {@code wrapperVersion},
+ * {@code distributionType}, and {@code distributionUrl} keys, which is
+ * what IDEs (IntelliJ) key on to auto-adopt the wrapper.
  *
- * <p>All methods are <b>file-level idempotent</b>: they unconditionally
- * write the file at the given path. Callers are responsible for the
- * "install only if missing" check — see {@link #writeMissingFiles}.
+ * <p>Used by {@code ws:scaffold-init} when scaffolding a new workspace,
+ * and by {@code ScaffoldConventionReconciler}'s {@code mvnw} step (run
+ * as part of {@code ws:scaffold-publish}) — both to fill in missing
+ * files and to replace the legacy custom "minimal bootstrap" wrapper
+ * that earlier plugin versions generated (IKE-Network/ike-issues#405).
  */
 public final class MavenWrapper {
+
+    /**
+     * Apache Maven Wrapper version of the vendored {@code mvnw} /
+     * {@code mvnw.cmd} scripts. Written into {@code wrapperVersion} of
+     * the generated {@code maven-wrapper.properties}.
+     */
+    public static final String WRAPPER_VERSION = "3.3.2";
+
+    /**
+     * Wrapper distribution type. {@code only-script} keeps the wrapper
+     * jar-free — the launcher scripts download Maven directly.
+     */
+    public static final String DISTRIBUTION_TYPE = "only-script";
+
+    /** Extracts the Maven version from a wrapper {@code distributionUrl}. */
+    private static final Pattern DISTRIBUTION_VERSION =
+            Pattern.compile("apache-maven-(.+?)-bin\\.(?:zip|tar\\.gz)");
 
     private MavenWrapper() {}
 
     /**
      * Install any of the three wrapper files that are missing from the
      * given workspace directory. Never overwrites an existing file — the
-     * user may have pinned a specific {@code maven.version} in
+     * user may have pinned a specific version in
      * {@code maven-wrapper.properties} or customized the launcher scripts.
+     * To replace a legacy wrapper in full, use {@link #writeAll}.
      *
      * @param wsDir        workspace root
      * @param mavenVersion Maven version to write into
@@ -67,16 +95,55 @@ public final class MavenWrapper {
     }
 
     /**
-     * Read {@code maven.version} from an existing
-     * {@code .mvn/wrapper/maven-wrapper.properties}, or return null if the
-     * file does not exist or the property is missing.
+     * Unconditionally (re)write all three wrapper files, overwriting any
+     * that already exist. Used to replace the legacy custom wrapper with
+     * the standard one — see {@link #isLegacyWrapper}.
      *
-     * <p>Used by the {@code mvnw-standard} upgrade step to preserve a
-     * user's pinned Maven version when regenerating a missing launcher
-     * script next to an existing properties file.
+     * @param wsDir        workspace root
+     * @param mavenVersion Maven version to write into
+     *                     {@code maven-wrapper.properties}
+     * @throws IOException if writing any of the files fails
+     */
+    public static void writeAll(Path wsDir, String mavenVersion) throws IOException {
+        writePropertiesFile(
+                wsDir.resolve(".mvn").resolve("wrapper").resolve("maven-wrapper.properties"),
+                mavenVersion);
+        writeMvnwScript(wsDir.resolve("mvnw"));
+        writeMvnwCmdScript(wsDir.resolve("mvnw.cmd"));
+    }
+
+    /**
+     * Report whether the workspace carries the legacy custom "minimal
+     * bootstrap" {@code mvnw} that pre-standardization plugin versions
+     * generated. Detected by the {@code minimal bootstrap} marker in the
+     * script header — the standard Apache launcher does not carry it,
+     * and neither would a user's own hand-written {@code mvnw}.
      *
      * @param wsDir workspace root
-     * @return the pinned Maven version, or null when not pinned
+     * @return true when {@code mvnw} exists and is the legacy custom
+     *         launcher; false when absent, standard, or user-authored
+     * @throws IOException if {@code mvnw} exists but cannot be read
+     */
+    public static boolean isLegacyWrapper(Path wsDir) throws IOException {
+        Path mvnw = wsDir.resolve("mvnw");
+        if (!Files.exists(mvnw)) {
+            return false;
+        }
+        return Files.readString(mvnw, StandardCharsets.UTF_8).contains("minimal bootstrap");
+    }
+
+    /**
+     * Read the pinned Maven version from an existing
+     * {@code .mvn/wrapper/maven-wrapper.properties}, or return null if the
+     * file does not exist or no version can be determined.
+     *
+     * <p>The version is parsed from the standard {@code distributionUrl}
+     * key. A legacy wrapper's explicit {@code maven.version} key is used
+     * as a fallback so that migrating an old workspace preserves its
+     * pinned version.
+     *
+     * @param wsDir workspace root
+     * @return the pinned Maven version, or null when not determinable
      * @throws IOException if the properties file exists but cannot be read
      */
     public static String readPinnedVersion(Path wsDir) throws IOException {
@@ -88,12 +155,20 @@ public final class MavenWrapper {
         try (var reader = Files.newBufferedReader(propsFile, StandardCharsets.UTF_8)) {
             props.load(reader);
         }
+        String url = props.getProperty("distributionUrl");
+        if (url != null) {
+            Matcher m = DISTRIBUTION_VERSION.matcher(url);
+            if (m.find()) {
+                return m.group(1);
+            }
+        }
         return props.getProperty("maven.version");
     }
 
     /**
-     * Write {@code maven-wrapper.properties} with the canonical distribution
-     * URL for the given version. Creates the parent directory as needed.
+     * Write {@code maven-wrapper.properties} in the standard
+     * {@code only-script} form for the given Maven version. Creates the
+     * parent directory as needed. Overwrites any existing file.
      *
      * @param propsFile    target path (typically
      *                     {@code .mvn/wrapper/maven-wrapper.properties})
@@ -103,7 +178,8 @@ public final class MavenWrapper {
     public static void writePropertiesFile(Path propsFile, String mavenVersion) throws IOException {
         Files.createDirectories(propsFile.getParent());
         String props = "# Maven Wrapper properties — managed by ws:scaffold-init from workspace.yaml\n"
-                + "maven.version=" + mavenVersion + "\n"
+                + "wrapperVersion=" + WRAPPER_VERSION + "\n"
+                + "distributionType=" + DISTRIBUTION_TYPE + "\n"
                 + "distributionUrl=https://repo.maven.apache.org/maven2/org/apache/maven/"
                 + "apache-maven/" + mavenVersion + "/apache-maven-" + mavenVersion
                 + "-bin.zip\n";
@@ -111,95 +187,50 @@ public final class MavenWrapper {
     }
 
     /**
-     * Write the POSIX {@code mvnw} launcher script and mark it executable.
-     * The script reads {@code maven.version} and {@code distributionUrl}
-     * from {@code .mvn/wrapper/maven-wrapper.properties} at runtime and
-     * downloads Maven on first use.
+     * Write the standard Apache POSIX {@code mvnw} launcher script and
+     * mark it executable. The script reads {@code distributionUrl} from
+     * {@code .mvn/wrapper/maven-wrapper.properties} at runtime and
+     * downloads Maven on first use. Overwrites any existing file.
      *
      * @param mvnw target path (typically {@code mvnw} at workspace root)
      * @throws IOException if writing fails
      */
     public static void writeMvnwScript(Path mvnw) throws IOException {
-        String script = """
-                #!/bin/sh
-                # Maven Wrapper launcher — installed by ws:scaffold-init
-                # Downloads and caches the Maven version specified in
-                # .mvn/wrapper/maven-wrapper.properties
-                #
-                # This is a minimal bootstrap. For the full-featured wrapper script,
-                # run: mvn wrapper:wrapper
-
-                set -e
-
-                PROPS_FILE="$(dirname "$0")/.mvn/wrapper/maven-wrapper.properties"
-                if [ ! -f "$PROPS_FILE" ]; then
-                    echo "Error: $PROPS_FILE not found" >&2
-                    exit 1
-                fi
-
-                DIST_URL=$(grep '^distributionUrl=' "$PROPS_FILE" | cut -d'=' -f2-)
-                MAVEN_VERSION=$(grep '^maven.version=' "$PROPS_FILE" | cut -d'=' -f2-)
-
-                WRAPPER_HOME="${HOME}/.m2/wrapper/dists/apache-maven-${MAVEN_VERSION}"
-                MAVEN_HOME="${WRAPPER_HOME}/apache-maven-${MAVEN_VERSION}"
-
-                if [ ! -d "$MAVEN_HOME" ]; then
-                    echo "Downloading Maven ${MAVEN_VERSION}..."
-                    mkdir -p "$WRAPPER_HOME"
-                    ZIP_FILE="${WRAPPER_HOME}/apache-maven-${MAVEN_VERSION}-bin.zip"
-                    curl -fsSL -o "$ZIP_FILE" "$DIST_URL"
-                    unzip -qo "$ZIP_FILE" -d "$WRAPPER_HOME"
-                    rm -f "$ZIP_FILE"
-                    echo "Maven ${MAVEN_VERSION} installed to ${MAVEN_HOME}"
-                fi
-
-                exec "$MAVEN_HOME/bin/mvn" "$@"
-                """;
-        Files.writeString(mvnw, script, StandardCharsets.UTF_8);
+        copyResource("wrapper/mvnw", mvnw);
         mvnw.toFile().setExecutable(true);
     }
 
     /**
-     * Write the Windows {@code mvnw.cmd} launcher script. The workspace
-     * {@code .gitattributes} {@code *.cmd text eol=crlf} rule is what keeps
-     * this file usable on Windows after checkout — without it, cmd.exe
-     * chokes on LF line endings (IKE-Network/ike-issues#189).
+     * Write the standard Apache Windows {@code mvnw.cmd} launcher script.
+     * The workspace {@code .gitattributes} {@code *.cmd text eol=crlf}
+     * rule is what keeps this file usable on Windows after checkout —
+     * without it, cmd.exe chokes on LF line endings
+     * (IKE-Network/ike-issues#189). Overwrites any existing file.
      *
      * @param mvnwCmd target path (typically {@code mvnw.cmd} at workspace root)
      * @throws IOException if writing fails
      */
     public static void writeMvnwCmdScript(Path mvnwCmd) throws IOException {
-        String script = """
-                @REM Maven Wrapper launcher — installed by ws:scaffold-init
-                @REM Downloads and caches the Maven version specified in
-                @REM .mvn/wrapper/maven-wrapper.properties
-                @echo off
-                setlocal
+        copyResource("wrapper/mvnw.cmd", mvnwCmd);
+    }
 
-                set "PROPS_FILE=%~dp0.mvn\\wrapper\\maven-wrapper.properties"
-                if not exist "%PROPS_FILE%" (
-                    echo Error: %PROPS_FILE% not found >&2
-                    exit /b 1
-                )
-
-                for /f "tokens=1,* delims==" %%a in ('findstr "^maven.version=" "%PROPS_FILE%"') do set "MAVEN_VERSION=%%b"
-                for /f "tokens=1,* delims==" %%a in ('findstr "^distributionUrl=" "%PROPS_FILE%"') do set "DIST_URL=%%b"
-
-                set "WRAPPER_HOME=%USERPROFILE%\\.m2\\wrapper\\dists\\apache-maven-%MAVEN_VERSION%"
-                set "MAVEN_HOME=%WRAPPER_HOME%\\apache-maven-%MAVEN_VERSION%"
-
-                if not exist "%MAVEN_HOME%" (
-                    echo Downloading Maven %MAVEN_VERSION%...
-                    mkdir "%WRAPPER_HOME%" 2>nul
-                    set "ZIP_FILE=%WRAPPER_HOME%\\apache-maven-%MAVEN_VERSION%-bin.zip"
-                    powershell -Command "Invoke-WebRequest -Uri '%DIST_URL%' -OutFile '%ZIP_FILE%'"
-                    powershell -Command "Expand-Archive -Path '%ZIP_FILE%' -DestinationPath '%WRAPPER_HOME%' -Force"
-                    del "%ZIP_FILE%"
-                    echo Maven %MAVEN_VERSION% installed to %MAVEN_HOME%
-                )
-
-                "%MAVEN_HOME%\\bin\\mvn.cmd" %*
-                """;
-        Files.writeString(mvnwCmd, script, StandardCharsets.UTF_8);
+    /**
+     * Copy a vendored wrapper resource verbatim to the target path,
+     * preserving its byte content (and thus line endings).
+     *
+     * @param resource resource name relative to this class's package
+     * @param target   destination path
+     * @throws IOException if the resource is missing or the copy fails
+     */
+    private static void copyResource(String resource, Path target) throws IOException {
+        if (target.getParent() != null) {
+            Files.createDirectories(target.getParent());
+        }
+        try (InputStream in = MavenWrapper.class.getResourceAsStream(resource)) {
+            if (in == null) {
+                throw new IOException("Bundled Maven wrapper resource not found: " + resource);
+            }
+            Files.copy(in, target, StandardCopyOption.REPLACE_EXISTING);
+        }
     }
 }

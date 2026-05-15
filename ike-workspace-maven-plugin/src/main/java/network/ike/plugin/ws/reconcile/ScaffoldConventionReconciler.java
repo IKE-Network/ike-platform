@@ -48,7 +48,9 @@ import java.util.regex.Pattern;
  *       with {@code -T 1C}.</li>
  *   <li><b>gitattributes</b> — line-ending policy at workspace root
  *       (ike-issues#189: Windows {@code mvnw.cmd} must be CRLF).</li>
- *   <li><b>mvnw</b> — regenerate any missing Maven wrapper files.</li>
+ *   <li><b>mvnw</b> — regenerate missing Maven wrapper files, and
+ *       replace the legacy custom wrapper with the standard
+ *       {@code only-script} Apache wrapper (ike-issues#405).</li>
  *   <li><b>ide-language-level</b> — apply the {@code ide:} section
  *       from {@code workspace.yaml} to {@code .idea/misc.xml}.</li>
  *   <li><b>plugin-version</b> — bump {@code ike-tooling.version} in
@@ -508,13 +510,35 @@ public class ScaffoldConventionReconciler implements Reconciler {
         boolean mvnwMissing = !Files.exists(mvnw);
         boolean mvnwCmdMissing = !Files.exists(mvnwCmd);
 
-        if (!propsMissing && !mvnwMissing && !mvnwCmdMissing) {
+        boolean legacy;
+        try {
+            legacy = MavenWrapper.isLegacyWrapper(root);
+        } catch (IOException e) {
+            log.warn("  Could not inspect Maven wrapper: " + e.getMessage());
+            return;
+        }
+
+        if (!propsMissing && !mvnwMissing && !mvnwCmdMissing && !legacy) {
             return;
         }
 
         String mavenVersion = resolveMavenVersionForUpgrade(ctx, root, log);
         if (mavenVersion == null) {
             // No version configured — skip cleanly.
+            return;
+        }
+
+        if (legacy) {
+            run.drift.add("mvnw: replace legacy custom wrapper with standard "
+                    + "only-script wrapper (Maven " + mavenVersion + ")");
+            if (publish) {
+                try {
+                    MavenWrapper.writeAll(root, mavenVersion);
+                    run.applied++;
+                } catch (IOException e) {
+                    log.warn("  Could not replace Maven wrapper: " + e.getMessage());
+                }
+            }
             return;
         }
 

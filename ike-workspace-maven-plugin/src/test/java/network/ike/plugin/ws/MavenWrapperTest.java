@@ -12,46 +12,53 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Tests for {@link MavenWrapper} — the shared generator used by
- * {@code ws:scaffold-init} scaffolding and the {@code mvnw-standard} upgrade step.
+ * {@code ws:scaffold-init} scaffolding and the {@code mvnw} reconciler step.
  *
- * <p>Covers the three idempotency cases the upgrade step depends on:
- * empty workspace (all three files written), partial state (only
- * missing files written), fully-present (no-op). Also verifies that
- * an existing properties file with a pinned {@code maven.version} is
- * preserved — the upgrade step reads the pin to avoid overwriting a
- * user's deliberate version choice.
+ * <p>Covers the standard {@code only-script} wrapper output, the
+ * idempotency cases the reconciler depends on (empty, partial,
+ * fully-present), legacy custom-wrapper detection, and full replacement
+ * via {@link MavenWrapper#writeAll}.
  */
 class MavenWrapperTest {
 
+    private static final String VERSION = "4.0.0-rc-5";
+
     @Test
-    void writeMissingFiles_createsAllThreeWhenAbsent(@TempDir Path tmp) throws IOException {
-        int written = MavenWrapper.writeMissingFiles(tmp, "4.0.0-rc-5");
+    void writeMissingFiles_createsStandardWrapperWhenAbsent(@TempDir Path tmp) throws IOException {
+        int written = MavenWrapper.writeMissingFiles(tmp, VERSION);
 
         assertThat(written).isEqualTo(3);
         assertThat(tmp.resolve("mvnw")).exists();
         assertThat(tmp.resolve("mvnw.cmd")).exists();
         assertThat(tmp.resolve(".mvn/wrapper/maven-wrapper.properties")).exists();
 
-        // Properties file carries the requested version
+        // only-script: no maven-wrapper.jar binary is committed
+        assertThat(tmp.resolve(".mvn/wrapper/maven-wrapper.jar")).doesNotExist();
+
+        // Properties file uses the standard keys IDEs key on
         String props = Files.readString(
                 tmp.resolve(".mvn/wrapper/maven-wrapper.properties"),
                 StandardCharsets.UTF_8);
         assertThat(props)
-                .contains("maven.version=4.0.0-rc-5")
+                .contains("wrapperVersion=" + MavenWrapper.WRAPPER_VERSION)
+                .contains("distributionType=only-script")
                 .contains("distributionUrl=https://repo.maven.apache.org/")
-                .contains("apache-maven-4.0.0-rc-5-bin.zip");
+                .contains("apache-maven-" + VERSION + "-bin.zip");
 
-        // mvnw script references the properties file at runtime
+        // mvnw is the standard Apache launcher, executable
         String mvnw = Files.readString(tmp.resolve("mvnw"), StandardCharsets.UTF_8);
         assertThat(mvnw)
                 .startsWith("#!/bin/sh")
-                .contains(".mvn/wrapper/maven-wrapper.properties");
+                .contains("Apache Maven Wrapper")
+                .contains(".mvn/wrapper/maven-wrapper.properties")
+                .doesNotContain("minimal bootstrap");
+        assertThat(Files.isExecutable(tmp.resolve("mvnw"))).isTrue();
 
-        // mvnw.cmd is a Windows batch file
+        // mvnw.cmd is the standard Apache Windows launcher
         String mvnwCmd = Files.readString(tmp.resolve("mvnw.cmd"), StandardCharsets.UTF_8);
         assertThat(mvnwCmd)
-                .contains("@echo off")
-                .contains(".mvn\\wrapper\\maven-wrapper.properties");
+                .contains("Apache Maven Wrapper")
+                .contains(".mvn/wrapper/maven-wrapper.properties");
     }
 
     @Test
@@ -67,16 +74,16 @@ class MavenWrapperTest {
         Files.writeString(tmp.resolve("mvnw.cmd"), "@REM user's custom launcher\n",
                 StandardCharsets.UTF_8);
 
-        int written = MavenWrapper.writeMissingFiles(tmp, "4.0.0-rc-5");
+        int written = MavenWrapper.writeMissingFiles(tmp, VERSION);
 
         assertThat(written).isZero();
 
-        // Nothing was overwritten — the user's 3.9.9 pin and custom
-        // launcher content are preserved.
+        // Nothing was overwritten — the user's pin and custom launcher
+        // content are preserved.
         assertThat(Files.readString(tmp.resolve(".mvn/wrapper/maven-wrapper.properties"),
                 StandardCharsets.UTF_8))
                 .contains("maven.version=3.9.9")
-                .doesNotContain("4.0.0-rc-5");
+                .doesNotContain(VERSION);
         assertThat(Files.readString(tmp.resolve("mvnw"), StandardCharsets.UTF_8))
                 .contains("user's custom launcher");
         assertThat(Files.readString(tmp.resolve("mvnw.cmd"), StandardCharsets.UTF_8))
@@ -85,27 +92,68 @@ class MavenWrapperTest {
 
     @Test
     void writeMissingFiles_fillsOnlyMissingOnes(@TempDir Path tmp) throws IOException {
-        // Partial state: properties file exists with a pin, but the
-        // launcher scripts are missing. This is the case the upgrade
-        // step cares about most — a user who set up a partial workspace
-        // and lost the launchers (or never committed them).
+        // Partial state: properties file exists, launchers missing.
         Files.createDirectories(tmp.resolve(".mvn/wrapper"));
         Files.writeString(tmp.resolve(".mvn/wrapper/maven-wrapper.properties"),
                 "maven.version=3.9.9\n",
                 StandardCharsets.UTF_8);
 
-        int written = MavenWrapper.writeMissingFiles(tmp, "4.0.0-rc-5");
+        int written = MavenWrapper.writeMissingFiles(tmp, VERSION);
 
         assertThat(written).isEqualTo(2);
         assertThat(tmp.resolve("mvnw")).exists();
         assertThat(tmp.resolve("mvnw.cmd")).exists();
 
-        // The existing properties file must NOT be overwritten — the
-        // user's 3.9.9 pin is preserved.
+        // The existing properties file must NOT be overwritten.
         assertThat(Files.readString(tmp.resolve(".mvn/wrapper/maven-wrapper.properties"),
                 StandardCharsets.UTF_8))
                 .contains("maven.version=3.9.9")
-                .doesNotContain("4.0.0-rc-5");
+                .doesNotContain(VERSION);
+    }
+
+    @Test
+    void writeAll_overwritesLegacyWrapperWithStandard(@TempDir Path tmp) throws IOException {
+        // Prime a legacy custom wrapper.
+        Files.createDirectories(tmp.resolve(".mvn/wrapper"));
+        Files.writeString(tmp.resolve(".mvn/wrapper/maven-wrapper.properties"),
+                "maven.version=3.9.9\ndistributionUrl=x\n", StandardCharsets.UTF_8);
+        Files.writeString(tmp.resolve("mvnw"),
+                "#!/bin/sh\n# This is a minimal bootstrap.\n", StandardCharsets.UTF_8);
+        Files.writeString(tmp.resolve("mvnw.cmd"),
+                "@REM minimal bootstrap\n", StandardCharsets.UTF_8);
+
+        MavenWrapper.writeAll(tmp, VERSION);
+
+        // Legacy content fully replaced by the standard wrapper.
+        assertThat(Files.readString(tmp.resolve("mvnw"), StandardCharsets.UTF_8))
+                .contains("Apache Maven Wrapper")
+                .doesNotContain("minimal bootstrap");
+        assertThat(Files.readString(tmp.resolve("mvnw.cmd"), StandardCharsets.UTF_8))
+                .contains("Apache Maven Wrapper")
+                .doesNotContain("minimal bootstrap");
+        assertThat(Files.readString(tmp.resolve(".mvn/wrapper/maven-wrapper.properties"),
+                StandardCharsets.UTF_8))
+                .contains("distributionType=only-script")
+                .contains("apache-maven-" + VERSION + "-bin.zip")
+                .doesNotContain("maven.version=");
+    }
+
+    @Test
+    void isLegacyWrapper_trueForCustomBootstrap(@TempDir Path tmp) throws IOException {
+        Files.writeString(tmp.resolve("mvnw"),
+                "#!/bin/sh\n# This is a minimal bootstrap.\n", StandardCharsets.UTF_8);
+        assertThat(MavenWrapper.isLegacyWrapper(tmp)).isTrue();
+    }
+
+    @Test
+    void isLegacyWrapper_falseForStandardWrapper(@TempDir Path tmp) throws IOException {
+        MavenWrapper.writeMissingFiles(tmp, VERSION);
+        assertThat(MavenWrapper.isLegacyWrapper(tmp)).isFalse();
+    }
+
+    @Test
+    void isLegacyWrapper_falseWhenAbsent(@TempDir Path tmp) throws IOException {
+        assertThat(MavenWrapper.isLegacyWrapper(tmp)).isFalse();
     }
 
     @Test
@@ -114,7 +162,14 @@ class MavenWrapperTest {
     }
 
     @Test
-    void readPinnedVersion_returnsMavenVersionWhenPresent(@TempDir Path tmp) throws IOException {
+    void readPinnedVersion_parsesStandardDistributionUrl(@TempDir Path tmp) throws IOException {
+        MavenWrapper.writeMissingFiles(tmp, "3.9.11");
+        assertThat(MavenWrapper.readPinnedVersion(tmp)).isEqualTo("3.9.11");
+    }
+
+    @Test
+    void readPinnedVersion_fallsBackToLegacyMavenVersionKey(@TempDir Path tmp) throws IOException {
+        // Legacy properties: no parseable distributionUrl, explicit key.
         Files.createDirectories(tmp.resolve(".mvn/wrapper"));
         Files.writeString(tmp.resolve(".mvn/wrapper/maven-wrapper.properties"),
                 "maven.version=3.9.11\ndistributionUrl=x\n",
@@ -124,7 +179,7 @@ class MavenWrapperTest {
     }
 
     @Test
-    void readPinnedVersion_returnsNullWhenPropertyMissing(@TempDir Path tmp) throws IOException {
+    void readPinnedVersion_returnsNullWhenVersionUndeterminable(@TempDir Path tmp) throws IOException {
         Files.createDirectories(tmp.resolve(".mvn/wrapper"));
         Files.writeString(tmp.resolve(".mvn/wrapper/maven-wrapper.properties"),
                 "distributionUrl=x\n",

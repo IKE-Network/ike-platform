@@ -73,9 +73,7 @@ Use `ws:report` to list and open them.
 | <<feature-finish-squash-publish>>                    | feature     | Execute the squash-merge
 | <<feature-start-draft,feature-start>>                | feature     | Preview a coordinated feature branch
 | <<feature-start-publish>>                            | feature     | Create the feature branch with auto-alignment
-| <<fix>>                          | inspection  | Sync `workspace.yaml` denormalized fields with POM truth
 | <<graph>>                        | inspection  | Print or DOT-render the workspace dependency graph
-| <<init>>                         | setup       | Clone all subprojects from `workspace.yaml`
 | <<lint>>                         | inspection  | Surface preflight hygiene conditions (report-only)
 | <<overview>>                     | inspection  | Consolidated manifest + graph + status + cascade
 | <<post-release>>                 | release     | Bump every subproject to the next development version
@@ -91,10 +89,9 @@ Use `ws:report` to list and open them.
 | <<release-status>>               | inspection  | Diagnose any in-flight or partial release
 | <<remove>>                       | setup       | Remove a subproject from `workspace.yaml`
 | <<report>>                       | inspection  | List and open per-goal markdown reports
-| <<scaffold-upgrade-draft,scaffold-upgrade>>          | upgrades    | Preview scaffold convention upgrades
-| <<scaffold-upgrade-publish>>                         | upgrades    | Apply scaffold upgrades
-| <<set-parent-draft,set-parent>>                      | alignment   | Preview an aggregator parent version cascade
-| <<set-parent-publish>>                               | alignment   | Apply the parent version cascade
+| <<scaffold-draft,scaffold>>      | convergence | Drift report — manifest consistency, git state, denormalized field sync, parent cascade, scaffold conventions, inter-subproject alignment (preview)
+| <<scaffold-init>>                | setup       | Bootstrap a workspace — create `workspace.yaml` if absent and clone declared-but-missing subprojects
+| <<scaffold-publish>>             | convergence | Apply the convergence drift — single reconciler-driven goal for routine workspace upkeep
 | <<stignore>>                     | setup       | Generate Syncthing `.stignore` files
 | <<switch-draft,switch>>          | feature     | Preview a coordinated branch checkout
 | <<switch-publish>>               | feature     | Execute the coordinated checkout
@@ -102,7 +99,6 @@ Use `ws:report` to list and open them.
 | <<update-feature-draft,update-feature>>              | feature     | Preview merging main into the current feature
 | <<update-feature-publish>>                           | feature     | Execute the main-into-feature merge
 | <<verify-convergence>>           | inspection  | Check transitive dependency convergence across subprojects
-| <<verify>>                       | inspection  | Check workspace manifest consistency and git state
 | <<versions-upgrade-draft,versions-upgrade>>          | upgrades    | Preview parent/property/plugin version upgrades
 | <<versions-upgrade-publish>>                         | upgrades    | Apply the version upgrades
 |===
@@ -112,25 +108,36 @@ Use `ws:report` to list and open them.
 Goals for adding repositories to a workspace, removing them, and
 keeping the manifest in sync with the on-disk reality.
 
-[#init]
-=== ws:init — clone subprojects
+[#scaffold-init]
+=== ws:scaffold-init — bootstrap a workspace
 
-Clone every subproject declared in `workspace.yaml`. Three modes per
-subproject:
+Bootstrap a workspace. Idempotent — safe to re-run any time a new
+subproject is declared in `workspace.yaml`. Two responsibilities:
 
-. *Already cloned* — directory has `.git/`; skip.
-. *Syncthing working tree* — directory exists but has no `.git/`.
+. *Manifest bootstrap* — if no `workspace.yaml` exists, generate a
+  minimal manifest in the current directory (one entry per subdirectory
+  with a `.git`/`pom.xml` shape, plus the workspace root POM scaffolding).
+. *Subproject hydration* — for every subproject in `workspace.yaml`,
+  ensure the on-disk directory exists with git initialized. Three modes
+  per subproject:
++
+.. *Already cloned* — directory has `.git/`; skip.
+.. *Syncthing working tree* — directory exists but has no `.git/`.
    Initializes git in-place: `git init`, adds the remote, fetches,
    and resets to match the remote branch. This preserves file content
    synced from another machine, avoiding a re-clone overwrite.
-. *Fresh clone* — no directory; runs `git clone`.
+.. *Fresh clone* — no directory; runs `git clone`.
 
-Components are processed in topological order so dependencies are
+Subprojects are processed in topological order so dependencies are
 present before dependents.
+
+Folds the retired `ws:create` and `ws:init` goals (ike-issues#393):
+the same goal handles first-run bootstrap and ongoing hydration of
+declared-but-missing subprojects.
 
 [source,bash]
 ----
-mvn ws:init
+mvn ws:scaffold-init
 ----
 
 [#add]
@@ -224,27 +231,6 @@ output for Graphviz rendering.
 ----
 mvn ws:graph
 mvn ws:graph -Dformat=dot | dot -Tsvg > workspace-graph.svg
-----
-
-[#verify]
-=== ws:verify — manifest + git consistency check
-
-Verify workspace manifest consistency and subproject git state.
-Checks:
-
-* All dependency references resolve.
-* No cycles exist in the dependency graph.
-* All group members are valid.
-* All subproject types are defined.
-* Subproject git state, Syncthing health, environment presence.
-
-Always read-only. Pair with `ws:scaffold-publish` to apply the
-reconciliation (denormalized field sync, alignment, parent bumps,
-etc.) — the convergence pattern from ike-issues#393.
-
-[source,bash]
-----
-mvn ws:verify
 ----
 
 [#verify-convergence]
@@ -599,49 +585,16 @@ POM version.
 Daily-use, safe, idempotent. The draft variant writes the would-be
 changes to a report; the publish variant applies them.
 
+The alignment logic lives in `AlignmentReconciler` and is shared with
+`ws:scaffold-publish` (when `-DupdateAlignment` is left at its default
+`true`), `ws:feature-start-publish`, `ws:checkpoint-publish`, and the
+per-subproject catch-up step inside `ws:release-publish`. `ws:align`
+stays as the standalone shortcut for the alignment-only case.
+
 [source,bash]
 ----
 mvn ws:align-draft                              # preview
 mvn ws:align-publish                            # apply
-----
-
-[#set-parent-draft]
-[#set-parent-publish]
-=== ws:set-parent — cascade aggregator parent version
-
-[IMPORTANT]
-====
-For routine "bump to the latest tested-together foundation" work,
-prefer `ike:scaffold-draft` (drift report, available now) and
-`ike:scaffold-publish` (drift apply, post-`#348`). The scaffold
-manifest's `foundation:` section pins the parent version + standard
-properties (`ike-tooling.version`, `ike-docs.version`,
-`ike-platform.version`) baked at ike-tooling release time — a
-single source of truth that bumps everything together.
-
-Use `ws:set-parent-publish` when you need to bump to a *specific
-non-current* version (reproducibility testing against an older
-`ike-parent`, partial-cycle rollback, etc.) — scaffold always
-points at the latest baked-in pin and can't be overridden.
-====
-
-Set the aggregator parent version (typically `ike-parent`) across the
-root POM and all subproject POMs in one operation. Cascades the
-parent version from the root POM to every cloned subproject,
-including submodule POMs that reference the same parent.
-
-Does *not* modify inter-subproject dependency versions — use
-`ws:align-publish` for that. Does *not* update properties
-(`ike-tooling.version`, `ike-docs.version`, `ike-platform.version`) —
-those need a separate `ws:versions-upgrade-publish` or manual edit.
-Scaffold-publish (post-#348) handles parent + properties in one
-operation.
-
-[source,bash]
-----
-mvn ws:set-parent-draft -DnewVersion=21
-mvn ws:set-parent-publish -DnewVersion=21
-mvn ws:set-parent-publish -DnewVersion=21 -Dmessage="bump ike-parent"
 ----
 
 [#reconcile-branches-draft]
@@ -762,9 +715,14 @@ mvn ws:checkpoint-publish -Dlabel=before-major-refactor
 
 == Upgrade Goals
 
-Goals that pull a workspace forward to the current standards —
-both the build-tooling versions a workspace uses and the scaffolding
-files (gitignore, hooks, IDE configs).
+Goals that pull a workspace forward to a *non-current* set of
+build-tooling versions, when the scaffold-pinned versions aren't
+what you want. For the routine "bump to the latest tested-together
+foundation" case, prefer the convergence pattern: `ws:scaffold-draft`
+followed by `ws:scaffold-publish` (the ScaffoldConventionReconciler
+handles scaffold files; the ParentCascadeReconciler handles the
+parent version). The `versions-upgrade-*` goals stay standalone for
+plan-driven upgrades that the scaffold manifest doesn't cover.
 
 [#versions-upgrade-draft]
 === ws:versions-upgrade-draft — preview version upgrades
@@ -802,24 +760,107 @@ Uses OpenRewrite (PomRewriter) for POM edits, never sed/regex.
 mvn ws:versions-upgrade-publish
 ----
 
-[#scaffold-upgrade-draft]
-[#scaffold-upgrade-publish]
-=== ws:scaffold-upgrade — refresh scaffold conventions
+== Convergence Goals
 
-Upgrade workspace scaffold conventions to the current plugin version.
-As workspace scaffold conventions evolve across plugin releases, this
-goal applies incremental upgrades to bring an existing workspace in
-line with current standards. Each upgrade step is idempotent —
-running the goal twice produces the same result.
+The convergence pattern (ike-issues#393) collapses what used to be a
+half-dozen overlapping reconcilers (`ws:fix`, `ws:verify`,
+`ws:set-parent`, `ws:scaffold-upgrade`, the eager bits of `ws:align`)
+into a single routine workspace-state reconciler driven by the
+`ReconcilerRegistry`. The draft variant reports drift; the publish
+variant applies it. Both walk the same ordered registry of
+reconcilers — they read identical state and produce identical
+findings.
 
-Addresses the *scaffold* layer only: gitignore, git hooks,
-`.mvn/maven.config`, IDE settings. POM versions are handled by
-`ws:versions-upgrade`.
+[#scaffold-draft]
+=== ws:scaffold-draft — drift report
+
+Read-only convergence drift report. Walks the `ReconcilerRegistry` in
+declared order and asks each reconciler to surface drift between the
+workspace's current state and its declared convention:
+
+* *FieldNormalizationReconciler* — `workspace.yaml` denormalized
+  fields (groupIds, version, parent name) match each subproject POM's
+  authoritative truth (folds the retired `ws:fix`).
+* *WorkspaceVerifier* — manifest consistency, dependency reference
+  resolution, cycle detection, valid subproject types, subproject
+  git state, Syncthing health, environment presence (folds the
+  retired `ws:verify`).
+* *ParentCascadeReconciler* — aggregator parent version matches the
+  scaffold manifest's `foundation:` pin across the root POM and every
+  cloned subproject (folds the retired `ws:set-parent`).
+* *ScaffoldConventionReconciler* — gitignore blocks, git hooks,
+  `.mvn/maven.config`, IDE settings against the scaffold manifest's
+  template files (folds the retired `ws:scaffold-upgrade`).
+* *AlignmentReconciler* — inter-subproject dependency versions point
+  at the workspace's actual subproject versions (shares logic with
+  `ws:align`, which stays as a standalone shortcut for the
+  alignment-only case).
+
+Writes the drift to `ws꞉scaffold-draft.md`; makes no on-disk changes.
+Pair with `ws:scaffold-publish` to apply.
 
 [source,bash]
 ----
-mvn ws:scaffold-upgrade-draft                  # preview
-mvn ws:scaffold-upgrade-publish                # apply
+mvn ws:scaffold-draft
+----
+
+[#scaffold-publish]
+=== ws:scaffold-publish — apply convergence drift
+
+Apply the drift reported by `ws:scaffold-draft`. Drives the same
+`ReconcilerRegistry`, but each reconciler is asked to *apply* rather
+than report. This is the routine workspace-state reconciler —
+the one to run after any state-changing operation to converge the
+workspace back to its declared convention.
+
+By default `ws:scaffold-publish` engages every reconciler. Each can
+be individually opted out via `-D...=false` flags when you need to
+narrow the scope (e.g., apply field normalization without bumping
+the parent version):
+
+[cols="2,1,3", options="header"]
+|===
+| Property | Default | Effect
+
+| `-DupdateFields=false`
+| `true`
+| Skip FieldNormalizationReconciler — do not sync denormalized
+  `workspace.yaml` fields against POM truth.
+
+| `-DupdateParent=false`
+| `true`
+| Skip ParentCascadeReconciler — do not cascade the aggregator
+  parent version.
+
+| `-DparentVersion=<v>`
+| _(scaffold manifest pin)_
+| Pin the parent cascade to a specific non-current version
+  (reproducibility testing against an older `ike-parent`,
+  partial-cycle rollback, etc.). Replaces the retired
+  `ws:set-parent` workflow.
+
+| `-DupdateScaffold=false`
+| `true`
+| Skip ScaffoldConventionReconciler — leave gitignore, hooks,
+  `.mvn/maven.config`, IDE settings alone.
+
+| `-DupdateAlignment=false`
+| `true`
+| Skip AlignmentReconciler — do not sync inter-subproject
+  dependency versions.
+|===
+
+The AlignmentReconciler is also invoked from `ws:align-publish`
+(standalone alignment-only shortcut), `ws:feature-start-publish`,
+`ws:checkpoint-publish`, and the per-subproject catch-up step inside
+`ws:release-publish`. Logic is shared; entry points differ.
+
+[source,bash]
+----
+mvn ws:scaffold-publish
+mvn ws:scaffold-publish -DparentVersion=21
+mvn ws:scaffold-publish -DupdateScaffold=false
+mvn ws:scaffold-publish -DupdateFields=false -DupdateParent=false  # alignment-only
 ----
 
 == Cleanup Goals

@@ -59,8 +59,7 @@ import java.util.stream.Collectors;
  * mvn ws:add -Drepo=https://github.com/ikmdev/komet.git
  * }</pre>
  *
- * @see WsCreateMojo for creating a new workspace
- * @see InitWorkspaceMojo for cloning all subprojects
+ * @see WsScaffoldInitMojo for creating a new workspace or cloning all subprojects
  */
 @Mojo(name = "add", projectRequired = false, aggregator = true)
 public class WsAddMojo extends AbstractWorkspaceMojo {
@@ -116,7 +115,7 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
     /**
      * Skip cloning — register the subproject in workspace.yaml without
      * cloning. Dependencies cannot be derived without a POM to scan,
-     * so they will be empty. Use {@code ws:init} to clone later.
+     * so they will be empty. Use {@code ws:scaffold-init} to clone later.
      */
     @Parameter(property = "skipClone", defaultValue = "false")
     private boolean skipClone;
@@ -139,7 +138,7 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
         if (!Files.exists(manifestPath)) {
             throw new MojoException(
                     "No workspace.yaml found in " + wsDir
-                    + ". Run ws:create first.");
+                    + ". Run ws:scaffold-init first.");
         }
 
         // Resolve the target branch up front: workspace repo HEAD is
@@ -350,13 +349,13 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
         if (cloned) {
             getLog().info("  Subproject added and cloned.");
         } else {
-            getLog().info("  Subproject added. Run 'mvn ws:init' to clone.");
+            getLog().info("  Subproject added. Run 'mvn ws:scaffold-init' to clone.");
         }
         getLog().info("");
         writeReport(WsGoal.ADD, "Added subproject **" + subproject + "**\n\n"
                 + "| Field | Value |\n|-------|-------|\n"
                 + "| Repo | " + repo + " |\n"
-                + "| Cloned | " + (cloned ? "yes" : "no — run ws:init") + " |\n");
+                + "| Cloned | " + (cloned ? "yes" : "no — run ws:scaffold-init") + " |\n");
 
         PostMutationSync.refresh(workspaceRoot(), getLog());
     }
@@ -1434,6 +1433,6 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
         }
         throw new MojoException(
                 "Cannot find workspace.yaml. Run from within a workspace "
-                + "directory or use ws:create first.");
+                + "directory or use ws:scaffold-init first.");
     }
 }

@@ -12,7 +12,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Tests for {@link MavenWrapper} — the shared generator used by
- * {@code ws:init} scaffolding and the {@code mvnw-standard} upgrade step.
+ * {@code ws:scaffold-init} scaffolding and the {@code mvnw-standard} upgrade step.
  *
  * <p>Covers the three idempotency cases the upgrade step depends on:
  * empty workspace (all three files written), partial state (only

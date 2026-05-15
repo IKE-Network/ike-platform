@@ -194,7 +194,7 @@ public class WsVersionsUpgradePublishMojo extends AbstractWorkspaceMojo {
             if (!unCloned.isEmpty()) {
                 msg.append("\n  Plan nodes not cloned on disk: ")
                         .append(unCloned)
-                        .append("\n  Run ws:init to clone missing subprojects.");
+                        .append("\n  Run ws:scaffold-init to clone missing subprojects.");
             }
             msg.append("\n  Regenerate the plan with"
                     + " ws:versions-upgrade-draft.");

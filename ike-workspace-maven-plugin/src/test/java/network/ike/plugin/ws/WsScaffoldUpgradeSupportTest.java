@@ -173,7 +173,7 @@ class WsScaffoldUpgradeSupportTest {
 
     @Test
     void gitattributes_fullyCurrentReturnsEmpty() {
-        // Simulates the file ws:init would write (mirrors komet-ws's
+        // Simulates the file ws:scaffold-init would write (mirrors komet-ws's
         // real .gitattributes added as the manual fix for #189).
         String existing = """
                 # Line-ending policy for workspace

@@ -1,5 +1,6 @@
 package network.ike.plugin.ws;
 
+import network.ike.plugin.ws.bootstrap.WorkspaceBootstrap;
 import org.apache.maven.api.plugin.MojoException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -12,11 +13,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Tests for {@link WsCreateMojo}'s real-GAV generation
- * (ike-issues#183).
+ * Tests for {@link WsScaffoldInitMojo}'s bootstrap (formerly
+ * {@code ws:create}) branch — real-GAV generation per ike-issues#183
+ * and the IKE-Network/ike-issues#393 fold of {@code ws:create} into
+ * {@code ws:scaffold-init}.
  *
- * <p>Exercises the file generators directly via reflection — no Maven
- * lifecycle required. Verifies:
+ * <p>Exercises {@link WorkspaceBootstrap}'s file generators directly via
+ * reflection — no Maven lifecycle required. Verifies:
  * <ul>
  *   <li>{@code -Dgroup} is required (no default, no prompt fallback)</li>
  *   <li>Generated {@code pom.xml} carries the user's groupId,
@@ -28,25 +31,26 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  *   <li>{@code -Dversion} defaults to {@code 1-SNAPSHOT}</li>
  * </ul>
  */
-class WsCreateMojoTest {
+class WsScaffoldInitMojoTest {
 
     @TempDir
     Path tempDir;
 
     @Test
     void execute_without_group_throws_with_pointer_to_183() throws Exception {
-        WsCreateMojo mojo = configured("my-ws", null, null, null);
+        WsScaffoldInitMojo mojo = configured("my-ws", null, null, null);
         assertThatThrownBy(mojo::execute)
                 .isInstanceOf(MojoException.class)
-                .hasMessageContaining("ws:create requires -Dgroup")
+                .hasMessageContaining("ws:scaffold-init in bootstrap mode requires -Dgroup")
                 .hasMessageContaining("ike-issues#183");
     }
 
     @Test
     void generated_pom_uses_user_supplied_coordinates() throws Exception {
-        WsCreateMojo mojo = configured("my-ws", "org.example", "2-SNAPSHOT", null);
+        WorkspaceBootstrap bootstrap = bootstrap("my-ws", "org.example",
+                "2-SNAPSHOT", null);
 
-        String pom = invokeGeneratePom(mojo);
+        String pom = invokeGeneratePom(bootstrap);
 
         assertThat(pom)
                 .contains("<groupId>org.example</groupId>")
@@ -57,18 +61,20 @@ class WsCreateMojoTest {
 
     @Test
     void generated_pom_uses_explicit_artifactId_when_supplied() throws Exception {
-        WsCreateMojo mojo = configured("my-ws", "org.example", null, "explicit-aid");
+        WorkspaceBootstrap bootstrap = bootstrap("my-ws", "org.example",
+                "1-SNAPSHOT", "explicit-aid");
 
-        String pom = invokeGeneratePom(mojo);
+        String pom = invokeGeneratePom(bootstrap);
 
         assertThat(pom).contains("<artifactId>explicit-aid</artifactId>");
     }
 
     @Test
     void generated_manifest_is_schema_1_1_with_workspace_root_block() throws Exception {
-        WsCreateMojo mojo = configured("my-ws", "org.example", "2-SNAPSHOT", null);
+        WorkspaceBootstrap bootstrap = bootstrap("my-ws", "org.example",
+                "2-SNAPSHOT", null);
 
-        String yaml = invokeGenerateManifest(mojo);
+        String yaml = invokeGenerateManifest(bootstrap);
 
         assertThat(yaml)
                 .contains("schema-version: \"1.1\"")
@@ -80,21 +86,19 @@ class WsCreateMojoTest {
 
     @Test
     void generated_manifest_falls_back_to_default_version_1_SNAPSHOT() throws Exception {
-        // Simulate the @Parameter defaultValue by setting version explicitly
-        // — Maven's DI normally injects the default, but the test bypasses
-        // injection.
-        WsCreateMojo mojo = configured("my-ws", "org.example", "1-SNAPSHOT", null);
+        WorkspaceBootstrap bootstrap = bootstrap("my-ws", "org.example",
+                "1-SNAPSHOT", null);
 
-        String yaml = invokeGenerateManifest(mojo);
+        String yaml = invokeGenerateManifest(bootstrap);
 
         assertThat(yaml).contains("version: 1-SNAPSHOT");
     }
 
     // ── Helpers ──────────────────────────────────────────────────
 
-    private WsCreateMojo configured(String name, String group, String version,
-                                    String artifactId) throws Exception {
-        WsCreateMojo mojo = TestLog.createMojo(WsCreateMojo.class);
+    private WsScaffoldInitMojo configured(String name, String group, String version,
+                                          String artifactId) throws Exception {
+        WsScaffoldInitMojo mojo = TestLog.createMojo(WsScaffoldInitMojo.class);
         setField(mojo, "name", name);
         setField(mojo, "group", group);
         setField(mojo, "version", version);
@@ -109,42 +113,41 @@ class WsCreateMojoTest {
 
     private static void setField(Object target, String fieldName, Object value)
             throws Exception {
-        Field f = WsCreateMojo.class.getDeclaredField(fieldName);
+        Field f = WsScaffoldInitMojo.class.getDeclaredField(fieldName);
         f.setAccessible(true);
         f.set(target, value);
     }
 
     /**
-     * Resolve artifactId fallback the way execute() does: artifactId
-     * defaults to name when null/blank. Then call generatePom().
+     * Build a {@link WorkspaceBootstrap} directly with the same parameter
+     * mix as the production code path. We don't bother running the mojo
+     * because the generators are now isolated on the bootstrap class.
      */
-    private String invokeGeneratePom(WsCreateMojo mojo) throws Exception {
-        applyDefaults(mojo);
-        Method m = WsCreateMojo.class.getDeclaredMethod("generatePom");
-        m.setAccessible(true);
-        return (String) m.invoke(mojo);
+    private WorkspaceBootstrap bootstrap(String name, String group,
+                                          String version, String artifactId) {
+        WorkspaceBootstrap.Params params = new WorkspaceBootstrap.Params(
+                name,
+                /*description*/ name,
+                /*org*/ null,
+                group,
+                (artifactId == null || artifactId.isBlank()) ? name : artifactId,
+                version == null ? "1-SNAPSHOT" : version,
+                /*mavenVersion*/ "4.0.0-rc-5",
+                /*defaultBranch*/ "main",
+                /*skipGit*/ true,
+                /*parentVersion*/ "test");
+        return new WorkspaceBootstrap(params, new TestLog());
     }
 
-    private String invokeGenerateManifest(WsCreateMojo mojo) throws Exception {
-        applyDefaults(mojo);
-        Method m = WsCreateMojo.class.getDeclaredMethod("generateManifest");
+    private String invokeGeneratePom(WorkspaceBootstrap bootstrap) throws Exception {
+        Method m = WorkspaceBootstrap.class.getDeclaredMethod("generatePom");
         m.setAccessible(true);
-        return (String) m.invoke(mojo);
+        return (String) m.invoke(bootstrap);
     }
 
-    /**
-     * Apply the same artifactId-fallback that {@code execute()} runs
-     * before the generators are called. The generators read
-     * {@code artifactId} (a field) — without this they'd see null
-     * because we bypass {@code execute()}.
-     */
-    private static void applyDefaults(WsCreateMojo mojo) throws Exception {
-        Field name = WsCreateMojo.class.getDeclaredField("name");
-        Field aid = WsCreateMojo.class.getDeclaredField("artifactId");
-        name.setAccessible(true);
-        aid.setAccessible(true);
-        if (aid.get(mojo) == null || ((String) aid.get(mojo)).isBlank()) {
-            aid.set(mojo, name.get(mojo));
-        }
+    private String invokeGenerateManifest(WorkspaceBootstrap bootstrap) throws Exception {
+        Method m = WorkspaceBootstrap.class.getDeclaredMethod("generateManifest");
+        m.setAccessible(true);
+        return (String) m.invoke(bootstrap);
     }
 }

@@ -172,15 +172,15 @@ class WorkspaceMojoIntegrationTest {
         assertThatCode(mojo::execute).doesNotThrowAnyException();
     }
 
-    // ── InitWorkspaceMojo ────────────────────────────────────────────
+    // ── WsScaffoldInitMojo (init branch — was InitWorkspaceMojo) ────
 
     @Test
-    void init_freshClone_clonesAllComponents() throws Exception {
+    void scaffoldInit_freshClone_clonesAllComponents() throws Exception {
         Path initRoot = Files.createTempDirectory(tempDir, "init-");
         TestWorkspaceHelper initHelper = new TestWorkspaceHelper(initRoot);
         initHelper.buildWorkspaceWithUpstreams();
 
-        InitWorkspaceMojo mojo = TestLog.createMojo(InitWorkspaceMojo.class);
+        WsScaffoldInitMojo mojo = TestLog.createMojo(WsScaffoldInitMojo.class);
         mojo.manifest = initHelper.workspaceYaml().toFile();
 
         mojo.execute();
@@ -195,7 +195,7 @@ class WorkspaceMojoIntegrationTest {
     }
 
     @Test
-    void init_alreadyCloned_skips() throws Exception {
+    void scaffoldInit_alreadyCloned_skips() throws Exception {
         Path initRoot = Files.createTempDirectory(tempDir, "init-");
         TestWorkspaceHelper initHelper = new TestWorkspaceHelper(initRoot);
         initHelper.buildWorkspaceWithUpstreams();
@@ -214,7 +214,7 @@ class WorkspaceMojoIntegrationTest {
         // Count commits before init
         String countBefore = execCapture(libA, "git", "rev-list", "--count", "HEAD");
 
-        InitWorkspaceMojo mojo = TestLog.createMojo(InitWorkspaceMojo.class);
+        WsScaffoldInitMojo mojo = TestLog.createMojo(WsScaffoldInitMojo.class);
         mojo.manifest = initHelper.workspaceYaml().toFile();
 
         mojo.execute();

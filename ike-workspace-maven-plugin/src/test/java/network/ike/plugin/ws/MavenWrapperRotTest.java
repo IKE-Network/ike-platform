@@ -27,8 +27,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <p>The lookup pattern this test forbids is specifically
  * {@code new File(<x>, "mvnw"...)}. Path-based <em>writers</em> like
- * {@code Path.resolve("mvnw")} (used by {@code WsCreateMojo} and
- * {@code InitWorkspaceMojo} to scaffold wrapper scripts) are
+ * {@code Path.resolve("mvnw")} (used by {@code WsScaffoldInitMojo} and
+ * its {@link network.ike.plugin.ws.bootstrap.SubprojectInitializer} to
+ * scaffold wrapper scripts) are
  * legitimate and must remain allowed.
  */
 class MavenWrapperRotTest {

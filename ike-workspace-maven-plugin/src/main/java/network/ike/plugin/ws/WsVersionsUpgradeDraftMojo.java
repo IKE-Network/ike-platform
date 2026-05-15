@@ -125,7 +125,7 @@ public class WsVersionsUpgradeDraftMojo extends AbstractWorkspaceMojo {
             throw new MojoException(
                     "No cloned subprojects found in workspace "
                             + workspaceRoot
-                            + ".\n  Run ws:init first, or check that"
+                            + ".\n  Run ws:scaffold-init first, or check that"
                             + " each subproject directory contains a"
                             + " pom.xml.");
         }

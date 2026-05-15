@@ -183,9 +183,9 @@ public class ScaffoldConventionReconciler implements Reconciler {
 
     /**
      * Required {@code .gitignore} entries grouped into named sections.
-     * Order mirrors what {@code WsCreateMojo.generateGitignore()} emits
-     * so that output from {@code ws:create} and this reconciler stays
-     * visually consistent.
+     * Order mirrors what {@code WorkspaceBootstrap#generateGitignore()}
+     * emits so that output from {@code ws:scaffold-init} and this
+     * reconciler stays visually consistent.
      */
     static final List<GitignoreSection> GITIGNORE_SECTIONS = List.of(
             new GitignoreSection(

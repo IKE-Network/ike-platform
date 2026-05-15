@@ -24,7 +24,7 @@ import java.io.File;
  * not stop the other.
  *
  * <p>Triggered from: {@code ws:add}, {@code ws:remove}, {@code ws:sync},
- * {@code ws:pull}, {@code ws:commit}, {@code ws:init},
+ * {@code ws:pull}, {@code ws:commit}, {@code ws:scaffold-init},
  * {@code ws:feature-finish-merge-publish},
  * {@code ws:feature-finish-squash-publish},
  * {@code ws:align-publish}, {@code ws:scaffold-publish}
@@ -33,7 +33,7 @@ import java.io.File;
  *
  * <p>See {@code IKE-Network/ike-issues#279}.
  */
-final class PostMutationSync {
+public final class PostMutationSync {
 
     private PostMutationSync() {}
 
@@ -44,7 +44,7 @@ final class PostMutationSync {
      * @param workspaceRoot the workspace root directory
      * @param log           plugin log for status messages
      */
-    static void refresh(File workspaceRoot, Log log) {
+    public static void refresh(File workspaceRoot, Log log) {
         IdeProfileSync.run(workspaceRoot, log);
         YamlDepsSync.run(workspaceRoot, log);
     }

@@ -336,7 +336,7 @@ class WsAddDependencyDerivationTest {
 
     @Test
     void insertionPoint_inserts_before_trailing_ide_comment_block() {
-        // The default ws:create template ends with a commented-out
+        // The default ws:scaffold-init template ends with a commented-out
         // `# ide:` block. New subprojects must NOT be appended after
         // that block (which would leave the comment trapped between
         // entries and dangle the indented commented lines).

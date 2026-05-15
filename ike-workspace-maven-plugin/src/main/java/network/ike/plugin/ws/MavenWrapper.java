@@ -17,8 +17,8 @@ import java.util.Properties;
  *       {@code .gitattributes} {@code *.cmd text eol=crlf} rule)</li>
  * </ul>
  *
- * <p>Used by {@code ws:init} when scaffolding a new workspace, and
- * by {@code ScaffoldConventionReconciler}'s {@code mvnw-standard}
+ * <p>Used by {@code ws:scaffold-init} when scaffolding a new workspace,
+ * and by {@code ScaffoldConventionReconciler}'s {@code mvnw-standard}
  * step (run as part of {@code ws:scaffold-publish}) when any of the
  * three files is missing from an existing workspace.
  *
@@ -100,9 +100,9 @@ public final class MavenWrapper {
      * @param mavenVersion Maven version (e.g. {@code 4.0.0-rc-5})
      * @throws IOException if writing fails
      */
-    static void writePropertiesFile(Path propsFile, String mavenVersion) throws IOException {
+    public static void writePropertiesFile(Path propsFile, String mavenVersion) throws IOException {
         Files.createDirectories(propsFile.getParent());
-        String props = "# Maven Wrapper properties — managed by ws:init from workspace.yaml\n"
+        String props = "# Maven Wrapper properties — managed by ws:scaffold-init from workspace.yaml\n"
                 + "maven.version=" + mavenVersion + "\n"
                 + "distributionUrl=https://repo.maven.apache.org/maven2/org/apache/maven/"
                 + "apache-maven/" + mavenVersion + "/apache-maven-" + mavenVersion
@@ -119,10 +119,10 @@ public final class MavenWrapper {
      * @param mvnw target path (typically {@code mvnw} at workspace root)
      * @throws IOException if writing fails
      */
-    static void writeMvnwScript(Path mvnw) throws IOException {
+    public static void writeMvnwScript(Path mvnw) throws IOException {
         String script = """
                 #!/bin/sh
-                # Maven Wrapper launcher — installed by ws:init
+                # Maven Wrapper launcher — installed by ws:scaffold-init
                 # Downloads and caches the Maven version specified in
                 # .mvn/wrapper/maven-wrapper.properties
                 #
@@ -168,9 +168,9 @@ public final class MavenWrapper {
      * @param mvnwCmd target path (typically {@code mvnw.cmd} at workspace root)
      * @throws IOException if writing fails
      */
-    static void writeMvnwCmdScript(Path mvnwCmd) throws IOException {
+    public static void writeMvnwCmdScript(Path mvnwCmd) throws IOException {
         String script = """
-                @REM Maven Wrapper launcher — installed by ws:init
+                @REM Maven Wrapper launcher — installed by ws:scaffold-init
                 @REM Downloads and caches the Maven version specified in
                 @REM .mvn/wrapper/maven-wrapper.properties
                 @echo off

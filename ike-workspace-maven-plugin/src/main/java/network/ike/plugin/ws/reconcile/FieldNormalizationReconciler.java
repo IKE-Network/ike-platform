@@ -58,20 +58,18 @@ public class FieldNormalizationReconciler implements Reconciler {
         }
 
         List<String> detail = new ArrayList<>();
-        for (Map.Entry<String, String[]> e : drift.versionUpdates.entrySet()) {
-            String name = e.getKey();
-            String[] beforeAfter = e.getValue();
-            detail.add(name + ": version "
-                    + (beforeAfter[0] == null ? "(null)" : beforeAfter[0])
-                    + " → " + beforeAfter[1]);
+        for (Map.Entry<String, FieldChange> e : drift.versionUpdates.entrySet()) {
+            FieldChange c = e.getValue();
+            detail.add(e.getKey() + ": version "
+                    + (c.before() == null ? "(null)" : c.before())
+                    + " → " + c.after());
         }
-        for (Map.Entry<String, String[]> e : drift.groupIdUpdates.entrySet()) {
-            String name = e.getKey();
-            String[] beforeAfter = e.getValue();
-            detail.add(name + ": groupId "
-                    + (beforeAfter[0] == null || beforeAfter[0].isEmpty()
-                            ? "(empty)" : beforeAfter[0])
-                    + " → " + beforeAfter[1]);
+        for (Map.Entry<String, FieldChange> e : drift.groupIdUpdates.entrySet()) {
+            FieldChange c = e.getValue();
+            detail.add(e.getKey() + ": groupId "
+                    + (c.before() == null || c.before().isEmpty()
+                            ? "(empty)" : c.before())
+                    + " → " + c.after());
         }
 
         int total = drift.versionUpdates.size() + drift.groupIdUpdates.size();
@@ -96,15 +94,15 @@ public class FieldNormalizationReconciler implements Reconciler {
         try {
             if (!drift.versionUpdates.isEmpty()) {
                 Map<String, String> versionValues = new LinkedHashMap<>();
-                for (Map.Entry<String, String[]> e : drift.versionUpdates.entrySet()) {
-                    versionValues.put(e.getKey(), e.getValue()[1]);
+                for (Map.Entry<String, FieldChange> e : drift.versionUpdates.entrySet()) {
+                    versionValues.put(e.getKey(), e.getValue().after());
                 }
                 writeVersionFields(ctx.manifestPath(), versionValues);
             }
             if (!drift.groupIdUpdates.isEmpty()) {
                 Map<String, String> groupIdValues = new LinkedHashMap<>();
-                for (Map.Entry<String, String[]> e : drift.groupIdUpdates.entrySet()) {
-                    groupIdValues.put(e.getKey(), e.getValue()[1]);
+                for (Map.Entry<String, FieldChange> e : drift.groupIdUpdates.entrySet()) {
+                    groupIdValues.put(e.getKey(), e.getValue().after());
                 }
                 writeGroupIdFields(ctx.manifestPath(), groupIdValues);
             }
@@ -119,18 +117,26 @@ public class FieldNormalizationReconciler implements Reconciler {
     // ── Drift computation (shared by detect and apply) ──────────────
 
     /**
-     * Per-subproject "before, after" pairs for each denormalized field
-     * that drifts from POM truth. Used as a shared intermediate
-     * between {@link #detect} and {@link #apply} so they agree on
-     * exactly which subprojects are affected.
+     * A single field's "before / after" values when its YAML value
+     * has drifted from POM truth. Used inside {@link Drift} so the
+     * pair is compiler-visible rather than a positional
+     * {@code String[]}.
+     */
+    private record FieldChange(String before, String after) {}
+
+    /**
+     * Per-subproject before/after for each denormalized field that
+     * drifts from POM truth. Used as a shared intermediate between
+     * {@link #detect} and {@link #apply} so they agree on exactly
+     * which subprojects are affected.
      */
     private record Drift(
-            Map<String, String[]> versionUpdates,
-            Map<String, String[]> groupIdUpdates) {}
+            Map<String, FieldChange> versionUpdates,
+            Map<String, FieldChange> groupIdUpdates) {}
 
     private Drift computeDrift(WorkspaceContext ctx) {
-        Map<String, String[]> versionUpdates = new LinkedHashMap<>();
-        Map<String, String[]> groupIdUpdates = new LinkedHashMap<>();
+        Map<String, FieldChange> versionUpdates = new LinkedHashMap<>();
+        Map<String, FieldChange> groupIdUpdates = new LinkedHashMap<>();
         for (Map.Entry<String, Subproject> entry
                 : ctx.graph().manifest().subprojects().entrySet()) {
             String name = entry.getKey();
@@ -143,9 +149,9 @@ public class FieldNormalizationReconciler implements Reconciler {
                 String pomVersion = ReleaseSupport.readPomVersion(pomFile);
                 String yamlVersion = subproject.version();
                 if (yamlVersion != null && !yamlVersion.equals(pomVersion)) {
-                    versionUpdates.put(name, new String[]{yamlVersion, pomVersion});
+                    versionUpdates.put(name, new FieldChange(yamlVersion, pomVersion));
                 } else if (yamlVersion == null && pomVersion != null) {
-                    versionUpdates.put(name, new String[]{null, pomVersion});
+                    versionUpdates.put(name, new FieldChange(null, pomVersion));
                 }
             } catch (MojoException e) {
                 ctx.log().warn("  " + name + ": could not read POM version — "
@@ -159,7 +165,7 @@ public class FieldNormalizationReconciler implements Reconciler {
                     if (yamlGroupId == null || yamlGroupId.isEmpty()
                             || !yamlGroupId.equals(pomGroupId)) {
                         groupIdUpdates.put(name,
-                                new String[]{yamlGroupId, pomGroupId});
+                                new FieldChange(yamlGroupId, pomGroupId));
                     }
                 }
             } catch (MojoException e) {

@@ -115,7 +115,7 @@ class CheckpointMojoTest {
 
         String yaml = WsCheckpointDraftMojo.buildCheckpointYaml(
                 "test", "2026-04-08T00:00:00Z", "tester", "1.0",
-                snapshots, java.util.List.of());
+                snapshots, java.util.List.of(), java.util.Map.of());
 
         assertThat(yaml)
                 .contains("name: \"test\"")
@@ -129,7 +129,8 @@ class CheckpointMojoTest {
     void buildCheckpointYaml_includesAbsentComponents() {
         String yaml = WsCheckpointDraftMojo.buildCheckpointYaml(
                 "test", "2026-04-08T00:00:00Z", "tester", "1.0",
-                java.util.List.of(), java.util.List.of("missing-repo"));
+                java.util.List.of(), java.util.List.of("missing-repo"),
+                java.util.Map.of());
 
         assertThat(yaml)
                 .contains("missing-repo:")

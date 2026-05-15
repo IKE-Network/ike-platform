@@ -16,7 +16,7 @@ class CheckpointSupportTest {
     void buildCheckpointYaml_header_containsMetadata() {
         String yaml = WsCheckpointDraftMojo.buildCheckpointYaml(
                 "sprint-42", "2026-03-20T10:00:00Z", "kec", "1.0",
-                List.of(), List.of());
+                List.of(), List.of(), java.util.Map.of());
 
         assertThat(yaml)
                 .contains("name: \"sprint-42\"")
@@ -34,7 +34,7 @@ class CheckpointSupportTest {
 
         String yaml = WsCheckpointDraftMojo.buildCheckpointYaml(
                 "test", "2026-01-01T00:00:00Z", "ci", "1.0",
-                List.of(snap), List.of());
+                List.of(snap), List.of(), java.util.Map.of());
 
         assertThat(yaml)
                 .contains("    ike-platform:")
@@ -56,7 +56,7 @@ class CheckpointSupportTest {
 
         String yaml = WsCheckpointDraftMojo.buildCheckpointYaml(
                 "test", "2026-01-01T00:00:00Z", "ci", "1.0",
-                List.of(snap), List.of());
+                List.of(snap), List.of(), java.util.Map.of());
 
         assertThat(yaml)
                 .contains("    ike-docs:")
@@ -68,7 +68,7 @@ class CheckpointSupportTest {
     void buildCheckpointYaml_absentSubproject_markedAbsent() {
         String yaml = WsCheckpointDraftMojo.buildCheckpointYaml(
                 "test", "2026-01-01T00:00:00Z", "ci", "1.0",
-                List.of(), List.of("missing-repo"));
+                List.of(), List.of("missing-repo"), java.util.Map.of());
 
         assertThat(yaml)
                 .contains("    missing-repo:")
@@ -83,7 +83,7 @@ class CheckpointSupportTest {
 
         String yaml = WsCheckpointDraftMojo.buildCheckpointYaml(
                 "test", "2026-01-01T00:00:00Z", "ci", "1.0",
-                List.of(snap), List.of());
+                List.of(snap), List.of(), java.util.Map.of());
 
         // The subproject section should not contain a version line
         // (schema-version in the header is separate)
@@ -96,7 +96,7 @@ class CheckpointSupportTest {
     void buildCheckpointYaml_emptySubprojects_minimalOutput() {
         String yaml = WsCheckpointDraftMojo.buildCheckpointYaml(
                 "empty", "2026-01-01T00:00:00Z", "ci", "1.0",
-                List.of(), List.of());
+                List.of(), List.of(), java.util.Map.of());
 
         assertThat(yaml)
                 .contains("checkpoint:")
@@ -112,7 +112,7 @@ class CheckpointSupportTest {
 
         String yaml = WsCheckpointDraftMojo.buildCheckpointYaml(
                 "multi", "2026-01-01T00:00:00Z", "ci", "1.0",
-                snaps, List.of());
+                snaps, List.of(), java.util.Map.of());
 
         assertThat(yaml)
                 .contains("    alpha:")

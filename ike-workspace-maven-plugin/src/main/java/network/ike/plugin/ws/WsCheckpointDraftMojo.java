@@ -24,8 +24,11 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
-import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * Create a workspace checkpoint — tag every subproject at its current HEAD
@@ -165,6 +168,10 @@ public class WsCheckpointDraftMojo extends AbstractWorkspaceMojo {
         // ── Tag each subproject in dependency order ────────────────────
         List<SubprojectSnapshot> snapshots = new ArrayList<>();
         List<String> absentComponents = new ArrayList<>();
+        // Per-subproject closing-keyword trailer issue refs (#394) —
+        // report-only, never mutates issue state.
+        Map<String, List<ReleaseNotesSupport.IssueRef>> issuesSinceLastRelease =
+                new LinkedHashMap<>();
 
         List<String> ordered = graph.topologicalSort(
                 new LinkedHashSet<>(graph.manifest().subprojects().keySet()));
@@ -184,17 +191,30 @@ public class WsCheckpointDraftMojo extends AbstractWorkspaceMojo {
             String shortSha = gitShortSha(dir);
             String version  = readVersion(dir);
 
+            // Collect issue refs from closing-keyword trailers in commits
+            // since the last release tag. Pure read — does not close
+            // issues or remove pending-release labels (#394).
+            List<ReleaseNotesSupport.IssueRef> issues =
+                    collectClosingTrailerIssuesSinceLastRelease(dir);
+            if (!issues.isEmpty()) {
+                issuesSinceLastRelease.put(subName, issues);
+            }
+
             if (draft) {
                 getLog().info(Ansi.green("  ✓ ") + subName
                         + " [" + shortSha + "] " + branch
-                        + " (" + version + ")");
+                        + " (" + version + ")"
+                        + (issues.isEmpty() ? ""
+                            : " — " + issues.size() + " issue(s) since last release"));
                 CheckpointSupport.preview(dir, wsTagName, getLog());
                 snapshots.add(new SubprojectSnapshot(
                         subName, sha, shortSha, branch, version, false));
             } else {
                 CheckpointSupport.checkpoint(dir, wsTagName, getLog());
                 getLog().info(Ansi.green("  ✓ ") + subName
-                        + " [" + shortSha + "] → " + wsTagName);
+                        + " [" + shortSha + "] → " + wsTagName
+                        + (issues.isEmpty() ? ""
+                            : " — " + issues.size() + " issue(s) since last release"));
                 snapshots.add(new SubprojectSnapshot(
                         subName, sha, shortSha, branch, version, false));
             }
@@ -204,7 +224,7 @@ public class WsCheckpointDraftMojo extends AbstractWorkspaceMojo {
         String yamlContent = buildCheckpointYaml(
                 name, timestamp, author,
                 graph.manifest().schemaVersion(),
-                snapshots, absentComponents);
+                snapshots, absentComponents, issuesSinceLastRelease);
 
         // ── Append testing context from milestone ─────────────────────
         ReleaseNotesSupport.TestingContext testingContext = snapshotTestingContext(graph);
@@ -305,7 +325,7 @@ public class WsCheckpointDraftMojo extends AbstractWorkspaceMojo {
                 name, wsTagName, timestamp, author, draft,
                 snapshots, absentComponents, yamlContent,
                 checkpointFile, workspaceHasGit, manifestUpdated, tagPushed,
-                testingContext);
+                testingContext, issuesSinceLastRelease);
         writeReport(publish ? WsGoal.CHECKPOINT_PUBLISH : WsGoal.CHECKPOINT_DRAFT,
                 buildCheckpointMarkdownReport(reportContext));
     }
@@ -357,7 +377,8 @@ public class WsCheckpointDraftMojo extends AbstractWorkspaceMojo {
             boolean workspaceHasGit,
             boolean manifestUpdated,
             boolean tagPushed,
-            ReleaseNotesSupport.TestingContext testingContext) {}
+            ReleaseNotesSupport.TestingContext testingContext,
+            Map<String, List<ReleaseNotesSupport.IssueRef>> issuesSinceLastRelease) {}
 
     private String buildCheckpointMarkdownReport(CheckpointReportContext ctx) {
         var sb = new StringBuilder();
@@ -428,6 +449,28 @@ public class WsCheckpointDraftMojo extends AbstractWorkspaceMojo {
             sb.append("## Testing context\n\nNo milestone found — skipping.\n\n");
         }
 
+        // #394: report issues referenced by closing trailers in commits
+        // since each subproject's last release tag. Report-only — checkpoint
+        // never closes issues or removes pending-release labels.
+        sb.append("## Issues since last release\n\n");
+        if (ctx.issuesSinceLastRelease().isEmpty()) {
+            sb.append("No closing-trailer issue references found in commits "
+                    + "since the last release tag in each subproject.\n\n");
+        } else {
+            sb.append("Per-subproject `Fixes`/`Closes`/`Resolves` trailers "
+                    + "in commits since the last `v*` tag. **This checkpoint "
+                    + "does not close any of these issues** — they remain in "
+                    + "their current state until an actual release ships.\n\n");
+            for (var entry : ctx.issuesSinceLastRelease().entrySet()) {
+                sb.append("### ").append(entry.getKey()).append("\n\n");
+                for (ReleaseNotesSupport.IssueRef ref : entry.getValue()) {
+                    sb.append("- ").append(ref.repo()).append("#")
+                            .append(ref.number()).append('\n');
+                }
+                sb.append('\n');
+            }
+        }
+
         if (ctx.draft()) {
             sb.append("## Checkpoint YAML (preview)\n\n");
             sb.append("```yaml\n")
@@ -454,7 +497,9 @@ public class WsCheckpointDraftMojo extends AbstractWorkspaceMojo {
     public static String buildCheckpointYaml(String name, String timestamp,
                                               String author, String schemaVersion,
                                               List<SubprojectSnapshot> snapshots,
-                                              List<String> absentNames) {
+                                              List<String> absentNames,
+                                              Map<String, List<ReleaseNotesSupport.IssueRef>>
+                                                      issuesSinceLastRelease) {
         List<String> yaml = new ArrayList<>();
         yaml.add("# IKE Workspace Checkpoint");
         yaml.add("# Generated by: mvn ws:checkpoint-publish");
@@ -480,6 +525,15 @@ public class WsCheckpointDraftMojo extends AbstractWorkspaceMojo {
             yaml.add("      sha: \"" + snap.sha() + "\"");
             yaml.add("      short-sha: \"" + snap.shortSha() + "\"");
             yaml.add("      branch: \"" + snap.branch() + "\"");
+            List<ReleaseNotesSupport.IssueRef> refs =
+                    issuesSinceLastRelease.get(snap.name());
+            if (refs != null && !refs.isEmpty()) {
+                yaml.add("      issues-since-last-release:");
+                for (ReleaseNotesSupport.IssueRef ref : refs) {
+                    yaml.add("        - \"" + ref.repo() + "#"
+                            + ref.number() + "\"");
+                }
+            }
         }
 
         return String.join("\n", yaml) + "\n";
@@ -507,6 +561,44 @@ public class WsCheckpointDraftMojo extends AbstractWorkspaceMojo {
 
     private String readVersion(File dir) throws MojoException {
         return ReleaseSupport.readPomVersion(new File(dir, "pom.xml"));
+    }
+
+    /**
+     * Collect issue references from closing-keyword trailers
+     * ({@code Fixes}, {@code Closes}, {@code Resolves} and grammatical
+     * variants) in commits since the given subproject's last release
+     * tag (matching {@code v*}). Returns an empty list when no
+     * previous release tag is reachable, when no commits are in the
+     * range, or when {@code git} or the parser fails.
+     *
+     * <p>Per IKE-Network/ike-issues#394: this is a <em>report-only</em>
+     * collection. The checkpoint never closes any of these issues and
+     * never removes {@code pending-release} labels — that's reserved
+     * for actual releases ({@link ReleaseNotesSupport#removePendingReleaseLabels}).
+     *
+     * @param subDir the subproject's git working tree
+     * @return ordered set of unique issue references, empty when none
+     */
+    private List<ReleaseNotesSupport.IssueRef>
+            collectClosingTrailerIssuesSinceLastRelease(File subDir) {
+        try {
+            String previousTag = ReleaseSupport.execCapture(subDir,
+                    "git", "describe", "--tags", "--abbrev=0",
+                    "--match", "v*", "HEAD");
+            if (previousTag == null || previousTag.isBlank()) {
+                return List.of();
+            }
+            String body = ReleaseSupport.execCapture(subDir,
+                    "git", "log",
+                    "--format=%B%n--end--", previousTag + "..HEAD");
+            Set<ReleaseNotesSupport.IssueRef> refs =
+                    ReleaseNotesSupport.parseClosingTrailers(body, null);
+            return new ArrayList<>(refs);
+        } catch (Exception e) {
+            // No previous tag, no commits, or git failure — non-fatal
+            // for a checkpoint. Empty list signals "nothing to report."
+            return List.of();
+        }
     }
 
     private String resolveAuthor(File root) {

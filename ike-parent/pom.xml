@@ -148,6 +148,14 @@
         <record-builder-core.version>34</record-builder-core.version>
         <!-- Skip jacoco with -Dike.skip.jacoco=true. -->
         <ike.skip.jacoco>false</ike.skip.jacoco>
+        <!-- Foundation release cascade manifest (ike-issues#402).
+             Declared here so the location is visible in the effective
+             POM rather than discovered by filesystem heuristics. The
+             unpack-release-cascade execution drops the manifest here
+             at the validate phase; ike:release-{draft,publish} and
+             ws:cascade-foundation-publish read this property. Override
+             in a project's <properties> or with -D to relocate. -->
+        <ike.release.cascade.manifest>${project.build.directory}/release-cascade.yaml</ike.release.cascade.manifest>
     </properties>
 
     <dependencyManagement>
@@ -217,6 +225,22 @@
                 <artifactId>ike-build-standards</artifactId>
                 <version>${ike-tooling.version}</version>
                 <classifier>scaffold</classifier>
+                <type>zip</type>
+            </dependency>
+
+            <!-- Release-cascade manifest (classified ZIP) — see #402.
+                 Declarative cross-repo release ordering. Unlike the
+                 other ike-build-standards classifiers this one is not
+                 unpacked by a lifecycle-bound execution: ike:release-*
+                 and ws:release-* are standalone aggregator goals, so
+                 ike-maven-plugin and ike-workspace-maven-plugin
+                 resolve this artifact directly at release time. The
+                 entry here exists purely to manage the version. -->
+            <dependency>
+                <groupId>network.ike.tooling</groupId>
+                <artifactId>ike-build-standards</artifactId>
+                <version>${ike-tooling.version}</version>
+                <classifier>cascade</classifier>
                 <type>zip</type>
             </dependency>
 
@@ -324,6 +348,17 @@
             <groupId>network.ike.tooling</groupId>
             <artifactId>ike-build-standards</artifactId>
             <classifier>scaffold</classifier>
+            <type>zip</type>
+            <scope>provided</scope>
+        </dependency>
+        <!-- Release-cascade manifest (#402) — pulled at validate so
+             ike:release-{draft,publish} and ws:release-* can read
+             target/release-cascade.yaml for cross-repo cascade
+             ordering. -->
+        <dependency>
+            <groupId>network.ike.tooling</groupId>
+            <artifactId>ike-build-standards</artifactId>
+            <classifier>cascade</classifier>
             <type>zip</type>
             <scope>provided</scope>
         </dependency>
@@ -632,6 +667,28 @@
                                 <overWriteSnapshots>true</overWriteSnapshots>
                             </configuration>
                         </execution>
+                        <!-- Release-cascade manifest (ike-issues#402).
+                             Unpacks release-cascade.yaml from
+                             ike-build-standards:cascade:zip at validate
+                             phase to target/release-cascade.yaml. The
+                             ike:release-{draft,publish} goals and the
+                             ws:release-* family read it for the
+                             cross-repo cascade. Bound to validate (not
+                             pre-site) so it is present for the
+                             standalone release goals. -->
+                        <execution>
+                            <id>unpack-release-cascade</id>
+                            <phase>validate</phase>
+                            <goals><goal>unpack-dependencies</goal></goals>
+                            <configuration>
+                                <includeArtifactIds>ike-build-standards</includeArtifactIds>
+                                <includeClassifiers>cascade</includeClassifiers>
+                                <includeTypes>zip</includeTypes>
+                                <outputDirectory>${project.build.directory}</outputDirectory>
+                                <overWriteReleases>true</overWriteReleases>
+                                <overWriteSnapshots>true</overWriteSnapshots>
+                            </configuration>
+                        </execution>
                     </executions>
                 </plugin>
 
@@ -763,6 +820,15 @@
                              at validate phase, so ike:scaffold-*
                              goals work in prefix form without a
                              mandatory -DscaffoldDir flag. -->
+                    </execution>
+                    <execution>
+                        <id>unpack-release-cascade</id>
+                        <!-- inherits config from pluginManagement
+                             (#402): unpacks ike-build-standards
+                             classifier=cascade to
+                             ${project.build.directory}/release-cascade.yaml
+                             at validate phase, so the cascade-aware
+                             release goals can read it. -->
                     </execution>
                 </executions>
             </plugin>

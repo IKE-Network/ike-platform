@@ -4,14 +4,25 @@
 :toc: left
 :toclevels: 3
 
-Walk the canonical IKE foundation cascade — `ike-tooling → ike-docs →
+Walk the IKE foundation cascade — `ike-tooling → ike-docs →
 ike-platform` — in topological order. For each repo that has unreleased
 changes, align upstream-version properties to the latest-released
 upstreams, then run `ike:release-publish`. Optionally chain
 `ws:release-publish` on the current workspace after the foundation
 cascade completes.
 
-ike-issues#375.
+ike-issues#375; cascade order made declarative in ike-issues#402.
+
+[NOTE]
+====
+The cascade order is read from the declarative `release-cascade.yaml`
+manifest (`ike-build-standards`'s `cascade` classified artifact,
+unpacked by `ike-parent` to `target/release-cascade.yaml`). When the
+manifest cannot be found, the goal falls back to the built-in
+`ike-tooling,ike-docs,ike-platform` order. `-Dfoundations=<csv>` still
+overrides both. To change the cascade permanently, edit
+`release-cascade.yaml` — not this goal's source. See ike-issues#402.
+====
 
 == TL;DR
 
@@ -25,7 +36,7 @@ mvn ws:cascade-foundation-publish
 mvn ws:cascade-foundation-publish -DskipWorkspace=true
 
 # Override the foundations base directory:
-mvn ws:cascade-foundation-publish -DfoundationsDir=/path/to/foundations
+mvn ws:cascade-foundation-publish -Dike.release.cascade.basedir=/path/to/foundations
 
 # Override the cascade order (rare):
 mvn ws:cascade-foundation-publish -Dfoundations=ike-tooling,ike-platform
@@ -72,10 +83,82 @@ The goal:
    ike-docs,ike-platform`), looks at
    `<baseDir>/<name>/` and treats it as a foundation repo.
 
+Step 3's `<baseDir>/<name>/` resolution is overridable. The base
+directory is the `ike.release.cascade.basedir` property; an
+individual repo checked out somewhere else is pointed at with the
+`cascadeRepoDirs` map parameter (see <<local_vs_ci>>).
+
 The workspace is just the **anchor** — the place the goal stands so it
 knows where to look. The foundations have no membership relationship
 with the workspace's `workspace.yaml`. They are discovered by path,
 not by manifest.
+
+[#local_vs_ci]
+=== Local single-process walk vs. CI build chains
+
+The cascade has two parts, and only one of them is location-bound:
+
+* **Topology** — _which_ repos, in _what_ order. This lives in
+  `release-cascade.yaml` (keyed off `groupId` + `artifactId`,
+  link:../../ike-tooling/ike-build-standards/[shipped by
+  `ike-build-standards`]). It is environment-neutral and identical
+  everywhere.
+* **Execution** — _where_ the repos are and _what process_ drives
+  them. This is environment-specific.
+
+This goal is the **local, single-process** execution model: one
+developer, all foundation repos checked out as siblings, one `mvn`
+invocation walking them. Location resolution is fully
+property-driven so it adapts to non-standard layouts:
+
+[cols="1,3"]
+|===
+| `ike.release.cascade.basedir`
+| Base directory holding the foundation checkouts. Defaults to the
+  parent of the current workspace.
+
+| `cascadeRepoDirs` (map parameter)
+| Per-repo absolute-path overrides for repos that are *not*
+  co-located under the base directory.
+|===
+
+[source,xml]
+----
+<plugin>
+  <groupId>network.ike.platform</groupId>
+  <artifactId>ike-workspace-maven-plugin</artifactId>
+  <configuration>
+    <cascadeRepoDirs>
+      <ike-tooling>/agent/work/a1/ike-tooling</ike-tooling>
+      <ike-docs>/agent/work/b2/ike-docs</ike-docs>
+    </cascadeRepoDirs>
+  </configuration>
+</plugin>
+----
+
+On a **CI server (e.g. TeamCity)** the picture is different and this
+goal is generally *not* used:
+
+* Each foundation repo is its own build configuration with its own
+  VCS checkout — there is no co-located sibling tree to walk.
+* The cascade *topology* is mirrored as CI build-chain dependencies
+  (snapshot/artifact dependencies): `ike-docs`'s build config depends
+  on `ike-tooling`'s, `ike-platform`'s on both. `release-cascade.yaml`
+  is the specification you build those edges from.
+* Each build config runs the standalone `ike:release-publish`. That
+  goal is **location-independent**: it identifies itself from its own
+  reactor-root POM coordinates and reads the manifest via the
+  `ike.release.cascade.manifest` property (resolvable from the
+  unpacked `cascade` artifact, or a CI-set path). It prints the
+  cascade footer naming the next repo — the signal a finish-build
+  trigger acts on.
+* Artifact handoff between stages is via Nexus, not the filesystem:
+  `ike-docs` resolves `ike-tooling`'s *released* artifact from the
+  repository, exactly as any consumer would.
+
+In short: the manifest is shared; `ws:cascade-foundation-publish` is
+the local walker; CI uses build-chain triggers over the same
+topology. See IKE-Network/ike-issues#402.
 
 === Cross-workspace scope
 

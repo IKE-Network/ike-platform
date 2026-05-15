@@ -2,6 +2,9 @@ package network.ike.plugin.ws;
 
 import network.ike.plugin.PomRewriter;
 import network.ike.plugin.ReleaseSupport;
+import network.ike.workspace.cascade.CascadeRepo;
+import network.ike.workspace.cascade.ReleaseCascade;
+import network.ike.workspace.cascade.ReleaseCascadeIo;
 
 import org.apache.maven.api.plugin.MojoException;
 import org.apache.maven.api.plugin.annotations.Mojo;
@@ -11,11 +14,13 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.regex.Pattern;
 
 /**
@@ -70,20 +75,73 @@ import java.util.regex.Pattern;
 public class WsCascadeFoundationPublishMojo extends AbstractWorkspaceMojo {
 
     /**
-     * Comma-separated list of foundation repos to walk, in topological
-     * order. Defaults to the canonical IKE foundation cascade.
+     * Canonical foundation cascade — the fallback order used only
+     * when no {@code release-cascade.yaml} manifest can be found and
+     * {@code -Dfoundations} was not supplied.
      */
-    @Parameter(property = "foundations",
-               defaultValue = "ike-tooling,ike-docs,ike-platform")
+    private static final String DEFAULT_FOUNDATIONS =
+            "ike-tooling,ike-docs,ike-platform";
+
+    /**
+     * Comma-separated list of foundation repos to walk, in topological
+     * order. When left unset (the normal case) the order is read from
+     * the {@code release-cascade.yaml} manifest
+     * (IKE-Network/ike-issues#402). Set this only to override the
+     * cascade for a partial run, e.g.
+     * {@code -Dfoundations=ike-tooling,ike-docs}.
+     */
+    @Parameter(property = "foundations")
     String foundations;
 
     /**
-     * Directory containing the foundation repos. Defaults to the
-     * parent of the current workspace, which matches the standard
-     * {@code ~/ike-dev/&lt;name&gt;/} layout.
+     * Path to the {@code release-cascade.yaml} manifest. Bound to the
+     * standard {@code ike.release.cascade.manifest} property, which
+     * {@code ike-parent} declares in its {@code <properties>}
+     * pointing at {@code target/release-cascade.yaml}. When the
+     * property is unset the goal falls back to
+     * {@code <workspaceRoot>/target/release-cascade.yaml}. See
+     * IKE-Network/ike-issues#402.
      */
-    @Parameter(property = "foundationsDir")
+    @Parameter(property = "ike.release.cascade.manifest")
+    String cascadeManifest;
+
+    /**
+     * Base directory containing the foundation repo checkouts as
+     * sibling directories. Bound to the {@code ike.release.cascade.basedir}
+     * property. Defaults to the parent of the current workspace, which
+     * matches the standard local {@code ~/ike-dev/&lt;repo&gt;/} layout.
+     *
+     * <p>This goal is the <em>single-process</em> cascade walker — it
+     * assumes every foundation repo is checked out under one base
+     * directory. That is the local-workstation model. On a CI server
+     * each repo is typically its own build configuration with its own
+     * checkout; there the cascade is expressed as CI build-chain
+     * dependencies and this goal is not used. See the goal's reference
+     * page and IKE-Network/ike-issues#402.
+     */
+    @Parameter(property = "ike.release.cascade.basedir")
     File foundationsDir;
+
+    /**
+     * Per-repo checkout-location overrides for non-standard layouts —
+     * keyed by cascade repo name, valued with an absolute path. A repo
+     * absent from this map is located at
+     * {@code <ike.release.cascade.basedir>/<repo>}. Configure in the
+     * POM when the foundation checkouts are not co-located:
+     *
+     * <pre>{@code
+     * <configuration>
+     *   <cascadeRepoDirs>
+     *     <ike-tooling>/agent/work/a1/ike-tooling</ike-tooling>
+     *     <ike-docs>/agent/work/b2/ike-docs</ike-docs>
+     *   </cascadeRepoDirs>
+     * </configuration>
+     * }</pre>
+     *
+     * IKE-Network/ike-issues#402.
+     */
+    @Parameter
+    Map<String, String> cascadeRepoDirs;
 
     /**
      * Skip the workspace's own {@code ws:release-publish} step at the
@@ -145,6 +203,81 @@ public class WsCascadeFoundationPublishMojo extends AbstractWorkspaceMojo {
     /** Creates this goal instance. */
     public WsCascadeFoundationPublishMojo() {}
 
+    /**
+     * Resolves the foundation cascade order (IKE-Network/ike-issues#402).
+     *
+     * <p>Priority: an explicit {@code -Dfoundations} CSV when supplied,
+     * otherwise the {@code release-cascade.yaml} manifest, otherwise
+     * the canonical {@link #DEFAULT_FOUNDATIONS} fallback. The chosen
+     * source is logged so the operator can see where the order came
+     * from.
+     *
+     * @param searchRoot the directory from which the manifest is
+     *                   located (the workspace root)
+     * @return foundation repo names in topological release order
+     */
+    private List<String> resolveFoundations(File searchRoot) {
+        if (foundations != null && !foundations.isBlank()) {
+            getLog().info("  Cascade source: -Dfoundations override");
+            return splitCsv(foundations);
+        }
+        Path manifestPath =
+                (cascadeManifest != null && !cascadeManifest.isBlank())
+                        ? Path.of(cascadeManifest)
+                        : new File(searchRoot, "target/release-cascade.yaml")
+                                .toPath();
+        Optional<ReleaseCascade> loaded;
+        try {
+            loaded = ReleaseCascadeIo.load(manifestPath);
+        } catch (RuntimeException e) {
+            getLog().warn("release-cascade.yaml could not be read ("
+                    + e.getMessage()
+                    + "); using the built-in default order.");
+            loaded = Optional.empty();
+        }
+        if (loaded.isPresent()) {
+            getLog().info("  Cascade source: release-cascade.yaml");
+            return loaded.get().repos().stream()
+                    .map(CascadeRepo::repo)
+                    .toList();
+        }
+        getLog().info("  Cascade source: built-in default"
+                + " (no release-cascade.yaml found)");
+        return splitCsv(DEFAULT_FOUNDATIONS);
+    }
+
+    private static List<String> splitCsv(String csv) {
+        return Arrays.stream(csv.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .toList();
+    }
+
+    /**
+     * Resolves a cascade repo's checkout directory
+     * (IKE-Network/ike-issues#402).
+     *
+     * <p>An explicit per-repo override in {@link #cascadeRepoDirs}
+     * wins; otherwise the repo is located as {@code <baseDir>/<repo>}
+     * — the co-located sibling layout.
+     *
+     * @param baseDir the foundations base directory
+     * @param repo    the cascade repo name
+     * @return the directory the repo is expected to be checked out in
+     */
+    private File resolveRepoDir(File baseDir, String repo) {
+        if (cascadeRepoDirs != null) {
+            String override = cascadeRepoDirs.get(repo);
+            if (override != null && !override.isBlank()) {
+                File dir = new File(override);
+                getLog().info("  " + repo + ": location override → "
+                        + dir);
+                return dir;
+            }
+        }
+        return new File(baseDir, repo);
+    }
+
     @Override
     public void execute() throws MojoException {
         File wsRoot = workspaceRoot();
@@ -153,20 +286,16 @@ public class WsCascadeFoundationPublishMojo extends AbstractWorkspaceMojo {
                 : wsRoot.getParentFile();
         if (baseDir == null) {
             throw new MojoException(
-                    "Could not determine foundations base directory. "
+                    "Could not determine the foundations base directory. "
                             + "Workspace root has no parent. Pass "
-                            + "-DfoundationsDir=<path>.");
+                            + "-Dike.release.cascade.basedir=<path>.");
         }
-
-        List<String> names = Arrays.stream(foundations.split(","))
-                .map(String::trim)
-                .filter(s -> !s.isEmpty())
-                .toList();
 
         getLog().info("");
         getLog().info("IKE Foundation Cascade");
         getLog().info("══════════════════════");
         getLog().info("  Base directory:  " + baseDir);
+        List<String> names = resolveFoundations(wsRoot);
         getLog().info("  Foundations:     " + String.join(", ", names));
         getLog().info("  pushRelease:     " + pushRelease);
         getLog().info("  skipWorkspace:   " + skipWorkspace);
@@ -179,7 +308,7 @@ public class WsCascadeFoundationPublishMojo extends AbstractWorkspaceMojo {
         // alignment for workspace subprojects (#375 followup).
         Map<String, String> releasedVersions = new LinkedHashMap<>();
         for (String name : names) {
-            File dir = new File(baseDir, name);
+            File dir = resolveRepoDir(baseDir, name);
             Outcome outcome = walkOne(dir, name, baseDir, names,
                     releasedVersions);
             outcomes.add(outcome);

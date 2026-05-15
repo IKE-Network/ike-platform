@@ -53,7 +53,9 @@ public class FieldNormalizationReconciler implements Reconciler {
     @Override
     public DriftReport detect(WorkspaceContext ctx) {
         Drift drift = computeDrift(ctx);
-        if (drift.versionUpdates.isEmpty() && drift.groupIdUpdates.isEmpty()) {
+        boolean hasDuplicates = hasDuplicateKeys(ctx);
+        if (drift.versionUpdates.isEmpty() && drift.groupIdUpdates.isEmpty()
+                && !hasDuplicates) {
             return DriftReport.noDrift(dimension());
         }
 
@@ -71,9 +73,22 @@ public class FieldNormalizationReconciler implements Reconciler {
                             ? "(empty)" : c.before())
                     + " → " + c.after());
         }
+        if (hasDuplicates) {
+            detail.add("workspace.yaml has duplicate subproject field "
+                    + "keys — will collapse to last-wins (#387)");
+        }
 
-        int total = drift.versionUpdates.size() + drift.groupIdUpdates.size();
-        String summary = total + " field(s) drift from POM truth";
+        int driftCount = drift.versionUpdates.size()
+                + drift.groupIdUpdates.size();
+        String summary;
+        if (driftCount > 0 && hasDuplicates) {
+            summary = driftCount + " field(s) drift from POM truth; "
+                    + "duplicate keys to collapse";
+        } else if (driftCount > 0) {
+            summary = driftCount + " field(s) drift from POM truth";
+        } else {
+            summary = "duplicate subproject field keys to collapse";
+        }
         String action = "sync from POM truth on scaffold-publish";
         String optOut = "mvn ws:scaffold-publish -D" + optOutFlag() + "=false";
 
@@ -88,9 +103,6 @@ public class FieldNormalizationReconciler implements Reconciler {
             return;
         }
         Drift drift = computeDrift(ctx);
-        if (drift.versionUpdates.isEmpty() && drift.groupIdUpdates.isEmpty()) {
-            return;
-        }
         try {
             if (!drift.versionUpdates.isEmpty()) {
                 Map<String, String> versionValues = new LinkedHashMap<>();
@@ -107,10 +119,59 @@ public class FieldNormalizationReconciler implements Reconciler {
                 writeGroupIdFields(ctx.manifestPath(), groupIdValues);
             }
             int total = drift.versionUpdates.size() + drift.groupIdUpdates.size();
-            ctx.log().info("  " + dimension() + ": updated " + total + " field(s)");
+            if (total > 0) {
+                ctx.log().info("  " + dimension() + ": updated " + total
+                        + " field(s)");
+            }
+            // #387 safety net (wired by #399): collapse any pre-existing
+            // duplicate subproject keys. Runs after the field sync — the
+            // writer-side fix means updateSubprojectField no longer
+            // creates duplicates, so this only cleans up duplicates that
+            // predate that fix. Idempotent: a no-op on a clean manifest.
+            collapseDuplicateKeys(ctx);
         } catch (IOException e) {
             throw new MojoException(
                     "Failed to update workspace.yaml: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Tests whether the workspace manifest contains duplicate
+     * subproject field keys (the pre-#387 duplicate-key bug).
+     *
+     * @param ctx the workspace context
+     * @return true if collapsing would change the manifest
+     */
+    private static boolean hasDuplicateKeys(WorkspaceContext ctx) {
+        try {
+            String content = Files.readString(
+                    ctx.manifestPath(), StandardCharsets.UTF_8);
+            return !ManifestWriter.collapseDuplicateSubprojectFields(content)
+                    .equals(content);
+        } catch (IOException e) {
+            ctx.log().warn("  could not check workspace.yaml for "
+                    + "duplicate keys — " + e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Collapses pre-existing duplicate subproject field keys in the
+     * workspace manifest, keeping the last (YAML last-wins) occurrence.
+     *
+     * @param ctx the workspace context
+     * @throws IOException if the manifest cannot be read or written
+     */
+    private void collapseDuplicateKeys(WorkspaceContext ctx)
+            throws IOException {
+        Path manifestPath = ctx.manifestPath();
+        String before = Files.readString(manifestPath, StandardCharsets.UTF_8);
+        String after =
+                ManifestWriter.collapseDuplicateSubprojectFields(before);
+        if (!after.equals(before)) {
+            Files.writeString(manifestPath, after, StandardCharsets.UTF_8);
+            ctx.log().info("  " + dimension()
+                    + ": collapsed duplicate keys in workspace.yaml");
         }
     }
 

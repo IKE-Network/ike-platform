@@ -44,7 +44,7 @@ import java.util.Set;
  * report.
  *
  * <p>Each {@code verifyXxx} method translates one check from the
- * original mojo. The {@link #verifyParentAlignment()} check was
+ * original mojo. The {@code verifyParentAlignment()} check was
  * intentionally dropped during the extraction: parent drift is now
  * detected by {@code ParentVersionReconciler.detect()} (one of the
  * workspace-level reconcilers run by {@code ws:scaffold-draft})

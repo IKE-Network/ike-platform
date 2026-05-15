@@ -579,8 +579,8 @@ public class InitWorkspaceMojo extends AbstractWorkspaceMojo {
 
                 | Goal | Description |
                 |------|-------------|
-                | `ws:verify` | Check manifest, parents, BOM cascade, VCS state |
-                | `ws:verify-convergence` | Full verify + transitive dependency convergence (slow) |
+                | `ws:scaffold-draft` | Check manifest, parents, BOM cascade, VCS state (folds verify per #393) |
+                | `ws:verify-convergence` | Transitive dependency convergence (slow) |
                 | `ws:overview` | Workspace overview (manifest, graph, status, cascade) |
                 | `ws:check-branch` | Warn when a subproject branch deviates from workspace.yaml |
 
@@ -740,8 +740,8 @@ public class InitWorkspaceMojo extends AbstractWorkspaceMojo {
                 | Goal | Description |
                 |------|-------------|
                 | `ws:init` | Clone/initialize components from workspace.yaml |
-                | `ws:verify` | Check manifest, BOM cascade, VCS state |
-                | `ws:verify-convergence` | Full verify + transitive convergence |
+                | `ws:scaffold-draft` | Check manifest, BOM cascade, VCS state (folds verify per #393) |
+                | `ws:verify-convergence` | Transitive dependency convergence (slow) |
                 | `ws:overview` | Dashboard: manifest, graph, status, cascade |
                 | `ws:scaffold-publish` | Apply workspace-level reconciliation (denormalized YAML field sync, etc.) |
                 | `ws:scaffold-upgrade-draft` / `-publish` | Scaffold upgrades for new plugin version |

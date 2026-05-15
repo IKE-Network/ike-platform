@@ -38,14 +38,21 @@ class WorkspaceMojoIntegrationTest {
         helper.buildWorkspace();
     }
 
-    // ── VerifyWorkspaceMojo ─────────────────────────────────────────
+    // ── WorkspaceVerifier (formerly VerifyWorkspaceMojo, #393) ──────
 
     @Test
-    void verify_validWorkspace_noException() {
-        VerifyWorkspaceMojo mojo = TestLog.createMojo(VerifyWorkspaceMojo.class);
-        mojo.manifest = helper.workspaceYaml().toFile();
+    void workspaceVerifier_validWorkspace_noException() throws Exception {
+        Path manifestPath = helper.workspaceYaml();
+        network.ike.workspace.Manifest m =
+                network.ike.workspace.ManifestReader.read(manifestPath);
+        network.ike.workspace.WorkspaceGraph graph =
+                new network.ike.workspace.WorkspaceGraph(m);
+        var verifier = new network.ike.plugin.ws.verify.WorkspaceVerifier(
+                new TestLog(), graph,
+                manifestPath.getParent().toFile(), manifestPath,
+                false, true);
 
-        assertThatCode(mojo::execute).doesNotThrowAnyException();
+        assertThatCode(verifier::runAllChecks).doesNotThrowAnyException();
     }
 
     // ── VerifyConvergenceMojo (issues #181, #182) ──────────────────

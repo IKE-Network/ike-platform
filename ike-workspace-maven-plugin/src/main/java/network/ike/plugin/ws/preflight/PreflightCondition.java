@@ -316,8 +316,9 @@ public enum PreflightCondition {
      * </ol>
      *
      * <p>This preflight is the release-gate analog of
-     * {@code ws:verify}'s coherence check (#324). The verify check
-     * warns; the preflight blocks. Composed via Preflight so
+     * {@code ws:scaffold-draft}'s coherence check (#324; folded
+     * from the retired {@code ws:verify} per #393). The scaffold-draft
+     * check warns; the preflight blocks. Composed via Preflight so
      * release-draft surfaces it as a warning and release-publish
      * promotes it to a hard error.
      */
@@ -540,9 +541,10 @@ public enum PreflightCondition {
             sb.append("  Subprojects sharing the workspace's parent GA must\n");
             sb.append("  agree on parent version AND declare an empty\n");
             sb.append("  <relativePath/> to prevent the Maven 4\n");
-            sb.append("  \"parents form a cycle\" error. ws:verify reports\n");
-            sb.append("  the same coherence check as a warning; the release\n");
-            sb.append("  gate promotes it to a hard requirement.");
+            sb.append("  \"parents form a cycle\" error. ws:scaffold-draft\n");
+            sb.append("  reports the same coherence check as a warning (folded\n");
+            sb.append("  from the retired ws:verify per #393); the release gate\n");
+            sb.append("  promotes it to a hard requirement.");
             return Optional.of(sb.toString());
         }
     };

@@ -1,27 +1,25 @@
-package network.ike.plugin.ws;
+package network.ike.plugin.ws.verify;
 
 import network.ike.plugin.ReleaseSupport;
+import network.ike.plugin.ws.Ansi;
+import network.ike.plugin.ws.PomParentSupport;
+import network.ike.plugin.ws.vcs.VcsOperations;
+import network.ike.plugin.ws.vcs.VcsState;
 import network.ike.workspace.BomAnalysis;
-import network.ike.workspace.Subproject;
 import network.ike.workspace.DependencyConvergenceAnalysis;
 import network.ike.workspace.DependencyConvergenceAnalysis.Divergence;
 import network.ike.workspace.DependencyTreeParser;
 import network.ike.workspace.DependencyTreeParser.ResolvedDependency;
 import network.ike.workspace.PublishedArtifactSet;
+import network.ike.workspace.Subproject;
 import network.ike.workspace.WorkspaceGraph;
-
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.Map;
-import java.util.Set;
-import network.ike.plugin.ws.vcs.VcsOperations;
-import network.ike.plugin.ws.vcs.VcsState;
+import org.apache.maven.api.plugin.Log;
 import org.apache.maven.api.plugin.MojoException;
-import org.apache.maven.api.plugin.annotations.Mojo;
-import org.apache.maven.api.plugin.annotations.Parameter;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.StringReader;
+import java.net.InetAddress;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -30,54 +28,77 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Properties;
+import java.util.Set;
 
 /**
- * Verify workspace manifest consistency and subproject git state.
+ * Workspace-wide verification — the read-only logic formerly in
+ * the retired {@code ws:verify} goal (IKE-Network/ike-issues#393).
+ * Now invoked by {@code ws:scaffold-draft} as part of its drift
+ * report.
  *
- * <p>Checks that all dependency references resolve, no cycles exist,
- * all group members are valid, and all subproject types are defined.
- * Also reports subproject git state, Syncthing health, and environment
- * presence.
- *
- * <pre>{@code mvn ike:verify}</pre>
+ * <p>Each {@code verifyXxx} method translates one check from the
+ * original mojo. The {@link #verifyParentAlignment()} check was
+ * intentionally dropped during the extraction: parent drift is now
+ * detected by {@code ParentVersionReconciler.detect()} (one of the
+ * workspace-level reconcilers run by {@code ws:scaffold-draft})
+ * and would otherwise duplicate that warning.
  */
-@Mojo(name = "verify", projectRequired = false, aggregator = true)
-public class VerifyWorkspaceMojo extends AbstractWorkspaceMojo {
+public final class WorkspaceVerifier {
+
+    private final Log log;
+    private final WorkspaceGraph graph;
+    private final File root;
+    private final Path manifestPath;
+    private final boolean checkConvergence;
+    private final boolean workspaceMode;
+    private final List<String[]> rows = new ArrayList<>();
 
     /**
-     * Run transitive dependency convergence analysis across all
-     * workspace subprojects. Slow — requires {@code mvn dependency:tree}
-     * per subproject.
+     * Construct a verifier bound to a single workspace.
+     *
+     * @param log              Maven logger for streaming check output
+     * @param graph            the workspace graph (already loaded by caller)
+     * @param root             workspace root directory
+     * @param manifestPath     path to {@code workspace.yaml}
+     * @param checkConvergence run the slow transitive-convergence check
+     * @param workspaceMode    {@code true} when running inside a
+     *                         workspace; {@code false} for a bare repo
      */
-    @Parameter(property = "checkConvergence", defaultValue = "false")
-    boolean checkConvergence;
+    public WorkspaceVerifier(Log log, WorkspaceGraph graph, File root,
+                             Path manifestPath, boolean checkConvergence,
+                             boolean workspaceMode) {
+        this.log = log;
+        this.graph = graph;
+        this.root = root;
+        this.manifestPath = manifestPath;
+        this.checkConvergence = checkConvergence;
+        this.workspaceMode = workspaceMode;
+    }
 
     /**
-     * Output file for the convergence markdown report. Defaults to
-     * {@code target/convergence-report.md} in the workspace root.
+     * Run every verification check; returns the row data the caller
+     * uses to render its markdown report. Also logs check progress
+     * and outcomes to the {@link Log} passed in the constructor.
+     *
+     * @return per-check {@code {label, status}} rows
+     * @throws MojoException if a verification step fails irrecoverably
      */
-    @Parameter(property = "convergenceReport")
-    String convergenceReport;
+    public List<String[]> runAllChecks() throws MojoException {
+        log.info("");
+        log.info(header("Verification"));
+        log.info("══════════════════════════════════════════════════════════════");
 
-    /** Creates this goal instance. */
-    public VerifyWorkspaceMojo() {}
-
-    /** Structured verification results for markdown report. */
-    private final List<String[]> verifyRows = new ArrayList<>();
-
-    @Override
-    public void execute() throws MojoException {
-        // Console output goes to Maven log; markdown report via writeReport
-        getLog().info("");
-        getLog().info(header("Verification"));
-        getLog().info("══════════════════════════════════════════════════════════════");
-
-        if (isWorkspaceMode()) {
+        if (workspaceMode) {
             verifyWorkspaceManifest();
-            verifyParentAlignment();
+            // Parent alignment intentionally omitted — superseded by
+            // ParentVersionReconciler.detect() (#393).
             verifyParentCoherence();
             verifyBomCascade();
             if (checkConvergence) {
@@ -89,133 +110,30 @@ public class VerifyWorkspaceMojo extends AbstractWorkspaceMojo {
         }
 
         verifyEnvironment();
-        getLog().info("");
-        // Structured markdown summary
-        if (!verifyRows.isEmpty()) {
-            writeReport(WsGoal.VERIFY, buildVerifyMarkdownReport());
-        }
+        log.info("");
+        return rows;
     }
 
-    private String buildVerifyMarkdownReport() {
-        var sb = new StringBuilder();
-        sb.append("| Check | Status |\n");
-        sb.append("|-------|--------|\n");
-        for (String[] row : verifyRows) {
-            sb.append("| ").append(row[0])
-                    .append(" | ").append(row[1])
-                    .append(" |\n");
-        }
-        return sb.toString();
-    }
-
-    // ── Workspace manifest verification (existing logic) ──────────
+    // ── Workspace manifest verification ───────────────────────────
 
     private void verifyWorkspaceManifest() throws MojoException {
-        WorkspaceGraph graph = loadGraph();
-
         List<String> errors = graph.verify();
 
         int subprojectCount = graph.manifest().subprojects().size();
 
-        getLog().info("  Components:      " + subprojectCount);
-        getLog().info("");
+        log.info("  Components:      " + subprojectCount);
+        log.info("");
 
         if (errors.isEmpty()) {
-            getLog().info(Ansi.green("  Manifest:    consistent  ✓"));
-            verifyRows.add(new String[]{"Manifest", "consistent ✓"});
+            log.info(Ansi.green("  Manifest:    consistent  ✓"));
+            rows.add(new String[]{"Manifest", "consistent ✓"});
         } else {
-            getLog().error("  Manifest:    " + errors.size() + " error(s)");
+            log.error("  Manifest:    " + errors.size() + " error(s)");
             for (String error : errors) {
-                getLog().error("    ✗ " + error);
+                log.error("    ✗ " + error);
             }
-            verifyRows.add(new String[]{"Manifest",
+            rows.add(new String[]{"Manifest",
                     errors.size() + " error(s)"});
-        }
-    }
-
-    // ── Parent version alignment ─────────────────────────────────
-
-    private void verifyParentAlignment() throws MojoException {
-        WorkspaceGraph graph = loadGraph();
-        File root = workspaceRoot();
-        int misaligned = 0;
-        int checked = 0;
-
-        getLog().info("");
-
-        for (Map.Entry<String, Subproject> entry :
-                graph.manifest().subprojects().entrySet()) {
-            String name = entry.getKey();
-            Subproject subproject = entry.getValue();
-            java.nio.file.Path pomFile = root.toPath().resolve(name).resolve("pom.xml");
-
-            if (!java.nio.file.Files.exists(pomFile)) continue;
-
-            try {
-                PomParentSupport.ParentInfo parent =
-                        PomParentSupport.readParent(pomFile);
-                if (parent == null) continue;
-
-                // Check if parent matches a workspace subproject
-                String parentSubprojectName = subproject.parent();
-                if (parentSubprojectName == null) {
-                    // Try to detect: does the parent artifactId match a workspace subproject?
-                    for (Map.Entry<String, Subproject> candidate :
-                            graph.manifest().subprojects().entrySet()) {
-                        if (candidate.getValue().groupId() != null
-                                && candidate.getValue().groupId().equals(parent.groupId())) {
-                            getLog().info("  INFO: " + name + " has parent "
-                                    + parent.groupId() + ":" + parent.artifactId()
-                                    + ":" + parent.version()
-                                    + " — consider adding 'parent: "
-                                    + candidate.getKey() + "' to workspace.yaml");
-                            break;
-                        }
-                    }
-                    continue;
-                }
-
-                // Parent is declared — check version alignment
-                checked++;
-                Subproject parentSubproject =
-                        graph.manifest().subprojects().get(parentSubprojectName);
-                if (parentSubproject == null) {
-                    getLog().warn("  WARN: " + name + " declares parent '"
-                            + parentSubprojectName + "' but it is not a workspace subproject");
-                    misaligned++;
-                    continue;
-                }
-
-                String expectedVersion = parentSubproject.version();
-                if (expectedVersion != null
-                        && !expectedVersion.equals(parent.version())) {
-                    getLog().warn("  WARN: " + name + " parent version "
-                            + parent.version() + " != " + parentSubprojectName
-                            + " workspace version " + expectedVersion);
-                    misaligned++;
-                } else {
-                    getLog().info(Ansi.green("  " + name + ": parent " + parentSubprojectName
-                            + ":" + parent.version() + "  ✓"));
-                }
-            } catch (java.io.IOException e) {
-                getLog().debug("  Could not read parent from " + name + ": "
-                        + e.getMessage());
-            }
-        }
-
-        if (checked == 0) {
-            getLog().info("  Parent alignment: no components declare workspace parents");
-            verifyRows.add(new String[]{"Parent alignment", "n/a"});
-        } else if (misaligned == 0) {
-            getLog().info("  Parent alignment: " + checked
-                    + " subproject(s) aligned  ✓");
-            verifyRows.add(new String[]{"Parent alignment",
-                    checked + " aligned ✓"});
-        } else {
-            getLog().warn("  Parent alignment: " + misaligned + "/" + checked
-                    + " subproject(s) misaligned");
-            verifyRows.add(new String[]{"Parent alignment",
-                    misaligned + "/" + checked + " misaligned"});
         }
     }
 
@@ -242,8 +160,8 @@ public class VerifyWorkspaceMojo extends AbstractWorkspaceMojo {
     //      consistency across the workspace.
 
     private void verifyParentCoherence() throws MojoException {
-        java.nio.file.Path workspacePom = workspaceRoot().toPath().resolve("pom.xml");
-        if (!java.nio.file.Files.exists(workspacePom)) {
+        Path workspacePom = root.toPath().resolve("pom.xml");
+        if (!Files.exists(workspacePom)) {
             // Bare-VCS or unusual layout — nothing to enforce.
             return;
         }
@@ -251,8 +169,8 @@ public class VerifyWorkspaceMojo extends AbstractWorkspaceMojo {
         PomParentSupport.ParentInfo workspaceParent;
         try {
             workspaceParent = PomParentSupport.readParent(workspacePom);
-        } catch (java.io.IOException e) {
-            getLog().debug("  Could not read workspace parent: " + e.getMessage());
+        } catch (IOException e) {
+            log.debug("  Could not read workspace parent: " + e.getMessage());
             return;
         }
         if (workspaceParent == null
@@ -263,25 +181,23 @@ public class VerifyWorkspaceMojo extends AbstractWorkspaceMojo {
             return;
         }
 
-        WorkspaceGraph graph = loadGraph();
-        File root = workspaceRoot();
         int cycleRisk = 0;
         int versionDrift = 0;
         int coherent = 0;
 
-        getLog().info("");
+        log.info("");
 
         for (Map.Entry<String, Subproject> entry :
                 graph.manifest().subprojects().entrySet()) {
             String name = entry.getKey();
-            java.nio.file.Path pomFile = root.toPath().resolve(name).resolve("pom.xml");
-            if (!java.nio.file.Files.exists(pomFile)) continue;
+            Path pomFile = root.toPath().resolve(name).resolve("pom.xml");
+            if (!Files.exists(pomFile)) continue;
 
             PomParentSupport.ParentInfo subParent;
             try {
                 subParent = PomParentSupport.readParent(pomFile);
-            } catch (java.io.IOException e) {
-                getLog().debug("  Could not read " + name + " parent: "
+            } catch (IOException e) {
+                log.debug("  Could not read " + name + " parent: "
                         + e.getMessage());
                 continue;
             }
@@ -291,9 +207,9 @@ public class VerifyWorkspaceMojo extends AbstractWorkspaceMojo {
             // the workspace aggregator's parent GA. Otherwise this
             // subproject inherits a different parent and is out of
             // scope for these rules.
-            if (!java.util.Objects.equals(workspaceParent.groupId(),
+            if (!Objects.equals(workspaceParent.groupId(),
                             subParent.groupId())
-                    || !java.util.Objects.equals(workspaceParent.artifactId(),
+                    || !Objects.equals(workspaceParent.artifactId(),
                             subParent.artifactId())) {
                 continue;
             }
@@ -302,9 +218,9 @@ public class VerifyWorkspaceMojo extends AbstractWorkspaceMojo {
                     + subParent.artifactId();
 
             // Rule 2: version coherence
-            if (!java.util.Objects.equals(workspaceParent.version(),
+            if (!Objects.equals(workspaceParent.version(),
                     subParent.version())) {
-                getLog().warn("  WARN: " + name + " parent "
+                log.warn("  WARN: " + name + " parent "
                         + coordinates + ":" + subParent.version()
                         + " != workspace " + coordinates + ":"
                         + workspaceParent.version()
@@ -318,14 +234,14 @@ public class VerifyWorkspaceMojo extends AbstractWorkspaceMojo {
             try {
                 hasEmptyRelativePath =
                         PomParentSupport.hasEmptyRelativePath(pomFile);
-            } catch (java.io.IOException e) {
-                getLog().debug("  Could not check relativePath for "
+            } catch (IOException e) {
+                log.debug("  Could not check relativePath for "
                         + name + ": " + e.getMessage());
                 continue;
             }
 
             if (!hasEmptyRelativePath) {
-                getLog().warn("  WARN: " + name + " parent "
+                log.warn("  WARN: " + name + " parent "
                         + coordinates + ":" + subParent.version()
                         + " matches workspace parent but is missing "
                         + "empty <relativePath/> (#324 cycle prevention; "
@@ -340,39 +256,36 @@ public class VerifyWorkspaceMojo extends AbstractWorkspaceMojo {
         int problems = cycleRisk + versionDrift;
         int total = problems + coherent;
         if (total == 0) {
-            getLog().info("  Parent coherence: no subprojects share the "
+            log.info("  Parent coherence: no subprojects share the "
                     + "workspace's parent GA");
-            verifyRows.add(new String[]{"Parent coherence", "n/a"});
+            rows.add(new String[]{"Parent coherence", "n/a"});
         } else if (problems == 0) {
-            getLog().info(Ansi.green("  Parent coherence: " + coherent
+            log.info(Ansi.green("  Parent coherence: " + coherent
                     + " subproject(s) coherent  ✓"));
-            verifyRows.add(new String[]{"Parent coherence",
+            rows.add(new String[]{"Parent coherence",
                     coherent + " coherent ✓"});
         } else {
             String summary = versionDrift + " version drift, "
                     + cycleRisk + " missing <relativePath/>";
-            getLog().warn("  Parent coherence: " + summary);
-            verifyRows.add(new String[]{"Parent coherence", summary});
+            log.warn("  Parent coherence: " + summary);
+            rows.add(new String[]{"Parent coherence", summary});
         }
     }
 
     // ── BOM cascade verification ──────────────────────────────────
 
     private void verifyBomCascade() throws MojoException {
-        WorkspaceGraph graph = loadGraph();
-        File root = workspaceRoot();
-
         // Build published artifact sets for all subprojects
         Map<String, Set<PublishedArtifactSet.Artifact>> workspaceArtifacts =
                 new LinkedHashMap<>();
         for (String name : graph.manifest().subprojects().keySet()) {
-            java.nio.file.Path subDir = root.toPath().resolve(name);
-            if (java.nio.file.Files.exists(subDir.resolve("pom.xml"))) {
+            Path subDir = root.toPath().resolve(name);
+            if (Files.exists(subDir.resolve("pom.xml"))) {
                 try {
                     workspaceArtifacts.put(name,
                             PublishedArtifactSet.scan(subDir));
-                } catch (java.io.IOException e) {
-                    getLog().debug("Could not scan " + name + ": " + e.getMessage());
+                } catch (IOException e) {
+                    log.debug("Could not scan " + name + ": " + e.getMessage());
                 }
             }
         }
@@ -382,21 +295,21 @@ public class VerifyWorkspaceMojo extends AbstractWorkspaceMojo {
                     root.toPath(), graph.manifest(), workspaceArtifacts);
 
             if (issues.isEmpty()) {
-                getLog().info("");
-                getLog().info("  BOM cascade: all dependency edges can cascade  ✓");
-                verifyRows.add(new String[]{"BOM cascade", "all edges cascade ✓"});
+                log.info("");
+                log.info("  BOM cascade: all dependency edges can cascade  ✓");
+                rows.add(new String[]{"BOM cascade", "all edges cascade ✓"});
             } else {
-                getLog().info("");
-                getLog().warn("  BOM cascade: " + issues.size() + " gap(s) detected");
-                verifyRows.add(new String[]{"BOM cascade",
+                log.info("");
+                log.warn("  BOM cascade: " + issues.size() + " gap(s) detected");
+                rows.add(new String[]{"BOM cascade",
                         issues.size() + " gap(s)"});
                 for (var issue : issues) {
-                    getLog().warn("    " + issue.subprojectName() + " → "
+                    log.warn("    " + issue.subprojectName() + " → "
                             + issue.dependsOn()
                             + ": no version-property or workspace BOM import");
                     if (!issue.externalBomPins().isEmpty()) {
                         for (var bom : issue.externalBomPins()) {
-                            getLog().warn("      external BOM: "
+                            log.warn("      external BOM: "
                                     + bom.groupId() + ":" + bom.artifactId()
                                     + ":" + bom.version()
                                     + " (may pin workspace artifact versions)");
@@ -404,22 +317,19 @@ public class VerifyWorkspaceMojo extends AbstractWorkspaceMojo {
                     }
                 }
             }
-        } catch (java.io.IOException e) {
-            getLog().warn("  BOM cascade check failed: " + e.getMessage());
+        } catch (IOException e) {
+            log.warn("  BOM cascade check failed: " + e.getMessage());
         }
     }
 
     // ── Dependency convergence check ───────────────────────────────
 
     private void verifyDependencyConvergence() throws MojoException {
-        WorkspaceGraph graph = loadGraph();
-        File root = workspaceRoot();
+        log.info("");
+        log.info("  Dependency convergence (this may take a while)...");
+        log.info("");
 
-        getLog().info("");
-        getLog().info("  Dependency convergence (this may take a while)...");
-        getLog().info("");
-
-        File mvnExecutable = ReleaseSupport.resolveMavenWrapper(root, getLog());
+        File mvnExecutable = ReleaseSupport.resolveMavenWrapper(root, log);
 
         // Collect dependency trees per subproject in topological order
         List<String> order = graph.topologicalSort();
@@ -431,7 +341,7 @@ public class VerifyWorkspaceMojo extends AbstractWorkspaceMojo {
             File pomFile = new File(subDir, "pom.xml");
             if (!pomFile.exists()) continue;
 
-            getLog().info("    Resolving " + name + "...");
+            log.info("    Resolving " + name + "...");
             try {
                 String treeOutput = ReleaseSupport.execCapture(subDir,
                         mvnExecutable.getAbsolutePath(),
@@ -443,13 +353,13 @@ public class VerifyWorkspaceMojo extends AbstractWorkspaceMojo {
                     componentTrees.put(name, deps);
                 }
             } catch (MojoException e) {
-                getLog().warn(Ansi.yellow("    ⚠ ") + name + ": dependency:tree failed — "
+                log.warn(Ansi.yellow("    ⚠ ") + name + ": dependency:tree failed — "
                         + e.getMessage());
             }
         }
 
         if (componentTrees.size() < 2) {
-            getLog().info("    Fewer than 2 components resolved — skipping analysis");
+            log.info("    Fewer than 2 components resolved — skipping analysis");
             return;
         }
 
@@ -457,70 +367,39 @@ public class VerifyWorkspaceMojo extends AbstractWorkspaceMojo {
         List<Divergence> divergences =
                 DependencyConvergenceAnalysis.analyze(componentTrees);
 
-        // Terminal output — use info so ReportLog captures it
         if (divergences.isEmpty()) {
-            getLog().info("");
-            getLog().info("  Convergence: all shared dependencies converge across "
+            log.info("");
+            log.info("  Convergence: all shared dependencies converge across "
                     + componentTrees.size() + " components  ✓");
-            verifyRows.add(new String[]{"Convergence",
+            rows.add(new String[]{"Convergence",
                     "all converge ✓ (" + componentTrees.size() + " components)"});
         } else {
-            getLog().info("");
-            verifyRows.add(new String[]{"Convergence",
+            log.info("");
+            rows.add(new String[]{"Convergence",
                     divergences.size() + " divergence(s)"});
-            getLog().info("  Convergence: " + divergences.size()
+            log.info("  Convergence: " + divergences.size()
                     + " artifact(s) diverge across "
                     + componentTrees.size() + " components");
-            getLog().info("");
+            log.info("");
 
             for (Divergence d : divergences) {
-                getLog().info("    " + d.coordinate());
+                log.info("    " + d.coordinate());
                 for (var vEntry : d.versionToSubprojects().entrySet()) {
-                    getLog().info("      " + vEntry.getKey() + " ← "
+                    log.info("      " + vEntry.getKey() + " ← "
                             + String.join(", ", vEntry.getValue()));
                 }
             }
         }
-
-        // Supplementary markdown report with full details
-        String wsName = workspaceName();
-        String markdown = divergences.isEmpty()
-                ? "# Dependency Convergence — " + wsName + "\n\n"
-                + "All shared dependencies converge across "
-                + componentTrees.size() + " components.\n"
-                : DependencyConvergenceAnalysis.formatMarkdownReport(
-                divergences, wsName);
-
-        Path reportPath = resolveConvergenceReportPath(root);
-        try {
-            Files.createDirectories(reportPath.getParent());
-            Files.writeString(reportPath, markdown, StandardCharsets.UTF_8);
-            getLog().info("");
-            getLog().info("  Report: " + reportPath);
-        } catch (IOException e) {
-            getLog().warn("  Could not write convergence report: "
-                    + e.getMessage());
-        }
-    }
-
-    private Path resolveConvergenceReportPath(File root) {
-        if (convergenceReport != null && !convergenceReport.isBlank()) {
-            return Path.of(convergenceReport);
-        }
-        return root.toPath().resolve("target").resolve("convergence-report.md");
     }
 
     // ── Subproject git state (workspace mode) ─────────────────────
 
     private void verifyWorkspaceVcs() throws MojoException {
-        WorkspaceGraph graph = loadGraph();
-        File root = workspaceRoot();
-
-        getLog().info("");
+        log.info("");
 
         // Workspace repo itself
         if (VcsState.isIkeManaged(root.toPath())) {
-            getLog().info("  Workspace");
+            log.info("  Workspace");
             reportVcsState(root, "    ");
         }
 
@@ -533,10 +412,10 @@ public class VerifyWorkspaceMojo extends AbstractWorkspaceMojo {
                 continue;
             }
 
-            getLog().info("  " + name);
+            log.info("  " + name);
 
             if (!VcsState.isIkeManaged(dir.toPath())) {
-                getLog().info("    Git state: freshly added (no workspace operations yet)");
+                log.info("    Git state: freshly added (no workspace operations yet)");
                 continue;
             }
 
@@ -550,15 +429,15 @@ public class VerifyWorkspaceMojo extends AbstractWorkspaceMojo {
         File dir = new File(System.getProperty("user.dir"));
         String dirName = dir.getName();
 
-        getLog().info("  Machine:     " + hostname());
+        log.info("  Machine:     " + hostname());
 
         if (!VcsState.isIkeManaged(dir.toPath())) {
-            getLog().info("  Git state:   freshly added (no workspace operations yet)");
+            log.info("  Git state:   freshly added (no workspace operations yet)");
             return;
         }
 
-        getLog().info("");
-        getLog().info("  " + dirName);
+        log.info("");
+        log.info("  " + dirName);
         reportVcsState(dir, "    ");
     }
 
@@ -569,29 +448,29 @@ public class VerifyWorkspaceMojo extends AbstractWorkspaceMojo {
         String localBranch = gitBranch(dir);
         String localSha = gitShortSha(dir);
 
-        getLog().info(indent + "Branch:        " + localBranch);
-        getLog().info(indent + "Local HEAD:    " + localSha);
+        log.info(indent + "Branch:        " + localBranch);
+        log.info(indent + "Local HEAD:    " + localSha);
 
         Optional<VcsState> stateOpt = VcsState.readFrom(dir.toPath());
 
         if (stateOpt.isEmpty()) {
-            getLog().info(indent + "State file:    absent (first commit, or Syncthing not delivered)");
-            getLog().info(indent + "Status:        no state file  ─");
+            log.info(indent + "State file:    absent (first commit, or Syncthing not delivered)");
+            log.info(indent + "Status:        no state file  ─");
             return;
         }
 
         VcsState state = stateOpt.get();
-        getLog().info(indent + "State file:    " + state.action().label()
+        log.info(indent + "State file:    " + state.action().label()
                 + " by " + state.machine() + " at " + state.timestamp());
-        getLog().info(indent + "State SHA:     " + state.sha());
-        getLog().info(indent + "State branch:  " + state.branch());
+        log.info(indent + "State SHA:     " + state.sha());
+        log.info(indent + "State branch:  " + state.branch());
 
         // In sync?
         boolean shaMatch = state.sha().equals(localSha);
         boolean branchMatch = state.branch().equals(localBranch);
 
         if (shaMatch && branchMatch) {
-            getLog().info(indent + "Status:        in sync  ✓");
+            log.info(indent + "Status:        in sync  ✓");
             return;
         }
 
@@ -607,38 +486,38 @@ public class VerifyWorkspaceMojo extends AbstractWorkspaceMojo {
                                          VcsState state, String localBranch) {
         switch (state.action()) {
             case FEATURE_START -> {
-                getLog().warn(indent + "Status:        feature branch '"
+                log.warn(indent + "Status:        feature branch '"
                         + state.branch() + "' started on " + state.machine()
                         + " at " + state.timestamp());
-                getLog().warn(indent + "               You are on '"
+                log.warn(indent + "               You are on '"
                         + localBranch + "'.");
-                getLog().warn(indent + "Action:        run 'mvnw ws:switch -Dbranch="
+                log.warn(indent + "Action:        run 'mvnw ws:switch -Dbranch="
                         + state.branch() + "' to follow the feature branch");
             }
             case FEATURE_FINISH -> {
-                getLog().warn(indent + "Status:        feature finished on "
+                log.warn(indent + "Status:        feature finished on "
                         + state.machine() + " at " + state.timestamp()
                         + ", merged to '" + state.branch() + "'");
-                getLog().warn(indent + "               You are on '"
+                log.warn(indent + "               You are on '"
                         + localBranch + "'.");
-                getLog().warn(indent + "Action:        run 'mvnw ws:switch -Dbranch="
+                log.warn(indent + "Action:        run 'mvnw ws:switch -Dbranch="
                         + state.branch() + "' to return to '"
                         + state.branch() + "'");
             }
             case SWITCH -> {
-                getLog().warn(indent + "Status:        switched to '"
+                log.warn(indent + "Status:        switched to '"
                         + state.branch() + "' on " + state.machine()
                         + " at " + state.timestamp());
-                getLog().warn(indent + "               You are on '"
+                log.warn(indent + "               You are on '"
                         + localBranch + "'.");
-                getLog().warn(indent + "Action:        run 'mvnw ws:switch -Dbranch="
+                log.warn(indent + "Action:        run 'mvnw ws:switch -Dbranch="
                         + state.branch() + "' or 'mvnw ws:align-publish"
                         + " -Dscope=branches -Dfrom=manifest'");
             }
             case COMMIT, PUSH, RELEASE, CHECKPOINT -> {
-                getLog().warn(indent + "Status:        branch mismatch — local '"
+                log.warn(indent + "Status:        branch mismatch — local '"
                         + localBranch + "', state file '" + state.branch() + "'");
-                getLog().warn(indent + "Action:        run 'mvnw ws:switch -Dbranch="
+                log.warn(indent + "Action:        run 'mvnw ws:switch -Dbranch="
                         + state.branch() + "' to reconcile");
             }
         }
@@ -659,44 +538,44 @@ public class VerifyWorkspaceMojo extends AbstractWorkspaceMojo {
         switch (state.action()) {
             case COMMIT -> {
                 if (shaOnRemote) {
-                    getLog().warn(indent + "Status:        commit on "
+                    log.warn(indent + "Status:        commit on "
                             + state.machine() + " at " + state.timestamp());
-                    getLog().warn(indent + "Action:        run 'mvnw ws:pull'");
+                    log.warn(indent + "Action:        run 'mvnw ws:pull'");
                 } else {
-                    getLog().warn(indent + "Status:        commit on "
+                    log.warn(indent + "Status:        commit on "
                             + state.machine() + " at " + state.timestamp()
                             + ", but push did not complete");
-                    getLog().warn(indent + "Action:        push from "
+                    log.warn(indent + "Action:        push from "
                             + state.machine() + " first, then 'mvnw ws:pull' here");
-                    getLog().warn(indent + "               Or: IKE_VCS_OVERRIDE=1 to proceed independently");
+                    log.warn(indent + "               Or: IKE_VCS_OVERRIDE=1 to proceed independently");
                 }
             }
             case PUSH -> {
-                getLog().warn(indent + "Status:        push from "
+                log.warn(indent + "Status:        push from "
                         + state.machine() + " at " + state.timestamp());
-                getLog().warn(indent + "               Local HEAD behind remote.");
-                getLog().warn(indent + "Action:        run 'mvnw ws:pull'");
+                log.warn(indent + "               Local HEAD behind remote.");
+                log.warn(indent + "Action:        run 'mvnw ws:pull'");
             }
             case RELEASE -> {
-                getLog().warn(indent + "Status:        release performed on "
+                log.warn(indent + "Status:        release performed on "
                         + state.machine() + " at " + state.timestamp());
-                getLog().warn(indent + "Action:        run 'mvnw ws:pull'");
+                log.warn(indent + "Action:        run 'mvnw ws:pull'");
             }
             case CHECKPOINT -> {
-                getLog().warn(indent + "Status:        checkpoint created on "
+                log.warn(indent + "Status:        checkpoint created on "
                         + state.machine() + " at " + state.timestamp());
-                getLog().warn(indent + "Action:        run 'mvnw ws:pull'");
+                log.warn(indent + "Action:        run 'mvnw ws:pull'");
             }
             case SWITCH -> {
-                getLog().warn(indent + "Status:        switched on "
+                log.warn(indent + "Status:        switched on "
                         + state.machine() + " at " + state.timestamp());
-                getLog().warn(indent + "Action:        run 'mvnw ws:align-publish"
+                log.warn(indent + "Action:        run 'mvnw ws:align-publish"
                         + " -Dscope=branches -Dfrom=manifest'");
             }
             case FEATURE_START, FEATURE_FINISH -> {
-                getLog().warn(indent + "Status:        behind ("
+                log.warn(indent + "Status:        behind ("
                         + state.action().label() + " on " + state.machine() + ")");
-                getLog().warn(indent + "Action:        run 'mvnw ws:pull'");
+                log.warn(indent + "Action:        run 'mvnw ws:pull'");
             }
         }
     }
@@ -706,22 +585,22 @@ public class VerifyWorkspaceMojo extends AbstractWorkspaceMojo {
     private void verifyEnvironment() {
         File dir = new File(System.getProperty("user.dir"));
 
-        getLog().info("");
+        log.info("");
 
         // Standards
         File standards = new File(dir, ".claude/standards");
         if (standards.isDirectory()) {
-            getLog().info("  Standards:   .claude/standards/ present  ✓");
+            log.info("  Standards:   .claude/standards/ present  ✓");
         } else {
-            getLog().info("  Standards:   .claude/standards/ absent");
+            log.info("  Standards:   .claude/standards/ absent");
         }
 
         // CLAUDE.md
         File claudeMd = new File(dir, "CLAUDE.md");
         if (claudeMd.exists()) {
-            getLog().info("  CLAUDE.md:   present  ✓");
+            log.info("  CLAUDE.md:   present  ✓");
         } else {
-            getLog().info("  CLAUDE.md:   absent");
+            log.info("  CLAUDE.md:   absent");
         }
 
         // Syncthing
@@ -737,14 +616,14 @@ public class VerifyWorkspaceMojo extends AbstractWorkspaceMojo {
         if (Files.exists(config)) {
             try {
                 Properties props = new Properties();
-                props.load(new java.io.StringReader(
+                props.load(new StringReader(
                         Files.readString(config, StandardCharsets.UTF_8)));
                 String portStr = props.getProperty("syncthing.port");
                 if (portStr != null) {
                     port = Integer.parseInt(portStr.trim());
                 }
             } catch (Exception e) {
-                getLog().debug("Could not read .ike/config: " + e.getMessage());
+                log.debug("Could not read .ike/config: " + e.getMessage());
             }
         }
 
@@ -761,21 +640,72 @@ public class VerifyWorkspaceMojo extends AbstractWorkspaceMojo {
                     HttpResponse.BodyHandlers.ofString());
 
             if (response.statusCode() == 200) {
-                getLog().info("  Syncthing:   connected (port " + port + ")  ✓");
+                log.info("  Syncthing:   connected (port " + port + ")  ✓");
             } else {
-                getLog().info("  Syncthing:   responded with status "
+                log.info("  Syncthing:   responded with status "
                         + response.statusCode());
             }
         } catch (Exception e) {
-            getLog().info("  Syncthing:   not running (port " + port + ")");
+            log.info("  Syncthing:   not running (port " + port + ")");
         }
     }
 
-    private String hostname() {
+    // ── Inlined helpers from AbstractWorkspaceMojo ────────────────
+
+    /**
+     * Format a goal header line using the workspace name.
+     * Inlined equivalent of {@code AbstractWorkspaceMojo#header}.
+     */
+    private String header(String goalName) {
+        return workspaceName() + " — " + goalName;
+    }
+
+    /**
+     * Read the workspace name from the root POM's artifactId.
+     * Falls back to {@code "Workspace"} if the POM cannot be read.
+     * Inlined equivalent of {@code AbstractWorkspaceMojo#workspaceName}.
+     */
+    private String workspaceName() {
+        try {
+            File rootPom = new File(root, "pom.xml");
+            if (rootPom.exists()) {
+                return ReleaseSupport.readPomArtifactId(rootPom);
+            }
+        } catch (Exception e) {
+            // Fall through
+        }
+        return "Workspace";
+    }
+
+    /**
+     * Inlined equivalent of {@code AbstractWorkspaceMojo#gitBranch}.
+     */
+    private static String gitBranch(File dir) {
+        try {
+            return ReleaseSupport.execCapture(dir,
+                    "git", "rev-parse", "--abbrev-ref", "HEAD");
+        } catch (Exception e) {
+            return "unknown";
+        }
+    }
+
+    /**
+     * Inlined equivalent of {@code AbstractWorkspaceMojo#gitShortSha}.
+     */
+    private static String gitShortSha(File dir) {
+        try {
+            return ReleaseSupport.execCapture(dir,
+                    "git", "rev-parse", "--short", "HEAD");
+        } catch (Exception e) {
+            return "???????";
+        }
+    }
+
+    private static String hostname() {
         String host = System.getenv("HOSTNAME");
         if (host == null || host.isEmpty()) {
             try {
-                host = java.net.InetAddress.getLocalHost().getHostName();
+                host = InetAddress.getLocalHost().getHostName();
             } catch (Exception e) {
                 host = "unknown";
             }

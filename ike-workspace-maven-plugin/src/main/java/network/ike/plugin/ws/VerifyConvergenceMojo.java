@@ -43,7 +43,8 @@ import java.util.TreeSet;
  * mvn ws:verify-convergence -DconvergenceReport=build/convergence.md
  * }</pre>
  *
- * @see VerifyWorkspaceMojo for general workspace verification
+ * <p>For general workspace verification, see
+ * {@link WsScaffoldDraftMojo} (which now folds verify per #393).
  */
 @Mojo(name = "verify-convergence", projectRequired = false, aggregator = true)
 public class VerifyConvergenceMojo extends AbstractWorkspaceMojo {

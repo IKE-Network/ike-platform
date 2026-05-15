@@ -145,19 +145,24 @@ class VcsBridgeIntegrationTest {
     }
 
     @Test
-    void verifyMojo_reportsInSync() throws Exception {
+    void verify_reportsInSync() throws Exception {
         // Both machines on same commit
         Files.createDirectories(machineBDir.resolve(".ike"));
         VcsOperations.writeVcsState(machineBDir.toFile(), VcsState.Action.COMMIT);
 
         System.setProperty("user.dir", machineBDir.toAbsolutePath().toString());
-        VerifyWorkspaceMojo mojo = TestLog.createMojo(VerifyWorkspaceMojo.class);
+        // VerifyWorkspaceMojo retired (#393); exercise WorkspaceVerifier
+        // in bare mode directly — graph + manifestPath are unused on
+        // that path.
+        var verifier = new network.ike.plugin.ws.verify.WorkspaceVerifier(
+                new TestLog(), null, machineBDir.toFile(), null,
+                false, false);
         // Should not throw — just reports state
-        mojo.execute();
+        verifier.runAllChecks();
     }
 
     @Test
-    void verifyMojo_reportsBehind() throws Exception {
+    void verify_reportsBehind() throws Exception {
         // Machine A advances, state file delivered to B
         Files.writeString(machineADir.resolve("file.txt"), "ahead", StandardCharsets.UTF_8);
         exec(machineADir, "git", "add", ".");
@@ -170,9 +175,11 @@ class VcsBridgeIntegrationTest {
                 machineBDir.resolve(".ike/vcs-state"));
 
         System.setProperty("user.dir", machineBDir.toAbsolutePath().toString());
-        VerifyWorkspaceMojo mojo = TestLog.createMojo(VerifyWorkspaceMojo.class);
+        var verifier = new network.ike.plugin.ws.verify.WorkspaceVerifier(
+                new TestLog(), null, machineBDir.toFile(), null,
+                false, false);
         // Should not throw — reports "behind" state
-        mojo.execute();
+        verifier.runAllChecks();
     }
 
     @Test

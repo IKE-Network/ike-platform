@@ -225,9 +225,9 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
             //   2. Cycle prevention — empty <relativePath/>
             // Warn (not fail) at add time so an operator who hits
             // either violation gets the heads-up before running
-            // mvn install. The matching ws:verify check is
-            // authoritative — failure mode there is what blocks
-            // a release.
+            // mvn install. The matching ws:scaffold-draft check
+            // (which folds verify per #393) is authoritative —
+            // failure mode there is what blocks a release.
             if (parentInfo != null) {
                 checkParentCoherenceAtAdd(wsDir, subprojectDir,
                         subproject, parentInfo);
@@ -1360,7 +1360,8 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
     /**
      * Apply ike-issues#324 parent-coherence rules to a freshly-added
      * subproject. Warning-only at add time — the matching check in
-     * {@code ws:verify} is the authoritative gate.
+     * {@code ws:scaffold-draft} (which folds verify per #393) is the
+     * authoritative gate.
      *
      * @param wsDir          workspace root directory
      * @param subprojectDir  subproject's checked-out directory
@@ -1399,7 +1400,8 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
                     + coords + ":" + parentInfo.version()
                     + " != workspace " + coords + ":" + wsParent.version()
                     + " (#324 coherence violation — fix before "
-                    + "ws:release-publish or expect ws:verify to flag it)");
+                    + "ws:release-publish or expect ws:scaffold-draft "
+                    + "to flag it)");
             return;
         }
 

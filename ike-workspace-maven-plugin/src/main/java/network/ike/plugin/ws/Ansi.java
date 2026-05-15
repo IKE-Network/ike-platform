@@ -16,25 +16,50 @@ package network.ike.plugin.ws;
  *   <li>Cyan — action (↻ sync, ↓ download, in-progress)</li>
  * </ul>
  */
-final class Ansi {
+public final class Ansi {
 
     private Ansi() {}
 
-    static final String GREEN  = "\u001B[32m";
-    static final String YELLOW = "\u001B[33m";
-    static final String RED    = "\u001B[31m";
-    static final String CYAN   = "\u001B[36m";
-    static final String RESET  = "\u001B[0m";
+    /** Green ANSI escape prefix. */
+    public static final String GREEN  = "[32m";
+    /** Yellow ANSI escape prefix. */
+    public static final String YELLOW = "[33m";
+    /** Red ANSI escape prefix. */
+    public static final String RED    = "[31m";
+    /** Cyan ANSI escape prefix. */
+    public static final String CYAN   = "[36m";
+    /** ANSI reset suffix. */
+    public static final String RESET  = "[0m";
 
-    /** Wrap text in green (success). */
-    static String green(String text)  { return GREEN + text + RESET; }
+    /**
+     * Wrap text in green (success).
+     *
+     * @param text the content to colorize
+     * @return ANSI-wrapped string
+     */
+    public static String green(String text)  { return GREEN + text + RESET; }
 
-    /** Wrap text in yellow (warning). */
-    static String yellow(String text) { return YELLOW + text + RESET; }
+    /**
+     * Wrap text in yellow (warning).
+     *
+     * @param text the content to colorize
+     * @return ANSI-wrapped string
+     */
+    public static String yellow(String text) { return YELLOW + text + RESET; }
 
-    /** Wrap text in red (error). */
-    static String red(String text)    { return RED + text + RESET; }
+    /**
+     * Wrap text in red (error).
+     *
+     * @param text the content to colorize
+     * @return ANSI-wrapped string
+     */
+    public static String red(String text)    { return RED + text + RESET; }
 
-    /** Wrap text in cyan (action/progress). */
-    static String cyan(String text)   { return CYAN + text + RESET; }
+    /**
+     * Wrap text in cyan (action/progress).
+     *
+     * @param text the content to colorize
+     * @return ANSI-wrapped string
+     */
+    public static String cyan(String text)   { return CYAN + text + RESET; }
 }

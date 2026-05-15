@@ -6,6 +6,7 @@ import network.ike.plugin.ws.reconcile.Reconciler;
 import network.ike.plugin.ws.reconcile.ReconcilerOptions;
 import network.ike.plugin.ws.reconcile.ReconcilerRegistry;
 import network.ike.plugin.ws.reconcile.WorkspaceContext;
+import network.ike.plugin.ws.verify.WorkspaceVerifier;
 import network.ike.workspace.Subproject;
 import network.ike.workspace.WorkspaceGraph;
 import org.apache.maven.api.plugin.MojoException;
@@ -74,7 +75,17 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
         getLog().info(publish ? "ws:scaffold-publish" : "ws:scaffold-draft");
         getLog().info("══════════════════════════════════════════════════════════════");
 
-        // Workspace-level reconcilers run first (#393). Each owns one
+        // Workspace-wide verification (formerly ws:verify, retired in
+        // #393). Runs in both draft and publish modes — it's read-only,
+        // so the call shape is identical. Parent alignment was dropped
+        // from this extraction because ParentVersionReconciler.detect()
+        // (below) already covers it.
+        var verifier = new WorkspaceVerifier(getLog(), graph, root,
+                resolveManifest(), false /* checkConvergence */,
+                isWorkspaceMode());
+        verifier.runAllChecks();
+
+        // Workspace-level reconcilers run next (#393). Each owns one
         // dimension of workspace state (denormalized YAML fields,
         // parent version, alignment, etc.) and is reported (draft) or
         // applied (publish) before the per-subproject ike:scaffold

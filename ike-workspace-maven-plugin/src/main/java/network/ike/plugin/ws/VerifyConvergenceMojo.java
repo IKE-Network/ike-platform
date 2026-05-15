@@ -292,8 +292,8 @@ public class VerifyConvergenceMojo extends AbstractWorkspaceMojo {
         for (String s : skewed) {
             getLog().warn("    " + s + "  ← mismatch");
         }
-        getLog().warn("  Use ws:set-parent-publish -Dparent.version="
-                + rootVersion + " to fix.");
+        getLog().warn("  Use ws:scaffold-publish -DparentVersion="
+                + rootVersion + " to cascade.");
         return true;
     }
 

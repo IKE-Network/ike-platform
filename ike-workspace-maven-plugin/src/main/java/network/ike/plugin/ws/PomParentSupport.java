@@ -28,7 +28,7 @@ public final class PomParentSupport {
      * @return the parent info, or null if no parent block
      * @throws IOException if the file cannot be read or parsed
      */
-    static ParentInfo readParent(Path pomFile) throws IOException {
+    public static ParentInfo readParent(Path pomFile) throws IOException {
         PomModel model = PomModel.parse(pomFile);
         Parent parent = model.parent();
         if (parent == null) return null;
@@ -52,10 +52,10 @@ public final class PomParentSupport {
      * @param newVersion       the new version to set
      * @return updated POM content (unchanged if no match)
      */
-    static String updateParentVersion(String pomContent,
-                                       String parentGroupId,
-                                       String parentArtifactId,
-                                       String newVersion) {
+    public static String updateParentVersion(String pomContent,
+                                              String parentGroupId,
+                                              String parentArtifactId,
+                                              String newVersion) {
         return PomRewriter.updateParentVersion(
                 pomContent, parentGroupId, parentArtifactId, newVersion);
     }
@@ -127,5 +127,5 @@ public final class PomParentSupport {
      * @param artifactId parent artifactId
      * @param version    parent version
      */
-    record ParentInfo(String groupId, String artifactId, String version) {}
+    public record ParentInfo(String groupId, String artifactId, String version) {}
 }

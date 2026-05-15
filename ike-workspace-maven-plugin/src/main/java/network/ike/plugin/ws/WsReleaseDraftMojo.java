@@ -459,7 +459,8 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
         // updated (per-subproject version: pin) by the post-release
         // bumps inside ike:release-publish, AND the workspace pom may
         // have been touched earlier in the cycle (parent bump from
-        // ws:set-parent-publish, .mvn/maven.config from ws:ide-sync).
+        // ws:scaffold-publish's ParentVersionReconciler,
+        // .mvn/maven.config from ws:ide-sync).
         // The workspace itself is therefore source-changed and should
         // tag + deploy + refresh its site so the published cycle has
         // a single anchor: "the workspace was at this commit when

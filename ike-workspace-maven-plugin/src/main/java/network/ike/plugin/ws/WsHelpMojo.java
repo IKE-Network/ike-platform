@@ -163,7 +163,8 @@ public class WsHelpMojo implements Mojo {
         getLog().info("  -Dpublish=true                Execute (most goals default to draft)");
         getLog().info("");
         getLog().info("Parent version:");
-        getLog().info("  -Dparent.version=<version>    Target parent version (ws:set-parent)");
+        getLog().info("  -DparentVersion=<version>     Pin parent version for ws:scaffold-publish cascade");
+        getLog().info("  -DupdateParent=false          Skip parent cascade in ws:scaffold-publish");
         getLog().info("");
         getLog().info("Feature branching:");
         getLog().info("  -Dfeature=<name>              Feature name (branch: feature/<name>)");

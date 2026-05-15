@@ -27,8 +27,9 @@ import java.io.File;
  * {@code ws:pull}, {@code ws:commit}, {@code ws:init},
  * {@code ws:feature-finish-merge-publish},
  * {@code ws:feature-finish-squash-publish},
- * {@code ws:align-publish}, {@code ws:set-parent-publish},
- * {@code ws:versions-upgrade-publish}.
+ * {@code ws:align-publish}, {@code ws:scaffold-publish}
+ * (which subsumes the retired ws:set-parent and folds in
+ * ws:versions-upgrade-publish via -Dplan=).
  *
  * <p>See {@code IKE-Network/ike-issues#279}.
  */

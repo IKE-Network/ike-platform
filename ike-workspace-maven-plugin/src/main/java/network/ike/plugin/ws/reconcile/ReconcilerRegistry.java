@@ -25,7 +25,8 @@ public final class ReconcilerRegistry {
      */
     public static List<Reconciler> all() {
         return List.of(
-                new FieldNormalizationReconciler()
+                new FieldNormalizationReconciler(),
+                new ParentVersionReconciler()
                 // Future reconcilers added here in the order they
                 // should run (see #393 for the full migration plan).
         );

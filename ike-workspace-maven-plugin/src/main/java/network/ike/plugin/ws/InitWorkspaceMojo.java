@@ -586,8 +586,9 @@ public class InitWorkspaceMojo extends AbstractWorkspaceMojo {
 
                 | Goal | Description |
                 |------|-------------|
-                | `ws:align-draft` | Preview inter-subproject POM/branch alignment |
-                | `ws:align-publish` | Apply alignment to POMs and/or branches |
+                | `ws:align-draft` | Preview inter-subproject POM version alignment (AlignmentReconciler) |
+                | `ws:align-publish` | Apply POM version alignment |
+                | `ws:reconcile-branches-draft` / `-publish` | Reconcile branch fields against on-disk state |
                 | `ws:scaffold-draft -DupdateParent=true` | Preview parent-POM version cascade (along with other reconciliation) |
                 | `ws:scaffold-publish -DparentVersion=<v>` | Pin parent to specific version and cascade |
                 | `ws:versions-upgrade-draft` | Preview version upgrades against the configured ruleset |

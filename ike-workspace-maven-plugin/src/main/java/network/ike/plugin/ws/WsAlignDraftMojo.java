@@ -1,128 +1,80 @@
 package network.ike.plugin.ws;
 
-import network.ike.plugin.PomRewriter;
-
-import network.ike.plugin.ReleaseSupport;
 import network.ike.plugin.ws.preflight.Preflight;
 import network.ike.plugin.ws.preflight.PreflightCondition;
 import network.ike.plugin.ws.preflight.PreflightContext;
 import network.ike.plugin.ws.preflight.PreflightResult;
-import network.ike.workspace.Subproject;
-import network.ike.workspace.Dependency;
+import network.ike.plugin.ws.reconcile.AlignmentReconciler;
+import network.ike.plugin.ws.reconcile.DriftReport;
+import network.ike.plugin.ws.reconcile.ReconcilerOptions;
+import network.ike.plugin.ws.reconcile.WorkspaceContext;
 import network.ike.workspace.ManifestReader;
-import network.ike.workspace.ManifestWriter;
-import network.ike.workspace.PublishedArtifactSet;
 import network.ike.workspace.WorkspaceGraph;
-import org.apache.maven.api.model.Parent;
-import org.apache.maven.api.model.Plugin;
 import org.apache.maven.api.plugin.MojoException;
 import org.apache.maven.api.plugin.annotations.Mojo;
 import org.apache.maven.api.plugin.annotations.Parameter;
 
 import java.io.File;
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 /**
- * Align inter-subproject dependency versions in POM files (preview).
+ * Preview inter-subproject dependency, plugin, and parent version
+ * alignment across every cloned subproject.
  *
- * <p>This is the {@code ws:align-draft} goal. The corresponding
- * {@code ws:align-publish} applies the same changes. Daily-use, safe,
- * idempotent.
+ * <p>This is the {@code ws:align-draft} goal — a thin wrapper over
+ * {@link AlignmentReconciler}. The same reconciler is iterated from
+ * {@code ws:scaffold-{draft,publish}} (#393); this standalone goal
+ * exists for the "I detected misalignment, run only that" use case
+ * where iterating the full convergence pass would be needlessly
+ * broad.
  *
- * <p>For each subproject on disk, scans POM dependency declarations.
- * When a dependency's groupId matches another workspace subproject
- * and the declared version does not match that subproject's current
- * POM version, the dependency version is updated. Property-based
- * versions (e.g. {@code <ike-bom.version>}) are updated via
- * {@link PomModel#updateProperty}; direct {@code <version>} tags are
- * updated via {@link PomModel#updateDependencyVersion}.
+ * <p>This goal also serves as the designated entry point for the
+ * legacy schema migration ({@code components:} → {@code subprojects:},
+ * #150): it calls
+ * {@link ManifestReader#migrateLegacySchemaIfNeeded} before reading
+ * the graph so old manifests are rewritten in place.
  *
  * <p>Branch reconciliation (the rare "manifest ↔ git state" recovery
  * operation that used to share this goal as
- * {@code -Dscope=branches}) is now {@link WsReconcileBranchesDraftMojo}
- * ({@code ws:reconcile-branches-draft}) per the ike-issues#200 split.
+ * {@code -Dscope=branches}) moved to
+ * {@link WsReconcileBranchesDraftMojo} ({@code ws:reconcile-branches-draft})
+ * per the ike-issues#200 split. The {@code scope} parameter on this
+ * goal is retained only to emit a clear migration error for users
+ * with muscle memory.
  *
  * <pre>{@code
- * mvn ws:align-draft                # preview POM version updates
- * mvn ws:align-publish               # apply
+ * mvn ws:align-draft     # preview POM version updates
+ * mvn ws:align-publish   # apply
  * }</pre>
  *
- * @see WsReconcileBranchesDraftMojo for branch-state recovery
+ * @see AlignmentReconciler
+ * @see WsReconcileBranchesDraftMojo
  */
 @Mojo(name = "align-draft", projectRequired = false, aggregator = true)
 public class WsAlignDraftMojo extends AbstractWorkspaceMojo {
 
     /**
-     * When true, report changes without writing to POM files.
+     * When true, apply changes; when false (default), preview only.
+     * Package-private so {@link WsAlignPublishMojo} can flip it.
      */
     @Parameter(property = "publish", defaultValue = "false")
     boolean publish;
 
     /**
-     * What to align — only {@code poms} is accepted on the
-     * {@code ws:align-draft} / {@code ws:align-publish} pair after
-     * ike-issues#200. Branch reconciliation moved to the dedicated
-     * {@link WsReconcileBranchesDraftMojo} ({@code ws:reconcile-branches-draft})
-     * and its publish counterpart. Passing {@code -Dscope=branches} or
-     * {@code -Dscope=all} on either align goal throws with a pointer to
-     * the new goal.
-     *
-     * <p>The parameter is retained as a transitional migration aid so
-     * users with muscle memory get a clear error rather than a
-     * silently-changed default.
+     * Migration aid for the ike-issues#200 two-axis split. The only
+     * accepted value is {@code poms} (the new default). Passing
+     * {@code branches} or {@code all} throws with a pointer to
+     * {@code ws:reconcile-branches-{draft,publish}}, so users with
+     * muscle memory get a clear error rather than silent breakage.
      */
     @Parameter(property = "scope", defaultValue = "poms")
     String scope;
 
-    /**
-     * Branch-sync direction — only consulted when {@code scope}
-     * includes branches.
-     *
-     * <ul>
-     *   <li>{@code repos} (default) — read actual branches and update
-     *       {@code workspace.yaml}.</li>
-     *   <li>{@code manifest} — run {@code git checkout} per subproject so
-     *       repos match the yaml.</li>
-     *   <li>{@code workspace-head} — the workspace repo's current git
-     *       branch is authoritative; reconcile both the {@code branch:}
-     *       fields in {@code workspace.yaml} <em>and</em> each subproject's
-     *       on-disk branch to that single value. Repairs branch drift
-     *       across the workspace (ike-issues#287).</li>
-     * </ul>
-     */
-    @Parameter(property = "from", defaultValue = "repos")
-    String from;
-
-    /**
-     * When true, allow branch checkout against subprojects with
-     * uncommitted changes. Only consulted with
-     * {@code scope=branches|all} and {@code from=manifest|workspace-head}.
-     * Default {@code false}.
-     */
-    @Parameter(property = "force", defaultValue = "false")
-    boolean force;
-
     /** Creates this goal instance. */
     public WsAlignDraftMojo() {}
-
-    /**
-     * Whether this goal may run the branch-axis reconciliation. False
-     * for {@code ws:align-draft} / {@code ws:align-publish} (POM-only
-     * after ike-issues#200); overridden to true by
-     * {@link WsReconcileBranchesDraftMojo} so the same implementation
-     * can serve both goal names without duplicating the cascade logic.
-     */
-    protected boolean isBranchScopeAllowed() {
-        return false;
-    }
 
     @Override
     public void execute() throws MojoException {
@@ -130,48 +82,20 @@ public class WsAlignDraftMojo extends AbstractWorkspaceMojo {
 
         // Migration gate (ike-issues#200): the align goals are POM-only.
         // Branch reconciliation moved to ws:reconcile-branches-{draft,publish}.
-        if (!isBranchScopeAllowed()
-                && ("branches".equals(scope) || "all".equals(scope))) {
+        if ("branches".equals(scope) || "all".equals(scope)) {
             String invokedGoal = "ws:align-" + (publish ? "publish" : "draft");
             throw new MojoException(
                     invokedGoal + " no longer supports -Dscope=" + scope
                             + " (ike-issues#200). Branch reconciliation moved to:\n"
                             + "  mvn ws:reconcile-branches-"
                             + (publish ? "publish" : "draft")
-                            + (from != null && !"repos".equals(from)
-                                    ? " -Dfrom=" + from : "")
                             + "\n  " + invokedGoal
                             + " is now POM-only — drop -Dscope=.");
         }
-
-        boolean doPoms = !"branches".equals(scope);
-        boolean doBranches = isBranchScopeAllowed() && !"poms".equals(scope);
-        if (!doPoms && !doBranches) {
+        if (!"poms".equals(scope)) {
             throw new MojoException(
-                    "Invalid scope '" + scope + "' — expected poms|branches|all");
+                    "Invalid scope '" + scope + "' — expected poms");
         }
-        if (doBranches
-                && !"repos".equals(from)
-                && !"manifest".equals(from)
-                && !"workspace-head".equals(from)) {
-            throw new MojoException(
-                    "Invalid from '" + from
-                            + "' — expected repos|manifest|workspace-head");
-        }
-
-        getLog().info("");
-        getLog().info("IKE Workspace Align — reconcile POM dependencies"
-                + " and branch fields");
-        getLog().info("══════════════════════════════════════════════════════════════");
-        getLog().info("  Scope: " + scope);
-        if (doBranches) {
-            getLog().info("  Branches: " + describeFromMode());
-        }
-
-        if (draft) {
-            getLog().info("  (draft — no files will be modified)");
-        }
-        getLog().info("");
 
         // #150 migration: ws:align-publish (and the draft variant) is the
         // designated entry point that rewrites legacy schemas in place.
@@ -186,927 +110,74 @@ public class WsAlignDraftMojo extends AbstractWorkspaceMojo {
         WorkspaceGraph graph = loadGraph();
         File root = workspaceRoot();
 
-        // Preflight: POM alignment requires clean working trees (#132)
-        // so the rewrite commit doesn't bundle unrelated edits. Branch
-        // alignment does its own per-subproject uncommitted-changes check —
-        // in from=manifest mode it skips repos with uncommitted changes
-        // unless -Dforce; in from=repos mode it only reads, and the
-        // workspace root will itself have uncommitted changes once yaml
-        // is rewritten. So the strict preflight only fires when scope
-        // includes poms.
-        if (doPoms) {
-            List<String> sorted = graph.topologicalSort();
-            PreflightResult preflight = Preflight.of(
-                    List.of(PreflightCondition.WORKING_TREE_CLEAN),
-                    PreflightContext.of(root, graph, sorted));
-            if (draft) {
-                preflight.warnIfFailed(getLog(), WsGoal.ALIGN_PUBLISH);
-            } else {
-                preflight.requirePassed(WsGoal.ALIGN_PUBLISH);
-            }
-        }
-
-        // Build lookup: groupId:artifactId → (subproject name, current POM version)
-        Map<String, ComponentVersion> artifactIndex = doPoms
-                ? buildArtifactIndex(graph, root)
-                : new LinkedHashMap<>();
-
-        int totalChanges = 0;
-        List<String> changedComponents = new ArrayList<>();
-        List<AlignChange> reportChanges = new ArrayList<>();
-        List<AlignCheck> alignChecks = new ArrayList<>();
-        List<BranchChange> branchChanges = new ArrayList<>();
-
-        if (doPoms) {
-            totalChanges += alignPoms(graph, root, artifactIndex,
-                    changedComponents, reportChanges, alignChecks, draft);
-        }
-
-        if (doBranches) {
-            totalChanges += alignBranches(graph, root, manifestPath,
-                    branchChanges, draft);
-        }
-
-        // --- Summary ---
         getLog().info("");
-        if (totalChanges == 0) {
-            getLog().info("  Nothing to align  ✓");
-        } else if (draft) {
-            getLog().info("  " + totalChanges + " change(s) would be applied");
-            getLog().info("  Use ws:align-publish to apply changes.");
-        } else {
-            getLog().info("  Applied " + totalChanges + " change(s)");
+        getLog().info("IKE Workspace Align — reconcile inter-subproject versions");
+        getLog().info("══════════════════════════════════════════════════════════════");
+        if (draft) {
+            getLog().info("  (draft — no files will be modified)");
         }
         getLog().info("");
 
-        // --- Structured markdown report ---
-        writeReport(publish ? WsGoal.ALIGN_PUBLISH : WsGoal.ALIGN_DRAFT,
-                buildMarkdownReport(totalChanges, changedComponents,
-                        reportChanges, alignChecks, branchChanges));
-    }
-
-    /**
-     * Run POM-side alignment (dependency versions, parent versions,
-     * plugin literals). Returns the number of changes made or that
-     * would be made in draft mode.
-     */
-    private int alignPoms(WorkspaceGraph graph, File root,
-                          Map<String, ComponentVersion> artifactIndex,
-                          List<String> changedComponents,
-                          List<AlignChange> reportChanges,
-                          List<AlignCheck> alignChecks,
-                          boolean draft) throws MojoException {
-        int totalChanges = 0;
-
-        for (Map.Entry<String, Subproject> entry : graph.manifest().subprojects().entrySet()) {
-            String name = entry.getKey();
-            Subproject subproject = entry.getValue();
-            File subprojectDir = new File(root, name);
-
-            if (!new File(subprojectDir, "pom.xml").exists()) {
-                getLog().debug("  " + name + ": not cloned — skipping");
-                continue;
-            }
-
-            // Find all POM files in this subproject
-            List<File> pomFiles;
-            try {
-                pomFiles = ReleaseSupport.findPomFiles(subprojectDir);
-            } catch (MojoException e) {
-                getLog().warn("  " + name + ": could not scan POM files — "
-                        + e.getMessage());
-                continue;
-            }
-
-            // Also use the declared depends-on to find version-property hints
-            Map<String, String> versionPropertyMap = new LinkedHashMap<>();
-            for (Dependency dep : subproject.dependsOn()) {
-                if (dep.versionProperty() != null && !dep.versionProperty().isEmpty()) {
-                    Subproject target = graph.manifest().subprojects().get(dep.subproject());
-                    if (target != null && target.groupId() != null
-                            && !target.groupId().isEmpty()) {
-                        versionPropertyMap.put(dep.subproject(), dep.versionProperty());
-                    }
-                }
-            }
-
-            int componentChanges = 0;
-
-            for (File pomFile : pomFiles) {
-                int changes = alignPomDependencies(
-                        name, pomFile, artifactIndex, versionPropertyMap,
-                        subprojectDir, graph, reportChanges);
-                changes += alignPomPlugins(
-                        name, pomFile, artifactIndex,
-                        subprojectDir, reportChanges);
-                componentChanges += changes;
-            }
-
-            // Read POM version for the summary table
-            String pomVersion = "—";
-            try {
-                pomVersion = ReleaseSupport.readPomVersion(
-                        new File(subprojectDir, "pom.xml"));
-            } catch (MojoException ignored) { }
-
-            if (componentChanges > 0) {
-                totalChanges += componentChanges;
-                changedComponents.add(name);
-                alignChecks.add(new AlignCheck(name, pomVersion, false));
-            } else {
-                alignChecks.add(new AlignCheck(name, pomVersion, true));
-            }
-        }
-
-        // --- Parent version alignment (via Maven 4 Model API) ---
-        for (Map.Entry<String, Subproject> entry : graph.manifest().subprojects().entrySet()) {
-            String name = entry.getKey();
-            Subproject subproject = entry.getValue();
-            String parentSubprojectName = subproject.parent();
-            if (parentSubprojectName == null) continue;
-
-            Subproject parentSubproject = graph.manifest().subprojects().get(parentSubprojectName);
-            if (parentSubproject == null || parentSubproject.version() == null) continue;
-
-            File subprojectDir = new File(root, name);
-            Path pomPath = subprojectDir.toPath().resolve("pom.xml");
-            if (!Files.exists(pomPath)) continue;
-
-            try {
-                PomModel pom = PomModel.parse(pomPath);
-                Parent parentInfo = pom.parent();
-                if (parentInfo == null) continue;
-
-                String expectedVersion = parentSubproject.version();
-                String currentVersion = parentInfo.getVersion();
-                if (currentVersion == null
-                        || expectedVersion.equals(currentVersion)) {
-                    continue;
-                }
-
-                String parentGid = parentInfo.getGroupId();
-                String parentAid = parentInfo.getArtifactId();
-                if (draft) {
-                    getLog().info("  " + name + ": parent " + parentAid
-                            + " " + currentVersion + " → " + expectedVersion
-                            + " (draft)");
-                } else {
-                    // #241: match full GA, not artifactId alone
-                    String updated = PomModel.updateParentVersion(
-                            pom.content(), parentGid, parentAid,
-                            expectedVersion);
-                    Files.writeString(pomPath, updated, StandardCharsets.UTF_8);
-                    getLog().info("  " + name + ": parent " + parentAid
-                            + " " + currentVersion + " → " + expectedVersion);
-
-                    // Also update submodule POMs that reference the same parent
-                    List<File> subPoms = ReleaseSupport.findPomFiles(subprojectDir);
-                    for (File subPom : subPoms) {
-                        if (subPom.toPath().equals(pomPath)) continue;
-                        String subContent = Files.readString(
-                                subPom.toPath(), StandardCharsets.UTF_8);
-                        String subUpdated = PomModel.updateParentVersion(
-                                subContent, parentGid, parentAid,
-                                expectedVersion);
-                        if (!subUpdated.equals(subContent)) {
-                            Files.writeString(subPom.toPath(), subUpdated,
-                                    StandardCharsets.UTF_8);
-                        }
-                    }
-                }
-                reportChanges.add(new AlignChange(
-                        name, "pom.xml", "parent:" + parentAid,
-                        currentVersion, expectedVersion));
-                totalChanges++;
-                if (!changedComponents.contains(name)) {
-                    changedComponents.add(name);
-                }
-            } catch (IOException e) {
-                getLog().warn("  " + name + ": could not align parent version — "
-                        + e.getMessage());
-            }
-        }
-
-        // --- POM alignment summary ---
-        if (totalChanges == 0) {
-            getLog().info("  POMs: all inter-subproject versions are aligned  ✓");
-        } else if (draft) {
-            getLog().info("  POMs: " + totalChanges + " version(s) would be updated across "
-                    + changedComponents.size() + " subproject(s)");
+        // POM alignment requires clean working trees (#132) so the
+        // rewrite commit doesn't bundle unrelated edits.
+        List<String> sorted = graph.topologicalSort();
+        PreflightResult preflight = Preflight.of(
+                List.of(PreflightCondition.WORKING_TREE_CLEAN),
+                PreflightContext.of(root, graph, sorted));
+        if (draft) {
+            preflight.warnIfFailed(getLog(), WsGoal.ALIGN_PUBLISH);
         } else {
-            getLog().info("  POMs: updated " + totalChanges + " version(s) across "
-                    + changedComponents.size() + " subproject(s)");
+            preflight.requirePassed(WsGoal.ALIGN_PUBLISH);
         }
 
-        return totalChanges;
-    }
-
-    /**
-     * Reconcile {@code workspace.yaml} branch fields against on-disk
-     * git state. With {@code from=repos}, the yaml is updated to match
-     * actual branches; with {@code from=manifest}, each subproject is
-     * checked out to the declared branch (respecting uncommitted work
-     * unless {@code -Dforce=true}).
-     *
-     * @return the number of branch changes applied, or that would be
-     *         applied in draft mode
-     */
-    private int alignBranches(WorkspaceGraph graph, File root,
-                              Path manifestPath,
-                              List<BranchChange> branchChanges,
-                              boolean draft) throws MojoException {
-        return switch (from) {
-            case "manifest" ->
-                    alignBranchesFromManifest(graph, root, branchChanges, draft);
-            case "workspace-head" ->
-                    alignBranchesFromWorkspaceHead(graph, root, manifestPath,
-                            branchChanges, draft);
-            default ->
-                    alignBranchesFromRepos(graph, root, manifestPath,
-                            branchChanges, draft);
-        };
-    }
-
-    /** Human-readable label for the active {@code from=...} mode. */
-    private String describeFromMode() {
-        return switch (from) {
-            case "manifest" -> "manifest → repos (git checkout)";
-            case "workspace-head" ->
-                    "workspace HEAD → manifest + repos (authoritative branch)";
-            default -> "repos → manifest (update yaml)";
-        };
-    }
-
-    /**
-     * Read actual branches from each cloned subproject and update
-     * {@code workspace.yaml} so the declared branch fields match reality.
-     */
-    private int alignBranchesFromRepos(WorkspaceGraph graph, File root,
-                                       Path manifestPath,
-                                       List<BranchChange> branchChanges,
-                                       boolean draft) throws MojoException {
-        Map<String, String> updates = new LinkedHashMap<>();
-
-        for (Map.Entry<String, Subproject> entry : graph.manifest().subprojects().entrySet()) {
-            String name = entry.getKey();
-            Subproject subproject = entry.getValue();
-            File dir = new File(root, name);
-            if (!new File(dir, ".git").exists()) continue;
-
-            String actual = gitBranch(dir);
-            String declared = subproject.branch();
-            if (actual.equals(declared)) continue;
-
-            updates.put(name, actual);
-            branchChanges.add(new BranchChange(name, declared, actual, "yaml"));
-            getLog().info("  branch: " + name + ": " + declared
-                    + " → " + actual + (draft ? " (draft)" : ""));
-        }
-
-        if (updates.isEmpty()) {
-            getLog().info("  Branches: yaml already matches repos  ✓");
-            return 0;
-        }
-
-        if (!draft) {
-            try {
-                ManifestWriter.updateBranches(manifestPath, updates);
-                getLog().info("  Branches: updated workspace.yaml ("
-                        + updates.size() + " change(s))");
-                // Commit if workspace root is a git repo
-                File wsRoot = manifestPath.getParent().toFile();
-                if (new File(wsRoot, ".git").exists()) {
-                    ReleaseSupport.exec(wsRoot, getLog(),
-                            "git", "add", "workspace.yaml");
-                    ReleaseSupport.exec(wsRoot, getLog(),
-                            "git", "commit", "-m",
-                            "workspace: align branch fields from repos");
-                }
-            } catch (IOException e) {
-                throw new MojoException(
-                        "Failed to update workspace.yaml: " + e.getMessage(), e);
-            }
-        }
-
-        return updates.size();
-    }
-
-    /**
-     * Reconcile every subproject's {@code branch:} field <em>and</em>
-     * on-disk git branch to the workspace repo's current HEAD.
-     *
-     * <p>This is the symmetric repair to {@code ws:add}'s
-     * branch-coherence rule (ike-issues#286): the workspace repo's
-     * branch is authoritative, and this mode brings everything else
-     * (YAML state, on-disk state) into agreement with it.
-     *
-     * <p>Behavior per subproject:
-     * <ol>
-     *   <li>If the YAML {@code branch:} != workspace HEAD → queue YAML
-     *       update.</li>
-     *   <li>If the on-disk branch != workspace HEAD → queue checkout.
-     *       Subprojects with uncommitted changes are skipped unless
-     *       {@code -Dforce=true} (same semantics as
-     *       {@code from=manifest}).</li>
-     * </ol>
-     *
-     * <p>If a subproject's local repo doesn't yet have the workspace
-     * branch, {@code git checkout} will fall through to creating it
-     * from {@code origin/<branch>} (the standard tracking-branch path).
-     * If the branch isn't on origin either, the checkout fails — that
-     * case is the {@code ws:add}'s territory; this mode does not push
-     * new branches to subproject origins.
-     *
-     * @return the number of changes applied (or that would be in draft mode)
-     * @throws MojoException if the workspace dir is not a git repo, or
-     *                       any individual checkout fails
-     */
-    private int alignBranchesFromWorkspaceHead(WorkspaceGraph graph, File root,
-                                                Path manifestPath,
-                                                List<BranchChange> branchChanges,
-                                                boolean draft) throws MojoException {
-        File wsRoot = manifestPath.getParent().toFile();
-        if (!new File(wsRoot, ".git").exists()) {
-            throw new MojoException(
-                    "from=workspace-head requires the workspace directory to be "
-                            + "a git repository. " + wsRoot.getAbsolutePath()
-                            + " has no .git directory.");
-        }
-        String wsBranch = gitBranch(wsRoot);
-        if (wsBranch == null || wsBranch.isBlank() || "unknown".equals(wsBranch)) {
-            throw new MojoException(
-                    "Could not read the workspace repo's current branch. "
-                            + "Ensure HEAD points at a named branch (not a "
-                            + "detached HEAD).");
-        }
-
-        getLog().info("  Workspace HEAD: " + wsBranch);
-
-        Map<String, String> yamlUpdates = new LinkedHashMap<>();
-        int checkoutsPlanned = 0;
-        int checkoutsApplied = 0;
-        int skippedDirty = 0;
-
-        for (Map.Entry<String, Subproject> entry : graph.manifest().subprojects().entrySet()) {
-            String name = entry.getKey();
-            Subproject subproject = entry.getValue();
-            File dir = new File(root, name);
-
-            // YAML reconciliation runs whether or not the repo is cloned.
-            String declared = subproject.branch();
-            if (declared == null || !declared.equals(wsBranch)) {
-                yamlUpdates.put(name, wsBranch);
-                branchChanges.add(new BranchChange(
-                        name, declared == null ? "(unset)" : declared,
-                        wsBranch, "yaml"));
-                getLog().info("  branch: " + name + " (yaml): "
-                        + (declared == null ? "(unset)" : declared)
-                        + " → " + wsBranch + (draft ? " (draft)" : ""));
-            }
-
-            // Checkout reconciliation only applies to cloned subprojects.
-            if (!new File(dir, ".git").exists()) continue;
-            String actual = gitBranch(dir);
-            if (wsBranch.equals(actual)) continue;
-
-            String status = gitStatus(dir);
-            if (!status.isEmpty() && !force) {
-                getLog().warn("  ⚠ " + name + ": uncommitted changes — skipping"
-                        + " checkout (pass -Dforce=true to override)");
-                skippedDirty++;
-                continue;
-            }
-
-            checkoutsPlanned++;
-            branchChanges.add(new BranchChange(name, actual, wsBranch, "checkout"));
-            getLog().info("  branch: " + name + " (repo): " + actual
-                    + " → " + wsBranch + (draft ? " (draft)" : ""));
-
-            if (!draft) {
-                // If the branch already exists locally (or on origin),
-                // a plain checkout works — git will set up tracking.
-                // Otherwise create it from the current HEAD, mirroring
-                // ws:add's workspace-branch-coherence semantics.
-                if (localBranchExists(dir, wsBranch)
-                        || originBranchExists(dir, wsBranch)) {
-                    ReleaseSupport.exec(dir, getLog(),
-                            "git", "checkout", wsBranch);
-                } else {
-                    getLog().info("    " + name + " has no '" + wsBranch
-                            + "' locally or on origin — creating from "
-                            + actual + ".");
-                    ReleaseSupport.exec(dir, getLog(),
-                            "git", "checkout", "-b", wsBranch);
-                }
-                checkoutsApplied++;
-            }
-        }
-
-        if (yamlUpdates.isEmpty() && checkoutsPlanned == 0 && skippedDirty == 0) {
-            getLog().info("  Branches: workspace, manifest, and repos all agree  ✓");
-            return 0;
-        }
-
-        if (!draft && !yamlUpdates.isEmpty()) {
-            try {
-                ManifestWriter.updateBranches(manifestPath, yamlUpdates);
-                getLog().info("  Branches: updated workspace.yaml ("
-                        + yamlUpdates.size() + " field(s))");
-                ReleaseSupport.exec(wsRoot, getLog(),
-                        "git", "add", "workspace.yaml");
-                ReleaseSupport.exec(wsRoot, getLog(),
-                        "git", "commit", "-m",
-                        "workspace: align branch fields to " + wsBranch);
-            } catch (IOException e) {
-                throw new MojoException(
-                        "Failed to update workspace.yaml: " + e.getMessage(), e);
-            }
-        }
+        WorkspaceContext ctx = new WorkspaceContext(
+                root, manifestPath, graph,
+                readReconcilerOptions(), getLog());
+        AlignmentReconciler reconciler = new AlignmentReconciler();
 
         if (draft) {
-            getLog().info("  Branches: " + (yamlUpdates.size() + checkoutsPlanned)
-                    + " change(s) would be applied"
-                    + (skippedDirty > 0
-                            ? " (" + skippedDirty + " skipped — uncommitted)"
-                            : ""));
-            return yamlUpdates.size() + checkoutsPlanned;
-        }
-        getLog().info("  Branches: " + yamlUpdates.size()
-                + " yaml update(s), " + checkoutsApplied + " checkout(s), "
-                + skippedDirty + " skipped (uncommitted)");
-        return yamlUpdates.size() + checkoutsApplied;
-    }
-
-    /**
-     * Whether {@code refs/heads/<branch>} exists in the local repo.
-     */
-    private static boolean localBranchExists(File dir, String branch) {
-        try {
-            String out = ReleaseSupport.execCapture(dir,
-                    "git", "branch", "--list", branch);
-            return out != null && !out.trim().isEmpty();
-        } catch (Exception e) {
-            return false;
-        }
-    }
-
-    /**
-     * Whether {@code refs/heads/<branch>} exists on the origin remote.
-     * Returns false on any failure (offline, no remote, etc.) — the
-     * caller treats that the same as \"doesn't exist on origin\" and
-     * creates the branch locally from the current HEAD.
-     */
-    private static boolean originBranchExists(File dir, String branch) {
-        try {
-            String out = ReleaseSupport.execCapture(dir,
-                    "git", "ls-remote", "--heads", "origin", branch);
-            return out != null && !out.trim().isEmpty();
-        } catch (Exception e) {
-            return false;
-        }
-    }
-
-    /**
-     * Read declared branches from {@code workspace.yaml} and run
-     * {@code git checkout} in each subproject whose current branch
-     * differs. Subprojects with uncommitted changes are skipped unless
-     * {@code -Dforce=true}.
-     */
-    private int alignBranchesFromManifest(WorkspaceGraph graph, File root,
-                                          List<BranchChange> branchChanges,
-                                          boolean draft) throws MojoException {
-        int switched = 0;
-        int skippedDirty = 0;
-
-        for (Map.Entry<String, Subproject> entry : graph.manifest().subprojects().entrySet()) {
-            String name = entry.getKey();
-            Subproject subproject = entry.getValue();
-            File dir = new File(root, name);
-            if (!new File(dir, ".git").exists()) continue;
-
-            String declared = subproject.branch();
-            if (declared == null) continue;
-            String actual = gitBranch(dir);
-            if (actual.equals(declared)) continue;
-
-            String status = gitStatus(dir);
-            if (!status.isEmpty() && !force) {
-                getLog().warn("  ⚠ " + name + ": uncommitted changes — skipping"
-                        + " (pass -Dforce=true to override)");
-                skippedDirty++;
-                continue;
-            }
-
-            branchChanges.add(new BranchChange(name, actual, declared, "checkout"));
-            getLog().info("  branch: " + name + ": " + actual
-                    + " → " + declared + (draft ? " (draft)" : ""));
-
-            if (!draft) {
-                ReleaseSupport.exec(dir, getLog(),
-                        "git", "checkout", declared);
-                switched++;
-            }
-        }
-
-        if (switched == 0 && skippedDirty == 0 && branchChanges.isEmpty()) {
-            getLog().info("  Branches: repos already match yaml  ✓");
-        } else if (draft) {
-            getLog().info("  Branches: " + branchChanges.size()
-                    + " subproject(s) would be switched");
+            printDriftReport(reconciler.detect(ctx));
         } else {
-            getLog().info("  Branches: switched " + switched
-                    + ", skipped " + skippedDirty + " (uncommitted)");
+            reconciler.apply(ctx);
         }
-
-        return draft ? branchChanges.size() : switched;
+        getLog().info("");
     }
 
     /**
-     * Build a structured markdown report from collected alignment changes.
+     * Collect Maven system properties into a {@link ReconcilerOptions}
+     * bag so the reconciler can query its opt-out flag
+     * ({@code -DupdateAlignment=false}).
      */
-    private String buildMarkdownReport(int totalChanges,
-                                        List<String> changedComponents,
-                                        List<AlignChange> changes,
-                                        List<AlignCheck> checks,
-                                        List<BranchChange> branches) {
-        StringBuilder md = new StringBuilder();
-
-        md.append("**Scope:** ").append(scope);
-        if (!"poms".equals(scope)) {
-            md.append(" (branches: ")
-              .append("manifest".equals(from) ? "manifest → repos" : "repos → manifest")
-              .append(")");
+    private static ReconcilerOptions readReconcilerOptions() {
+        Map<String, String> flags = new HashMap<>();
+        for (String name : System.getProperties().stringPropertyNames()) {
+            flags.put(name, System.getProperty(name));
         }
-        md.append("\n\n");
-
-        if (totalChanges == 0) {
-            md.append("Nothing to align.\n\n");
-        } else if (!publish) {
-            md.append("**Dry run** — ").append(totalChanges)
-              .append(" change(s) would be applied.\n\n");
-        } else {
-            md.append("Applied ").append(totalChanges)
-              .append(" change(s).\n\n");
-        }
-
-        if (!changes.isEmpty()) {
-            md.append("### POM changes\n\n");
-            md.append("| Subproject | POM | Artifact | From | To |\n");
-            md.append("|-----------|-----|----------|------|----|\n");
-            for (AlignChange c : changes) {
-                md.append("| ").append(c.subproject)
-                  .append(" | ").append(c.pomRelPath)
-                  .append(" | `").append(c.artifact).append('`')
-                  .append(" | ").append(c.fromVersion)
-                  .append(" | ").append(c.toVersion)
-                  .append(" |\n");
-            }
-            md.append('\n');
-        }
-
-        if (!branches.isEmpty()) {
-            md.append("### Branch changes\n\n");
-            md.append("| Subproject | From | To | Action |\n");
-            md.append("|-----------|------|----|--------|\n");
-            for (BranchChange b : branches) {
-                md.append("| ").append(b.subproject)
-                  .append(" | ").append(b.fromBranch)
-                  .append(" | ").append(b.toBranch)
-                  .append(" | ").append(b.action)
-                  .append(" |\n");
-            }
-            md.append('\n');
-        }
-
-        // Always show alignment summary table
-        if (!checks.isEmpty()) {
-            md.append("| Subproject | Version | Status |\n");
-            md.append("|-----------|---------|--------|\n");
-            for (AlignCheck c : checks) {
-                md.append("| ").append(c.subproject)
-                  .append(" | ").append(c.version)
-                  .append(" | ").append(c.aligned ? "✓ aligned" : "✗ needs update")
-                  .append(" |\n");
-            }
-        }
-
-        return md.toString();
-    }
-
-    /** A single version alignment change for the report. */
-    private record AlignChange(String subproject, String pomRelPath,
-                                String artifact, String fromVersion,
-                                String toVersion) {}
-
-    /** A subproject alignment check result for the summary table. */
-    private record AlignCheck(String subproject, String version,
-                               boolean aligned) {}
-
-    /**
-     * A single branch-alignment change. The {@code action} is either
-     * {@code "yaml"} (workspace.yaml branch field rewritten) or
-     * {@code "checkout"} (repo switched via {@code git checkout}).
-     */
-    private record BranchChange(String subproject, String fromBranch,
-                                 String toBranch, String action) {}
-
-    // ── Artifact index ───────────────────────────────────────────────
-
-    /**
-     * Build an index from {@code groupId:artifactId} to (subproject name,
-     * current POM version) for all cloned workspace subprojects.
-     *
-     * <p>Uses {@link PublishedArtifactSet#scan} to discover every
-     * artifact each subproject publishes, so components sharing a
-     * groupId (e.g., {@code dev.ikm.ike}) are correctly distinguished
-     * by artifactId.
-     */
-    private Map<String, ComponentVersion> buildArtifactIndex(
-            WorkspaceGraph graph, File root) throws MojoException {
-        Map<String, ComponentVersion> index = new LinkedHashMap<>();
-
-        for (Map.Entry<String, Subproject> entry : graph.manifest().subprojects().entrySet()) {
-            String name = entry.getKey();
-            File subprojectDir = new File(root, name);
-
-            if (!new File(subprojectDir, "pom.xml").exists()) {
-                continue;
-            }
-
-            String pomVersion;
-            try {
-                pomVersion = ReleaseSupport.readPomVersion(
-                        new File(subprojectDir, "pom.xml"));
-            } catch (MojoException e) {
-                getLog().warn("  " + name + ": could not read POM version — "
-                        + e.getMessage());
-                continue;
-            }
-
-            Set<PublishedArtifactSet.Artifact> published;
-            try {
-                published = PublishedArtifactSet.scan(subprojectDir.toPath());
-            } catch (IOException e) {
-                getLog().warn("  " + name + ": could not scan published artifacts — "
-                        + e.getMessage());
-                continue;
-            }
-
-            ComponentVersion cv = new ComponentVersion(name, pomVersion);
-            for (PublishedArtifactSet.Artifact artifact : published) {
-                String key = artifact.groupId() + ":" + artifact.artifactId();
-                index.put(key, cv);
-            }
-        }
-
-        return index;
-    }
-
-    // ── POM dependency alignment ────────────────────────────────────
-
-    /**
-     * Scan a single POM file for dependencies whose {@code groupId:artifactId}
-     * matches a workspace subproject's published artifact, and update
-     * mismatched versions.
-     *
-     * <p>Uses Maven 4's {@link PomModel} for reading dependency coordinates
-     * (no regex for extraction). Writes go through {@link PomRewriter},
-     * which uses OpenRewrite's XML Lossless Semantic Tree to preserve
-     * whitespace, comments, and quote style — never regex or sed-style
-     * substitution. See {@code feedback_no_sed_on_poms} for the discipline.
-     *
-     * @return number of changes made (or that would be made in draft)
-     */
-    private int alignPomDependencies(String ownerName, File pomFile,
-                                     Map<String, ComponentVersion> artifactIndex,
-                                     Map<String, String> versionPropertyMap,
-                                     File subprojectDir, WorkspaceGraph graph,
-                                     List<AlignChange> reportChanges)
-            throws MojoException {
-        PomModel pom;
-        try {
-            pom = PomModel.parse(pomFile.toPath());
-        } catch (IOException e) {
-            getLog().debug("  " + ownerName + ": skipping "
-                    + pomFile.getName() + " (empty or unparseable)");
-            return 0;
-        }
-
-        String updated = pom.content();
-        int changes = 0;
-
-        // Iterate all dependencies using the Maven 4 Model API
-        for (org.apache.maven.api.model.Dependency dep : pom.allDependencies()) {
-            String depGroupId = dep.getGroupId();
-            String depArtifactId = dep.getArtifactId();
-            String currentVersion = dep.getVersion();
-
-            if (depGroupId == null || depArtifactId == null
-                    || currentVersion == null) {
-                continue;
-            }
-
-            String key = depGroupId + ":" + depArtifactId;
-            ComponentVersion target = artifactIndex.get(key);
-
-            // Skip if not a workspace artifact or self-reference
-            if (target == null || target.name.equals(ownerName)) {
-                continue;
-            }
-
-            if (currentVersion.startsWith("${") && currentVersion.endsWith("}")) {
-                // Property-based version — resolve via model properties
-                String propName = currentVersion.substring(2,
-                        currentVersion.length() - 1);
-                String propValue = pom.properties().get(propName);
-                if (propValue != null && !propValue.equals(target.version)) {
-                    String relPath = subprojectDir.toPath().relativize(
-                            pomFile.toPath()).toString();
-                    getLog().info("  " + ownerName + " (" + relPath
-                            + "): property <" + propName + "> "
-                            + propValue + " → " + target.version);
-                    reportChanges.add(new AlignChange(
-                            ownerName, relPath,
-                            "property:" + propName,
-                            propValue, target.version));
-                    updated = PomModel.updateProperty(
-                            updated, propName, target.version);
-                    changes++;
-                }
-            } else if (!currentVersion.equals(target.version)) {
-                // Direct version mismatch — rewrite via OpenRewrite LST
-                String relPath = subprojectDir.toPath().relativize(
-                        pomFile.toPath()).toString();
-                getLog().info("  " + ownerName + " (" + relPath + "): "
-                        + key + " " + currentVersion
-                        + " → " + target.version);
-                reportChanges.add(new AlignChange(
-                        ownerName, relPath, key,
-                        currentVersion, target.version));
-                updated = PomModel.updateDependencyVersion(
-                        updated, depGroupId, depArtifactId, target.version);
-                changes++;
-            }
-        }
-
-        // Handle version-property updates declared in depends-on.
-        // Look up the target subproject's version by name (via the
-        // artifact index), not by groupId — avoids the collision.
-        for (Map.Entry<String, String> vpEntry : versionPropertyMap.entrySet()) {
-            String targetComponent = vpEntry.getKey();
-            String versionProperty = vpEntry.getValue();
-
-            ComponentVersion cv = findComponentVersion(
-                    targetComponent, artifactIndex, workspaceRoot());
-            if (cv == null) continue;
-
-            // Read current property value from the model
-            String currentValue = pom.properties().get(versionProperty);
-            if (currentValue != null && !currentValue.equals(cv.version)) {
-                String relPath = subprojectDir.toPath().relativize(
-                        pomFile.toPath()).toString();
-                getLog().info("  " + ownerName + " (" + relPath
-                        + "): property <" + versionProperty + "> "
-                        + currentValue + " → " + cv.version);
-                reportChanges.add(new AlignChange(
-                        ownerName, relPath,
-                        "property:" + versionProperty,
-                        currentValue, cv.version));
-                updated = PomModel.updateProperty(
-                        updated, versionProperty, cv.version);
-                changes++;
-            }
-        }
-
-        // Write if changed
-        if (changes > 0 && publish && !updated.equals(pom.content())) {
-            try {
-                Files.writeString(pomFile.toPath(), updated,
-                        StandardCharsets.UTF_8);
-            } catch (IOException e) {
-                throw new MojoException(
-                        "Failed to write " + pomFile + ": "
-                        + e.getMessage(), e);
-            }
-        }
-
-        return changes;
+        return new ReconcilerOptions(flags);
     }
 
     /**
-     * Scan a single POM file for plugins whose {@code groupId:artifactId}
-     * matches a workspace subproject's published artifact, and update
-     * mismatched literal versions.
-     *
-     * <p>Uses Maven 4's {@link PomModel} for reading plugin coordinates.
-     * Writes use {@link PomModel#updatePluginVersion} (OpenRewrite LST)
-     * to preserve formatting.
-     *
-     * <p>Property-based plugin versions (e.g., {@code ${ike-tooling.version}})
-     * are skipped here — property alignment is handled by the dependency
-     * alignment pass via {@code versionProperty} declarations.
-     *
-     * @return number of changes made (or that would be made in draft)
+     * Render a {@link DriftReport} for {@code ws:align-draft} output
+     * with the copy-paste opt-out command inline. Mirrors the format
+     * used by {@code ws:scaffold-draft}'s reconciler loop.
      */
-    private int alignPomPlugins(String ownerName, File pomFile,
-                                Map<String, ComponentVersion> artifactIndex,
-                                File subprojectDir,
-                                List<AlignChange> reportChanges)
-            throws MojoException {
-        PomModel pom;
-        try {
-            pom = PomModel.parse(pomFile.toPath());
-        } catch (IOException e) {
-            return 0;
+    private void printDriftReport(DriftReport report) {
+        if (!report.hasDrift()) {
+            getLog().info("  ✓ " + report.dimension());
+            return;
         }
-
-        String updated = pom.content();
-        int changes = 0;
-
-        for (Plugin plugin : pom.allPlugins()) {
-            String pluginGroupId = plugin.getGroupId();
-            String pluginArtifactId = plugin.getArtifactId();
-            String currentVersion = plugin.getVersion();
-
-            if (pluginGroupId == null || pluginArtifactId == null
-                    || currentVersion == null) {
-                continue;
-            }
-
-            // Skip property-based versions — handled by dependency/property alignment
-            if (currentVersion.startsWith("${")) {
-                continue;
-            }
-
-            String key = pluginGroupId + ":" + pluginArtifactId;
-            ComponentVersion target = artifactIndex.get(key);
-
-            if (target == null || target.name().equals(ownerName)) {
-                continue;
-            }
-
-            if (!currentVersion.equals(target.version())) {
-                String relPath = subprojectDir.toPath().relativize(
-                        pomFile.toPath()).toString();
-                getLog().info("  " + ownerName + " (" + relPath + "): plugin "
-                        + key + " " + currentVersion
-                        + " → " + target.version());
-                reportChanges.add(new AlignChange(
-                        ownerName, relPath, "plugin:" + key,
-                        currentVersion, target.version()));
-                updated = PomModel.updatePluginVersion(
-                        updated, pluginGroupId, pluginArtifactId,
-                        target.version());
-                changes++;
-            }
+        getLog().info("  ⚠ " + report.dimension());
+        if (!report.summary().isEmpty()) {
+            getLog().info("     " + report.summary());
         }
-
-        if (changes > 0 && publish && !updated.equals(pom.content())) {
-            try {
-                Files.writeString(pomFile.toPath(), updated,
-                        StandardCharsets.UTF_8);
-            } catch (IOException e) {
-                throw new MojoException(
-                        "Failed to write " + pomFile + ": "
-                        + e.getMessage(), e);
-            }
+        for (String line : report.detailLines()) {
+            getLog().info("       " + line);
         }
-
-        return changes;
+        if (!report.defaultAction().isEmpty()) {
+            getLog().info("     Default: " + report.defaultAction());
+        }
+        if (!report.optOutCommand().isEmpty()) {
+            getLog().info("     Opt out: " + report.optOutCommand());
+        }
     }
-
-    /**
-     * Find a subproject's version by scanning its published artifacts
-     * and looking them up in the artifact index. Matches by subproject
-     * name (not groupId), so it handles groupId collisions.
-     */
-    private ComponentVersion findComponentVersion(
-            String subprojectName,
-            Map<String, ComponentVersion> artifactIndex, File root) {
-        File subprojectDir = new File(root, subprojectName);
-        if (!new File(subprojectDir, "pom.xml").exists()) {
-            return null;
-        }
-        try {
-            Set<PublishedArtifactSet.Artifact> published =
-                    PublishedArtifactSet.scan(subprojectDir.toPath());
-            for (PublishedArtifactSet.Artifact artifact : published) {
-                String key = artifact.groupId() + ":" + artifact.artifactId();
-                ComponentVersion cv = artifactIndex.get(key);
-                if (cv != null && cv.name.equals(subprojectName)) {
-                    return cv;
-                }
-            }
-        } catch (IOException e) {
-            // Fall through
-        }
-        return null;
-    }
-
-    // ── Internal record ─────────────────────────────────────────────
-
-    /**
-     * Associates a subproject name with its current POM version.
-     */
-    private record ComponentVersion(String name, String version) {}
 }

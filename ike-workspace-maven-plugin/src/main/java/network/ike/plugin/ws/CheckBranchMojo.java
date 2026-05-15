@@ -165,8 +165,8 @@ public class CheckBranchMojo extends AbstractWorkspaceMojo {
      * <p>Read-only. Never modifies state. Intended as a quick \"is my
      * workspace coherent?\" check before running
      * {@code ws:checkpoint} or {@code ws:feature-finish-*}, or to
-     * confirm whether {@code ws:align-publish -Dfrom=workspace-head} is
-     * needed (ike-issues#287).
+     * confirm whether {@code ws:reconcile-branches-publish -Dfrom=workspace-head}
+     * is needed (ike-issues#287).
      */
     private void executeWorkspaceScope() throws MojoException {
         WorkspaceGraph graph = loadGraph();

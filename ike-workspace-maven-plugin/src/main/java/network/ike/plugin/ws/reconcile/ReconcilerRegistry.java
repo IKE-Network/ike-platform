@@ -31,7 +31,14 @@ public final class ReconcilerRegistry {
                 // that any parent-cascade-driven POM rewrites happen
                 // first, and the scaffold layer reconciles against the
                 // updated POMs.
-                new ScaffoldConventionReconciler()
+                new ScaffoldConventionReconciler(),
+                // Inter-subproject alignment runs after scaffold so the
+                // POMs it rewrites already reflect the current
+                // ike-tooling.version property and parent cascade. The
+                // standalone ws:align-{draft,publish} goals also wrap
+                // this reconciler — see AlignmentReconciler's class
+                // javadoc for why both entry points coexist.
+                new AlignmentReconciler()
                 // Future reconcilers added here in the order they
                 // should run (see #393 for the full migration plan).
         );

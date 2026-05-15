@@ -36,7 +36,7 @@ import java.util.Map;
  * Regex/sed-style substitution on POMs is forbidden; see
  * {@code feedback_no_sed_on_poms}.
  */
-final class PomModel {
+public final class PomModel {
 
     private final Model model;
     private final String content;
@@ -53,7 +53,7 @@ final class PomModel {
      * @return parsed model
      * @throws IOException if the file cannot be read or parsed
      */
-    static PomModel parse(Path pomFile) throws IOException {
+    public static PomModel parse(Path pomFile) throws IOException {
         String content = Files.readString(pomFile, StandardCharsets.UTF_8);
         MavenStaxReader reader = new MavenStaxReader();
         reader.setAddLocationInformation(true);
@@ -67,10 +67,10 @@ final class PomModel {
     }
 
     /** The underlying Maven 4 model. */
-    Model model() { return model; }
+    public Model model() { return model; }
 
     /** Raw POM text for targeted editing. */
-    String content() { return content; }
+    public String content() { return content; }
 
     // ── Reading ────────────────────────────────────────────────────
 
@@ -78,7 +78,7 @@ final class PomModel {
      * All dependencies from both {@code <dependencies>} and
      * {@code <dependencyManagement>} sections.
      */
-    List<Dependency> allDependencies() {
+    public List<Dependency> allDependencies() {
         List<Dependency> result = new ArrayList<>(model.getDependencies());
         DependencyManagement mgmt = model.getDependencyManagement();
         if (mgmt != null) {
@@ -91,7 +91,7 @@ final class PomModel {
      * All plugins from both {@code <build><plugins>} and
      * {@code <build><pluginManagement><plugins>} sections.
      */
-    List<Plugin> allPlugins() {
+    public List<Plugin> allPlugins() {
         List<Plugin> result = new ArrayList<>();
         Build build = model.getBuild();
         if (build != null) {
@@ -105,12 +105,12 @@ final class PomModel {
     }
 
     /** Properties from {@code <properties>}. */
-    Map<String, String> properties() {
+    public Map<String, String> properties() {
         return model.getProperties();
     }
 
     /** Parent info, or null if no parent block. */
-    Parent parent() {
+    public Parent parent() {
         return model.getParent();
     }
 
@@ -190,7 +190,7 @@ final class PomModel {
      * @param newVersion the version to set
      * @return updated POM text, or unchanged if no match
      */
-    static String updateDependencyVersion(String pomContent,
+    public static String updateDependencyVersion(String pomContent,
                                            String groupId,
                                            String artifactId,
                                            String newVersion) {
@@ -207,7 +207,7 @@ final class PomModel {
      * @param newValue     the new property value
      * @return updated POM text
      */
-    static String updateProperty(String pomContent,
+    public static String updateProperty(String pomContent,
                                   String propertyName,
                                   String newValue) {
         return PomRewriter.updateProperty(
@@ -227,7 +227,7 @@ final class PomModel {
      * @param newVersion       the new version to set
      * @return updated POM text, or unchanged if no match
      */
-    static String updateParentVersion(String pomContent,
+    public static String updateParentVersion(String pomContent,
                                        String parentGroupId,
                                        String parentArtifactId,
                                        String newVersion) {
@@ -247,7 +247,7 @@ final class PomModel {
      * @param newVersion the version to set
      * @return updated POM text, or unchanged if no match
      */
-    static String updatePluginVersion(String pomContent,
+    public static String updatePluginVersion(String pomContent,
                                        String groupId,
                                        String artifactId,
                                        String newVersion) {

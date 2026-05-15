@@ -511,8 +511,8 @@ public final class WorkspaceVerifier {
                 log.warn(indent + "               You are on '"
                         + localBranch + "'.");
                 log.warn(indent + "Action:        run 'mvnw ws:switch -Dbranch="
-                        + state.branch() + "' or 'mvnw ws:align-publish"
-                        + " -Dscope=branches -Dfrom=manifest'");
+                        + state.branch() + "' or 'mvnw ws:reconcile-branches-publish"
+                        + " -Dfrom=manifest'");
             }
             case COMMIT, PUSH, RELEASE, CHECKPOINT -> {
                 log.warn(indent + "Status:        branch mismatch — local '"
@@ -569,8 +569,8 @@ public final class WorkspaceVerifier {
             case SWITCH -> {
                 log.warn(indent + "Status:        switched on "
                         + state.machine() + " at " + state.timestamp());
-                log.warn(indent + "Action:        run 'mvnw ws:align-publish"
-                        + " -Dscope=branches -Dfrom=manifest'");
+                log.warn(indent + "Action:        run 'mvnw ws:reconcile-branches-publish"
+                        + " -Dfrom=manifest'");
             }
             case FEATURE_START, FEATURE_FINISH -> {
                 log.warn(indent + "Status:        behind ("

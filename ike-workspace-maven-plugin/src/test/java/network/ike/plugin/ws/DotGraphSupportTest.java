@@ -13,19 +13,20 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Tests for {@link GraphWorkspaceMojo#buildDotGraph}.
+ * Tests for {@link DotGraphSupport}.
  *
- * <p>The mojo no longer type-colors nodes (subprojects are all Maven
- * projects — there is no type distinction). These tests exercise the
- * pure DOT-emission function against subproject names and edges only.
+ * <p>DOT rendering does not type-color nodes (subprojects are all
+ * Maven projects — there is no type distinction). These tests
+ * exercise the pure DOT-emission functions against subproject names
+ * and edges only.
  */
-class GraphSupportTest {
+class DotGraphSupportTest {
 
     // ── buildDotGraph ────────────────────────────────────────────────
 
     @Test
     void buildDotGraph_emptyGraph() {
-        String dot = GraphWorkspaceMojo.buildDotGraph(
+        String dot = DotGraphSupport.buildDotGraph(
                 "test", List.of(), Map.of());
 
         assertThat(dot)
@@ -39,7 +40,7 @@ class GraphSupportTest {
     void buildDotGraph_singleNode_noEdges() {
         List<String> names = List.of("ike-platform");
 
-        String dot = GraphWorkspaceMojo.buildDotGraph(
+        String dot = DotGraphSupport.buildDotGraph(
                 "ws", names, Map.of());
 
         assertThat(dot)
@@ -53,7 +54,7 @@ class GraphSupportTest {
         Map<String, List<String[]>> edges = Map.of(
                 "app", List.<String[]>of(new String[]{"lib", "build"}));
 
-        String dot = GraphWorkspaceMojo.buildDotGraph("ws", names, edges);
+        String dot = DotGraphSupport.buildDotGraph("ws", names, edges);
 
         assertThat(dot)
                 .contains("\"app\" -> \"lib\"");
@@ -66,7 +67,7 @@ class GraphSupportTest {
         Map<String, List<String[]>> edges = Map.of(
                 "guide", List.<String[]>of(new String[]{"topics", "content"}));
 
-        String dot = GraphWorkspaceMojo.buildDotGraph("ws", names, edges);
+        String dot = DotGraphSupport.buildDotGraph("ws", names, edges);
 
         assertThat(dot)
                 .contains("\"guide\" -> \"topics\" [style=dashed]");
@@ -79,7 +80,7 @@ class GraphSupportTest {
         Map<String, List<String[]>> edges = Map.of(
                 "a", List.<String[]>of(new String[]{"b", "build"}));
 
-        String dot = GraphWorkspaceMojo.buildDotGraph("ws", names, edges);
+        String dot = DotGraphSupport.buildDotGraph("ws", names, edges);
 
         // Edge should not have [style=dashed]
         assertThat(dot)
@@ -96,7 +97,7 @@ class GraphSupportTest {
                 new String[]{"lib1", "build"},
                 new String[]{"lib2", "content"}));
 
-        String dot = GraphWorkspaceMojo.buildDotGraph("ws", names, edges);
+        String dot = DotGraphSupport.buildDotGraph("ws", names, edges);
 
         assertThat(dot)
                 .contains("\"app\" -> \"lib1\"")
@@ -123,7 +124,7 @@ class GraphSupportTest {
                         relationship: build
                 """));
 
-        String block = GraphWorkspaceMojo.buildDotReportBlock(
+        String block = DotGraphSupport.buildDotReportBlock(
                 new WorkspaceGraph(manifest));
 
         // GraphViz, per IKE-DIAGRAMS.md — not Mermaid.

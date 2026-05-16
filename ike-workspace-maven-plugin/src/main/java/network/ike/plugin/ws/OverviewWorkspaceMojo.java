@@ -310,7 +310,7 @@ public class OverviewWorkspaceMojo extends AbstractWorkspaceMojo {
         // GraphViz dependency graph — IKE-DIAGRAMS.md mandates
         // GraphViz for dependency graphs (IKE-Network/ike-issues#406).
         sb.append('\n');
-        sb.append(GraphWorkspaceMojo.buildDotReportBlock(graph));
+        sb.append(DotGraphSupport.buildDotReportBlock(graph));
 
         // Status table
         sb.append("\n### Status\n\n");
@@ -360,7 +360,7 @@ public class OverviewWorkspaceMojo extends AbstractWorkspaceMojo {
 
     private void printDot(WorkspaceGraph graph) {
         for (String line
-                : GraphWorkspaceMojo.dotFromGraph(graph).split("\n")) {
+                : DotGraphSupport.dotFromGraph(graph).split("\n")) {
             getLog().info(line);
         }
     }

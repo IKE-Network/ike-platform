@@ -101,7 +101,7 @@ public class WsCheckpointDraftMojo extends AbstractWorkspaceMojo {
     public WsCheckpointDraftMojo() {}
 
     @Override
-    public void execute() throws MojoException {
+    protected WorkspaceReportSpec runGoal() throws MojoException {
         WorkspaceGraph graph = loadGraph();
         File root = workspaceRoot();
 
@@ -140,12 +140,11 @@ public class WsCheckpointDraftMojo extends AbstractWorkspaceMojo {
                 getLog().info("  file (and the matching checkpoint/"
                         + name + " tag in each subproject) first.");
                 getLog().info("");
-                writeReport(WsGoal.CHECKPOINT_PUBLISH,
+                return new WorkspaceReportSpec(WsGoal.CHECKPOINT_PUBLISH,
                         "Idempotent skip — checkpoint **`" + name
                                 + "`** already exists at `"
                                 + root.toPath().relativize(existingCheckpoint)
                                 + "`.\n");
-                return;
             }
         }
 
@@ -326,7 +325,8 @@ public class WsCheckpointDraftMojo extends AbstractWorkspaceMojo {
                 snapshots, absentComponents, yamlContent,
                 checkpointFile, workspaceHasGit, manifestUpdated, tagPushed,
                 testingContext, issuesSinceLastRelease);
-        writeReport(publish ? WsGoal.CHECKPOINT_PUBLISH : WsGoal.CHECKPOINT_DRAFT,
+        return new WorkspaceReportSpec(
+                publish ? WsGoal.CHECKPOINT_PUBLISH : WsGoal.CHECKPOINT_DRAFT,
                 buildCheckpointMarkdownReport(reportContext));
     }
 

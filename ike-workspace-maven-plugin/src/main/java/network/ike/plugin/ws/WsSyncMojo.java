@@ -74,7 +74,7 @@ public class WsSyncMojo extends AbstractWorkspaceMojo {
     boolean pushOnly;
 
     @Override
-    public void execute() throws MojoException {
+    protected WorkspaceReportSpec runGoal() throws MojoException {
         if (pullOnly && pushOnly) {
             throw new MojoException(
                     "-DpullOnly and -DpushOnly are mutually exclusive —"
@@ -121,8 +121,9 @@ public class WsSyncMojo extends AbstractWorkspaceMojo {
         summary.append(" then ");
         summary.append(pullOnly ? "skipped push" : "pushed");
         summary.append(".\n");
-        writeReport(WsGoal.SYNC, summary.toString());
 
         PostMutationSync.refresh(workspaceRoot(), getLog());
+
+        return new WorkspaceReportSpec(WsGoal.SYNC, summary.toString());
     }
 }

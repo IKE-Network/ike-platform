@@ -105,15 +105,14 @@ public class FeatureStartDraftMojo extends AbstractWorkspaceMojo {
                                   String issue) {}
 
     @Override
-    public void execute() throws MojoException {
+    protected WorkspaceReportSpec runGoal() throws MojoException {
         support = new FeatureStartSupport(getLog());
         feature = requireParam(feature, "feature", "Feature name (without feature/ prefix)");
         validateFeatureName(feature);
         String branchName = "feature/" + feature;
 
         if (!isWorkspaceMode()) {
-            executeBareMode(branchName);
-            return;
+            return executeBareMode(branchName);
         }
 
         // --- Workspace mode ---
@@ -281,8 +280,9 @@ public class FeatureStartDraftMojo extends AbstractWorkspaceMojo {
         getLog().info("");
 
         // Structured markdown report
-        writeReport(publish ? WsGoal.FEATURE_START_PUBLISH : WsGoal.FEATURE_START_DRAFT, buildMarkdownReport(
-                branchName, branchRows, cascadeGaps));
+        return new WorkspaceReportSpec(
+                publish ? WsGoal.FEATURE_START_PUBLISH : WsGoal.FEATURE_START_DRAFT,
+                buildMarkdownReport(branchName, branchRows, cascadeGaps));
     }
 
     private String buildMarkdownReport(String branchName,
@@ -319,7 +319,7 @@ public class FeatureStartDraftMojo extends AbstractWorkspaceMojo {
     /**
      * Bare-mode: create feature branch in the current repo only.
      */
-    private void executeBareMode(String branchName) throws MojoException {
+    private WorkspaceReportSpec executeBareMode(String branchName) throws MojoException {
         boolean draft = !publish;
         File dir = new File(System.getProperty("user.dir"));
 
@@ -363,7 +363,10 @@ public class FeatureStartDraftMojo extends AbstractWorkspaceMojo {
             }
             getLog().info("  [draft] Would create " + branchName + versionInfo);
             getLog().info("");
-            return;
+            return new WorkspaceReportSpec(
+                    publish ? WsGoal.FEATURE_START_PUBLISH : WsGoal.FEATURE_START_DRAFT,
+                    "[draft] Would create `" + branchName + "` in `"
+                            + dir.getName() + "`.\n");
         }
 
         // Auto-unshallow if needed
@@ -402,6 +405,9 @@ public class FeatureStartDraftMojo extends AbstractWorkspaceMojo {
         VcsOperations.writeVcsState(dir, VcsState.Action.FEATURE_START);
 
         getLog().info("");
+        return new WorkspaceReportSpec(
+                publish ? WsGoal.FEATURE_START_PUBLISH : WsGoal.FEATURE_START_DRAFT,
+                "Created `" + branchName + "` in `" + dir.getName() + "`.\n");
     }
 
     /**

@@ -69,8 +69,10 @@ abstract class AbstractWorkspaceMojo implements Mojo {
     }
 
     /**
-     * Replace the logger (used by {@link #startReport()} to install
-     * a capturing wrapper).
+     * Replace the logger. Used when a mojo is constructed directly
+     * (not via Maven's DI container) and so never had a logger
+     * injected — {@link WsSyncMojo} drives {@link PullWorkspaceMojo}
+     * and {@link PushMojo} instances it created itself.
      *
      * @param log the replacement logger
      */
@@ -386,26 +388,31 @@ abstract class AbstractWorkspaceMojo implements Mojo {
     }
 
     /**
-     * Write a goal's report to its per-goal file at the workspace root.
+     * Run the goal and write its report.
      *
-     * <p>Overwrites any previous content for this goal. Filenames use
-     * {@code ꞉} (U+A789) to cluster as {@code ws꞉goal-name.md} in IDE file
-     * browsers. The nearest {@code .gitignore} is self-healed to include
-     * {@code ws꞉*.md} so reports never land in git.
+     * <p>This method is {@code final}: every {@code ws:*} goal follows
+     * the same template — do the work, then write exactly one report.
+     * Subclasses supply the work and the report content by implementing
+     * {@link #runGoal()}; they cannot override {@code execute()} to skip
+     * the report. That is what makes report-writing structural — a goal
+     * that compiles necessarily writes a report, so the #407 bug class
+     * (a goal runs fine but silently writes none) becomes
+     * compiler-impossible (IKE-Network/ike-issues#413).
      *
-     * <p>Each goal owns exactly its own report file. A {@code -publish}
-     * run does not delete the matching {@code -draft} report: the draft
-     * is the recorded plan and the publish report is the recorded
-     * outcome, both timestamped, so keeping them side by side is
-     * history rather than staleness (ike-issues#413).
+     * <p>The report lands in its per-goal file at the workspace root
+     * ({@code ws꞉goal-name.md}); {@link WorkspaceReport} self-heals the
+     * nearest {@code .gitignore} so reports never land in git. A
+     * {@code -publish} run does not delete the matching {@code -draft}
+     * report — both are timestamped history (ike-issues#413).
      *
-     * @param goal    the goal whose output is being reported
-     * @param content markdown content to write
+     * @throws MojoException if the goal fails
      */
-    protected void writeReport(WsGoal goal, String content) {
+    @Override
+    public final void execute() throws MojoException {
+        WorkspaceReportSpec report = runGoal();
         try {
-            java.nio.file.Path root = workspaceRoot().toPath();
-            WorkspaceReport.write(root, goal.qualified(), content, getLog());
+            WorkspaceReport.write(workspaceRoot().toPath(),
+                    report.goal().qualified(), report.content(), getLog());
         } catch (MojoException e) {
             getLog().debug("Could not resolve workspace root for report: "
                     + e.getMessage());
@@ -413,29 +420,20 @@ abstract class AbstractWorkspaceMojo implements Mojo {
     }
 
     /**
-     * Start capturing info-level log output for the workspace report.
-     * Replaces the Mojo's logger with a tee that captures info output.
-     * Call {@link #finishReport(WsGoal, ReportLog)} at the end of
-     * {@code execute()} to write the captured output to the report file.
+     * Run this goal's work and return the report it produced.
      *
-     * @return a ReportLog that wraps the original logger and captures info output
-     */
-    protected ReportLog startReport() {
-        ReportLog report = new ReportLog(getLog());
-        setLog(report);
-        return report;
-    }
-
-    /**
-     * Write captured log output to the workspace report file.
+     * <p>Implementations do the goal's actual work here and return a
+     * {@link WorkspaceReportSpec} — the goal identity and the Markdown
+     * body. The base class resolves the workspace root and writes the
+     * file. A goal cannot be implemented without producing a report,
+     * which is the structural fix for the missing-report bug class
+     * (IKE-Network/ike-issues#413 / #407).
      *
-     * @param goal      the goal whose output is being reported
-     * @param reportLog the ReportLog from {@link #startReport()}
+     * <p>On failure, throw {@link MojoException} as usual — a failed
+     * goal produces no report, and Maven surfaces the exception.
+     *
+     * @return the report this goal produced (never {@code null})
+     * @throws MojoException if the goal fails
      */
-    protected void finishReport(WsGoal goal, ReportLog reportLog) {
-        String content = reportLog.captured();
-        if (!content.isBlank()) {
-            writeReport(goal, content);
-        }
-    }
+    protected abstract WorkspaceReportSpec runGoal() throws MojoException;
 }

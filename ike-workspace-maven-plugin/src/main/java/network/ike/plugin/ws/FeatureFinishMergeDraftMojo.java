@@ -77,15 +77,14 @@ public class FeatureFinishMergeDraftMojo extends AbstractWorkspaceMojo {
     boolean publish;
 
     @Override
-    public void execute() throws MojoException {
+    protected WorkspaceReportSpec runGoal() throws MojoException {
         if (!isWorkspaceMode()) {
             if (feature == null || feature.isBlank()) {
                 feature = requireParam(feature, "feature",
                         "Feature to merge (without feature/ prefix)");
             }
             validateFeatureName(feature);
-            executeBareMode("feature/" + feature);
-            return;
+            return executeBareMode("feature/" + feature);
         }
 
         // Auto-detect feature from subproject branches if not specified
@@ -99,10 +98,11 @@ public class FeatureFinishMergeDraftMojo extends AbstractWorkspaceMojo {
         String branchName = "feature/" + feature;
 
         // message is optional — auto-generated from subproject history
-        executeWorkspaceMode(branchName);
+        return executeWorkspaceMode(branchName);
     }
 
-    private void executeWorkspaceMode(String branchName) throws MojoException {
+    private WorkspaceReportSpec executeWorkspaceMode(String branchName)
+            throws MojoException {
         boolean draft = !publish;
         WorkspaceGraph graph = loadGraph();
         File root = workspaceRoot();
@@ -163,7 +163,10 @@ public class FeatureFinishMergeDraftMojo extends AbstractWorkspaceMojo {
 
         if (eligible.isEmpty()) {
             getLog().info("  No components on " + branchName + " — nothing to do.");
-            return;
+            return new WorkspaceReportSpec(
+                    publish ? WsGoal.FEATURE_FINISH_MERGE_PUBLISH
+                            : WsGoal.FEATURE_FINISH_MERGE_DRAFT,
+                    "No components on `" + branchName + "` — nothing to do.\n");
         }
 
         // Refresh local main from origin/main before merging the feature
@@ -231,8 +234,11 @@ public class FeatureFinishMergeDraftMojo extends AbstractWorkspaceMojo {
         getLog().info("");
 
         // Structured markdown report
-        writeReport(publish ? WsGoal.FEATURE_FINISH_MERGE_PUBLISH : WsGoal.FEATURE_FINISH_MERGE_DRAFT, buildMergeReport(
-                eligible, branchName, targetBranch, merged, draft, keepBranch));
+        return new WorkspaceReportSpec(
+                publish ? WsGoal.FEATURE_FINISH_MERGE_PUBLISH
+                        : WsGoal.FEATURE_FINISH_MERGE_DRAFT,
+                buildMergeReport(eligible, branchName, targetBranch,
+                        merged, draft, keepBranch));
     }
 
     private String buildMergeReport(List<String> components, String branch,
@@ -256,7 +262,8 @@ public class FeatureFinishMergeDraftMojo extends AbstractWorkspaceMojo {
         return sb.toString();
     }
 
-    private void executeBareMode(String branchName) throws MojoException {
+    private WorkspaceReportSpec executeBareMode(String branchName)
+            throws MojoException {
         boolean draft = !publish;
         File dir = new File(System.getProperty("user.dir"));
 
@@ -277,7 +284,9 @@ public class FeatureFinishMergeDraftMojo extends AbstractWorkspaceMojo {
 
         if (draft) {
             getLog().info("  [draft] Would merge → " + targetBranch);
-            return;
+            return new WorkspaceReportSpec(WsGoal.FEATURE_FINISH_MERGE_DRAFT,
+                    "Bare repo: would merge `" + branchName + "` → `"
+                            + targetBranch + "`.\n");
         }
 
         // Auto-generate message for bare mode
@@ -302,5 +311,8 @@ public class FeatureFinishMergeDraftMojo extends AbstractWorkspaceMojo {
 
         getLog().info("  Done.");
         getLog().info("");
+        return new WorkspaceReportSpec(WsGoal.FEATURE_FINISH_MERGE_PUBLISH,
+                "Bare repo: merged `" + branchName + "` → `"
+                        + targetBranch + "`.\n");
     }
 }

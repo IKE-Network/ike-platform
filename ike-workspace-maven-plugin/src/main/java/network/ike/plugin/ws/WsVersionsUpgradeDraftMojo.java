@@ -111,7 +111,7 @@ public class WsVersionsUpgradeDraftMojo extends AbstractWorkspaceMojo {
     public WsVersionsUpgradeDraftMojo() {}
 
     @Override
-    public void execute() throws MojoException {
+    protected WorkspaceReportSpec runGoal() throws MojoException {
         File workspaceRoot = workspaceRoot();
         Path workspaceRootPath = workspaceRoot.toPath();
         Path rulesPath = resolveRulesPath(workspaceRootPath);
@@ -139,7 +139,7 @@ public class WsVersionsUpgradeDraftMojo extends AbstractWorkspaceMojo {
 
         logSummary(plan, rulesPath, planPath, nodePoms.size());
 
-        writeReport(WsGoal.VERSIONS_UPGRADE_DRAFT,
+        return new WorkspaceReportSpec(WsGoal.VERSIONS_UPGRADE_DRAFT,
                 buildReport(plan, rulesPath, planPath, rules));
     }
 

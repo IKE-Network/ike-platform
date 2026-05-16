@@ -62,7 +62,7 @@ public class WsRemoveMojo extends AbstractWorkspaceMojo {
     public WsRemoveMojo() {}
 
     @Override
-    public void execute() throws MojoException {
+    protected WorkspaceReportSpec runGoal() throws MojoException {
         subproject = requireParam(subproject, "subproject",
                 "Subproject name to remove");
         validateSubprojectName(subproject);
@@ -149,10 +149,12 @@ public class WsRemoveMojo extends AbstractWorkspaceMojo {
         getLog().info("  Subproject '" + subproject + "' removed.");
         getLog().info("");
 
-        writeReport(WsGoal.REMOVE, "Removed subproject **" + subproject + "**."
+        WorkspaceReportSpec spec = new WorkspaceReportSpec(WsGoal.REMOVE,
+                "Removed subproject **" + subproject + "**."
                 + (deleteDir ? " Directory deleted." : "") + "\n");
 
         PostMutationSync.refresh(workspaceRoot(), getLog());
+        return spec;
     }
 
     // ── YAML removal ────────────────────────────────────────────

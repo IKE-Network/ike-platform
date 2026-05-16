@@ -33,8 +33,8 @@ public class WsReleasePublishMojo extends WsReleaseDraftMojo {
     public WsReleasePublishMojo() {}
 
     @Override
-    public void execute() throws MojoException {
+    protected WorkspaceReportSpec runGoal() throws MojoException {
         publish = true;
-        super.execute();
+        return super.runGoal();
     }
 }

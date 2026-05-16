@@ -66,7 +66,7 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
     public WsScaffoldDraftMojo() {}
 
     @Override
-    public void execute() throws MojoException {
+    protected WorkspaceReportSpec runGoal() throws MojoException {
         WorkspaceGraph graph = loadGraph();
         File root = workspaceRoot();
         String goal = publish ? "ike:scaffold-publish" : "ike:scaffold-draft";
@@ -168,17 +168,16 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
               .append(publish ? "publish" : "draft")
               .append(".md` report.\n");
 
-        // Write the report before any failure throw, so it documents
-        // the failures it is reporting.
-        writeReport(publish ? WsGoal.SCAFFOLD_PUBLISH : WsGoal.SCAFFOLD_DRAFT,
-                report.toString());
-
         if (failed > 0) {
             throw new MojoException(
                     "ws:" + (publish ? "scaffold-publish" : "scaffold-draft")
                     + " saw " + failed + " per-subproject failure(s); "
                     + "see logs above.");
         }
+
+        return new WorkspaceReportSpec(
+                publish ? WsGoal.SCAFFOLD_PUBLISH : WsGoal.SCAFFOLD_DRAFT,
+                report.toString());
     }
 
     /**

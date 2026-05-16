@@ -45,19 +45,24 @@ public class ReportMojo extends AbstractWorkspaceMojo {
     private boolean printOnly;
 
     @Override
-    public void execute() throws MojoException {
+    protected WorkspaceReportSpec runGoal() throws MojoException {
         Path root = workspaceRoot().toPath();
         List<Path> reports = findReports(root);
 
         if (reports.isEmpty()) {
             getLog().info("No ws꞉*.md reports at " + root
                     + ". Run a ws: goal first.");
-            return;
+            return new WorkspaceReportSpec(WsGoal.REPORT,
+                    "No `ws꞉*.md` goal reports at the workspace root yet.\n");
         }
 
         getLog().info("Workspace reports at " + root + ":");
+        StringBuilder body = new StringBuilder();
+        body.append(reports.size()).append(" goal report(s) at the workspace root, "
+                + "newest first:\n\n");
         for (Path report : reports) {
             getLog().info("  " + root.relativize(report));
+            body.append("- `").append(root.relativize(report)).append("`\n");
         }
 
         if (!printOnly) {
@@ -69,6 +74,8 @@ public class ReportMojo extends AbstractWorkspaceMojo {
                         + root);
             }
         }
+
+        return new WorkspaceReportSpec(WsGoal.REPORT, body.toString());
     }
 
     /**

@@ -279,7 +279,7 @@ public class WsCascadeFoundationPublishMojo extends AbstractWorkspaceMojo {
     }
 
     @Override
-    public void execute() throws MojoException {
+    protected WorkspaceReportSpec runGoal() throws MojoException {
         File wsRoot = workspaceRoot();
         File baseDir = foundationsDir != null
                 ? foundationsDir
@@ -337,6 +337,34 @@ public class WsCascadeFoundationPublishMojo extends AbstractWorkspaceMojo {
                             + "failed. " + wsOutcome.detail
                             + ". ike-issues#375.");
         }
+        return new WorkspaceReportSpec(WsGoal.CASCADE_FOUNDATION_PUBLISH,
+                buildCascadeReport(outcomes));
+    }
+
+    /**
+     * Render the per-foundation cascade outcomes as a Markdown table
+     * for the session report.
+     *
+     * @param outcomes the outcomes recorded across the cascade
+     * @return the Markdown report body
+     */
+    static String buildCascadeReport(List<Outcome> outcomes) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("| Repo | Outcome | Detail |\n");
+        sb.append("|------|---------|--------|\n");
+        for (Outcome o : outcomes) {
+            String marker = switch (o.kind) {
+                case RELEASED -> "✓ released";
+                case UP_TO_DATE -> "— up to date";
+                case SKIPPED -> "— skipped";
+                case FAILED -> "✗ FAILED";
+            };
+            sb.append("| ").append(o.name)
+              .append(" | ").append(marker)
+              .append(" | ").append(o.detail == null ? "" : o.detail)
+              .append(" |\n");
+        }
+        return sb.toString();
     }
 
     /**

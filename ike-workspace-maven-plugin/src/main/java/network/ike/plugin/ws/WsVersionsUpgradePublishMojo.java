@@ -54,7 +54,7 @@ import java.util.Map;
  * <p>On success the plan file is deleted — the goal completes its
  * effect rather than leaving a transient artifact in the workspace
  * root. Re-run {@code ws:versions-upgrade-draft} to regenerate it.
- * The markdown report written via {@code writeReport(...)} is the
+ * The markdown {@link WorkspaceReportSpec} this goal returns is the
  * durable record of what was applied.
  *
  * <p>Each subproject is edited in place but not committed — review
@@ -94,7 +94,7 @@ public class WsVersionsUpgradePublishMojo extends AbstractWorkspaceMojo {
     public WsVersionsUpgradePublishMojo() {}
 
     @Override
-    public void execute() throws MojoException {
+    protected WorkspaceReportSpec runGoal() throws MojoException {
         File workspaceRoot = workspaceRoot();
         Path workspaceRootPath = workspaceRoot.toPath();
         Path planPath = resolvePlanPath(workspaceRootPath);
@@ -102,7 +102,9 @@ public class WsVersionsUpgradePublishMojo extends AbstractWorkspaceMojo {
         if (!Files.isRegularFile(planPath)) {
             getLog().info("no plan for " + workspaceName()
                     + " (" + planPath + ") — nothing to publish.");
-            return;
+            return new WorkspaceReportSpec(WsGoal.VERSIONS_UPGRADE_PUBLISH,
+                    "No upgrade plan for **" + workspaceName() + "** (`"
+                            + planPath + "`) — nothing to publish.\n");
         }
 
         VersionUpgradePlan plan = readPlan(planPath);
@@ -133,10 +135,13 @@ public class WsVersionsUpgradePublishMojo extends AbstractWorkspaceMojo {
 
         logSummary(outcomes, planPath);
 
-        writeReport(WsGoal.VERSIONS_UPGRADE_PUBLISH,
+        WorkspaceReportSpec spec = new WorkspaceReportSpec(
+                WsGoal.VERSIONS_UPGRADE_PUBLISH,
                 buildReport(plan, outcomes, planPath));
 
         PostMutationSync.refresh(workspaceRoot(), getLog());
+
+        return spec;
     }
 
     private Path resolvePlanPath(Path workspaceRootPath) {

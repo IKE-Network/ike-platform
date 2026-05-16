@@ -55,7 +55,7 @@ public class WsRefreshMainMojo extends AbstractWorkspaceMojo {
     String remote;
 
     @Override
-    public void execute() throws MojoException {
+    protected WorkspaceReportSpec runGoal() throws MojoException {
         if (!isWorkspaceMode()) {
             throw new MojoException(
                     "ws:refresh-main requires a workspace (workspace.yaml).");
@@ -77,9 +77,11 @@ public class WsRefreshMainMojo extends AbstractWorkspaceMojo {
         List<RefreshMainSupport.Outcome> outcomes =
                 RefreshMainSupport.refreshOrThrow(root, sorted, mainBranch, getLog());
 
-        writeReport(WsGoal.REFRESH_MAIN, buildReport(outcomes));
+        WorkspaceReportSpec spec = new WorkspaceReportSpec(
+                WsGoal.REFRESH_MAIN, buildReport(outcomes));
 
         PostMutationSync.refresh(root, getLog());
+        return spec;
     }
 
     private String buildReport(List<RefreshMainSupport.Outcome> outcomes) {

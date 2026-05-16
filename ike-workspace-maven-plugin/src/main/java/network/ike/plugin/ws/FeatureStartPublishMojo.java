@@ -26,10 +26,10 @@ public class FeatureStartPublishMojo extends FeatureStartDraftMojo {
     public FeatureStartPublishMojo() {}
 
     @Override
-    public void execute() throws MojoException {
+    protected WorkspaceReportSpec runGoal() throws MojoException {
         publish = true;
         autoAlign();
-        super.execute();
+        return super.runGoal();
     }
 
     private void autoAlign() throws MojoException {

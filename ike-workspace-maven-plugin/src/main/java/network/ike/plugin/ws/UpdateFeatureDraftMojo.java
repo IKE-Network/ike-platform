@@ -76,7 +76,7 @@ public class UpdateFeatureDraftMojo extends AbstractWorkspaceMojo {
     boolean publish;
 
     @Override
-    public void execute() throws MojoException {
+    protected WorkspaceReportSpec runGoal() throws MojoException {
         if (!isWorkspaceMode()) {
             throw new MojoException(
                     "ws:update-feature requires a workspace (workspace.yaml).");
@@ -157,7 +157,9 @@ public class UpdateFeatureDraftMojo extends AbstractWorkspaceMojo {
 
         if (eligible.isEmpty()) {
             getLog().info("  No components on " + branchName + " — nothing to update.");
-            return;
+            return new WorkspaceReportSpec(
+                    publish ? WsGoal.UPDATE_FEATURE_PUBLISH : WsGoal.UPDATE_FEATURE_DRAFT,
+                    "No components on `" + branchName + "` — nothing to update.\n");
         }
 
         // Refresh local main from origin/main across eligible components
@@ -284,7 +286,8 @@ public class UpdateFeatureDraftMojo extends AbstractWorkspaceMojo {
         sb.append("\n**").append(eligible.size()).append("** subproject(s)")
           .append(draft ? " to update" : " updated")
           .append(", **").append(skipped.size()).append("** skipped.\n");
-        writeReport(publish ? WsGoal.UPDATE_FEATURE_PUBLISH : WsGoal.UPDATE_FEATURE_DRAFT,
+        return new WorkspaceReportSpec(
+                publish ? WsGoal.UPDATE_FEATURE_PUBLISH : WsGoal.UPDATE_FEATURE_DRAFT,
                 sb.toString());
     }
 }

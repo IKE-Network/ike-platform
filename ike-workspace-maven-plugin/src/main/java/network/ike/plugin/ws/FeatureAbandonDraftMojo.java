@@ -69,16 +69,15 @@ public class FeatureAbandonDraftMojo extends AbstractWorkspaceMojo {
     public FeatureAbandonDraftMojo() {}
 
     @Override
-    public void execute() throws MojoException {
+    protected WorkspaceReportSpec runGoal() throws MojoException {
         if (!isWorkspaceMode()) {
-            executeBareMode();
-            return;
+            return executeBareMode();
         }
 
-        executeWorkspaceMode();
+        return executeWorkspaceMode();
     }
 
-    private void executeWorkspaceMode() throws MojoException {
+    private WorkspaceReportSpec executeWorkspaceMode() throws MojoException {
         boolean draft = !publish;
         WorkspaceGraph graph = loadGraph();
         File root = workspaceRoot();
@@ -186,7 +185,9 @@ public class FeatureAbandonDraftMojo extends AbstractWorkspaceMojo {
         if (eligible.isEmpty()) {
             getLog().info("  No components on " + branchName + " — nothing to abandon.");
             getLog().info("");
-            return;
+            return new WorkspaceReportSpec(
+                    publish ? WsGoal.FEATURE_ABANDON_PUBLISH : WsGoal.FEATURE_ABANDON_DRAFT,
+                    "No components on `" + branchName + "` — nothing to abandon.\n");
         }
 
         getLog().info("");
@@ -200,8 +201,7 @@ public class FeatureAbandonDraftMojo extends AbstractWorkspaceMojo {
             getLog().info("  Next: mvn ws:feature-abandon-publish"
                     + (force ? "" : " (will prompt for confirmation)"));
             getLog().info("");
-            writeAbandonReport(branchName, reportRows, eligible, skipped, draft);
-            return;
+            return writeAbandonReport(branchName, reportRows, eligible, skipped, draft);
         }
 
         // Publish mode — prompt for confirmation
@@ -245,10 +245,10 @@ public class FeatureAbandonDraftMojo extends AbstractWorkspaceMojo {
         }
         getLog().info("");
 
-        writeAbandonReport(branchName, reportRows, eligible, skipped, draft);
+        return writeAbandonReport(branchName, reportRows, eligible, skipped, draft);
     }
 
-    private void writeAbandonReport(String branchName, List<String[]> rows,
+    private WorkspaceReportSpec writeAbandonReport(String branchName, List<String[]> rows,
                                      List<String> eligible, List<String> skipped,
                                      boolean isDraft) {
         var sb = new StringBuilder();
@@ -264,7 +264,8 @@ public class FeatureAbandonDraftMojo extends AbstractWorkspaceMojo {
         sb.append("\n**").append(eligible.size()).append("** ")
           .append(isDraft ? "would be abandoned" : "abandoned")
           .append(", **").append(skipped.size()).append("** skipped.\n");
-        writeReport(publish ? WsGoal.FEATURE_ABANDON_PUBLISH : WsGoal.FEATURE_ABANDON_DRAFT,
+        return new WorkspaceReportSpec(
+                publish ? WsGoal.FEATURE_ABANDON_PUBLISH : WsGoal.FEATURE_ABANDON_DRAFT,
                 sb.toString());
     }
 
@@ -315,7 +316,7 @@ public class FeatureAbandonDraftMojo extends AbstractWorkspaceMojo {
 
     // ── Bare mode ───────────────────────────────────────────────────
 
-    private void executeBareMode() throws MojoException {
+    private WorkspaceReportSpec executeBareMode() throws MojoException {
         boolean draft = !publish;
         File dir = new File(System.getProperty("user.dir"));
 
@@ -359,7 +360,9 @@ public class FeatureAbandonDraftMojo extends AbstractWorkspaceMojo {
             getLog().info("");
             getLog().info("  Next: mvn ws:feature-abandon-publish");
             getLog().info("");
-            return;
+            return new WorkspaceReportSpec(WsGoal.FEATURE_ABANDON_DRAFT,
+                    "Bare repo: would abandon `" + branchName + "` and switch to `"
+                            + targetBranch + "`.\n");
         }
 
         // Publish mode — prompt for confirmation
@@ -385,6 +388,9 @@ public class FeatureAbandonDraftMojo extends AbstractWorkspaceMojo {
 
         VcsOperations.writeVcsState(dir, VcsState.Action.FEATURE_FINISH);
         getLog().info("");
+        return new WorkspaceReportSpec(WsGoal.FEATURE_ABANDON_PUBLISH,
+                "Bare repo: abandoned `" + branchName + "`, switched to `"
+                        + targetBranch + "`.\n");
     }
 
     // ── Workspace repo cleanup ──────────────────────────────────────

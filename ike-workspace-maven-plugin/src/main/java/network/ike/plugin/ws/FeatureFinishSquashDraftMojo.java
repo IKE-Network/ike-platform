@@ -85,7 +85,7 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
     boolean publish;
 
     @Override
-    public void execute() throws MojoException {
+    protected WorkspaceReportSpec runGoal() throws MojoException {
         boolean draft = !publish;
 
         if (!isWorkspaceMode()) {
@@ -95,8 +95,7 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
             }
             validateFeatureName(feature);
             validateMessage(draft);
-            executeBareMode("feature/" + feature);
-            return;
+            return executeBareMode("feature/" + feature);
         }
 
         // Auto-detect feature from subproject branches if not specified
@@ -108,7 +107,7 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
         }
         validateFeatureName(feature);
         validateMessage(draft);
-        executeWorkspaceMode("feature/" + feature);
+        return executeWorkspaceMode("feature/" + feature);
     }
 
     /**
@@ -136,7 +135,7 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
         }
     }
 
-    private void executeWorkspaceMode(String branchName) throws MojoException {
+    private WorkspaceReportSpec executeWorkspaceMode(String branchName) throws MojoException {
         boolean draft = !publish;
         WorkspaceGraph graph = loadGraph();
         File root = workspaceRoot();
@@ -199,7 +198,10 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
 
         if (eligible.isEmpty()) {
             getLog().info("  No components on " + branchName + " — nothing to do.");
-            return;
+            return new WorkspaceReportSpec(
+                    publish ? WsGoal.FEATURE_FINISH_SQUASH_PUBLISH
+                            : WsGoal.FEATURE_FINISH_SQUASH_DRAFT,
+                    "No components on `" + branchName + "` — nothing to do.\n");
         }
 
         // Refresh local main from origin/main before squash-merging the
@@ -272,8 +274,11 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
         getLog().info("");
 
         // Structured markdown report
-        writeReport(publish ? WsGoal.FEATURE_FINISH_SQUASH_PUBLISH : WsGoal.FEATURE_FINISH_SQUASH_DRAFT, buildSquashReport(
-                eligible, branchName, targetBranch, merged, draft, keepBranch));
+        return new WorkspaceReportSpec(
+                publish ? WsGoal.FEATURE_FINISH_SQUASH_PUBLISH
+                        : WsGoal.FEATURE_FINISH_SQUASH_DRAFT,
+                buildSquashReport(
+                        eligible, branchName, targetBranch, merged, draft, keepBranch));
     }
 
     private String buildSquashReport(List<String> components, String branch,
@@ -297,7 +302,7 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
         return sb.toString();
     }
 
-    private void executeBareMode(String branchName) throws MojoException {
+    private WorkspaceReportSpec executeBareMode(String branchName) throws MojoException {
         boolean draft = !publish;
         File dir = new File(System.getProperty("user.dir"));
 
@@ -322,7 +327,9 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
 
         if (draft) {
             getLog().info("  [draft] Would squash-merge → " + targetBranch);
-            return;
+            return new WorkspaceReportSpec(WsGoal.FEATURE_FINISH_SQUASH_DRAFT,
+                    "Bare repo: would squash-merge `" + branchName + "` → `"
+                            + targetBranch + "`.\n");
         }
 
         FeatureFinishSupport.stripBranchVersionBare(dir, branchName, getLog());
@@ -351,5 +358,8 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
         getLog().info("");
         getLog().info("  Done.");
         getLog().info("");
+        return new WorkspaceReportSpec(WsGoal.FEATURE_FINISH_SQUASH_PUBLISH,
+                "Bare repo: squash-merged `" + branchName + "` → `"
+                        + targetBranch + "`.\n");
     }
 }

@@ -151,7 +151,7 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
     public WsReleaseDraftMojo() {}
 
     @Override
-    public void execute() throws MojoException {
+    protected WorkspaceReportSpec runGoal() throws MojoException {
         WorkspaceGraph graph = loadGraph();
         File root = workspaceRoot();
 
@@ -324,7 +324,9 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
 
         if (releasable.isEmpty()) {
             getLog().info("No components need releasing. All are clean.");
-            return;
+            return new WorkspaceReportSpec(
+                    publish ? WsGoal.RELEASE_PUBLISH : WsGoal.RELEASE_DRAFT,
+                    "No components need releasing — all are clean.\n");
         }
 
         // ── 3. Topological sort of release-pending components ────────────
@@ -362,7 +364,8 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
 
         if (draft) {
             getLog().info("[DRAFT] No releases executed (draft mode).");
-            return;
+            return new WorkspaceReportSpec(WsGoal.RELEASE_DRAFT,
+                    buildReleasePlanMarkdownReport(releaseOrder, releasable));
         }
 
         // ── 5. Pre-release checkpoint ─────────────────────────────────
@@ -524,7 +527,9 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
         }
 
         // Structured markdown report
-        writeReport(publish ? WsGoal.RELEASE_PUBLISH : WsGoal.RELEASE_DRAFT, buildReleaseMarkdownReport(releasedVersions));
+        return new WorkspaceReportSpec(
+                publish ? WsGoal.RELEASE_PUBLISH : WsGoal.RELEASE_DRAFT,
+                buildReleaseMarkdownReport(releasedVersions));
     }
 
     /**
@@ -670,6 +675,33 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
                 }
             }
         }
+    }
+
+    /**
+     * Build the draft-mode report: the planned release order and the
+     * reason each subproject is included. No subproject is released in
+     * draft mode, so this records intent rather than outcomes.
+     *
+     * @param releaseOrder topologically sorted names of the release plan
+     * @param releasable   release candidates keyed by subproject name
+     * @return the Markdown report body
+     */
+    private String buildReleasePlanMarkdownReport(
+            List<String> releaseOrder,
+            Map<String, ReleaseCandidate> releasable) {
+        var sb = new StringBuilder();
+        sb.append(releaseOrder.size())
+                .append(" subproject(s) would be released (draft).\n\n");
+        sb.append("| Subproject | Version | Reason |\n");
+        sb.append("|-----------|---------|--------|\n");
+        for (String name : releaseOrder) {
+            ReleaseCandidate rc = releasable.get(name);
+            sb.append("| ").append(rc.name)
+                    .append(" | ").append(currentVersion(rc.dir))
+                    .append(" | ").append(rc.reason)
+                    .append(" |\n");
+        }
+        return sb.toString();
     }
 
     private String buildReleaseMarkdownReport(

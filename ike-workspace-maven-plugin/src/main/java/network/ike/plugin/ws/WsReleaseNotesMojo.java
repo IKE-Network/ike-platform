@@ -51,7 +51,7 @@ public class WsReleaseNotesMojo extends AbstractWorkspaceMojo {
     public WsReleaseNotesMojo() {}
 
     @Override
-    public void execute() throws MojoException {
+    protected WorkspaceReportSpec runGoal() throws MojoException {
         milestone = requireParam(milestone, "milestone", "Milestone name");
 
         String notes = ReleaseNotesSupport.generate(repo, milestone, getLog());
@@ -77,7 +77,7 @@ public class WsReleaseNotesMojo extends AbstractWorkspaceMojo {
         }
 
         long issueCount = notes.lines().filter(l -> l.startsWith("- ")).count();
-        writeReport(WsGoal.RELEASE_NOTES, "**Milestone:** " + milestone
+        return new WorkspaceReportSpec(WsGoal.RELEASE_NOTES, "**Milestone:** " + milestone
                 + " | **Repo:** " + repo
                 + " | **Issues:** " + issueCount + "\n");
     }

@@ -100,7 +100,7 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
     public WsReconcileBranchesDraftMojo() {}
 
     @Override
-    public void execute() throws MojoException {
+    protected WorkspaceReportSpec runGoal() throws MojoException {
         // Defensive scope validation: this goal is branch-only. Any
         // other -Dscope= value is almost certainly a user invoking the
         // wrong goal (e.g., they meant ws:align-draft).
@@ -135,15 +135,25 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
         int totalChanges = alignBranches(graph, root, manifestPath, draft);
 
         getLog().info("");
+        String summary;
         if (totalChanges == 0) {
             getLog().info("  Nothing to reconcile  ✓");
+            summary = "Nothing to reconcile — branches already coherent.\n";
         } else if (draft) {
             getLog().info("  " + totalChanges + " change(s) would be applied");
             getLog().info("  Use ws:reconcile-branches-publish to apply.");
+            summary = totalChanges + " branch change(s) would be applied "
+                    + "(" + describeFromMode() + ").\n";
         } else {
             getLog().info("  Applied " + totalChanges + " change(s)");
+            summary = "Applied " + totalChanges + " branch change(s) "
+                    + "(" + describeFromMode() + ").\n";
         }
         getLog().info("");
+        return new WorkspaceReportSpec(
+                publish ? WsGoal.RECONCILE_BRANCHES_PUBLISH
+                        : WsGoal.RECONCILE_BRANCHES_DRAFT,
+                summary);
     }
 
     /**

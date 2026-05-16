@@ -28,8 +28,8 @@ public class WsScaffoldPublishMojo extends WsScaffoldDraftMojo {
     public WsScaffoldPublishMojo() {}
 
     @Override
-    public void execute() throws MojoException {
+    protected WorkspaceReportSpec runGoal() throws MojoException {
         publish = true;
-        super.execute();
+        return super.runGoal();
     }
 }

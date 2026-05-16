@@ -33,7 +33,7 @@ public class GraphWorkspaceMojo extends AbstractWorkspaceMojo {
     public GraphWorkspaceMojo() {}
 
     @Override
-    public void execute() throws MojoException {
+    protected WorkspaceReportSpec runGoal() throws MojoException {
         WorkspaceGraph graph = loadGraph();
 
         if ("dot".equalsIgnoreCase(format)) {
@@ -45,7 +45,7 @@ public class GraphWorkspaceMojo extends AbstractWorkspaceMojo {
         // Append the GraphViz dependency graph to the report.
         // IKE-DIAGRAMS.md mandates GraphViz for dependency graphs;
         // Mermaid is discouraged (IKE-Network/ike-issues#406).
-        writeReport(WsGoal.GRAPH,
+        return new WorkspaceReportSpec(WsGoal.GRAPH,
                 DotGraphSupport.buildDotReportBlock(graph));
     }
 

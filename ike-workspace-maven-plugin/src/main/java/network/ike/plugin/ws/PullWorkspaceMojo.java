@@ -36,7 +36,7 @@ public class PullWorkspaceMojo extends AbstractWorkspaceMojo {
     public PullWorkspaceMojo() {}
 
     @Override
-    public void execute() throws MojoException {
+    protected WorkspaceReportSpec runGoal() throws MojoException {
         WorkspaceGraph graph = loadGraph();
         File root = workspaceRoot();
 
@@ -106,9 +106,11 @@ public class PullWorkspaceMojo extends AbstractWorkspaceMojo {
         }
 
         // Structured markdown report
-        writeReport(WsGoal.PULL, pulled + " pulled, " + skipped
+        WorkspaceReportSpec spec = new WorkspaceReportSpec(WsGoal.PULL,
+                pulled + " pulled, " + skipped
                 + " skipped, " + failed + " failed.\n");
 
         PostMutationSync.refresh(root, getLog());
+        return spec;
     }
 }

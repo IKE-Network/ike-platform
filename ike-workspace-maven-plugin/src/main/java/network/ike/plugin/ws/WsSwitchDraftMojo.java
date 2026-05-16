@@ -90,7 +90,7 @@ public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
     boolean noStash;
 
     @Override
-    public void execute() throws MojoException {
+    protected WorkspaceReportSpec runGoal() throws MojoException {
         if (!isWorkspaceMode()) {
             throw new MojoException(
                     "ws:switch requires a workspace (workspace.yaml). "
@@ -143,7 +143,9 @@ public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
 
         if (branch.equals(currentBranch)) {
             getLog().info("Already on " + currentBranch + " — nothing to do.");
-            return;
+            return new WorkspaceReportSpec(
+                    publish ? WsGoal.SWITCH_PUBLISH : WsGoal.SWITCH_DRAFT,
+                    "Already on `" + currentBranch + "` — nothing to do.\n");
         }
 
         // Validate the target branch exists somewhere (or is main)
@@ -262,7 +264,8 @@ public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
         if (stashed > 0) sb.append(", **").append(stashed).append("** stashed");
         if (applied > 0) sb.append(", **").append(applied).append("** applied");
         sb.append(".\n");
-        writeReport(publish ? WsGoal.SWITCH_PUBLISH : WsGoal.SWITCH_DRAFT,
+        return new WorkspaceReportSpec(
+                publish ? WsGoal.SWITCH_PUBLISH : WsGoal.SWITCH_DRAFT,
                 sb.toString());
     }
 

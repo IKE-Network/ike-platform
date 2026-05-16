@@ -78,7 +78,7 @@ public class StignoreWorkspaceMojo extends AbstractWorkspaceMojo {
     public StignoreWorkspaceMojo() {}
 
     @Override
-    public void execute() throws MojoException {
+    protected WorkspaceReportSpec runGoal() throws MojoException {
         WorkspaceGraph graph = loadGraph();
         File root = workspaceRoot();
 
@@ -111,7 +111,7 @@ public class StignoreWorkspaceMojo extends AbstractWorkspaceMojo {
                 + " subproject .stignore files");
         getLog().info("");
 
-        writeReport(WsGoal.STIGNORE, "Generated **1** workspace + **"
+        return new WorkspaceReportSpec(WsGoal.STIGNORE, "Generated **1** workspace + **"
                 + perComponent + "** subproject .stignore files.\n");
     }
 

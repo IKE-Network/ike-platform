@@ -8,9 +8,9 @@ import org.apache.maven.api.plugin.annotations.Mojo;
  * a short human description.
  *
  * <p>Callers that invoke ws goals from Java — for subprocess exec, for
- * {@code writeReport} / {@code startReport} / {@code finishReport}, for
- * javadoc examples that survive a rename — should reference these
- * enum values rather than string literals. {@code Find Usages} then
+ * the {@link WorkspaceReportSpec} a goal returns, for javadoc examples
+ * that survive a rename — should reference these enum values rather
+ * than string literals. {@code Find Usages} then
  * surfaces every consumer when a goal is renamed, and the
  * exhaustiveness guard in {@code WsGoalExhaustivenessTest} ensures the
  * enum stays in lockstep with {@link Mojo @Mojo} declarations.

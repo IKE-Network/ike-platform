@@ -48,7 +48,7 @@ public class WsPostReleaseMojo extends AbstractWorkspaceMojo {
     public WsPostReleaseMojo() {}
 
     @Override
-    public void execute() throws MojoException {
+    protected WorkspaceReportSpec runGoal() throws MojoException {
         nextVersion = requireParam(nextVersion, "nextVersion",
                 "Next development version (e.g., 4-SNAPSHOT)");
         validateMavenVersion(nextVersion);
@@ -200,7 +200,8 @@ public class WsPostReleaseMojo extends AbstractWorkspaceMojo {
         getLog().info("  Bumped: " + bumped + " | Skipped: " + skipped);
         getLog().info("");
 
-        writeReport(WsGoal.POST_RELEASE, "**" + bumped + "** bumped, **"
+        return new WorkspaceReportSpec(WsGoal.POST_RELEASE,
+                "**" + bumped + "** bumped, **"
                 + skipped + "** skipped.\n");
     }
 }

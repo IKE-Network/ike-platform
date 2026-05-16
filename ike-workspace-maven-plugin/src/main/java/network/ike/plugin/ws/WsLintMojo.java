@@ -44,7 +44,7 @@ public class WsLintMojo extends AbstractWorkspaceMojo {
     public WsLintMojo() {}
 
     @Override
-    public void execute() throws MojoException {
+    protected WorkspaceReportSpec runGoal() throws MojoException {
         WorkspaceGraph graph = loadGraph();
         File root = workspaceRoot();
         List<String> sorted = graph.topologicalSort();
@@ -79,6 +79,6 @@ public class WsLintMojo extends AbstractWorkspaceMojo {
         }
         getLog().info("");
 
-        writeReport(WsGoal.LINT, md.toString());
+        return new WorkspaceReportSpec(WsGoal.LINT, md.toString());
     }
 }

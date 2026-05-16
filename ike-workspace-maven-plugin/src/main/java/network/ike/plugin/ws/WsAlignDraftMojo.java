@@ -77,7 +77,7 @@ public class WsAlignDraftMojo extends AbstractWorkspaceMojo {
     public WsAlignDraftMojo() {}
 
     @Override
-    public void execute() throws MojoException {
+    protected WorkspaceReportSpec runGoal() throws MojoException {
         boolean draft = !publish;
 
         // Migration gate (ike-issues#200): the align goals are POM-only.
@@ -135,12 +135,19 @@ public class WsAlignDraftMojo extends AbstractWorkspaceMojo {
                 readReconcilerOptions(), getLog());
         AlignmentReconciler reconciler = new AlignmentReconciler();
 
+        String content;
         if (draft) {
-            printDriftReport(reconciler.detect(ctx));
+            DriftReport report = reconciler.detect(ctx);
+            printDriftReport(report);
+            content = report.toMarkdown();
         } else {
             reconciler.apply(ctx);
+            content = "Inter-subproject version alignment applied across "
+                    + "the workspace.\n";
         }
         getLog().info("");
+        return new WorkspaceReportSpec(
+                publish ? WsGoal.ALIGN_PUBLISH : WsGoal.ALIGN_DRAFT, content);
     }
 
     /**

@@ -86,15 +86,16 @@ public class CommitMojo extends AbstractWorkspaceMojo {
     boolean skipLint;
 
     @Override
-    public void execute() throws MojoException {
+    protected WorkspaceReportSpec runGoal() throws MojoException {
         if (isWorkspaceMode()) {
-            executeWorkspace();
-        } else {
-            executeSingleRepo(new File(System.getProperty("user.dir")));
+            return executeWorkspace();
         }
+        executeSingleRepo(new File(System.getProperty("user.dir")));
+        return new WorkspaceReportSpec(WsGoal.COMMIT,
+                "Committed in single-repo mode (no workspace).\n");
     }
 
-    private void executeWorkspace() throws MojoException {
+    private WorkspaceReportSpec executeWorkspace() throws MojoException {
         WorkspaceGraph graph = loadGraph();
         File root = workspaceRoot();
 
@@ -173,14 +174,14 @@ public class CommitMojo extends AbstractWorkspaceMojo {
         getLog().info("  Done: " + summary);
         getLog().info("");
 
-        writeReport(WsGoal.COMMIT, summary + "\n");
-
         PostMutationSync.refresh(root, getLog());
 
         if (failed > 0) {
             throw new MojoException(failed
                     + " commit(s) failed — check output above for details.");
         }
+
+        return new WorkspaceReportSpec(WsGoal.COMMIT, summary + "\n");
     }
 
     /**

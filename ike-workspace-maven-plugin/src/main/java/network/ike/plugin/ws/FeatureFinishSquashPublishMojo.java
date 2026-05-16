@@ -20,9 +20,10 @@ public class FeatureFinishSquashPublishMojo extends FeatureFinishSquashDraftMojo
     public FeatureFinishSquashPublishMojo() {}
 
     @Override
-    public void execute() throws MojoException {
+    protected WorkspaceReportSpec runGoal() throws MojoException {
         publish = true;
-        super.execute();
+        WorkspaceReportSpec spec = super.runGoal();
         PostMutationSync.refresh(workspaceRoot(), getLog());
+        return spec;
     }
 }

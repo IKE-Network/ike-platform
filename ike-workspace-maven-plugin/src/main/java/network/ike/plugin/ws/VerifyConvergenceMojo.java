@@ -60,7 +60,7 @@ public class VerifyConvergenceMojo extends AbstractWorkspaceMojo {
     public VerifyConvergenceMojo() {}
 
     @Override
-    public void execute() throws MojoException {
+    protected WorkspaceReportSpec runGoal() throws MojoException {
         getLog().info("");
         getLog().info(header("Dependency Convergence"));
         getLog().info("══════════════════════════════════════════════════════════════");
@@ -113,11 +113,10 @@ public class VerifyConvergenceMojo extends AbstractWorkspaceMojo {
 
         if (componentTrees.size() < 2) {
             getLog().info("    Fewer than 2 components resolved — skipping analysis");
-            writeReport(WsGoal.VERIFY_CONVERGENCE, buildSummary(
+            return new WorkspaceReportSpec(WsGoal.VERIFY_CONVERGENCE, buildSummary(
                     workspaceName(), componentTrees.size(),
                     parentSkew, qualifierContamination,
                     java.util.List.of(), failed));
-            return;
         }
 
         // Analyze
@@ -170,15 +169,16 @@ public class VerifyConvergenceMojo extends AbstractWorkspaceMojo {
         }
 
         getLog().info("");
-        writeReport(WsGoal.VERIFY_CONVERGENCE, buildSummary(
-                wsName, componentTrees.size(),
-                parentSkew, qualifierContamination,
-                divergences, failed));
 
         if (failed) {
             throw new MojoException(
                     "Convergence verification failed — see output above.");
         }
+
+        return new WorkspaceReportSpec(WsGoal.VERIFY_CONVERGENCE, buildSummary(
+                wsName, componentTrees.size(),
+                parentSkew, qualifierContamination,
+                divergences, failed));
     }
 
     /**

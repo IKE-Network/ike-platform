@@ -49,13 +49,14 @@ public class OverviewWorkspaceMojo extends AbstractWorkspaceMojo {
     String format;
 
     @Override
-    public void execute() throws MojoException {
+    protected WorkspaceReportSpec runGoal() throws MojoException {
         WorkspaceGraph graph = loadGraph();
 
         // DOT mode — delegate to graph-only output
         if ("dot".equalsIgnoreCase(format)) {
             printDot(graph);
-            return;
+            return new WorkspaceReportSpec(WsGoal.OVERVIEW,
+                    "DOT format emitted to console — no report generated.\n");
         }
 
         File root = workspaceRoot();
@@ -271,7 +272,7 @@ public class OverviewWorkspaceMojo extends AbstractWorkspaceMojo {
         getLog().info("");
 
         // Structured markdown report
-        writeReport(WsGoal.OVERVIEW, buildMarkdownReport(
+        return new WorkspaceReportSpec(WsGoal.OVERVIEW, buildMarkdownReport(
                 errors, graphRows, statusRows, divergenceRows, cascadeRows,
                 cloned, notCloned, modifiedComponents.size(), graph));
     }

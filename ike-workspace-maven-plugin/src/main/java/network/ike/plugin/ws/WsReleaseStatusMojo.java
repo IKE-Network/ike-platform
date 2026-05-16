@@ -55,34 +55,30 @@ public class WsReleaseStatusMojo extends AbstractWorkspaceMojo {
     public WsReleaseStatusMojo() {}
 
     @Override
-    public void execute() throws MojoException {
-        ReportLog report = startReport();
-        try {
-            WorkspaceGraph graph = loadGraph();
-            File root = workspaceRoot();
+    protected WorkspaceReportSpec runGoal() throws MojoException {
+        WorkspaceGraph graph = loadGraph();
+        File root = workspaceRoot();
 
-            getLog().info("");
-            getLog().info(header("Release status"));
-            getLog().info("══════════════════════════════════════════════════════════════");
-            getLog().info("");
+        getLog().info("");
+        getLog().info(header("Release status"));
+        getLog().info("══════════════════════════════════════════════════════════════");
+        getLog().info("");
 
-            List<String> order = graph.topologicalSort();
-            List<ReleaseStatusInspector.Finding> findings = new ArrayList<>();
-            for (String name : order) {
-                File subDir = new File(root, name);
-                ReleaseStatusInspector.Observation obs = observe(name, subDir);
-                ReleaseStatusInspector.Finding finding =
-                        ReleaseStatusInspector.classify(obs);
-                findings.add(finding);
-                renderFinding(finding);
-            }
-
-            getLog().info("");
-            renderFooter(findings);
-            writeReport(WsGoal.RELEASE_STATUS, buildMarkdownReport(findings));
-        } finally {
-            finishReport(WsGoal.RELEASE_STATUS, report);
+        List<String> order = graph.topologicalSort();
+        List<ReleaseStatusInspector.Finding> findings = new ArrayList<>();
+        for (String name : order) {
+            File subDir = new File(root, name);
+            ReleaseStatusInspector.Observation obs = observe(name, subDir);
+            ReleaseStatusInspector.Finding finding =
+                    ReleaseStatusInspector.classify(obs);
+            findings.add(finding);
+            renderFinding(finding);
         }
+
+        getLog().info("");
+        renderFooter(findings);
+        return new WorkspaceReportSpec(WsGoal.RELEASE_STATUS,
+                buildMarkdownReport(findings));
     }
 
     // ── Observation: real git interaction ────────────────────────────

@@ -45,7 +45,7 @@ public class CleanupWorkspaceMojo extends AbstractWorkspaceMojo {
     boolean publish;
 
     @Override
-    public void execute() throws MojoException {
+    protected WorkspaceReportSpec runGoal() throws MojoException {
         WorkspaceGraph graph = loadGraph();
         File root = workspaceRoot();
 
@@ -168,8 +168,9 @@ public class CleanupWorkspaceMojo extends AbstractWorkspaceMojo {
 
         getLog().info("");
 
-        writeReport(publish ? WsGoal.CLEANUP_PUBLISH : WsGoal.CLEANUP_DRAFT, buildCleanupReport(
-                allMerged, allActive, mergedBySubproject, root));
+        return new WorkspaceReportSpec(
+                publish ? WsGoal.CLEANUP_PUBLISH : WsGoal.CLEANUP_DRAFT,
+                buildCleanupReport(allMerged, allActive, mergedBySubproject, root));
     }
 
     private String buildCleanupReport(Set<String> merged, Set<String> active,

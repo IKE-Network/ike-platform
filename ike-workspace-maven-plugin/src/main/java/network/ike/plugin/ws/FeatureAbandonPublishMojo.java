@@ -25,8 +25,8 @@ public class FeatureAbandonPublishMojo extends FeatureAbandonDraftMojo {
     public FeatureAbandonPublishMojo() {}
 
     @Override
-    public void execute() throws MojoException {
+    protected WorkspaceReportSpec runGoal() throws MojoException {
         this.publish = true;
-        super.execute();
+        return super.runGoal();
     }
 }

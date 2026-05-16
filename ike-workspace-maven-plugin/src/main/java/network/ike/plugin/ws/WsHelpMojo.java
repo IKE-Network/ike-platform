@@ -1,8 +1,5 @@
 package network.ike.plugin.ws;
 
-import org.apache.maven.api.di.Inject;
-import org.apache.maven.api.plugin.Log;
-import org.apache.maven.api.plugin.Mojo;
 import org.apache.maven.api.plugin.MojoException;
 
 import java.util.ArrayList;
@@ -38,20 +35,13 @@ import java.util.Map;
  * @see <a href="https://github.com/IKE-Network/ike-platform">IKE Platform</a>
  */
 @org.apache.maven.api.plugin.annotations.Mojo(name = "help", projectRequired = false, aggregator = true)
-public class WsHelpMojo implements Mojo {
-
-    /** Maven logger, injected by the Maven 4 DI container. */
-    @Inject
-    private Log log;
+public class WsHelpMojo extends AbstractWorkspaceMojo {
 
     /** Creates this goal instance. */
     public WsHelpMojo() {}
 
-    /** Access the Maven logger. */
-    private Log getLog() { return log; }
-
     @Override
-    public void execute() throws MojoException {
+    protected WorkspaceReportSpec runGoal() throws MojoException {
         List<GoalInfo> goals = discoverGoals();
 
         getLog().info("");
@@ -76,6 +66,27 @@ public class WsHelpMojo implements Mojo {
         getLog().info("");
         printOptions();
         getLog().info("");
+
+        return new WorkspaceReportSpec(WsGoal.HELP, buildHelpReport(goals));
+    }
+
+    /**
+     * Render the discovered goals as a Markdown table for the session
+     * report.
+     *
+     * @param goals the goals discovered from the {@link WsGoal} registry
+     * @return the Markdown report body
+     */
+    private static String buildHelpReport(List<GoalInfo> goals) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(goals.size()).append(" `ws:*` goals.\n\n");
+        sb.append("| Goal | Description |\n");
+        sb.append("|------|-------------|\n");
+        for (GoalInfo g : goals) {
+            sb.append("| `ws:").append(g.name())
+              .append("` | ").append(g.summary()).append(" |\n");
+        }
+        return sb.toString();
     }
 
     // ── Goal discovery ──────────────────────────────────────────

@@ -55,16 +55,14 @@ public class CheckBranchMojo extends AbstractWorkspaceMojo {
     public CheckBranchMojo() {}
 
     @Override
-    public void execute() throws MojoException {
+    protected WorkspaceReportSpec runGoal() throws MojoException {
         if (!isWorkspaceMode()) {
-            writeReport(WsGoal.CHECK_BRANCH,
+            return new WorkspaceReportSpec(WsGoal.CHECK_BRANCH,
                     "_Bare mode — not inside a workspace._\n");
-            return;
         }
 
         if ("workspace".equals(scope)) {
-            executeWorkspaceScope();
-            return;
+            return executeWorkspaceScope();
         }
         if (!"subproject".equals(scope)) {
             throw new MojoException(
@@ -78,28 +76,25 @@ public class CheckBranchMojo extends AbstractWorkspaceMojo {
         // Determine which subproject we're in by matching CWD to workspace root + subproject name
         String subprojectName = findSubprojectName(wsRoot, cwd, graph);
         if (subprojectName == null) {
-            writeReport(WsGoal.CHECK_BRANCH,
+            return new WorkspaceReportSpec(WsGoal.CHECK_BRANCH,
                     "_CWD is not inside a known subproject directory._\n");
-            return;
         }
 
         Subproject subproject = graph.manifest().subprojects().get(subprojectName);
         if (subproject == null || subproject.branch() == null) {
-            writeReport(WsGoal.CHECK_BRANCH,
+            return new WorkspaceReportSpec(WsGoal.CHECK_BRANCH,
                     "**Subproject:** `" + subprojectName + "`\n\n"
                             + "_No expected branch declared in workspace.yaml._\n");
-            return;
         }
 
         String expectedBranch = subproject.branch();
         String actualBranch = gitBranch(cwd);
 
         if (actualBranch.equals(expectedBranch)) {
-            writeReport(WsGoal.CHECK_BRANCH,
+            return new WorkspaceReportSpec(WsGoal.CHECK_BRANCH,
                     "**Subproject:** `" + subprojectName + "`\n"
                             + "**Branch:** `" + actualBranch
                             + "` (matches expected)  ✓\n");
-            return;
         }
 
         // Determine if this was a branch creation (new branch that doesn't match expected)
@@ -148,7 +143,7 @@ public class CheckBranchMojo extends AbstractWorkspaceMojo {
             scenario = "switched to an existing branch";
         }
 
-        writeReport(WsGoal.CHECK_BRANCH,
+        return new WorkspaceReportSpec(WsGoal.CHECK_BRANCH,
                 "**Subproject:** `" + subprojectName + "`\n"
                         + "**Expected:** `" + expectedBranch + "`\n"
                         + "**Actual:** `" + actualBranch + "`\n"
@@ -168,21 +163,19 @@ public class CheckBranchMojo extends AbstractWorkspaceMojo {
      * confirm whether {@code ws:reconcile-branches-publish -Dfrom=workspace-head}
      * is needed (ike-issues#287).
      */
-    private void executeWorkspaceScope() throws MojoException {
+    private WorkspaceReportSpec executeWorkspaceScope() throws MojoException {
         WorkspaceGraph graph = loadGraph();
         File wsRoot = workspaceRoot();
 
         if (!new File(wsRoot, ".git").exists()) {
-            writeReport(WsGoal.CHECK_BRANCH,
+            return new WorkspaceReportSpec(WsGoal.CHECK_BRANCH,
                     "_Workspace directory has no `.git` — cannot determine "
                             + "the authoritative workspace branch._\n");
-            return;
         }
         String wsBranch = gitBranch(wsRoot);
         if (wsBranch == null || "unknown".equals(wsBranch)) {
-            writeReport(WsGoal.CHECK_BRANCH,
+            return new WorkspaceReportSpec(WsGoal.CHECK_BRANCH,
                     "_Workspace HEAD is not on a named branch (detached HEAD?)._\n");
-            return;
         }
 
         List<DriftRow> rows = new ArrayList<>();
@@ -251,7 +244,7 @@ public class CheckBranchMojo extends AbstractWorkspaceMojo {
             md.append("\n_Repair: `mvn ws:reconcile-branches-publish "
                     + "-Dfrom=workspace-head`_\n");
         }
-        writeReport(WsGoal.CHECK_BRANCH, md.toString());
+        return new WorkspaceReportSpec(WsGoal.CHECK_BRANCH, md.toString());
     }
 
     /** One row of the workspace-scope drift table. */

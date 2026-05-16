@@ -49,15 +49,15 @@ public class PushMojo extends AbstractWorkspaceMojo {
     boolean failFast;
 
     @Override
-    public void execute() throws MojoException {
+    protected WorkspaceReportSpec runGoal() throws MojoException {
         if (isWorkspaceMode()) {
-            executeWorkspace();
+            return executeWorkspace();
         } else {
-            executeSingleRepo(new File(System.getProperty("user.dir")));
+            return executeSingleRepo(new File(System.getProperty("user.dir")));
         }
     }
 
-    private void executeWorkspace() throws MojoException {
+    private WorkspaceReportSpec executeWorkspace() throws MojoException {
         WorkspaceGraph graph = loadGraph();
         File root = workspaceRoot();
 
@@ -172,10 +172,10 @@ public class PushMojo extends AbstractWorkspaceMojo {
             getLog().warn("  Some pushes failed — check output above for details.");
         }
 
-        writeReport(WsGoal.PUSH, summary + "\n");
+        return new WorkspaceReportSpec(WsGoal.PUSH, summary + "\n");
     }
 
-    private void executeSingleRepo(File dir) throws MojoException {
+    private WorkspaceReportSpec executeSingleRepo(File dir) throws MojoException {
         getLog().info("");
         getLog().info("IKE VCS Bridge — Push");
         getLog().info("══════════════════════════════════════════════════════════════");
@@ -191,5 +191,8 @@ public class PushMojo extends AbstractWorkspaceMojo {
         getLog().info("");
         getLog().info("  Done.");
         getLog().info("");
+        return new WorkspaceReportSpec(WsGoal.PUSH,
+                "Pushed `" + dir.getName() + "` to `" + remote + "/"
+                        + branch + "`.\n");
     }
 }

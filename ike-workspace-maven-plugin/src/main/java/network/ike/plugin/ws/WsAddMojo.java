@@ -127,7 +127,7 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
     public WsAddMojo() {}
 
     @Override
-    public void execute() throws MojoException {
+    protected WorkspaceReportSpec runGoal() throws MojoException {
         repo = requireParam(repo, "repo", "Git repository URL");
 
         // Resolve workspace root
@@ -352,12 +352,14 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
             getLog().info("  Subproject added. Run 'mvn ws:scaffold-init' to clone.");
         }
         getLog().info("");
-        writeReport(WsGoal.ADD, "Added subproject **" + subproject + "**\n\n"
+        WorkspaceReportSpec spec = new WorkspaceReportSpec(WsGoal.ADD,
+                "Added subproject **" + subproject + "**\n\n"
                 + "| Field | Value |\n|-------|-------|\n"
                 + "| Repo | " + repo + " |\n"
                 + "| Cloned | " + (cloned ? "yes" : "no — run ws:scaffold-init") + " |\n");
 
         PostMutationSync.refresh(workspaceRoot(), getLog());
+        return spec;
     }
 
     // ── YAML generation ──────────────────────────────────────────

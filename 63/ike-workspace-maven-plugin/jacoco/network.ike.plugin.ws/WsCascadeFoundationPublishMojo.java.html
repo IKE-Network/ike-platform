@@ -1,0 +1,819 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>WsCascadeFoundationPublishMojo.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">WsCascadeFoundationPublishMojo.java</span></div><h1>WsCascadeFoundationPublishMojo.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.plugin.PomRewriter;
+import network.ike.plugin.ReleaseSupport;
+import network.ike.workspace.cascade.CascadeRepo;
+import network.ike.workspace.cascade.ReleaseCascade;
+import network.ike.workspace.cascade.ReleaseCascadeIo;
+
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.regex.Pattern;
+
+/**
+ * Walk the canonical IKE foundation cascade in topological order and
+ * invoke {@code ike:release-publish} on each repo that has unreleased
+ * changes. ike-issues#375.
+ *
+ * &lt;p&gt;The foundation cascade is structural: {@code ike-tooling →
+ * ike-docs → ike-platform → workspace consumers}. Each upstream repo
+ * must release (with its Nexus deploy complete) before the next can
+ * pick up the new property versions in its catch-up alignment step.
+ * Before this goal, an operator typed three {@code mvn ike:release-
+ * publish} invocations in three different directories. This goal does
+ * the same walk but cleanly: each foundation is checked for unreleased
+ * changes via the same git logic ws:release-publish uses, releases are
+ * skipped when not needed, and the report at the end states exactly
+ * what happened.
+ *
+ * &lt;p&gt;Foundation repos are located as siblings of the current workspace
+ * (default {@code ~/ike-dev/&amp;lt;name&amp;gt;/}). The starting directory's
+ * parent is the search root; non-checked-out foundations are skipped
+ * with a clear &quot;not found&quot; entry in the report.
+ *
+ * &lt;p&gt;After the foundation cascade succeeds, this goal also runs
+ * {@code ws:release-publish} on the current workspace by default —
+ * the operator is already in a workspace and almost always wants the
+ * whole loop closed (foundations + workspace) rather than foundations
+ * only. Pass {@code -DskipWorkspace=true} for the rarer
+ * foundation-only case (e.g., releasing foundations so a sibling
+ * workspace can pick them up, without touching this workspace yet).
+ *
+ * &lt;p&gt;No draft variant: foundation releases already have
+ * {@code ike:release-draft} individually if the operator wants a
+ * preview of a specific repo before kicking off the cascade.
+ *
+ * &lt;p&gt;Usage:
+ * &lt;pre&gt;
+ * # Full loop: release foundations that have unreleased changes,
+ * # then release the workspace (default behavior):
+ * mvn ws:cascade-foundation-publish
+ *
+ * # Foundations only (don't touch the workspace):
+ * mvn ws:cascade-foundation-publish -DskipWorkspace=true
+ *
+ * # Override the foundation set (rarely useful):
+ * mvn ws:cascade-foundation-publish -Dfoundations=ike-tooling,ike-docs
+ * &lt;/pre&gt;
+ */
+@Mojo(name = &quot;cascade-foundation-publish&quot;,
+      projectRequired = false,
+      aggregator = true)
+public class WsCascadeFoundationPublishMojo extends AbstractWorkspaceMojo {
+
+    /**
+     * Canonical foundation cascade — the fallback order used only
+     * when no {@code release-cascade.yaml} manifest can be found and
+     * {@code -Dfoundations} was not supplied.
+     */
+    private static final String DEFAULT_FOUNDATIONS =
+            &quot;ike-tooling,ike-docs,ike-platform&quot;;
+
+    /**
+     * Comma-separated list of foundation repos to walk, in topological
+     * order. When left unset (the normal case) the order is read from
+     * the {@code release-cascade.yaml} manifest
+     * (IKE-Network/ike-issues#402). Set this only to override the
+     * cascade for a partial run, e.g.
+     * {@code -Dfoundations=ike-tooling,ike-docs}.
+     */
+    @Parameter(property = &quot;foundations&quot;)
+    String foundations;
+
+    /**
+     * Path to the {@code release-cascade.yaml} manifest. Bound to the
+     * standard {@code ike.release.cascade.manifest} property, which
+     * {@code ike-parent} declares in its {@code &lt;properties&gt;}
+     * pointing at {@code target/release-cascade.yaml}. When the
+     * property is unset the goal falls back to
+     * {@code &lt;workspaceRoot&gt;/target/release-cascade.yaml}. See
+     * IKE-Network/ike-issues#402.
+     */
+    @Parameter(property = &quot;ike.release.cascade.manifest&quot;)
+    String cascadeManifest;
+
+    /**
+     * Base directory containing the foundation repo checkouts as
+     * sibling directories. Bound to the {@code ike.release.cascade.basedir}
+     * property. Defaults to the parent of the current workspace, which
+     * matches the standard local {@code ~/ike-dev/&amp;lt;repo&amp;gt;/} layout.
+     *
+     * &lt;p&gt;This goal is the &lt;em&gt;single-process&lt;/em&gt; cascade walker — it
+     * assumes every foundation repo is checked out under one base
+     * directory. That is the local-workstation model. On a CI server
+     * each repo is typically its own build configuration with its own
+     * checkout; there the cascade is expressed as CI build-chain
+     * dependencies and this goal is not used. See the goal's reference
+     * page and IKE-Network/ike-issues#402.
+     */
+    @Parameter(property = &quot;ike.release.cascade.basedir&quot;)
+    File foundationsDir;
+
+    /**
+     * Per-repo checkout-location overrides for non-standard layouts —
+     * keyed by cascade repo name, valued with an absolute path. A repo
+     * absent from this map is located at
+     * {@code &lt;ike.release.cascade.basedir&gt;/&lt;repo&gt;}. Configure in the
+     * POM when the foundation checkouts are not co-located:
+     *
+     * &lt;pre&gt;{@code
+     * &lt;configuration&gt;
+     *   &lt;cascadeRepoDirs&gt;
+     *     &lt;ike-tooling&gt;/agent/work/a1/ike-tooling&lt;/ike-tooling&gt;
+     *     &lt;ike-docs&gt;/agent/work/b2/ike-docs&lt;/ike-docs&gt;
+     *   &lt;/cascadeRepoDirs&gt;
+     * &lt;/configuration&gt;
+     * }&lt;/pre&gt;
+     *
+     * IKE-Network/ike-issues#402.
+     */
+    @Parameter
+    Map&lt;String, String&gt; cascadeRepoDirs;
+
+    /**
+     * Skip the workspace's own {@code ws:release-publish} step at the
+     * end of the cascade. Defaults to {@code false} — the operator
+     * almost always wants the whole loop closed (foundations +
+     * workspace) since they're invoking from inside a workspace.
+     *
+     * &lt;p&gt;Pass {@code -DskipWorkspace=true} for the foundation-only
+     * case (e.g., releasing foundations so a sibling workspace can
+     * pick them up, without touching this workspace yet).
+     *
+     * &lt;p&gt;Replaces the inverted {@code alsoReleaseWorkspace} parameter
+     * (default false) — that default served the rare case, this one
+     * serves the common case.
+     */
+    @Parameter(property = &quot;skipWorkspace&quot;, defaultValue = &quot;false&quot;)
+    boolean skipWorkspace;
+
+    /**
+     * Forwarded to {@code ike:release-publish} on each foundation
+     * (and to {@code ws:release-publish} when chained). Defaults to
+     * {@code true}; pass {@code -DpushRelease=false} for a local-only
+     * dry run that stops before pushing.
+     */
+    @Parameter(property = &quot;pushRelease&quot;, defaultValue = &quot;true&quot;)
+    boolean pushRelease;
+
+    /**
+     * The running plugin's own version, read from
+     * {@code META-INF/maven/.../pom.properties} on the classpath
+     * (see {@link #resolvePluginVersion}). Used by
+     * {@link #invokeWorkspaceRelease} to build explicit-coords
+     * invocations of {@code ws:release-publish} that pin to THIS
+     * plugin version instead of letting the workspace's
+     * {@code pluginManagement} pick (which, for a workspace still
+     * on an old {@code ike-parent}, would resolve to an old version
+     * that lacks the cascade-driven fixes). ike-issues#378.
+     *
+     * &lt;p&gt;Maven 4's {@code @Parameter(defaultValue = &quot;${plugin.version}&quot;)}
+     * idiom does NOT work — Maven 4.0.0-rc-5 doesn't bind
+     * {@code PluginDescriptor} in the DI container (see WsHelpMojo
+     * for the same observation). The classpath-resource fallback
+     * is independent of the DI container and works reliably.
+     */
+    private String pluginVersion;
+
+    /**
+     * Skip the per-foundation pre-install step that seeds {@code
+     * ~/.m2} with the current SNAPSHOT before invoking
+     * {@code ike:release-publish}. Defaults to {@code false} (do
+     * the pre-install) because {@code ike-tooling}'s X-SNAPSHOT
+     * self-host pattern (#370) needs the current SNAPSHOT to be
+     * locally resolvable — otherwise Maven cannot even start the
+     * release goal. ike-issues#379.
+     */
+    @Parameter(property = &quot;skipPreInstall&quot;, defaultValue = &quot;false&quot;)
+    boolean skipPreInstall;
+
+    /** Creates this goal instance. */
+<span class="fc" id="L204">    public WsCascadeFoundationPublishMojo() {}</span>
+
+    /**
+     * Resolves the foundation cascade order (IKE-Network/ike-issues#402).
+     *
+     * &lt;p&gt;Priority: an explicit {@code -Dfoundations} CSV when supplied,
+     * otherwise the {@code release-cascade.yaml} manifest, otherwise
+     * the canonical {@link #DEFAULT_FOUNDATIONS} fallback. The chosen
+     * source is logged so the operator can see where the order came
+     * from.
+     *
+     * @param searchRoot the directory from which the manifest is
+     *                   located (the workspace root)
+     * @return foundation repo names in topological release order
+     */
+    private List&lt;String&gt; resolveFoundations(File searchRoot) {
+<span class="nc bnc" id="L220" title="All 4 branches missed.">        if (foundations != null &amp;&amp; !foundations.isBlank()) {</span>
+<span class="nc" id="L221">            getLog().info(&quot;  Cascade source: -Dfoundations override&quot;);</span>
+<span class="nc" id="L222">            return splitCsv(foundations);</span>
+        }
+        Path manifestPath =
+<span class="nc bnc" id="L225" title="All 4 branches missed.">                (cascadeManifest != null &amp;&amp; !cascadeManifest.isBlank())</span>
+<span class="nc" id="L226">                        ? Path.of(cascadeManifest)</span>
+                        : new File(searchRoot, &quot;target/release-cascade.yaml&quot;)
+<span class="nc" id="L228">                                .toPath();</span>
+        Optional&lt;ReleaseCascade&gt; loaded;
+        try {
+<span class="nc" id="L231">            loaded = ReleaseCascadeIo.load(manifestPath);</span>
+<span class="nc" id="L232">        } catch (RuntimeException e) {</span>
+<span class="nc" id="L233">            getLog().warn(&quot;release-cascade.yaml could not be read (&quot;</span>
+<span class="nc" id="L234">                    + e.getMessage()</span>
+                    + &quot;); using the built-in default order.&quot;);
+<span class="nc" id="L236">            loaded = Optional.empty();</span>
+<span class="nc" id="L237">        }</span>
+<span class="nc bnc" id="L238" title="All 2 branches missed.">        if (loaded.isPresent()) {</span>
+<span class="nc" id="L239">            getLog().info(&quot;  Cascade source: release-cascade.yaml&quot;);</span>
+<span class="nc" id="L240">            return loaded.get().repos().stream()</span>
+<span class="nc" id="L241">                    .map(CascadeRepo::repo)</span>
+<span class="nc" id="L242">                    .toList();</span>
+        }
+<span class="nc" id="L244">        getLog().info(&quot;  Cascade source: built-in default&quot;</span>
+                + &quot; (no release-cascade.yaml found)&quot;);
+<span class="nc" id="L246">        return splitCsv(DEFAULT_FOUNDATIONS);</span>
+    }
+
+    private static List&lt;String&gt; splitCsv(String csv) {
+<span class="nc" id="L250">        return Arrays.stream(csv.split(&quot;,&quot;))</span>
+<span class="nc" id="L251">                .map(String::trim)</span>
+<span class="nc bnc" id="L252" title="All 2 branches missed.">                .filter(s -&gt; !s.isEmpty())</span>
+<span class="nc" id="L253">                .toList();</span>
+    }
+
+    /**
+     * Resolves a cascade repo's checkout directory
+     * (IKE-Network/ike-issues#402).
+     *
+     * &lt;p&gt;An explicit per-repo override in {@link #cascadeRepoDirs}
+     * wins; otherwise the repo is located as {@code &lt;baseDir&gt;/&lt;repo&gt;}
+     * — the co-located sibling layout.
+     *
+     * @param baseDir the foundations base directory
+     * @param repo    the cascade repo name
+     * @return the directory the repo is expected to be checked out in
+     */
+    private File resolveRepoDir(File baseDir, String repo) {
+<span class="nc bnc" id="L269" title="All 2 branches missed.">        if (cascadeRepoDirs != null) {</span>
+<span class="nc" id="L270">            String override = cascadeRepoDirs.get(repo);</span>
+<span class="nc bnc" id="L271" title="All 4 branches missed.">            if (override != null &amp;&amp; !override.isBlank()) {</span>
+<span class="nc" id="L272">                File dir = new File(override);</span>
+<span class="nc" id="L273">                getLog().info(&quot;  &quot; + repo + &quot;: location override → &quot;</span>
+                        + dir);
+<span class="nc" id="L275">                return dir;</span>
+            }
+        }
+<span class="nc" id="L278">        return new File(baseDir, repo);</span>
+    }
+
+    @Override
+    public void execute() throws MojoException {
+<span class="nc" id="L283">        File wsRoot = workspaceRoot();</span>
+<span class="nc bnc" id="L284" title="All 2 branches missed.">        File baseDir = foundationsDir != null</span>
+<span class="nc" id="L285">                ? foundationsDir</span>
+<span class="nc" id="L286">                : wsRoot.getParentFile();</span>
+<span class="nc bnc" id="L287" title="All 2 branches missed.">        if (baseDir == null) {</span>
+<span class="nc" id="L288">            throw new MojoException(</span>
+                    &quot;Could not determine the foundations base directory. &quot;
+                            + &quot;Workspace root has no parent. Pass &quot;
+                            + &quot;-Dike.release.cascade.basedir=&lt;path&gt;.&quot;);
+        }
+
+<span class="nc" id="L294">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L295">        getLog().info(&quot;IKE Foundation Cascade&quot;);</span>
+<span class="nc" id="L296">        getLog().info(&quot;══════════════════════&quot;);</span>
+<span class="nc" id="L297">        getLog().info(&quot;  Base directory:  &quot; + baseDir);</span>
+<span class="nc" id="L298">        List&lt;String&gt; names = resolveFoundations(wsRoot);</span>
+<span class="nc" id="L299">        getLog().info(&quot;  Foundations:     &quot; + String.join(&quot;, &quot;, names));</span>
+<span class="nc" id="L300">        getLog().info(&quot;  pushRelease:     &quot; + pushRelease);</span>
+<span class="nc" id="L301">        getLog().info(&quot;  skipWorkspace:   &quot; + skipWorkspace);</span>
+<span class="nc" id="L302">        getLog().info(&quot;&quot;);</span>
+
+<span class="nc" id="L304">        List&lt;Outcome&gt; outcomes = new ArrayList&lt;&gt;();</span>
+        // Track this-cycle releases so downstream foundations bump
+        // their &lt;X.version&gt; properties to the just-shipped version
+        // before they release. Mirrors ws:release-publish's catch-up
+        // alignment for workspace subprojects (#375 followup).
+<span class="nc" id="L309">        Map&lt;String, String&gt; releasedVersions = new LinkedHashMap&lt;&gt;();</span>
+<span class="nc bnc" id="L310" title="All 2 branches missed.">        for (String name : names) {</span>
+<span class="nc" id="L311">            File dir = resolveRepoDir(baseDir, name);</span>
+<span class="nc" id="L312">            Outcome outcome = walkOne(dir, name, baseDir, names,</span>
+                    releasedVersions);
+<span class="nc" id="L314">            outcomes.add(outcome);</span>
+<span class="nc bnc" id="L315" title="All 4 branches missed.">            if (outcome.kind == OutcomeKind.RELEASED &amp;&amp; outcome.releasedAs != null) {</span>
+<span class="nc" id="L316">                releasedVersions.put(name, outcome.releasedAs);</span>
+            }
+<span class="nc bnc" id="L318" title="All 2 branches missed.">            if (outcome.kind == OutcomeKind.FAILED) {</span>
+<span class="nc" id="L319">                reportAndMaybeFail(outcomes, name, baseDir);</span>
+            }
+<span class="nc" id="L321">        }</span>
+
+        // Workspace cascade — default-on, opt out via -DskipWorkspace=true.
+        // Only runs if all foundations cleared (any failure aborts above).
+<span class="nc" id="L325">        Outcome wsOutcome = null;</span>
+<span class="nc bnc" id="L326" title="All 2 branches missed.">        if (!skipWorkspace) {</span>
+<span class="nc" id="L327">            getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L328">            getLog().info(&quot;─── Workspace cascade ────────────────────────────&quot;);</span>
+<span class="nc" id="L329">            wsOutcome = invokeWorkspaceRelease(wsRoot);</span>
+<span class="nc" id="L330">            outcomes.add(wsOutcome);</span>
+        }
+
+<span class="nc" id="L333">        reportFinal(outcomes);</span>
+<span class="nc bnc" id="L334" title="All 4 branches missed.">        if (wsOutcome != null &amp;&amp; wsOutcome.kind == OutcomeKind.FAILED) {</span>
+<span class="nc" id="L335">            throw new MojoException(</span>
+                    &quot;Foundation cascade succeeded but workspace release &quot;
+                            + &quot;failed. &quot; + wsOutcome.detail
+                            + &quot;. ike-issues#375.&quot;);
+        }
+<span class="nc" id="L340">    }</span>
+
+    /**
+     * Process one foundation: detect git state, align upstream-version
+     * properties, optionally release.
+     *
+     * @param dir              foundation repo directory (may not exist)
+     * @param name             foundation repo name (used in messages)
+     * @param baseDir          directory containing all foundations
+     * @param cascade          full cascade order — upstream candidates
+     *                         are the entries before {@code name}
+     * @param releasedVersions versions released earlier in this cycle,
+     *                         indexed by foundation name
+     * @return outcome capturing what happened
+     */
+    Outcome walkOne(File dir, String name, File baseDir,
+                     List&lt;String&gt; cascade,
+                     Map&lt;String, String&gt; releasedVersions) {
+<span class="fc" id="L358">        getLog().info(&quot;─── &quot; + name + &quot; ─────────────────────────────────────&quot;);</span>
+<span class="fc bfc" id="L359" title="All 2 branches covered.">        if (!dir.isDirectory()) {</span>
+<span class="fc" id="L360">            getLog().info(&quot;  Not checked out at &quot; + dir);</span>
+<span class="fc" id="L361">            getLog().info(&quot;  Skipping (downstream still picks up its &quot;</span>
+                    + &quot;released versions from Nexus).&quot;);
+<span class="fc" id="L363">            getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L364">            return Outcome.skipped(name, &quot;not checked out at &quot; + dir);</span>
+        }
+<span class="fc bfc" id="L366" title="All 2 branches covered.">        if (!new File(dir, &quot;.git&quot;).exists()) {</span>
+<span class="fc" id="L367">            getLog().info(&quot;  No .git at &quot; + dir);</span>
+<span class="fc" id="L368">            getLog().info(&quot;  Skipping.&quot;);</span>
+<span class="fc" id="L369">            getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L370">            return Outcome.skipped(name, &quot;no .git at &quot; + dir);</span>
+        }
+<span class="pc bpc" id="L372" title="1 of 2 branches missed.">        if (!new File(dir, &quot;pom.xml&quot;).exists()) {</span>
+<span class="fc" id="L373">            getLog().info(&quot;  No pom.xml at &quot; + dir);</span>
+<span class="fc" id="L374">            getLog().info(&quot;  Skipping.&quot;);</span>
+<span class="fc" id="L375">            getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L376">            return Outcome.skipped(name, &quot;no pom.xml at &quot; + dir);</span>
+        }
+
+        // Catch-up alignment: bump every upstream &lt;X.version&gt; in this
+        // foundation's pom to whatever X has shipped — either earlier
+        // in this cycle (via releasedVersions) or in a prior cycle
+        // (via X's latest release tag on disk). The alignment commits
+        // by itself BECOME meaningful commits, so a foundation that
+        // had no other source changes still releases once a property
+        // needs catching up.
+<span class="nc" id="L386">        alignUpstreamProperties(dir, name, baseDir, cascade,</span>
+                releasedVersions);
+
+        // Detect unreleased changes the same way ws:release-publish does:
+        // latest release tag + commits since that aren't release-cadence.
+<span class="nc" id="L391">        String tag = latestReleaseTag(dir);</span>
+<span class="nc bnc" id="L392" title="All 2 branches missed.">        if (tag == null) {</span>
+<span class="nc" id="L393">            getLog().info(&quot;  Never released — releasing for the first time.&quot;);</span>
+        } else {
+<span class="nc" id="L395">            int meaningful = meaningfulCommitsSinceTag(dir, tag);</span>
+<span class="nc bnc" id="L396" title="All 2 branches missed.">            if (meaningful &lt;= 0) {</span>
+<span class="nc" id="L397">                getLog().info(&quot;  At &quot; + tag</span>
+                        + &quot;; no meaningful commits since.&quot;);
+<span class="nc" id="L399">                getLog().info(&quot;  Skipping (already released).&quot;);</span>
+<span class="nc" id="L400">                getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L401">                return Outcome.upToDate(name, tag);</span>
+            }
+<span class="nc" id="L403">            getLog().info(&quot;  At &quot; + tag + &quot;; &quot; + meaningful</span>
+                    + &quot; meaningful commit(s) since.&quot;);
+        }
+
+        // Read the about-to-release version so the cascade can record
+        // it for downstream alignment. ike:release-publish strips
+        // -SNAPSHOT from the current pom version to produce the
+        // release version.
+<span class="nc" id="L411">        String releaseVersion = currentReleaseVersion(dir);</span>
+
+<span class="nc" id="L413">        String mvn = ReleaseSupport.resolveMavenWrapper(dir, getLog())</span>
+<span class="nc" id="L414">                .getAbsolutePath();</span>
+
+        // SNAPSHOT bootstrap (ike-issues#379). Between cycles, no
+        // process installs the freshly-bumped SNAPSHOT to ~/.m2 —
+        // the previous cycle's post-release-bump only edits the
+        // pom; nothing rebuilds. For reactors with the X-SNAPSHOT
+        // self-host pattern (ike-tooling per #370), Maven can't
+        // resolve the reactor's own plugin reference at the current
+        // SNAPSHOT, so `ike:release-publish` fails before its
+        // own `mvn clean install` can fix the gap.
+        //
+        // Seed ~/.m2 with a fast install. Tests skipped (the release
+        // flow's own pre-release verify runs them). Best-effort: a
+        // failure here usually points at a real build problem the
+        // operator should see, but we let the release flow run
+        // anyway so the operator gets the clearer error from there.
+<span class="nc bnc" id="L430" title="All 2 branches missed.">        if (!skipPreInstall) {</span>
+<span class="nc" id="L431">            getLog().info(&quot;  Seeding ~/.m2 with current SNAPSHOT...&quot;);</span>
+            try {
+<span class="nc" id="L433">                ReleaseSupport.exec(dir, getLog(),</span>
+                        mvn, &quot;install&quot;, &quot;-DskipTests&quot;, &quot;-T&quot;, &quot;4&quot;, &quot;-B&quot;);
+<span class="nc" id="L435">            } catch (Exception e) {</span>
+<span class="nc" id="L436">                getLog().warn(&quot;  Pre-install for &quot; + name</span>
+                        + &quot; failed (continuing — release-publish will &quot;
+                        + &quot;surface the underlying error if it's real): &quot;
+<span class="nc" id="L439">                        + e.getMessage());</span>
+<span class="nc" id="L440">            }</span>
+        }
+
+        // Run ike:release-publish.
+<span class="nc" id="L444">        getLog().info(&quot;  Running mvn ike:release-publish...&quot;);</span>
+        try {
+<span class="nc" id="L446">            ReleaseSupport.exec(dir, getLog(),</span>
+                    mvn, &quot;ike:release-publish&quot;,
+                    &quot;-DpushRelease=&quot; + pushRelease,
+                    &quot;-B&quot;);
+<span class="nc" id="L450">            getLog().info(&quot;  ✓ Released &quot; + name</span>
+<span class="nc bnc" id="L451" title="All 2 branches missed.">                    + (releaseVersion != null ? &quot; &quot; + releaseVersion : &quot;&quot;));</span>
+<span class="nc" id="L452">            getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L453">            return Outcome.released(name, releaseVersion);</span>
+<span class="nc" id="L454">        } catch (Exception e) {</span>
+<span class="nc" id="L455">            getLog().error(&quot;  ✗ Failed to release &quot; + name + &quot;: &quot;</span>
+<span class="nc" id="L456">                    + e.getMessage());</span>
+<span class="nc" id="L457">            getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L458">            return Outcome.failed(name, e.getMessage());</span>
+        }
+    }
+
+    /**
+     * Update upstream-foundation {@code &lt;X.version&gt;} properties in
+     * {@code dir}/pom.xml to the latest released version of each X.
+     * Each property bump that lands a real change is committed
+     * individually so the per-bump intent is visible in the git log.
+     *
+     * &lt;p&gt;Upstream candidates are the foundations earlier in the
+     * cascade order. &quot;Latest released version&quot; is the cycle-released
+     * version when available (from {@code releasedVersions}), else the
+     * tip of {@code v*} tags on the upstream repo, else nothing.
+     *
+     * &lt;p&gt;Mirrors {@code WsReleaseDraftMojo}'s {@code updateParentVersions}
+     * approach: read once, apply all updates, write once, commit once.
+     * Uses {@link PomRewriter#updateProperty} so the rewrite goes
+     * through OpenRewrite's LST instead of regex.
+     *
+     * @param dir              foundation repo dir
+     * @param name             foundation name
+     * @param baseDir          directory containing all foundations
+     * @param cascade          full cascade order
+     * @param releasedVersions versions released earlier this cycle
+     */
+    void alignUpstreamProperties(File dir, String name, File baseDir,
+                                  List&lt;String&gt; cascade,
+                                  Map&lt;String, String&gt; releasedVersions) {
+<span class="nc" id="L487">        File pomFile = new File(dir, &quot;pom.xml&quot;);</span>
+<span class="nc bnc" id="L488" title="All 2 branches missed.">        if (!pomFile.isFile()) return;</span>
+
+        String content;
+        try {
+<span class="nc" id="L492">            content = Files.readString(pomFile.toPath(),</span>
+                    StandardCharsets.UTF_8);
+<span class="nc" id="L494">        } catch (IOException e) {</span>
+<span class="nc" id="L495">            getLog().warn(&quot;  Could not read pom.xml for alignment: &quot;</span>
+<span class="nc" id="L496">                    + e.getMessage());</span>
+<span class="nc" id="L497">            return;</span>
+<span class="nc" id="L498">        }</span>
+
+<span class="nc" id="L500">        String original = content;</span>
+<span class="nc" id="L501">        List&lt;String&gt; bumps = new ArrayList&lt;&gt;();</span>
+
+<span class="nc bnc" id="L503" title="All 2 branches missed.">        for (String upstream : cascade) {</span>
+<span class="nc bnc" id="L504" title="All 2 branches missed.">            if (upstream.equals(name)) break; // stop at self</span>
+<span class="nc" id="L505">            String target = resolveTargetVersion(upstream, baseDir,</span>
+                    releasedVersions);
+<span class="nc bnc" id="L507" title="All 2 branches missed.">            if (target == null) continue;</span>
+<span class="nc" id="L508">            String propertyName = upstream + &quot;.version&quot;;</span>
+<span class="nc" id="L509">            String currentValue = extractPropertyValue(content,</span>
+                    propertyName);
+<span class="nc bnc" id="L511" title="All 4 branches missed.">            if (currentValue == null || target.equals(currentValue)) {</span>
+<span class="nc" id="L512">                continue;</span>
+            }
+<span class="nc" id="L514">            String after = PomRewriter.updateProperty(content,</span>
+                    propertyName, target);
+<span class="nc bnc" id="L516" title="All 2 branches missed.">            if (!after.equals(content)) {</span>
+<span class="nc" id="L517">                content = after;</span>
+<span class="nc" id="L518">                bumps.add(&quot;&lt;&quot; + propertyName + &quot;&gt;: &quot;</span>
+                        + currentValue + &quot; -&gt; &quot; + target);
+            }
+<span class="nc" id="L521">        }</span>
+
+<span class="nc bnc" id="L523" title="All 2 branches missed.">        if (content.equals(original)) {</span>
+<span class="nc" id="L524">            getLog().debug(&quot;  Upstream alignment: no bumps needed.&quot;);</span>
+<span class="nc" id="L525">            return;</span>
+        }
+
+        try {
+<span class="nc" id="L529">            Files.writeString(pomFile.toPath(), content,</span>
+                    StandardCharsets.UTF_8);
+<span class="nc" id="L531">        } catch (IOException e) {</span>
+<span class="nc" id="L532">            getLog().warn(&quot;  Could not write aligned pom.xml: &quot;</span>
+<span class="nc" id="L533">                    + e.getMessage());</span>
+<span class="nc" id="L534">            return;</span>
+<span class="nc" id="L535">        }</span>
+
+<span class="nc" id="L537">        getLog().info(&quot;  Catch-up alignment:&quot;);</span>
+<span class="nc bnc" id="L538" title="All 2 branches missed.">        for (String b : bumps) {</span>
+<span class="nc" id="L539">            getLog().info(&quot;    &quot; + b);</span>
+<span class="nc" id="L540">        }</span>
+
+        try {
+<span class="nc" id="L543">            ReleaseSupport.exec(dir, getLog(),</span>
+                    &quot;git&quot;, &quot;add&quot;, &quot;pom.xml&quot;);
+<span class="nc" id="L545">            ReleaseSupport.exec(dir, getLog(),</span>
+                    &quot;git&quot;, &quot;commit&quot;, &quot;-m&quot;,
+                    &quot;chore: align upstream versions before release&quot;);
+<span class="nc" id="L548">        } catch (Exception e) {</span>
+<span class="nc" id="L549">            getLog().warn(&quot;  Alignment commit failed: &quot;</span>
+<span class="nc" id="L550">                    + e.getMessage());</span>
+<span class="nc" id="L551">        }</span>
+<span class="nc" id="L552">    }</span>
+
+    /**
+     * Resolve the target version for {@code upstream}: prefer this-
+     * cycle release, else the foundation's tip {@code v*} tag.
+     */
+    static String resolveTargetVersion(String upstream, File baseDir,
+                                        Map&lt;String, String&gt; releasedVersions) {
+<span class="fc" id="L560">        String fromCycle = releasedVersions.get(upstream);</span>
+<span class="fc bfc" id="L561" title="All 2 branches covered.">        if (fromCycle != null) return fromCycle;</span>
+<span class="fc" id="L562">        File upstreamDir = new File(baseDir, upstream);</span>
+<span class="pc bpc" id="L563" title="1 of 2 branches missed.">        if (!upstreamDir.isDirectory()) return null;</span>
+<span class="nc" id="L564">        String tag = latestReleaseTag(upstreamDir);</span>
+<span class="nc bnc" id="L565" title="All 2 branches missed.">        if (tag == null) return null;</span>
+<span class="nc bnc" id="L566" title="All 2 branches missed.">        return tag.startsWith(&quot;v&quot;) ? tag.substring(1) : tag;</span>
+    }
+
+    /**
+     * Pure-string extract of a {@code &lt;properties&gt;}-block value by
+     * name. Returns {@code null} when the property is absent. Used
+     * for the &quot;is this property already at the target version?&quot;
+     * pre-check so we don't rewrite-and-commit a no-op.
+     */
+    static String extractPropertyValue(String pomContent, String propertyName) {
+<span class="fc bfc" id="L576" title="All 2 branches covered.">        if (pomContent == null) return null;</span>
+<span class="fc" id="L577">        String openTag = &quot;&lt;&quot; + propertyName + &quot;&gt;&quot;;</span>
+<span class="fc" id="L578">        int open = pomContent.indexOf(openTag);</span>
+<span class="fc bfc" id="L579" title="All 2 branches covered.">        if (open &lt; 0) return null;</span>
+<span class="fc" id="L580">        int valueStart = open + openTag.length();</span>
+<span class="fc" id="L581">        int close = pomContent.indexOf(&quot;&lt;/&quot; + propertyName + &quot;&gt;&quot;,</span>
+                valueStart);
+<span class="pc bpc" id="L583" title="1 of 2 branches missed.">        if (close &lt; 0) return null;</span>
+<span class="fc" id="L584">        return pomContent.substring(valueStart, close).trim();</span>
+    }
+
+    /**
+     * Read the current pom version and strip {@code -SNAPSHOT} so the
+     * cascade can record what the next release will be tagged as.
+     * Returns {@code null} when the pom can't be read.
+     */
+    static String currentReleaseVersion(File dir) {
+<span class="fc" id="L593">        File pomFile = new File(dir, &quot;pom.xml&quot;);</span>
+<span class="fc bfc" id="L594" title="All 2 branches covered.">        if (!pomFile.isFile()) return null;</span>
+        try {
+<span class="fc" id="L596">            String content = Files.readString(pomFile.toPath(),</span>
+                    StandardCharsets.UTF_8);
+            // Skip &lt;parent&gt;...&lt;/parent&gt; so the project's own version wins.
+<span class="fc" id="L599">            int searchFrom = 0;</span>
+<span class="fc" id="L600">            int parentOpen = content.indexOf(&quot;&lt;parent&gt;&quot;);</span>
+<span class="fc bfc" id="L601" title="All 2 branches covered.">            if (parentOpen &gt;= 0) {</span>
+<span class="fc" id="L602">                int parentClose = content.indexOf(&quot;&lt;/parent&gt;&quot;, parentOpen);</span>
+<span class="pc bpc" id="L603" title="1 of 2 branches missed.">                if (parentClose &gt; parentOpen) {</span>
+<span class="fc" id="L604">                    searchFrom = parentClose + &quot;&lt;/parent&gt;&quot;.length();</span>
+                }
+            }
+<span class="fc" id="L607">            int open = content.indexOf(&quot;&lt;version&gt;&quot;, searchFrom);</span>
+<span class="pc bpc" id="L608" title="1 of 2 branches missed.">            if (open &lt; 0) return null;</span>
+<span class="fc" id="L609">            int valueStart = open + &quot;&lt;version&gt;&quot;.length();</span>
+<span class="fc" id="L610">            int close = content.indexOf(&quot;&lt;/version&gt;&quot;, valueStart);</span>
+<span class="pc bpc" id="L611" title="1 of 2 branches missed.">            if (close &lt; 0) return null;</span>
+<span class="fc" id="L612">            String v = content.substring(valueStart, close).trim();</span>
+<span class="fc" id="L613">            return v.replaceFirst(&quot;-SNAPSHOT$&quot;, &quot;&quot;);</span>
+<span class="nc" id="L614">        } catch (IOException e) {</span>
+<span class="nc" id="L615">            return null;</span>
+        }
+    }
+
+    /**
+     * Chain {@code ws:release-publish} on the workspace.
+     *
+     * &lt;p&gt;Uses explicit self-version coordinates rather than the short
+     * {@code ws:release-publish} prefix (ike-issues#378). The short
+     * prefix resolves through the workspace's {@code pluginManagement}
+     * → {@code ike-parent} → ws-plugin pin; for a workspace still on
+     * an older {@code ike-parent}, this would load the OLDER ws-plugin
+     * even when the running cascade is a newer version. The classic
+     * chicken-and-egg: the cascade's fixes that ALIGN the workspace's
+     * parent to the current version can't take effect because they're
+     * gated on the workspace having already aligned. Pinning to
+     * {@link #pluginVersion} (the running plugin's own version)
+     * makes the cascade self-consistent: a v47 cascade always calls
+     * v47 ws:release-publish, regardless of what the workspace
+     * inherits.
+     */
+    Outcome invokeWorkspaceRelease(File wsRoot) {
+<span class="nc" id="L637">        String mvn = ReleaseSupport.resolveMavenWrapper(wsRoot, getLog())</span>
+<span class="nc" id="L638">                .getAbsolutePath();</span>
+<span class="nc bnc" id="L639" title="All 2 branches missed.">        if (pluginVersion == null) {</span>
+<span class="nc" id="L640">            pluginVersion = resolvePluginVersion();</span>
+        }
+<span class="nc" id="L642">        String selfCoords = &quot;network.ike.platform&quot;</span>
+                + &quot;:ike-workspace-maven-plugin:&quot;
+                + pluginVersion
+                + &quot;:release-publish&quot;;
+        try {
+<span class="nc" id="L647">            ReleaseSupport.exec(wsRoot, getLog(),</span>
+                    mvn, selfCoords,
+                    &quot;-Dpush=&quot; + pushRelease,
+                    &quot;-B&quot;);
+<span class="nc" id="L651">            getLog().info(&quot;  ✓ Workspace release complete&quot;);</span>
+<span class="nc" id="L652">            return Outcome.released(&quot;(workspace)&quot;, null);</span>
+<span class="nc" id="L653">        } catch (Exception e) {</span>
+<span class="nc" id="L654">            getLog().error(&quot;  ✗ Workspace release failed: &quot;</span>
+<span class="nc" id="L655">                    + e.getMessage());</span>
+<span class="nc" id="L656">            return Outcome.failed(&quot;(workspace)&quot;, e.getMessage());</span>
+        }
+    }
+
+    /**
+     * Print the summary table and exit with a clear &quot;resume from N&quot;
+     * instruction if any foundation failed.
+     *
+     * @param outcomes outcomes recorded so far
+     * @param failedAt the name of the failed foundation
+     * @param baseDir  the resolved foundations base dir (NOT the
+     *                 {@link #foundationsDir} field, which may be
+     *                 null when the default of &quot;parent of workspace&quot;
+     *                 is in effect)
+     * @throws MojoException always — release fails fast on first
+     *                       foundation failure
+     */
+    void reportAndMaybeFail(List&lt;Outcome&gt; outcomes, String failedAt,
+                              File baseDir) throws MojoException {
+<span class="nc" id="L675">        reportFinal(outcomes);</span>
+<span class="nc" id="L676">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L677">        getLog().info(&quot;Resume after fixing &quot; + failedAt + &quot;:&quot;);</span>
+<span class="nc" id="L678">        getLog().info(&quot;  cd &quot; + new File(baseDir, failedAt).getAbsolutePath()</span>
+                + &quot; &amp;&amp; mvn ike:release-publish&quot;);
+<span class="nc" id="L680">        getLog().info(&quot;Then re-run this cascade to continue with the &quot;</span>
+                + &quot;remaining foundations.&quot;);
+<span class="nc" id="L682">        throw new MojoException(</span>
+                &quot;Foundation cascade failed at &quot; + failedAt
+                        + &quot;. See output above for details. &quot;
+                        + &quot;ike-issues#375.&quot;);
+    }
+
+    /** Print the per-foundation summary table. */
+    void reportFinal(List&lt;Outcome&gt; outcomes) {
+<span class="nc" id="L690">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L691">        getLog().info(&quot;Cascade summary:&quot;);</span>
+<span class="nc bnc" id="L692" title="All 2 branches missed.">        for (Outcome o : outcomes) {</span>
+<span class="nc bnc" id="L693" title="All 4 branches missed.">            String marker = switch (o.kind) {</span>
+<span class="nc" id="L694">                case RELEASED -&gt; &quot;✓ released&quot;;</span>
+<span class="nc" id="L695">                case UP_TO_DATE -&gt; &quot;— up to date&quot;;</span>
+<span class="nc" id="L696">                case SKIPPED -&gt; &quot;— skipped&quot;;</span>
+<span class="nc" id="L697">                case FAILED -&gt; &quot;✗ FAILED&quot;;</span>
+            };
+<span class="nc bnc" id="L699" title="All 2 branches missed.">            String detail = o.detail == null ? &quot;&quot; : &quot;  (&quot; + o.detail + &quot;)&quot;;</span>
+<span class="nc" id="L700">            getLog().info(&quot;  &quot; + padRight(o.name, 24)</span>
+<span class="nc" id="L701">                    + padRight(marker, 16) + detail);</span>
+<span class="nc" id="L702">        }</span>
+<span class="nc" id="L703">    }</span>
+
+    // ── git state helpers (mirror WsReleaseDraftMojo) ──────────────────
+
+    static String latestReleaseTag(File dir) {
+        try {
+<span class="nc" id="L709">            String tags = ReleaseSupport.execCapture(dir,</span>
+                    &quot;git&quot;, &quot;tag&quot;, &quot;-l&quot;, &quot;v*&quot;, &quot;--sort=-version:refname&quot;);
+<span class="nc bnc" id="L711" title="All 4 branches missed.">            if (tags == null || tags.isBlank()) return null;</span>
+<span class="nc" id="L712">            return tags.lines().findFirst().orElse(null);</span>
+<span class="nc" id="L713">        } catch (Exception e) {</span>
+<span class="nc" id="L714">            return null;</span>
+        }
+    }
+
+    /**
+     * Match the same release-cadence patterns WsReleaseDraftMojo uses
+     * (#347) so a partial-cascade retry doesn't re-release a foundation
+     * whose only post-tag commits are bookkeeping from a prior
+     * successful attempt.
+     */
+<span class="fc" id="L724">    static final Pattern RELEASE_CADENCE_PATTERN = Pattern.compile(</span>
+            &quot;^(release: set version to .+&quot;
+                    + &quot;|release: restore .+&quot;
+                    + &quot;|merge: release .+&quot;
+                    + &quot;|post-release: bump to .+&quot;
+                    + &quot;|site: publish .+&quot;
+                    + &quot;|post-release: sync workspace\\.yaml .+)$&quot;);
+
+    static int meaningfulCommitsSinceTag(File dir, String tag) {
+        try {
+<span class="nc" id="L734">            String log = ReleaseSupport.execCapture(dir,</span>
+                    &quot;git&quot;, &quot;log&quot;, tag + &quot;..HEAD&quot;,
+                    &quot;--pretty=format:%s&quot;, &quot;--no-merges&quot;);
+<span class="nc bnc" id="L737" title="All 2 branches missed.">            if (log == null) return 0;</span>
+<span class="nc" id="L738">            String trimmed = log.strip();</span>
+<span class="nc bnc" id="L739" title="All 2 branches missed.">            if (trimmed.isEmpty()) return 0;</span>
+<span class="nc" id="L740">            int count = 0;</span>
+<span class="nc bnc" id="L741" title="All 2 branches missed.">            for (String line : trimmed.split(&quot;\n&quot;)) {</span>
+<span class="nc bnc" id="L742" title="All 2 branches missed.">                if (!RELEASE_CADENCE_PATTERN.matcher(line.strip()).matches()) {</span>
+<span class="nc" id="L743">                    count++;</span>
+                }
+            }
+<span class="nc" id="L746">            return count;</span>
+<span class="nc" id="L747">        } catch (Exception e) {</span>
+<span class="nc" id="L748">            return -1;</span>
+        }
+    }
+
+    static String padRight(String s, int width) {
+<span class="fc bfc" id="L753" title="All 2 branches covered.">        if (s.length() &gt;= width) return s;</span>
+<span class="fc" id="L754">        return s + &quot; &quot;.repeat(width - s.length());</span>
+    }
+
+    /**
+     * Resolve this plugin's own version by reading
+     * {@code META-INF/maven/network.ike.platform/
+     * ike-workspace-maven-plugin/pom.properties} from the classpath.
+     * Maven generates this file at build time for every artifact, so
+     * it's a reliable self-version source independent of the Maven
+     * DI container's plugin-descriptor bindings (which Maven 4.0.0-rc-5
+     * doesn't reliably populate).
+     *
+     * @return this plugin's version, or {@code &quot;UNKNOWN&quot;} if the
+     *         pom.properties resource can't be read (a build error
+     *         that would prevent invocation entirely, so should
+     *         never happen at runtime).
+     */
+    static String resolvePluginVersion() {
+<span class="nc" id="L772">        String resource = &quot;/META-INF/maven/network.ike.platform&quot;</span>
+                + &quot;/ike-workspace-maven-plugin/pom.properties&quot;;
+<span class="nc" id="L774">        try (java.io.InputStream is =</span>
+                     WsCascadeFoundationPublishMojo.class
+<span class="nc" id="L776">                             .getResourceAsStream(resource)) {</span>
+<span class="nc bnc" id="L777" title="All 2 branches missed.">            if (is == null) return &quot;UNKNOWN&quot;;</span>
+<span class="nc" id="L778">            java.util.Properties p = new java.util.Properties();</span>
+<span class="nc" id="L779">            p.load(is);</span>
+<span class="nc" id="L780">            String v = p.getProperty(&quot;version&quot;);</span>
+<span class="nc bnc" id="L781" title="All 2 branches missed.">            return v != null ? v : &quot;UNKNOWN&quot;;</span>
+<span class="nc bnc" id="L782" title="All 2 branches missed.">        } catch (java.io.IOException e) {</span>
+<span class="nc" id="L783">            return &quot;UNKNOWN&quot;;</span>
+        }
+    }
+
+    /** One foundation's outcome in the cascade summary. */
+<span class="fc" id="L788">    enum OutcomeKind { RELEASED, UP_TO_DATE, SKIPPED, FAILED }</span>
+
+    /**
+     * Outcome record for one foundation step.
+     *
+     * @param name        foundation repo name
+     * @param kind        what happened
+     * @param detail      human-readable explanation; {@code null} when
+     *                    RELEASED with no extra context
+     * @param releasedAs  the released version, populated only for
+     *                    {@link OutcomeKind#RELEASED}; used by the
+     *                    cascade to drive downstream property alignment
+     */
+<span class="fc" id="L801">    record Outcome(String name, OutcomeKind kind, String detail,</span>
+                    String releasedAs) {
+        static Outcome released(String name, String version) {
+<span class="fc" id="L804">            return new Outcome(name, OutcomeKind.RELEASED,</span>
+<span class="pc bpc" id="L805" title="1 of 2 branches missed.">                    version != null ? &quot;v&quot; + version : null, version);</span>
+        }
+        static Outcome upToDate(String name, String tag) {
+<span class="fc" id="L808">            return new Outcome(name, OutcomeKind.UP_TO_DATE,</span>
+                    &quot;at &quot; + tag, null);
+        }
+        static Outcome skipped(String name, String reason) {
+<span class="fc" id="L812">            return new Outcome(name, OutcomeKind.SKIPPED, reason, null);</span>
+        }
+        static Outcome failed(String name, String reason) {
+<span class="fc" id="L815">            return new Outcome(name, OutcomeKind.FAILED, reason, null);</span>
+        }
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

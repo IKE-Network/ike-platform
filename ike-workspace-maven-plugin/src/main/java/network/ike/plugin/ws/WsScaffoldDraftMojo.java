@@ -10,11 +10,17 @@ import network.ike.plugin.ws.reconcile.WorkspaceContext;
 import network.ike.plugin.ws.verify.WorkspaceVerifier;
 import network.ike.workspace.Subproject;
 import network.ike.workspace.WorkspaceGraph;
+import org.apache.maven.api.ArtifactCoordinates;
+import org.apache.maven.api.Session;
+import org.apache.maven.api.Version;
 import org.apache.maven.api.plugin.MojoException;
 import org.apache.maven.api.plugin.annotations.Mojo;
 import org.apache.maven.api.plugin.annotations.Parameter;
+import org.apache.maven.api.services.VersionRangeResolver;
+import org.apache.maven.api.services.VersionRangeResolverResult;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -117,6 +123,13 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
                 ? "Workspace reconcilers applied"
                 : "Workspace reconciler drift");
         runWorkspaceReconcilers(graph, root, report);
+
+        // #417: foundation currency — discover whether a newer parent
+        // has been released and offer a deterministic upgrade command.
+        // Draft only; publish is already applying.
+        if (!publish) {
+            reportLatestParent(root, report);
+        }
 
         // Walk each subproject in topological order, then the
         // workspace root. Topological order isn't strictly needed
@@ -253,6 +266,93 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
             flags.put(name, System.getProperty(name));
         }
         return new ReconcilerOptions(flags);
+    }
+
+    /**
+     * Discover whether a newer parent than the workspace root POM's
+     * {@code <parent>} version has been released, and — when one has —
+     * print and report a deterministic copy-paste upgrade command
+     * (IKE-Network/ike-issues#417).
+     *
+     * <p>The command pins {@code -DparentVersion=X}, the existing pin
+     * flag of {@link network.ike.plugin.ws.reconcile.ParentVersionReconciler}:
+     * the next {@code ws:scaffold-publish} updates the workspace root
+     * POM to {@code X} and cascades it to every subproject. Discovery
+     * is best-effort — an unreachable remote is logged at debug and
+     * the draft proceeds.
+     *
+     * @param root   the workspace root directory
+     * @param report the goal report being accumulated
+     */
+    private void reportLatestParent(File root, GoalReportBuilder report) {
+        PomParentSupport.ParentInfo rootParent;
+        try {
+            rootParent = PomParentSupport.readParent(
+                    root.toPath().resolve("pom.xml"));
+        } catch (IOException e) {
+            getLog().debug("Foundation currency: could not read the "
+                    + "workspace root POM parent: " + e.getMessage());
+            return;
+        }
+        if (rootParent == null) {
+            return;
+        }
+        String latest = latestReleasedVersion(rootParent.groupId(),
+                rootParent.artifactId(), rootParent.version());
+        if (latest == null) {
+            return;
+        }
+        String command = "mvn ws:scaffold-publish -DparentVersion=" + latest;
+        getLog().info("");
+        getLog().info("Foundation currency:");
+        getLog().info("  Latest released " + rootParent.artifactId()
+                + ": " + latest + " (workspace root pins "
+                + rootParent.version() + ").");
+        getLog().info("  To upgrade the whole workspace, run:");
+        getLog().info("    " + command);
+        report.section("Foundation upgrade available")
+                .paragraph("A newer `" + rootParent.artifactId() + "` (`"
+                        + latest + "`) is released; the workspace root "
+                        + "pins `" + rootParent.version() + "`. To "
+                        + "upgrade the whole workspace, run:")
+                .codeBlock("", command);
+    }
+
+    /**
+     * Resolve the highest released (non-SNAPSHOT) version of a Maven
+     * coordinate strictly newer than {@code current}, via the Maven 4
+     * {@link VersionRangeResolver}.
+     *
+     * @param groupId    the coordinate groupId
+     * @param artifactId the coordinate artifactId
+     * @param current    the currently-pinned version (exclusive lower
+     *                    bound of the range)
+     * @return the highest released version newer than {@code current},
+     *         or {@code null} when none exists or resolution fails
+     */
+    private String latestReleasedVersion(String groupId, String artifactId,
+                                         String current) {
+        try {
+            Session s = getSession();
+            VersionRangeResolver resolver =
+                    s.getService(VersionRangeResolver.class);
+            ArtifactCoordinates coords = s.createArtifactCoordinates(
+                    groupId + ":" + artifactId + ":(" + current + ",)");
+            VersionRangeResolverResult result = resolver.resolve(s, coords);
+            String best = null;
+            for (Version v : result.getVersions()) {
+                String str = v.toString();
+                if (!str.endsWith("-SNAPSHOT")) {
+                    best = str;  // resolver returns ascending — last wins
+                }
+            }
+            return best;
+        } catch (Exception e) {
+            getLog().debug("Foundation currency: could not resolve the "
+                    + "latest " + groupId + ":" + artifactId + " — "
+                    + e.getMessage());
+            return null;
+        }
     }
 
     /**

@@ -69,6 +69,15 @@ abstract class AbstractWorkspaceMojo implements Mojo {
     }
 
     /**
+     * Access the Maven session injected by Maven 4's plugin DI.
+     *
+     * @return the injected session (may be {@code null} in unit tests)
+     */
+    protected Session getSession() {
+        return session;
+    }
+
+    /**
      * Replace the logger. Used when a mojo is constructed directly
      * (not via Maven's DI container) and so never had a logger
      * injected — {@link WsSyncMojo} drives {@link PullWorkspaceMojo}

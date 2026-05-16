@@ -1,7 +1,11 @@
 package network.ike.plugin.ws;
 
+import network.ike.workspace.Manifest;
+import network.ike.workspace.ManifestReader;
+import network.ike.workspace.WorkspaceGraph;
 import org.junit.jupiter.api.Test;
 
+import java.io.StringReader;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -97,5 +101,37 @@ class GraphSupportTest {
         assertThat(dot)
                 .contains("\"app\" -> \"lib1\"")
                 .contains("\"app\" -> \"lib2\"");
+    }
+
+    // ── buildDotReportBlock (IKE-Network/ike-issues#406) ─────────────
+
+    @Test
+    void buildDotReportBlock_emitsGraphvizFence_notMermaid() {
+        Manifest manifest = ManifestReader.read(new StringReader("""
+                schema-version: "1.0"
+                defaults:
+                  branch: main
+                subprojects:
+                  alpha:
+                    repo: https://example.com/alpha.git
+                    version: "1.0.0"
+                  beta:
+                    repo: https://example.com/beta.git
+                    version: "1.0.0"
+                    depends-on:
+                      - subproject: alpha
+                        relationship: build
+                """));
+
+        String block = GraphWorkspaceMojo.buildDotReportBlock(
+                new WorkspaceGraph(manifest));
+
+        // GraphViz, per IKE-DIAGRAMS.md — not Mermaid.
+        assertThat(block).startsWith("```dot\n");
+        assertThat(block).contains("digraph workspace {");
+        assertThat(block).contains("\"beta\" -> \"alpha\"");
+        assertThat(block.stripTrailing()).endsWith("```");
+        assertThat(block).doesNotContain("mermaid");
+        assertThat(block).doesNotContain("graph TD");
     }
 }

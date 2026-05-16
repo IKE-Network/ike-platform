@@ -307,9 +307,10 @@ public class OverviewWorkspaceMojo extends AbstractWorkspaceMojo {
               .append(" |\n");
         }
 
-        // Mermaid graph
+        // GraphViz dependency graph — IKE-DIAGRAMS.md mandates
+        // GraphViz for dependency graphs (IKE-Network/ike-issues#406).
         sb.append('\n');
-        sb.append(buildMermaidGraph(graph));
+        sb.append(GraphWorkspaceMojo.buildDotReportBlock(graph));
 
         // Status table
         sb.append("\n### Status\n\n");
@@ -355,53 +356,11 @@ public class OverviewWorkspaceMojo extends AbstractWorkspaceMojo {
         return sb.toString();
     }
 
-    // ── Mermaid graph ───────────────────────────────────────────────
-
-    private String buildMermaidGraph(WorkspaceGraph graph) {
-        List<String> sorted = graph.topologicalSort();
-        var sb = new StringBuilder();
-        sb.append("```mermaid\ngraph TD\n");
-
-        for (String name : sorted) {
-            String id = name.replace("-", "_");
-            sb.append("    ").append(id)
-              .append("[\"").append(name).append("\"]\n");
-        }
-        sb.append('\n');
-
-        for (String name : sorted) {
-            Subproject sub = graph.manifest().subprojects().get(name);
-            String sourceId = name.replace("-", "_");
-            for (Dependency dep : sub.dependsOn()) {
-                String targetId = dep.subproject().replace("-", "_");
-                if ("content".equals(dep.relationship())) {
-                    sb.append("    ").append(sourceId)
-                      .append(" -.-> ").append(targetId).append('\n');
-                } else {
-                    sb.append("    ").append(sourceId)
-                      .append(" --> ").append(targetId).append('\n');
-                }
-            }
-        }
-
-        sb.append("```\n");
-        return sb.toString();
-    }
-
     // ── DOT output ──────────────────────────────────────────────────
 
     private void printDot(WorkspaceGraph graph) {
-        String dot = GraphWorkspaceMojo.buildDotGraph("workspace",
-                graph.manifest().subprojects().values().stream()
-                        .map(Subproject::name)
-                        .toList(),
-                graph.manifest().subprojects().values().stream()
-                        .filter(c -> !c.dependsOn().isEmpty())
-                        .collect(Collectors.toMap(Subproject::name,
-                                c -> c.dependsOn().stream()
-                                        .map(d -> new String[]{d.subproject(), d.relationship()})
-                                        .toList())));
-        for (String line : dot.split("\n")) {
+        for (String line
+                : GraphWorkspaceMojo.dotFromGraph(graph).split("\n")) {
             getLog().info(line);
         }
     }

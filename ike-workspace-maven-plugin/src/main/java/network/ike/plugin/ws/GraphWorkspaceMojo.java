@@ -44,8 +44,10 @@ public class GraphWorkspaceMojo extends AbstractWorkspaceMojo {
             printText(graph);
         }
 
-        // Append Mermaid graph to ws-report.md
-        writeReport(WsGoal.GRAPH, buildMermaidGraph(graph));
+        // Append the GraphViz dependency graph to the report.
+        // IKE-DIAGRAMS.md mandates GraphViz for dependency graphs;
+        // Mermaid is discouraged (IKE-Network/ike-issues#406).
+        writeReport(WsGoal.GRAPH, buildDotReportBlock(graph));
     }
 
     private void printText(WorkspaceGraph graph) {
@@ -115,7 +117,23 @@ public class GraphWorkspaceMojo extends AbstractWorkspaceMojo {
     }
 
     private void printDot(WorkspaceGraph graph) {
-        // Build data structures for the pure function
+        for (String line : dotFromGraph(graph).split("\n")) {
+            getLog().info(line);
+        }
+    }
+
+    /**
+     * Build Graphviz DOT source for a whole workspace graph.
+     *
+     * <p>Extracts the subproject names and dependency edges from the
+     * {@link WorkspaceGraph} and delegates to {@link #buildDotGraph}.
+     * Shared by the {@code -Dformat=dot} console output (here and in
+     * {@code ws:overview}) and by {@link #buildDotReportBlock}.
+     *
+     * @param graph the workspace graph
+     * @return complete DOT source (a {@code digraph} block)
+     */
+    static String dotFromGraph(WorkspaceGraph graph) {
         List<String> subprojectNames = graph.manifest().subprojects()
                 .values().stream()
                 .map(Subproject::name)
@@ -130,50 +148,22 @@ public class GraphWorkspaceMojo extends AbstractWorkspaceMojo {
                 edges.put(sub.name(), compEdges);
             }
         }
-
-        String dot = buildDotGraph("workspace", subprojectNames, edges);
-        for (String line : dot.split("\n")) {
-            getLog().info(line);
-        }
+        return buildDotGraph("workspace", subprojectNames, edges);
     }
 
     /**
-     * Build a Mermaid graph block for the markdown report.
+     * Build a fenced Graphviz DOT block for a markdown report.
+     *
+     * <p>IKE-DIAGRAMS.md mandates GraphViz for dependency graphs and
+     * IKE-DOC.md discourages Mermaid; the workspace reports embed the
+     * graph as a {@code ```dot} block accordingly
+     * (IKE-Network/ike-issues#406).
+     *
+     * @param graph the workspace graph
+     * @return a fenced {@code ```dot} block, newline-terminated
      */
-    private String buildMermaidGraph(WorkspaceGraph graph) {
-        List<String> sorted = graph.topologicalSort();
-        var sb = new StringBuilder();
-        sb.append("```mermaid\ngraph TD\n");
-
-        for (String name : sorted) {
-            String id = mermaidId(name);
-            sb.append("    ").append(id)
-              .append("[\"").append(name).append("\"]\n");
-        }
-
-        sb.append('\n');
-
-        for (String name : sorted) {
-            Subproject sub = graph.manifest().subprojects().get(name);
-            String sourceId = mermaidId(name);
-            for (Dependency dep : sub.dependsOn()) {
-                String targetId = mermaidId(dep.subproject());
-                if ("content".equals(dep.relationship())) {
-                    sb.append("    ").append(sourceId)
-                      .append(" -.-> ").append(targetId).append('\n');
-                } else {
-                    sb.append("    ").append(sourceId)
-                      .append(" --> ").append(targetId).append('\n');
-                }
-            }
-        }
-
-        sb.append("```\n");
-        return sb.toString();
-    }
-
-    private static String mermaidId(String name) {
-        return name.replace("-", "_");
+    static String buildDotReportBlock(WorkspaceGraph graph) {
+        return "```dot\n" + dotFromGraph(graph) + "```\n";
     }
 
     // ── DOT generation (pure, static, testable) ─────────────────────

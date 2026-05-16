@@ -113,13 +113,7 @@ public enum WsGoal {
     UPDATE_FEATURE_PUBLISH("update-feature-publish", UpdateFeaturePublishMojo.class,
             "Rebase a feature branch onto main."),
     VERIFY_CONVERGENCE("verify-convergence", VerifyConvergenceMojo.class,
-            "Verify transitive dependency convergence across subprojects."),
-    VERSIONS_UPGRADE_DRAFT("versions-upgrade-draft",
-            WsVersionsUpgradeDraftMojo.class,
-            "Preview version upgrades across the workspace against the configured ruleset."),
-    VERSIONS_UPGRADE_PUBLISH("versions-upgrade-publish",
-            WsVersionsUpgradePublishMojo.class,
-            "Apply the workspace version-upgrade plan across all subprojects.");
+            "Verify transitive dependency convergence across subprojects.");
 
     /** Shared {@code ws:} prefix for all goals in this plugin. */
     public static final String PLUGIN_PREFIX = "ws";

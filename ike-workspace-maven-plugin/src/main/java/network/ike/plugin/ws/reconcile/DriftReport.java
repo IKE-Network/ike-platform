@@ -34,4 +34,37 @@ public record DriftReport(
     public static DriftReport noDrift(String dimension) {
         return new DriftReport(dimension, false, "", List.of(), "", "");
     }
+
+    /**
+     * Render this report as a Markdown fragment for a goal report
+     * file (IKE-Network/ike-issues#407).
+     *
+     * <p>Shared renderer so reconciler drift looks the same in every
+     * report that includes it: a checkmark line when there is no
+     * drift, otherwise the dimension, summary, detail lines, default
+     * action, and the copy-paste opt-out command.
+     *
+     * @return a Markdown fragment, newline-terminated
+     */
+    public String toMarkdown() {
+        if (!hasDrift) {
+            return "- ✓ **" + dimension + "** — no drift\n";
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("- ⚠ **").append(dimension).append("**");
+        if (!summary.isEmpty()) {
+            sb.append(" — ").append(summary);
+        }
+        sb.append("\n");
+        for (String line : detailLines) {
+            sb.append("  - ").append(line).append("\n");
+        }
+        if (!defaultAction.isEmpty()) {
+            sb.append("  - _Default:_ ").append(defaultAction).append("\n");
+        }
+        if (!optOutCommand.isEmpty()) {
+            sb.append("  - _Opt out:_ `").append(optOutCommand).append("`\n");
+        }
+        return sb.toString();
+    }
 }

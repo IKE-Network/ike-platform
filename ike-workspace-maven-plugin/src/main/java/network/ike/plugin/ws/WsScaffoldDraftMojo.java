@@ -70,10 +70,19 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
         WorkspaceGraph graph = loadGraph();
         File root = workspaceRoot();
         String goal = publish ? "ike:scaffold-publish" : "ike:scaffold-draft";
+        String goalLabel = publish ? "ws:scaffold-publish"
+                                   : "ws:scaffold-draft";
 
         getLog().info("");
-        getLog().info(publish ? "ws:scaffold-publish" : "ws:scaffold-draft");
+        getLog().info(goalLabel);
         getLog().info("══════════════════════════════════════════════════════════════");
+
+        // Accumulate the markdown report alongside the console output
+        // (IKE-Network/ike-issues#407) so the goal writes its
+        // ws꞉scaffold-{draft,publish}.md like every other goal.
+        StringBuilder report = new StringBuilder();
+        report.append("# ").append(goalLabel).append("\n\n");
+        report.append("**Workspace:** `").append(root).append("`\n\n");
 
         // Workspace-wide verification (formerly ws:verify, retired in
         // #393). Runs in both draft and publish modes — it's read-only,
@@ -84,13 +93,18 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
                 resolveManifest(), false /* checkConvergence */,
                 isWorkspaceMode());
         verifier.runAllChecks();
+        report.append("Workspace verification ran — see the console "
+                + "output for the full check list.\n\n");
 
         // Workspace-level reconcilers run next (#393). Each owns one
         // dimension of workspace state (denormalized YAML fields,
         // parent version, alignment, etc.) and is reported (draft) or
         // applied (publish) before the per-subproject ike:scaffold
         // delegation runs.
-        runWorkspaceReconcilers(graph, root);
+        report.append(publish
+                ? "## Workspace reconcilers applied\n\n"
+                : "## Workspace reconciler drift\n\n");
+        runWorkspaceReconcilers(graph, root, report);
 
         // Walk each subproject in topological order, then the
         // workspace root. Topological order isn't strictly needed
@@ -108,6 +122,7 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
         // Workspace root last (mirrors ws:release-publish ordering).
         boolean walkRoot = new File(root, "pom.xml").exists();
 
+        report.append("\n## Subprojects walked\n\n");
         int processed = 0;
         int failed = 0;
         for (String name : targets) {
@@ -116,9 +131,12 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
             getLog().info("── " + name + " ".repeat(Math.max(1, 60 - name.length())) + "──");
             try {
                 runScaffoldInSubproject(subDir, goal);
+                report.append("- ✓ ").append(name).append("\n");
                 processed++;
             } catch (MojoException e) {
                 getLog().error("  ✗ " + name + ": " + e.getMessage());
+                report.append("- ✗ ").append(name).append(" — ")
+                      .append(e.getMessage()).append("\n");
                 failed++;
             }
         }
@@ -127,9 +145,12 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
             getLog().info("── (workspace root)" + " ".repeat(43) + "──");
             try {
                 runScaffoldInSubproject(root, goal);
+                report.append("- ✓ (workspace root)\n");
                 processed++;
             } catch (MojoException e) {
                 getLog().error("  ✗ workspace root: " + e.getMessage());
+                report.append("- ✗ (workspace root) — ")
+                      .append(e.getMessage()).append("\n");
                 failed++;
             }
         }
@@ -138,6 +159,20 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
         getLog().info("══════════════════════════════════════════════════════════════");
         getLog().info("  Walked " + processed + " project(s)"
                 + (failed > 0 ? "; " + failed + " failed" : ""));
+
+        report.append("\n").append(processed).append(" project(s) walked")
+              .append(failed > 0 ? "; " + failed + " failed" : "")
+              .append(".\n\n");
+        report.append("Per-subproject scaffold detail is in each "
+                + "subproject's own `ike꞉scaffold-")
+              .append(publish ? "publish" : "draft")
+              .append(".md` report.\n");
+
+        // Write the report before any failure throw, so it documents
+        // the failures it is reporting.
+        writeReport(publish ? WsGoal.SCAFFOLD_PUBLISH : WsGoal.SCAFFOLD_DRAFT,
+                report.toString());
+
         if (failed > 0) {
             throw new MojoException(
                     "ws:" + (publish ? "scaffold-publish" : "scaffold-draft")
@@ -178,16 +213,20 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
      * and other cross-subproject state, complementing the
      * per-subproject {@code ike:scaffold-*} pass that follows.
      */
-    private void runWorkspaceReconcilers(WorkspaceGraph graph, File root)
-            throws MojoException {
+    private void runWorkspaceReconcilers(WorkspaceGraph graph, File root,
+            StringBuilder report) throws MojoException {
         WorkspaceContext ctx = new WorkspaceContext(
                 root, resolveManifest(), graph,
                 readReconcilerOptions(), getLog());
         for (Reconciler reconciler : ReconcilerRegistry.all()) {
             if (publish) {
                 reconciler.apply(ctx);
+                report.append("- ").append(reconciler.dimension())
+                      .append("\n");
             } else {
-                printDriftReport(reconciler.detect(ctx));
+                DriftReport drift = reconciler.detect(ctx);
+                printDriftReport(drift);
+                report.append(drift.toMarkdown());
             }
         }
     }

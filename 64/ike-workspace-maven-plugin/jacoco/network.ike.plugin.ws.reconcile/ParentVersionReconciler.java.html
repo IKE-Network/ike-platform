@@ -1,0 +1,228 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ParentVersionReconciler.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws.reconcile</a> &gt; <span class="el_source">ParentVersionReconciler.java</span></div><h1>ParentVersionReconciler.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws.reconcile;
+
+import network.ike.plugin.ReleaseSupport;
+import network.ike.plugin.ws.PomParentSupport;
+import network.ike.plugin.ws.PomParentSupport.ParentInfo;
+import network.ike.workspace.Subproject;
+import org.apache.maven.api.plugin.MojoException;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Reconciler that cascades the workspace root POM's
+ * {@code &lt;parent&gt;} version across every cloned subproject (and any
+ * nested submodule POMs whose parent block matches the same
+ * {@code groupId:artifactId}).
+ *
+ * &lt;p&gt;Subsumes the retired {@code ws:set-parent-{draft,publish}}
+ * goals (IKE-Network/ike-issues#393). The source of truth for the
+ * target parent version is the workspace root POM's
+ * {@code &lt;parent&gt;&lt;version&gt;}. To pin to a specific (non-root-declared)
+ * version, pass {@code -DparentVersion=&lt;v&gt;}; the reconciler then
+ * also updates the root POM before cascading.
+ *
+ * &lt;p&gt;External-trigger drift dimension: a new ike-parent release
+ * lands → the user updates the root POM (or passes
+ * {@code -DparentVersion=}) → next scaffold-publish cascades to
+ * every subproject.
+ */
+<span class="nc" id="L37">public class ParentVersionReconciler implements Reconciler {</span>
+
+    @Override
+    public String dimension() {
+<span class="nc" id="L41">        return &quot;Parent version cascade&quot;;</span>
+    }
+
+    @Override
+    public String optOutFlag() {
+<span class="nc" id="L46">        return &quot;updateParent&quot;;</span>
+    }
+
+    @Override
+    public String pinFlag() {
+<span class="nc" id="L51">        return &quot;parentVersion&quot;;</span>
+    }
+
+    @Override
+    public DriftReport detect(WorkspaceContext ctx) {
+<span class="nc" id="L56">        Plan plan = computePlan(ctx);</span>
+<span class="nc bnc" id="L57" title="All 4 branches missed.">        if (plan == null || plan.changes().isEmpty()) {</span>
+<span class="nc" id="L58">            return DriftReport.noDrift(dimension());</span>
+        }
+<span class="nc" id="L60">        List&lt;String&gt; detail = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L61" title="All 2 branches missed.">        for (Map.Entry&lt;String, FieldChange&gt; e : plan.changes().entrySet()) {</span>
+<span class="nc" id="L62">            detail.add(e.getKey() + &quot;: &quot;</span>
+<span class="nc" id="L63">                    + plan.parentArtifactId() + &quot;:&quot; + e.getValue().before()</span>
+<span class="nc" id="L64">                    + &quot; → &quot; + e.getValue().after());</span>
+<span class="nc" id="L65">        }</span>
+<span class="nc" id="L66">        String summary = plan.changes().size()</span>
+<span class="nc" id="L67">                + &quot; POM(s) need parent &quot; + plan.parentArtifactId()</span>
+<span class="nc" id="L68">                + &quot; cascaded to &quot; + plan.targetVersion();</span>
+<span class="nc" id="L69">        String action = &quot;cascade to &quot; + plan.targetVersion()</span>
+                + &quot; on scaffold-publish&quot;;
+<span class="nc" id="L71">        String optOut = &quot;mvn ws:scaffold-publish -D&quot; + optOutFlag() + &quot;=false&quot;;</span>
+<span class="nc" id="L72">        return new DriftReport(dimension(), true, summary, detail,</span>
+                action, optOut);
+    }
+
+    @Override
+    public void apply(WorkspaceContext ctx) {
+<span class="nc bnc" id="L78" title="All 2 branches missed.">        if (ctx.options().isOptedOut(optOutFlag())) {</span>
+<span class="nc" id="L79">            ctx.log().info(&quot;  &quot; + dimension() + &quot;: skipped (opted out via -D&quot;</span>
+<span class="nc" id="L80">                    + optOutFlag() + &quot;=false)&quot;);</span>
+<span class="nc" id="L81">            return;</span>
+        }
+<span class="nc" id="L83">        Plan plan = computePlan(ctx);</span>
+<span class="nc bnc" id="L84" title="All 4 branches missed.">        if (plan == null || plan.changes().isEmpty()) {</span>
+<span class="nc" id="L85">            return;</span>
+        }
+        try {
+            // Update root POM first if its current parent version doesn't
+            // already match the target — covers the pin (-DparentVersion=)
+            // case where root POM also needs to be updated.
+<span class="nc" id="L91">            Path rootPomPath = ctx.workspaceRoot().toPath().resolve(&quot;pom.xml&quot;);</span>
+<span class="nc" id="L92">            ParentInfo rootParent = PomParentSupport.readParent(rootPomPath);</span>
+<span class="nc bnc" id="L93" title="All 2 branches missed.">            if (rootParent != null</span>
+<span class="nc bnc" id="L94" title="All 2 branches missed.">                    &amp;&amp; !plan.targetVersion().equals(rootParent.version())) {</span>
+<span class="nc" id="L95">                updateOnePom(rootPomPath, plan.parentGroupId(),</span>
+<span class="nc" id="L96">                        plan.parentArtifactId(), plan.targetVersion());</span>
+            }
+            // Then cascade to each subproject (and its submodules).
+<span class="nc bnc" id="L99" title="All 2 branches missed.">            for (String name : plan.changes().keySet()) {</span>
+<span class="nc" id="L100">                File subDir = new File(ctx.workspaceRoot(), name);</span>
+<span class="nc" id="L101">                cascadeIntoSubproject(subDir, plan);</span>
+<span class="nc" id="L102">            }</span>
+<span class="nc" id="L103">            ctx.log().info(&quot;  &quot; + dimension() + &quot;: cascaded to &quot;</span>
+<span class="nc" id="L104">                    + plan.changes().size() + &quot; subproject(s)&quot;);</span>
+<span class="nc" id="L105">        } catch (IOException e) {</span>
+<span class="nc" id="L106">            throw new MojoException(</span>
+<span class="nc" id="L107">                    &quot;Parent cascade failed: &quot; + e.getMessage(), e);</span>
+<span class="nc" id="L108">        }</span>
+<span class="nc" id="L109">    }</span>
+
+    // ── Plan computation (shared by detect and apply) ───────────────
+
+    /**
+     * &quot;Before → after&quot; pair for one subproject's parent version.
+     * Compiler-visible alternative to a positional {@code String[]}.
+     */
+<span class="nc" id="L117">    private record FieldChange(String before, String after) {}</span>
+
+    /**
+     * The full cascade plan for one reconciliation pass.
+     *
+     * @param parentGroupId    workspace root's parent groupId
+     * @param parentArtifactId workspace root's parent artifactId
+     * @param targetVersion    target parent version to cascade
+     * @param changes          subproject name → before/after for those
+     *                         whose parent version doesn't match target
+     */
+<span class="nc" id="L128">    private record Plan(</span>
+            String parentGroupId,
+            String parentArtifactId,
+            String targetVersion,
+            Map&lt;String, FieldChange&gt; changes) {}
+
+    private Plan computePlan(WorkspaceContext ctx) {
+<span class="nc" id="L135">        Path rootPomPath = ctx.workspaceRoot().toPath().resolve(&quot;pom.xml&quot;);</span>
+<span class="nc bnc" id="L136" title="All 2 branches missed.">        if (!Files.exists(rootPomPath)) {</span>
+<span class="nc" id="L137">            return null;</span>
+        }
+        ParentInfo rootParent;
+        try {
+<span class="nc" id="L141">            rootParent = PomParentSupport.readParent(rootPomPath);</span>
+<span class="nc" id="L142">        } catch (IOException e) {</span>
+<span class="nc" id="L143">            ctx.log().warn(&quot;  Cannot read root POM parent: &quot; + e.getMessage());</span>
+<span class="nc" id="L144">            return null;</span>
+<span class="nc" id="L145">        }</span>
+<span class="nc bnc" id="L146" title="All 2 branches missed.">        if (rootParent == null) {</span>
+<span class="nc" id="L147">            return null;</span>
+        }
+
+        // Target version: -DparentVersion=&lt;v&gt; pin overrides root POM.
+<span class="nc" id="L151">        String targetVersion = ctx.options().pin(pinFlag())</span>
+<span class="nc" id="L152">                .orElse(rootParent.version());</span>
+
+<span class="nc" id="L154">        Map&lt;String, FieldChange&gt; changes = new LinkedHashMap&lt;&gt;();</span>
+        for (Map.Entry&lt;String, Subproject&gt; entry
+<span class="nc bnc" id="L156" title="All 2 branches missed.">                : ctx.graph().manifest().subprojects().entrySet()) {</span>
+<span class="nc" id="L157">            String name = entry.getKey();</span>
+<span class="nc" id="L158">            Path subprojectPom = new File(ctx.workspaceRoot(), name)</span>
+<span class="nc" id="L159">                    .toPath().resolve(&quot;pom.xml&quot;);</span>
+<span class="nc bnc" id="L160" title="All 2 branches missed.">            if (!Files.exists(subprojectPom)) continue;</span>
+            ParentInfo subParent;
+            try {
+<span class="nc" id="L163">                subParent = PomParentSupport.readParent(subprojectPom);</span>
+<span class="nc" id="L164">            } catch (IOException e) {</span>
+<span class="nc" id="L165">                ctx.log().warn(&quot;  &quot; + name + &quot;: cannot read parent — &quot;</span>
+<span class="nc" id="L166">                        + e.getMessage());</span>
+<span class="nc" id="L167">                continue;</span>
+<span class="nc" id="L168">            }</span>
+<span class="nc bnc" id="L169" title="All 2 branches missed.">            if (subParent == null) continue;</span>
+            // Skip subprojects with an unrelated parent GAV (see #241).
+<span class="nc bnc" id="L171" title="All 2 branches missed.">            if (!rootParent.groupId().equals(subParent.groupId())</span>
+<span class="nc bnc" id="L172" title="All 2 branches missed.">                    || !rootParent.artifactId().equals(subParent.artifactId())) {</span>
+<span class="nc" id="L173">                continue;</span>
+            }
+<span class="nc bnc" id="L175" title="All 2 branches missed.">            if (!targetVersion.equals(subParent.version())) {</span>
+<span class="nc" id="L176">                changes.put(name, new FieldChange(</span>
+<span class="nc" id="L177">                        subParent.version(), targetVersion));</span>
+            }
+<span class="nc" id="L179">        }</span>
+<span class="nc" id="L180">        return new Plan(rootParent.groupId(), rootParent.artifactId(),</span>
+                targetVersion, changes);
+    }
+
+    private static void cascadeIntoSubproject(File subDir, Plan plan)
+            throws IOException {
+<span class="nc" id="L186">        Path subprojectPom = subDir.toPath().resolve(&quot;pom.xml&quot;);</span>
+<span class="nc bnc" id="L187" title="All 2 branches missed.">        if (!Files.exists(subprojectPom)) return;</span>
+
+        // Update the subproject's root POM.
+<span class="nc" id="L190">        updateOnePom(subprojectPom, plan.parentGroupId(),</span>
+<span class="nc" id="L191">                plan.parentArtifactId(), plan.targetVersion());</span>
+
+        // Then update any submodule POMs that reference the same parent
+        // GAV (matches WsSetParentDraftMojo's submodule cascade).
+        List&lt;File&gt; subPoms;
+        try {
+<span class="nc" id="L197">            subPoms = ReleaseSupport.findPomFiles(subDir);</span>
+<span class="nc" id="L198">        } catch (MojoException e) {</span>
+            // Non-fatal — submodule scan failures don't roll back the
+            // root POM update.
+<span class="nc" id="L201">            return;</span>
+<span class="nc" id="L202">        }</span>
+<span class="nc bnc" id="L203" title="All 2 branches missed.">        for (File subPom : subPoms) {</span>
+<span class="nc bnc" id="L204" title="All 2 branches missed.">            if (subPom.toPath().equals(subprojectPom)) continue;</span>
+<span class="nc" id="L205">            String content = Files.readString(subPom.toPath(),</span>
+                    StandardCharsets.UTF_8);
+<span class="nc" id="L207">            String updated = PomParentSupport.updateParentVersion(</span>
+<span class="nc" id="L208">                    content, plan.parentGroupId(),</span>
+<span class="nc" id="L209">                    plan.parentArtifactId(), plan.targetVersion());</span>
+<span class="nc bnc" id="L210" title="All 2 branches missed.">            if (!updated.equals(content)) {</span>
+<span class="nc" id="L211">                Files.writeString(subPom.toPath(), updated,</span>
+                        StandardCharsets.UTF_8);
+            }
+<span class="nc" id="L214">        }</span>
+<span class="nc" id="L215">    }</span>
+
+    private static void updateOnePom(Path pomPath, String parentGroupId,
+                                      String parentArtifactId,
+                                      String newVersion) throws IOException {
+<span class="nc" id="L220">        String content = Files.readString(pomPath, StandardCharsets.UTF_8);</span>
+<span class="nc" id="L221">        String updated = PomParentSupport.updateParentVersion(</span>
+                content, parentGroupId, parentArtifactId, newVersion);
+<span class="nc bnc" id="L223" title="All 2 branches missed.">        if (!updated.equals(content)) {</span>
+<span class="nc" id="L224">            Files.writeString(pomPath, updated, StandardCharsets.UTF_8);</span>
+        }
+<span class="nc" id="L226">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

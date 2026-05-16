@@ -61,8 +61,6 @@ Draft / publish split Most state-mutating goals come in two forms — `**-draft*
 | [update-feature](#update-feature-draft) | feature | Preview merging main into the current feature |
 | [ws:update-feature — incorporate main into feature](#update-feature-publish) | feature | Execute the main-into-feature merge |
 | [ws:verify-convergence — transitive dependency convergence](#verify-convergence) | inspection | Check transitive dependency convergence across subprojects |
-| [versions-upgrade](#versions-upgrade-draft) | upgrades | Preview parent/property/plugin version upgrades |
-| [ws:versions-upgrade-publish — apply the version upgrades](#versions-upgrade-publish) | upgrades | Apply the version upgrades |
 
 ## [#setup-goals](#setup-goals)Setup Goals
 
@@ -427,30 +425,6 @@ The publish variant runs `ws:align-publish` first so the checkpoint captures a c
 ```
 mvn ws:checkpoint-draft -Dlabel=before-major-refactor
 mvn ws:checkpoint-publish -Dlabel=before-major-refactor
-```
-
-## [#upgrade-goals](#upgrade-goals)Upgrade Goals
-
-Goals that pull a workspace forward to a **non-current** set of build-tooling versions, when the scaffold-pinned versions aren’t what you want. For the routine "bump to the latest tested-together foundation" case, prefer the convergence pattern: `ws:scaffold-draft` followed by `ws:scaffold-publish` (the ScaffoldConventionReconciler handles scaffold files; the ParentCascadeReconciler handles the parent version). The `versions-upgrade-*` goals stay standalone for plan-driven upgrades that the scaffold manifest doesn’t cover.
-
-### [#ws-versions-upgrade-draft--preview-version-upgrade](#ws-versions-upgrade-draft--preview-version-upgrade)ws:versions-upgrade-draft — preview version upgrades
-
-Preview the version upgrades that `ws:versions-upgrade-publish` would apply across every subproject in the workspace. Walks `workspace.yaml` in topological order, scans each cloned subproject’s root `pom.xml` for `<parent>`, version properties, and literal plugin/dependency versions, and consults the workspace-level `versions-upgrade-rules.yaml` to compute the target version for each.
-
-Writes a `versions-upgrade-plan.yaml` that the publish variant consumes — separating the plan from execution lets you eyeball the plan before applying.
-
-```
-mvn ws:versions-upgrade-draft
-```
-
-### [#ws-versions-upgrade-publish--apply-the-version-upg](#ws-versions-upgrade-publish--apply-the-version-upg)ws:versions-upgrade-publish — apply the version upgrades
-
-Apply a previously drafted workspace `versions-upgrade-plan.yaml` across every subproject in the workspace. Walks `workspace.yaml` in topological order. For each node named in the plan, locates the matching subproject directory, confirms the on-disk POM exists, and rewrites `<parent><version>`, `<properties>` entries, and literal plugin/dependency versions per the plan.
-
-Uses OpenRewrite (PomRewriter) for POM edits, never sed/regex.
-
-```
-mvn ws:versions-upgrade-publish
 ```
 
 ## [#convergence-goals](#convergence-goals)Convergence Goals

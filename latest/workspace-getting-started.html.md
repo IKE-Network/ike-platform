@@ -225,7 +225,7 @@ mvn ws:scaffold-draft -DparentVersion=22    # preview cascade pinned to parent 2
 mvn ws:scaffold-publish -DparentVersion=22  # apply cascade pinned to parent 22
 ```
 
-`ws:scaffold-publish` reconciles the `<parent>` reference together with the standard properties in one converged cascade — no separate `ws:versions-upgrade-publish` step. Omit `-DparentVersion` to take the default cascade (the versions ike-tooling captured at its release moment).
+`ws:scaffold-publish` reconciles the `<parent>` reference together with the standard properties in one converged cascade. Omit `-DparentVersion` to take the default cascade (the versions ike-tooling captured at its release moment).
 
 ### [#build-warnings-about-bom-imports](#build-warnings-about-bom-imports)Build warnings about BOM imports
 

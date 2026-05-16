@@ -221,14 +221,7 @@ mvn ws:scaffold-publish               # apply
 
 The ScaffoldConventionReconciler handles the scaffold layer (gitignore, hooks, `.mvn/maven.config`, IDE settings) and the ParentCascadeReconciler handles the parent version — both in the same pass, both driven by the scaffold manifest pinned at ike-tooling release time.
 
-For plan-driven version upgrades that the scaffold manifest does not cover (e.g., walking literal plugin/dependency versions across a workspace per a custom rule file), the standalone upgrade goals stay available:
-
-```
-mvn ws:versions-upgrade-draft         # writes versions-upgrade-plan.yaml
-mvn ws:versions-upgrade-publish       # applies the plan
-```
-
-All three goals are idempotent and safe to re-run. POM edits go through OpenRewrite — never sed/regex.
+Both goals are idempotent and safe to re-run. POM edits go through OpenRewrite — never sed/regex.
 
 ## [#when-git-fights-back](#when-git-fights-back)When git fights back
 

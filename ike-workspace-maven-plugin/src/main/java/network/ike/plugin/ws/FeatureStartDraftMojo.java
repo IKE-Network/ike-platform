@@ -1,6 +1,7 @@
 package network.ike.plugin.ws;
 
 import network.ike.plugin.ReleaseSupport;
+import network.ike.plugin.support.GoalReportBuilder;
 
 import network.ike.workspace.BomAnalysis;
 import network.ike.workspace.Subproject;
@@ -288,32 +289,29 @@ public class FeatureStartDraftMojo extends AbstractWorkspaceMojo {
     private String buildMarkdownReport(String branchName,
                                         List<BranchRow> branchRows,
                                         List<CascadeGapRow> cascadeGaps) {
-        var sb = new StringBuilder();
-        sb.append("**Branch:** `").append(branchName).append("`\n\n");
+        GoalReportBuilder report = new GoalReportBuilder();
+        report.paragraph("**Branch:** `" + branchName + "`");
 
-        sb.append("| Subproject | Branch | Snapshot Version | Status |\n");
-        sb.append("|-----------|--------|-----------------|--------|\n");
+        List<String[]> rows = new ArrayList<>();
         for (BranchRow row : branchRows) {
-            sb.append("| ").append(row.subproject)
-              .append(" | ").append(row.branch)
-              .append(" | ").append(row.snapshotVersion)
-              .append(" | ").append(row.status)
-              .append(" |\n");
+            rows.add(new String[]{row.subproject(), row.branch(),
+                    row.snapshotVersion(), row.status()});
         }
+        report.table(
+                List.of("Subproject", "Branch", "Snapshot Version", "Status"),
+                rows);
 
         if (!cascadeGaps.isEmpty()) {
-            sb.append("\n**BOM cascade gaps:**\n\n");
-            sb.append("| Consumer | Dependency | Issue |\n");
-            sb.append("|----------|------------|-------|\n");
+            List<String[]> gapRows = new ArrayList<>();
             for (CascadeGapRow row : cascadeGaps) {
-                sb.append("| ").append(row.consumer)
-                  .append(" | ").append(row.dependency)
-                  .append(" | ").append(row.issue)
-                  .append(" |\n");
+                gapRows.add(new String[]{row.consumer(),
+                        row.dependency(), row.issue()});
             }
+            report.paragraph("**BOM cascade gaps:**")
+                    .table(List.of("Consumer", "Dependency", "Issue"), gapRows);
         }
 
-        return sb.toString();
+        return report.build();
     }
 
     /**

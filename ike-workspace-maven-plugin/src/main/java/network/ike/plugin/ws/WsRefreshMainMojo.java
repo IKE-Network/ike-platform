@@ -1,11 +1,13 @@
 package network.ike.plugin.ws;
 
+import network.ike.plugin.support.GoalReportBuilder;
 import network.ike.workspace.WorkspaceGraph;
 import org.apache.maven.api.plugin.MojoException;
 import org.apache.maven.api.plugin.annotations.Mojo;
 import org.apache.maven.api.plugin.annotations.Parameter;
 
 import java.io.File;
+import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -85,18 +87,17 @@ public class WsRefreshMainMojo extends AbstractWorkspaceMojo {
     }
 
     private String buildReport(List<RefreshMainSupport.Outcome> outcomes) {
-        var sb = new StringBuilder();
-        sb.append("**Branch:** `").append(mainBranch).append("` ← `")
-          .append(remote).append("/").append(mainBranch).append("`\n\n");
-        sb.append("| Subproject | Outcome |\n");
-        sb.append("|-----------|---------|\n");
+        List<String[]> rows = new ArrayList<>();
         for (RefreshMainSupport.Outcome o : outcomes) {
-            sb.append("| ").append(o.component()).append(" | ")
-              .append(outcomeLabel(o)).append(" |\n");
+            rows.add(new String[]{o.component(), outcomeLabel(o)});
         }
-        sb.append("\n**").append(outcomes.size())
-          .append("** subproject(s) refreshed.\n");
-        return sb.toString();
+        GoalReportBuilder report = new GoalReportBuilder();
+        report.paragraph("**Branch:** `" + mainBranch + "` ← `"
+                        + remote + "/" + mainBranch + "`")
+                .table(List.of("Subproject", "Outcome"), rows)
+                .paragraph("**" + outcomes.size()
+                        + "** subproject(s) refreshed.");
+        return report.build();
     }
 
     private static String outcomeLabel(RefreshMainSupport.Outcome o) {

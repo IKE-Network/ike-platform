@@ -1,6 +1,7 @@
 package network.ike.plugin.ws;
 
 import network.ike.plugin.ReleaseSupport;
+import network.ike.plugin.support.GoalReportBuilder;
 import network.ike.workspace.Subproject;
 import network.ike.workspace.WorkspaceGraph;
 import org.apache.maven.api.plugin.MojoException;
@@ -220,31 +221,29 @@ public class CheckBranchMojo extends AbstractWorkspaceMojo {
             getLog().warn("");
         }
 
-        StringBuilder md = new StringBuilder();
-        md.append("**Workspace HEAD:** `").append(wsBranch).append("`\n\n");
-        if (driftCount == 0) {
-            md.append("All subprojects agree with workspace HEAD.\n");
-        } else {
-            md.append(driftCount).append(" subproject(s) drift from workspace HEAD.\n\n");
-        }
-        md.append("| Subproject | YAML branch | Repo branch | Status |\n");
-        md.append("|-----------|-------------|-------------|--------|\n");
+        GoalReportBuilder report = new GoalReportBuilder();
+        report.paragraph("**Workspace HEAD:** `" + wsBranch + "`");
+        report.paragraph(driftCount == 0
+                ? "All subprojects agree with workspace HEAD."
+                : driftCount + " subproject(s) drift from workspace HEAD.");
+
+        List<String[]> driftTableRows = new ArrayList<>();
         for (DriftRow r : rows) {
             String status = (!r.yamlDrift && !r.repoDrift)
                     ? "✓ aligned"
                     : (r.yamlDrift && r.repoDrift
                             ? "✗ yaml + repo drift"
                             : (r.yamlDrift ? "✗ yaml drift" : "✗ repo drift"));
-            md.append("| ").append(r.name)
-              .append(" | `").append(r.declared).append('`')
-              .append(" | `").append(r.actual).append('`')
-              .append(" | ").append(status).append(" |\n");
+            driftTableRows.add(new String[]{r.name,
+                    "`" + r.declared + "`", "`" + r.actual + "`", status});
         }
+        report.table(List.of("Subproject", "YAML branch", "Repo branch", "Status"),
+                driftTableRows);
         if (driftCount > 0) {
-            md.append("\n_Repair: `mvn ws:reconcile-branches-publish "
-                    + "-Dfrom=workspace-head`_\n");
+            report.paragraph("_Repair: `mvn ws:reconcile-branches-publish "
+                    + "-Dfrom=workspace-head`_");
         }
-        return new WorkspaceReportSpec(WsGoal.CHECK_BRANCH, md.toString());
+        return new WorkspaceReportSpec(WsGoal.CHECK_BRANCH, report.build());
     }
 
     /** One row of the workspace-scope drift table. */

@@ -2,6 +2,7 @@ package network.ike.plugin.ws;
 
 import network.ike.workspace.Subproject;
 import network.ike.workspace.WorkspaceGraph;
+import network.ike.plugin.support.GoalReportBuilder;
 import network.ike.plugin.ws.vcs.VcsOperations;
 import network.ike.plugin.ws.vcs.VcsState;
 import org.apache.maven.api.plugin.MojoException;
@@ -284,22 +285,20 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
     private String buildSquashReport(List<String> components, String branch,
                                       String target, int merged,
                                       boolean isDraft, boolean kept) {
-        var sb = new StringBuilder();
-        sb.append("**Branch:** `").append(branch).append("` → `")
-          .append(target).append("`\n");
-        sb.append("**Strategy:** squash-merge\n\n");
+        GoalReportBuilder report = new GoalReportBuilder();
+        report.paragraph("**Branch:** `" + branch + "` → `" + target + "`  \n"
+                + "**Strategy:** squash-merge");
 
-        sb.append("| Subproject | Status |\n");
-        sb.append("|-----------|--------|\n");
+        List<String[]> rows = new ArrayList<>();
         for (String name : components) {
-            sb.append("| ").append(name).append(" | ")
-              .append(isDraft ? "would squash" : "squashed").append(" |\n");
+            rows.add(new String[]{name, isDraft ? "would squash" : "squashed"});
         }
+        report.table(List.of("Subproject", "Status"), rows);
 
-        sb.append("\n**").append(merged).append(" subproject(s)** ")
-          .append(isDraft ? "would be squash-merged" : "squash-merged")
-          .append(". Branch ").append(kept ? "kept" : "deleted").append(".\n");
-        return sb.toString();
+        report.paragraph("**" + merged + " subproject(s)** "
+                + (isDraft ? "would be squash-merged" : "squash-merged")
+                + ". Branch " + (kept ? "kept" : "deleted") + ".");
+        return report.build();
     }
 
     private WorkspaceReportSpec executeBareMode(String branchName) throws MojoException {

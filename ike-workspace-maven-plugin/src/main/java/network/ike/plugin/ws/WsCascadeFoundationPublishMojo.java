@@ -2,6 +2,7 @@ package network.ike.plugin.ws;
 
 import network.ike.plugin.PomRewriter;
 import network.ike.plugin.ReleaseSupport;
+import network.ike.plugin.support.GoalReportBuilder;
 import network.ike.workspace.cascade.CascadeRepo;
 import network.ike.workspace.cascade.ReleaseCascade;
 import network.ike.workspace.cascade.ReleaseCascadeIo;
@@ -349,9 +350,7 @@ public class WsCascadeFoundationPublishMojo extends AbstractWorkspaceMojo {
      * @return the Markdown report body
      */
     static String buildCascadeReport(List<Outcome> outcomes) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("| Repo | Outcome | Detail |\n");
-        sb.append("|------|---------|--------|\n");
+        List<String[]> rows = new ArrayList<>();
         for (Outcome o : outcomes) {
             String marker = switch (o.kind) {
                 case RELEASED -> "✓ released";
@@ -359,12 +358,12 @@ public class WsCascadeFoundationPublishMojo extends AbstractWorkspaceMojo {
                 case SKIPPED -> "— skipped";
                 case FAILED -> "✗ FAILED";
             };
-            sb.append("| ").append(o.name)
-              .append(" | ").append(marker)
-              .append(" | ").append(o.detail == null ? "" : o.detail)
-              .append(" |\n");
+            rows.add(new String[]{o.name, marker,
+                    o.detail == null ? "" : o.detail});
         }
-        return sb.toString();
+        GoalReportBuilder report = new GoalReportBuilder();
+        report.table(List.of("Repo", "Outcome", "Detail"), rows);
+        return report.build();
     }
 
     /**

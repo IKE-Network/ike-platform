@@ -1,6 +1,7 @@
 package network.ike.plugin.ws;
 
 import network.ike.plugin.ReleaseSupport;
+import network.ike.plugin.support.GoalReportBuilder;
 import network.ike.workspace.Subproject;
 import network.ike.workspace.DependencyConvergenceAnalysis;
 import network.ike.workspace.DependencyConvergenceAnalysis.Divergence;
@@ -201,34 +202,34 @@ public class VerifyConvergenceMojo extends AbstractWorkspaceMojo {
                                 boolean qualifierContamination,
                                 List<Divergence> divergences,
                                 boolean failed) {
-        var sb = new StringBuilder();
-        sb.append("# Dependency Convergence — ").append(wsName).append("\n\n");
-        sb.append("**Components resolved:** ").append(componentsResolved).append("\n\n");
-        sb.append("| Check | Result |\n|-------|--------|\n");
-        sb.append("| Parent version skew | ")
-                .append(parentSkew ? "❌ mismatches" : "✓ clean")
-                .append(" |\n");
-        sb.append("| Branch qualifier contamination | ")
-                .append(qualifierContamination ? "❌ found" : "✓ clean")
-                .append(" |\n");
-        sb.append("| Dependency convergence | ")
-                .append(divergences.isEmpty() ? "✓ clean"
-                        : "❌ " + divergences.size() + " divergence(s)")
-                .append(" |\n");
-        sb.append("\n**Overall:** ").append(failed ? "FAIL" : "PASS").append("\n");
+        GoalReportBuilder report = new GoalReportBuilder();
+        report.section("Dependency Convergence — " + wsName)
+                .paragraph("**Components resolved:** " + componentsResolved)
+                .table(List.of("Check", "Result"), List.of(
+                        new String[]{"Parent version skew",
+                                parentSkew ? "❌ mismatches" : "✓ clean"},
+                        new String[]{"Branch qualifier contamination",
+                                qualifierContamination ? "❌ found" : "✓ clean"},
+                        new String[]{"Dependency convergence",
+                                divergences.isEmpty() ? "✓ clean"
+                                        : "❌ " + divergences.size()
+                                                + " divergence(s)"}))
+                .paragraph("**Overall:** " + (failed ? "FAIL" : "PASS"));
 
         if (!divergences.isEmpty()) {
-            sb.append("\n## Divergences\n\n");
+            report.section("Divergences");
             for (Divergence d : divergences) {
-                sb.append("- `").append(d.coordinate()).append("`\n");
+                StringBuilder item = new StringBuilder();
+                item.append("`").append(d.coordinate()).append("`");
                 for (var vEntry : d.versionToSubprojects().entrySet()) {
-                    sb.append("  - `").append(vEntry.getKey()).append("` ← ")
-                      .append(String.join(", ", vEntry.getValue())).append("\n");
+                    item.append("\n  - `").append(vEntry.getKey()).append("` ← ")
+                        .append(String.join(", ", vEntry.getValue()));
                 }
+                report.bullet(item.toString());
             }
         }
 
-        return sb.toString();
+        return report.build();
     }
 
     // ── Parent version skew check ───────────────────────────────

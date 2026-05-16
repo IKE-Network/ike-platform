@@ -1,5 +1,6 @@
 package network.ike.plugin.ws;
 
+import network.ike.plugin.support.GoalReportBuilder;
 import network.ike.plugin.support.upgrade.SessionCandidateVersionResolver;
 import network.ike.plugin.support.upgrade.VersionUpgradePlanBuilder;
 import network.ike.workspace.LiteralVersionUpgrade;
@@ -350,43 +351,45 @@ public class WsVersionsUpgradeDraftMojo extends AbstractWorkspaceMojo {
         String rulesLink = reportDir == null ? rulesPath.toString()
                 : reportDir.relativize(rulesPath).toString();
 
-        StringBuilder sb = new StringBuilder();
-        sb.append("**Workspace:** ").append(workspaceName()).append("\n");
-        sb.append("**Scope:** workspace\n");
-        sb.append("**Files to edit:** [`")
+        StringBuilder header = new StringBuilder();
+        header.append("**Workspace:** ").append(workspaceName()).append("\n");
+        header.append("**Scope:** workspace\n");
+        header.append("**Files to edit:** [`")
                 .append(planLink).append("`](").append(planLink)
                 .append(") · [`")
                 .append(rulesLink).append("`](").append(rulesLink)
                 .append(")\n");
         if (plan.ikeToolingVersion() != null) {
-            sb.append("**ike-tooling.version:** `")
+            header.append("**ike-tooling.version:** `")
                     .append(plan.ikeToolingVersion()).append("`\n");
         }
-        sb.append("**Generated:** ").append(plan.generated()).append("\n");
-        sb.append("**Nodes:** ").append(plan.nodes().size())
+        header.append("**Generated:** ").append(plan.generated()).append("\n");
+        header.append("**Nodes:** ").append(plan.nodes().size())
                 .append("  ·  **Ready:** ").append(ready.size())
                 .append("  ·  **Blocked:** ").append(blocked.size())
                 .append("  ·  **Pending upstream:** ").append(pending.size())
-                .append("  ·  **Warnings:** ").append(warnings.size())
-                .append("\n\n");
+                .append("  ·  **Warnings:** ").append(warnings.size());
 
-        appendNextSteps(sb, planLink, rulesLink,
+        GoalReportBuilder report = new GoalReportBuilder();
+        report.paragraph(header.toString());
+        appendNextSteps(report, planLink, rulesLink,
                 ready.size(), blocked.size(), warnings.size());
-        appendActiveRules(sb, rules);
-        appendWarnings(sb, warnings);
-        appendReady(sb, ready);
-        appendBlockedGrouped(sb, blocked);
-        appendPending(sb, pending);
-        appendStandardsLink(sb);
-        return sb.toString();
+        appendActiveRules(report, rules);
+        appendWarnings(report, warnings);
+        appendReady(report, ready);
+        appendBlockedGrouped(report, blocked);
+        appendPending(report, pending);
+        appendStandardsLink(report);
+        return report.build();
     }
 
     /** ike-issues#384: top-of-report numbered next-steps section. */
-    private static void appendNextSteps(StringBuilder sb,
+    private static void appendNextSteps(GoalReportBuilder report,
                                          String planLink, String rulesLink,
                                          int readyCount, int blockedCount,
                                          int warningCount) {
-        sb.append("## Next steps\n\n");
+        report.section("Next steps");
+        StringBuilder sb = new StringBuilder();
         if (warningCount > 0) {
             sb.append("1. **Resolve the ").append(warningCount)
                     .append(" warning")
@@ -415,70 +418,70 @@ public class WsVersionsUpgradeDraftMojo extends AbstractWorkspaceMojo {
                 .append(" specific entries: [`").append(planLink)
                 .append("`](").append(planLink).append(").\n");
         sb.append(step + 1).append(". **Apply** with")
-                .append(" `mvn ws:versions-upgrade-publish`.\n\n");
+                .append(" `mvn ws:versions-upgrade-publish`.");
+        report.paragraph(sb.toString());
     }
 
     /** ike-issues#384: inline summary of the active rules. */
-    private static void appendActiveRules(StringBuilder sb,
+    private static void appendActiveRules(GoalReportBuilder report,
                                            VersionUpgradeRules rules) {
         if (rules == null) return;
-        sb.append("## Active rules\n\n");
-        sb.append("From the ruleset, in declaration order (first match wins):\n\n");
+        report.section("Active rules");
+        report.paragraph("From the ruleset, in declaration order "
+                + "(first match wins):");
         for (VersionUpgradeRule rule : rules.rules()) {
-            sb.append("- `").append(rule.groupIdPattern()).append(":")
+            StringBuilder b = new StringBuilder();
+            b.append("`").append(rule.groupIdPattern()).append(":")
                     .append(rule.artifactIdPattern()).append("`")
                     .append(" → **").append(rule.action().name()
                             .toLowerCase(Locale.ROOT))
                     .append("**");
             if (rule.pinnedVersion() != null
                     && !rule.pinnedVersion().isEmpty()) {
-                sb.append(" (pin to `").append(rule.pinnedVersion())
+                b.append(" (pin to `").append(rule.pinnedVersion())
                         .append("`)");
             }
             if (rule.reason() != null && !rule.reason().isEmpty()) {
-                sb.append(" — ").append(rule.reason());
+                b.append(" — ").append(rule.reason());
             }
-            sb.append("\n");
+            report.bullet(b.toString());
         }
-        sb.append("- _(default)_ → **")
-                .append(rules.defaultAction().name()
-                        .toLowerCase(Locale.ROOT))
-                .append("**\n\n");
+        report.bullet("_(default)_ → **"
+                + rules.defaultAction().name().toLowerCase(Locale.ROOT)
+                + "**");
     }
 
     /** ike-issues#384: from==to entries with a meaningful reason. */
-    private static void appendWarnings(StringBuilder sb,
+    private static void appendWarnings(GoalReportBuilder report,
                                         List<ActionableEntry> warnings) {
         if (warnings.isEmpty()) return;
-        sb.append("## Warnings (").append(warnings.size()).append(")\n\n");
-        sb.append("These coordinates did **not** get an upgrade proposal,")
-                .append(" but the resolver flagged a real problem worth")
-                .append(" investigating.\n\n");
+        report.section("Warnings (" + warnings.size() + ")");
+        report.paragraph("These coordinates did **not** get an upgrade"
+                + " proposal, but the resolver flagged a real problem"
+                + " worth investigating.");
         for (ActionableEntry w : warnings) {
-            sb.append("- **").append(w.node()).append("** · ")
-                    .append(w.coordLabel()).append(" stays at `")
-                    .append(w.fromVersion()).append("` — ")
-                    .append(w.reason()).append("\n");
+            report.bullet("**" + w.node() + "** · " + w.coordLabel()
+                    + " stays at `" + w.fromVersion() + "` — "
+                    + w.reason());
         }
-        sb.append("\n");
     }
 
     /** ike-issues#384: ready upgrades, one row per node. */
-    private static void appendReady(StringBuilder sb,
+    private static void appendReady(GoalReportBuilder report,
                                      List<ActionableEntry> ready) {
         if (ready.isEmpty()) return;
-        sb.append("## Ready (").append(ready.size()).append(")\n\n");
-        sb.append("These will be applied by `ws:versions-upgrade-publish`")
-                .append(". Edit the plan file to drop or re-pin any.\n\n");
-        sb.append("| Node | Coordinate | From → To |\n");
-        sb.append("|---|---|---|\n");
+        report.section("Ready (" + ready.size() + ")");
+        report.paragraph("These will be applied by"
+                + " `ws:versions-upgrade-publish`. Edit the plan file"
+                + " to drop or re-pin any.");
+        List<String[]> rows = new ArrayList<>();
         for (ActionableEntry r : ready) {
-            sb.append("| `").append(r.node()).append("` | ")
-                    .append(r.coordLabel()).append(" | `")
-                    .append(r.fromVersion()).append("` → `")
-                    .append(r.toVersion()).append("` |\n");
+            rows.add(new String[] {
+                    "`" + r.node() + "`",
+                    r.coordLabel(),
+                    "`" + r.fromVersion() + "` → `" + r.toVersion() + "`" });
         }
-        sb.append("\n");
+        report.table(List.of("Node", "Coordinate", "From → To"), rows);
     }
 
     /**
@@ -486,15 +489,14 @@ public class WsVersionsUpgradeDraftMojo extends AbstractWorkspaceMojo {
      * ruleset blocks). Grouped by groupId with a suggested allow-rule
      * snippet ready to paste into the ruleset.
      */
-    private static void appendBlockedGrouped(StringBuilder sb,
+    private static void appendBlockedGrouped(GoalReportBuilder report,
                                               List<ActionableEntry> blocked) {
         if (blocked.isEmpty()) return;
-        sb.append("## Blocked — newer available (")
-                .append(blocked.size()).append(")\n\n");
-        sb.append("Newer versions exist but the ruleset doesn't allow")
-                .append(" the groupId. To allow a group, paste its")
-                .append(" suggested rule into `versions-upgrade-rules.yaml`")
-                .append(" and re-draft.\n\n");
+        report.section("Blocked — newer available (" + blocked.size() + ")");
+        report.paragraph("Newer versions exist but the ruleset doesn't"
+                + " allow the groupId. To allow a group, paste its"
+                + " suggested rule into `versions-upgrade-rules.yaml`"
+                + " and re-draft.");
 
         // Group by groupId, preserving first-seen order.
         Map<String, List<ActionableEntry>> byGroup =
@@ -504,66 +506,70 @@ public class WsVersionsUpgradeDraftMojo extends AbstractWorkspaceMojo {
                     k -> new ArrayList<>()).add(b);
         }
 
-        sb.append("| GroupId | Coords in this workspace | Suggested rule |\n");
-        sb.append("|---|---|---|\n");
+        List<String[]> rows = new ArrayList<>();
         for (Map.Entry<String, List<ActionableEntry>> g
                 : byGroup.entrySet()) {
             String groupId = g.getKey();
             List<ActionableEntry> entries = g.getValue();
-            sb.append("| `").append(groupId).append("` | ")
-                    .append(coordSummary(entries)).append(" | ")
-                    .append("`- match: \"").append(groupId)
-                    .append(":*\"`<br>`  action: allow` |\n");
+            rows.add(new String[] {
+                    "`" + groupId + "`",
+                    coordSummary(entries),
+                    "`- match: \"" + groupId
+                            + ":*\"`<br>`  action: allow`" });
         }
-        sb.append("\n");
+        report.table(List.of("GroupId", "Coords in this workspace",
+                "Suggested rule"), rows);
 
-        // Collapsible detail per group for transparency.
-        sb.append("<details><summary>Detail — every blocked entry,")
+        // Collapsible detail per group for transparency. Rendered as a
+        // pre-built HTML+Markdown fragment via raw() — the <details>
+        // wrapper interleaves bold group headers and bullet lists.
+        StringBuilder detail = new StringBuilder();
+        detail.append("<details><summary>Detail — every blocked entry,")
                 .append(" grouped</summary>\n\n");
         for (Map.Entry<String, List<ActionableEntry>> g
                 : byGroup.entrySet()) {
-            sb.append("**`").append(g.getKey()).append("`**\n");
+            detail.append("**`").append(g.getKey()).append("`**\n");
             for (ActionableEntry b : g.getValue()) {
-                sb.append("- `").append(b.node()).append("` · ")
+                detail.append("- `").append(b.node()).append("` · ")
                         .append(b.coordLabel()).append(": `")
                         .append(b.fromVersion()).append("` → `")
                         .append(b.toVersion()).append("`");
                 if (b.reason() != null) {
-                    sb.append(" — ").append(b.reason());
+                    detail.append(" — ").append(b.reason());
                 }
-                sb.append("\n");
+                detail.append("\n");
             }
-            sb.append("\n");
+            detail.append("\n");
         }
-        sb.append("</details>\n\n");
+        detail.append("</details>\n\n");
+        report.raw(detail.toString());
     }
 
     /** ike-issues#384: pending-upstream entries (waiting on an upstream release). */
-    private static void appendPending(StringBuilder sb,
+    private static void appendPending(GoalReportBuilder report,
                                        List<ActionableEntry> pending) {
         if (pending.isEmpty()) return;
-        sb.append("## Pending upstream (").append(pending.size())
-                .append(")\n\n");
-        sb.append("Re-draft after the upstream releases — the resolver")
-                .append(" will pick up the new version.\n\n");
+        report.section("Pending upstream (" + pending.size() + ")");
+        report.paragraph("Re-draft after the upstream releases — the"
+                + " resolver will pick up the new version.");
         for (ActionableEntry p : pending) {
-            sb.append("- `").append(p.node()).append("` · ")
+            StringBuilder b = new StringBuilder();
+            b.append("`").append(p.node()).append("` · ")
                     .append(p.coordLabel()).append(": `")
                     .append(p.fromVersion()).append("` → `")
                     .append(p.toVersion()).append("`");
-            if (p.reason() != null) sb.append(" — ").append(p.reason());
-            sb.append("\n");
+            if (p.reason() != null) b.append(" — ").append(p.reason());
+            report.bullet(b.toString());
         }
-        sb.append("\n");
     }
 
     /** ike-issues#384: link to the standards doc for conceptual context. */
-    private static void appendStandardsLink(StringBuilder sb) {
-        sb.append("---\n\n");
-        sb.append("See [`IKE-WORKSPACE.md`](https://github.com/IKE-Network/")
-                .append("ike-tooling/blob/main/ike-build-standards/")
-                .append("src/main/standards/IKE-WORKSPACE.md) for the")
-                .append(" workspace and versions-upgrade conventions.\n");
+    private static void appendStandardsLink(GoalReportBuilder report) {
+        report.raw("---\n\n");
+        report.paragraph("See [`IKE-WORKSPACE.md`](https://github.com/"
+                + "IKE-Network/ike-tooling/blob/main/ike-build-standards/"
+                + "src/main/standards/IKE-WORKSPACE.md) for the"
+                + " workspace and versions-upgrade conventions.");
     }
 
     private static String coordSummary(List<ActionableEntry> entries) {

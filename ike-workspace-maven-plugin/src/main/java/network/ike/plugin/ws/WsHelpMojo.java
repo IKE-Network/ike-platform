@@ -1,5 +1,6 @@
 package network.ike.plugin.ws;
 
+import network.ike.plugin.support.GoalReportBuilder;
 import org.apache.maven.api.plugin.MojoException;
 
 import java.util.ArrayList;
@@ -78,15 +79,14 @@ public class WsHelpMojo extends AbstractWorkspaceMojo {
      * @return the Markdown report body
      */
     private static String buildHelpReport(List<GoalInfo> goals) {
-        StringBuilder sb = new StringBuilder();
-        sb.append(goals.size()).append(" `ws:*` goals.\n\n");
-        sb.append("| Goal | Description |\n");
-        sb.append("|------|-------------|\n");
+        List<String[]> rows = new ArrayList<>();
         for (GoalInfo g : goals) {
-            sb.append("| `ws:").append(g.name())
-              .append("` | ").append(g.summary()).append(" |\n");
+            rows.add(new String[]{"`ws:" + g.name() + "`", g.summary()});
         }
-        return sb.toString();
+        GoalReportBuilder report = new GoalReportBuilder();
+        report.paragraph(goals.size() + " `ws:*` goals.")
+                .table(List.of("Goal", "Description"), rows);
+        return report.build();
     }
 
     // ── Goal discovery ──────────────────────────────────────────

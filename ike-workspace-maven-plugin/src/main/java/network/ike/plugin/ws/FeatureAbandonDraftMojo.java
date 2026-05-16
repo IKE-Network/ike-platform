@@ -1,6 +1,7 @@
 package network.ike.plugin.ws;
 
 import network.ike.plugin.ReleaseSupport;
+import network.ike.plugin.support.GoalReportBuilder;
 import network.ike.plugin.ws.preflight.Preflight;
 import network.ike.plugin.ws.preflight.PreflightCondition;
 import network.ike.plugin.ws.preflight.PreflightContext;
@@ -251,22 +252,15 @@ public class FeatureAbandonDraftMojo extends AbstractWorkspaceMojo {
     private WorkspaceReportSpec writeAbandonReport(String branchName, List<String[]> rows,
                                      List<String> eligible, List<String> skipped,
                                      boolean isDraft) {
-        var sb = new StringBuilder();
-        sb.append("**Branch:** `").append(branchName).append("`\n\n");
-        sb.append("| Subproject | Status | Unmerged Commits |\n");
-        sb.append("|-----------|--------|------------------|\n");
-        for (String[] row : rows) {
-            sb.append("| ").append(row[0])
-              .append(" | ").append(row[1])
-              .append(" | ").append(row[2])
-              .append(" |\n");
-        }
-        sb.append("\n**").append(eligible.size()).append("** ")
-          .append(isDraft ? "would be abandoned" : "abandoned")
-          .append(", **").append(skipped.size()).append("** skipped.\n");
+        GoalReportBuilder report = new GoalReportBuilder();
+        report.paragraph("**Branch:** `" + branchName + "`");
+        report.table(List.of("Subproject", "Status", "Unmerged Commits"), rows);
+        report.paragraph("**" + eligible.size() + "** "
+                + (isDraft ? "would be abandoned" : "abandoned")
+                + ", **" + skipped.size() + "** skipped.");
         return new WorkspaceReportSpec(
                 publish ? WsGoal.FEATURE_ABANDON_PUBLISH : WsGoal.FEATURE_ABANDON_DRAFT,
-                sb.toString());
+                report.build());
     }
 
     // ── Auto-detect ─────────────────────────────────────────────────

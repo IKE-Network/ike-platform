@@ -1,6 +1,7 @@
 package network.ike.plugin.ws;
 
 import network.ike.workspace.WorkspaceGraph;
+import network.ike.plugin.support.GoalReportBuilder;
 import network.ike.plugin.ws.vcs.VcsOperations;
 import network.ike.plugin.ws.vcs.VcsState;
 import org.apache.maven.api.plugin.MojoException;
@@ -270,24 +271,17 @@ public class UpdateFeatureDraftMojo extends AbstractWorkspaceMojo {
         getLog().info("");
 
         // Write report
-        var sb = new StringBuilder();
-        sb.append("**Branch:** `").append(branchName)
-          .append("` ← `").append(targetBranch).append("`\n\n");
-        sb.append("| Subproject | Behind | Ahead | Conflicts | Status |\n");
-        sb.append("|-----------|--------|-------|-----------|--------|\n");
-        for (String[] row : reportRows) {
-            sb.append("| ").append(row[0])
-              .append(" | ").append(row[1])
-              .append(" | ").append(row[2])
-              .append(" | ").append(row[3])
-              .append(" | ").append(row[4])
-              .append(" |\n");
-        }
-        sb.append("\n**").append(eligible.size()).append("** subproject(s)")
-          .append(draft ? " to update" : " updated")
-          .append(", **").append(skipped.size()).append("** skipped.\n");
+        GoalReportBuilder report = new GoalReportBuilder();
+        report.paragraph("**Branch:** `" + branchName
+                + "` ← `" + targetBranch + "`");
+        report.table(
+                List.of("Subproject", "Behind", "Ahead", "Conflicts", "Status"),
+                reportRows);
+        report.paragraph("**" + eligible.size() + "** subproject(s)"
+                + (draft ? " to update" : " updated")
+                + ", **" + skipped.size() + "** skipped.");
         return new WorkspaceReportSpec(
                 publish ? WsGoal.UPDATE_FEATURE_PUBLISH : WsGoal.UPDATE_FEATURE_DRAFT,
-                sb.toString());
+                report.build());
     }
 }

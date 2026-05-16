@@ -1,5 +1,6 @@
 package network.ike.plugin.ws;
 
+import network.ike.plugin.support.GoalReportBuilder;
 import network.ike.plugin.support.upgrade.VersionUpgradeApplyException;
 import network.ike.plugin.support.upgrade.VersionUpgradePlanApplier;
 import network.ike.plugin.support.upgrade.VersionUpgradePlanBuilder;
@@ -316,77 +317,73 @@ public class WsVersionsUpgradePublishMojo extends AbstractWorkspaceMojo {
     private String buildReport(VersionUpgradePlan plan,
                                List<NodeOutcome> outcomes,
                                Path planPath) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("**Workspace:** ").append(workspaceName()).append("\n");
-        sb.append("**Plan:** `").append(planPath).append("`\n");
-        if (plan.planHash() != null) {
-            sb.append("**Plan hash:** `").append(plan.planHash())
-                    .append("`\n");
-        }
-        if (plan.ikeToolingVersion() != null) {
-            sb.append("**ike-tooling.version:** `")
-                    .append(plan.ikeToolingVersion()).append("`\n");
-        }
-
         int totalEdits = outcomes.stream()
                 .mapToInt(NodeOutcome::edits).sum();
         int totalSkipped = outcomes.stream()
                 .mapToInt(NodeOutcome::skipped).sum();
-        sb.append("**Edits applied:** ").append(totalEdits).append("\n");
-        sb.append("**Non-ready skipped:** ").append(totalSkipped)
-                .append("\n\n");
 
-        sb.append("## Per-node outcomes\n");
-        sb.append("| Node | Edits | Skipped |\n");
-        sb.append("|------|------:|--------:|\n");
-        for (NodeOutcome o : outcomes) {
-            sb.append("| ").append(o.nodeName())
-                    .append(" | ").append(o.edits())
-                    .append(" | ").append(o.skipped())
-                    .append(" |\n");
+        StringBuilder header = new StringBuilder();
+        header.append("**Workspace:** ").append(workspaceName()).append("\n");
+        header.append("**Plan:** `").append(planPath).append("`\n");
+        if (plan.planHash() != null) {
+            header.append("**Plan hash:** `").append(plan.planHash())
+                    .append("`\n");
         }
-        sb.append("\n");
+        if (plan.ikeToolingVersion() != null) {
+            header.append("**ike-tooling.version:** `")
+                    .append(plan.ikeToolingVersion()).append("`\n");
+        }
+        header.append("**Edits applied:** ").append(totalEdits).append("\n");
+        header.append("**Non-ready skipped:** ").append(totalSkipped);
 
-        sb.append("## Applied details\n");
+        GoalReportBuilder report = new GoalReportBuilder();
+        report.paragraph(header.toString());
+
+        List<String[]> outcomeRows = new ArrayList<>();
+        for (NodeOutcome o : outcomes) {
+            outcomeRows.add(new String[] {
+                    o.nodeName(),
+                    Integer.toString(o.edits()),
+                    Integer.toString(o.skipped()) });
+        }
+        report.section("Per-node outcomes")
+                .table(List.of("Node", "Edits", "Skipped"), outcomeRows);
+
+        report.section("Applied details");
         for (Map.Entry<String, NodeVersionUpgrade> entry
                 : plan.nodes().entrySet()) {
-            sb.append("### ").append(entry.getKey()).append("\n");
-            appendApplied(sb, entry.getValue());
-            sb.append("\n");
+            report.section(entry.getKey());
+            appendApplied(report, entry.getValue());
         }
 
-        return sb.toString();
+        return report.build();
     }
 
-    private static void appendApplied(StringBuilder sb,
+    private static void appendApplied(GoalReportBuilder report,
                                       NodeVersionUpgrade node) {
         boolean any = false;
         if (node.parent() != null
                 && node.parent().status() == VersionUpgradeStatus.READY) {
             ParentVersionUpgrade p = node.parent();
-            sb.append("- parent `").append(p.groupId()).append(":")
-                    .append(p.artifactId()).append("`: ")
-                    .append(p.fromVersion()).append(" → ")
-                    .append(p.toVersion()).append("\n");
+            report.bullet("parent `" + p.groupId() + ":" + p.artifactId()
+                    + "`: " + p.fromVersion() + " → " + p.toVersion());
             any = true;
         }
         for (PropertyVersionUpgrade prop : node.properties()) {
             if (prop.status() != VersionUpgradeStatus.READY) continue;
-            sb.append("- property `${").append(prop.propertyName())
-                    .append("}`: ").append(prop.fromVersion())
-                    .append(" → ").append(prop.toVersion()).append("\n");
+            report.bullet("property `${" + prop.propertyName() + "}`: "
+                    + prop.fromVersion() + " → " + prop.toVersion());
             any = true;
         }
         for (LiteralVersionUpgrade lit : node.literals()) {
             if (lit.status() != VersionUpgradeStatus.READY) continue;
-            sb.append("- literal `").append(lit.groupId()).append(":")
-                    .append(lit.artifactId()).append("`: ")
-                    .append(lit.fromVersion()).append(" → ")
-                    .append(lit.toVersion()).append("\n");
+            report.bullet("literal `" + lit.groupId() + ":"
+                    + lit.artifactId() + "`: " + lit.fromVersion()
+                    + " → " + lit.toVersion());
             any = true;
         }
         if (!any) {
-            sb.append("- _no ready upgrades_\n");
+            report.bullet("_no ready upgrades_");
         }
     }
 

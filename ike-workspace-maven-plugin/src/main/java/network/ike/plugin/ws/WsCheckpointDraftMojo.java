@@ -2,6 +2,7 @@ package network.ike.plugin.ws;
 
 import network.ike.plugin.ReleaseNotesSupport;
 import network.ike.plugin.ReleaseSupport;
+import network.ike.plugin.support.GoalReportBuilder;
 import network.ike.plugin.ws.preflight.Preflight;
 import network.ike.plugin.ws.preflight.PreflightCondition;
 import network.ike.plugin.ws.preflight.PreflightContext;
@@ -381,104 +382,104 @@ public class WsCheckpointDraftMojo extends AbstractWorkspaceMojo {
             Map<String, List<ReleaseNotesSupport.IssueRef>> issuesSinceLastRelease) {}
 
     private String buildCheckpointMarkdownReport(CheckpointReportContext ctx) {
-        var sb = new StringBuilder();
+        GoalReportBuilder report = new GoalReportBuilder();
 
-        sb.append(ctx.snapshots().size()).append(" subproject(s) checkpointed");
+        StringBuilder lead = new StringBuilder();
+        lead.append(ctx.snapshots().size()).append(" subproject(s) checkpointed");
         if (!ctx.absentComponents().isEmpty()) {
-            sb.append(", ").append(ctx.absentComponents().size()).append(" absent");
+            lead.append(", ").append(ctx.absentComponents().size()).append(" absent");
         }
-        sb.append(ctx.draft() ? " (draft)" : "").append(".\n\n");
+        lead.append(ctx.draft() ? " (draft)" : "").append(".");
+        report.paragraph(lead.toString());
 
-        sb.append("## Checkpoint\n\n");
-        sb.append("- **Name:** ").append(ctx.name()).append('\n');
-        sb.append("- **Tag:** `").append(ctx.wsTagName()).append("`\n");
-        sb.append("- **Time:** ").append(ctx.checkpointTimestamp()).append('\n');
-        sb.append("- **Author:** ").append(ctx.author()).append('\n');
-        sb.append("- **Mode:** ")
-                .append(ctx.draft() ? "DRAFT — no tags, no files written" : "PUBLISH")
-                .append("\n\n");
+        report.section("Checkpoint")
+                .bullet("**Name:** " + ctx.name())
+                .bullet("**Tag:** `" + ctx.wsTagName() + "`")
+                .bullet("**Time:** " + ctx.checkpointTimestamp())
+                .bullet("**Author:** " + ctx.author())
+                .bullet("**Mode:** " + (ctx.draft()
+                        ? "DRAFT — no tags, no files written" : "PUBLISH"));
 
-        sb.append("## Subprojects\n\n");
-        sb.append("| Subproject | Version | SHA | Branch | Status |\n");
-        sb.append("|-----------|---------|-----|--------|--------|\n");
+        List<String[]> subprojectRows = new ArrayList<>();
         for (var snap : ctx.snapshots()) {
-            sb.append("| ").append(snap.name())
-                    .append(" | ").append(snap.version())
-                    .append(" | `").append(snap.shortSha()).append('`')
-                    .append(" | ").append(snap.branch())
-                    .append(" | ✓ |\n");
+            subprojectRows.add(new String[]{
+                    snap.name(), snap.version(),
+                    "`" + snap.shortSha() + "`", snap.branch(), "✓"});
         }
         for (String absentName : ctx.absentComponents()) {
-            sb.append("| ").append(absentName)
-                    .append(" | — | — | — | not cloned |\n");
+            subprojectRows.add(new String[]{
+                    absentName, "—", "—", "—", "not cloned"});
         }
-        sb.append('\n');
+        report.section("Subprojects")
+                .table(List.of("Subproject", "Version", "SHA", "Branch",
+                        "Status"), subprojectRows);
 
-        sb.append("## Outputs\n\n");
+        report.section("Outputs");
         String checkpointPath = "checkpoints/" + checkpointFileName(ctx.name());
         if (ctx.draft()) {
-            sb.append("- Checkpoint file `").append(checkpointPath)
-                    .append("` would be written.\n");
+            report.bullet("Checkpoint file `" + checkpointPath
+                    + "` would be written.");
             if (ctx.workspaceHasGit()) {
-                sb.append("- Workspace tag `").append(ctx.wsTagName())
-                        .append("` would be created.\n");
+                report.bullet("Workspace tag `" + ctx.wsTagName()
+                        + "` would be created.");
             } else {
-                sb.append("- No `.git` at workspace root; tag/commit/push would be skipped.\n");
+                report.bullet("No `.git` at workspace root; "
+                        + "tag/commit/push would be skipped.");
             }
-            sb.append("- `workspace.yaml` subproject SHAs would be updated.\n");
+            report.bullet("`workspace.yaml` subproject SHAs would be updated.");
         } else {
-            sb.append("- Checkpoint file written: `").append(checkpointPath).append("`\n");
+            report.bullet("Checkpoint file written: `" + checkpointPath + "`");
             if (ctx.workspaceHasGit()) {
                 String tagOutcome = ctx.tagPushed()
                         ? "pushed to `origin`."
                         : "created locally (no `origin` remote — not pushed).";
-                sb.append("- Workspace tag `").append(ctx.wsTagName())
-                        .append("` ").append(tagOutcome).append('\n');
+                report.bullet("Workspace tag `" + ctx.wsTagName()
+                        + "` " + tagOutcome);
             } else {
-                sb.append("- No `.git` at workspace root; tag/commit/push skipped.\n");
+                report.bullet("No `.git` at workspace root; "
+                        + "tag/commit/push skipped.");
             }
-            sb.append("- `workspace.yaml` subproject SHAs ")
-                    .append(ctx.manifestUpdated() ? "updated" : "**not updated** (write failed)")
-                    .append(".\n");
+            report.bullet("`workspace.yaml` subproject SHAs "
+                    + (ctx.manifestUpdated()
+                            ? "updated" : "**not updated** (write failed)")
+                    + ".");
         }
-        sb.append('\n');
 
         if (ctx.testingContext() != null) {
-            sb.append(ctx.testingContext().toMarkdown().stripTrailing()).append("\n\n");
+            report.raw(ctx.testingContext().toMarkdown().stripTrailing()
+                    + "\n\n");
         } else {
-            sb.append("## Testing context\n\nNo milestone found — skipping.\n\n");
+            report.section("Testing context")
+                    .paragraph("No milestone found — skipping.");
         }
 
         // #394: report issues referenced by closing trailers in commits
         // since each subproject's last release tag. Report-only — checkpoint
         // never closes issues or removes pending-release labels.
-        sb.append("## Issues since last release\n\n");
+        report.section("Issues since last release");
         if (ctx.issuesSinceLastRelease().isEmpty()) {
-            sb.append("No closing-trailer issue references found in commits "
-                    + "since the last release tag in each subproject.\n\n");
+            report.paragraph("No closing-trailer issue references found in "
+                    + "commits since the last release tag in each subproject.");
         } else {
-            sb.append("Per-subproject `Fixes`/`Closes`/`Resolves` trailers "
-                    + "in commits since the last `v*` tag. **This checkpoint "
-                    + "does not close any of these issues** — they remain in "
-                    + "their current state until an actual release ships.\n\n");
+            report.paragraph("Per-subproject `Fixes`/`Closes`/`Resolves` "
+                    + "trailers in commits since the last `v*` tag. **This "
+                    + "checkpoint does not close any of these issues** — they "
+                    + "remain in their current state until an actual release "
+                    + "ships.");
             for (var entry : ctx.issuesSinceLastRelease().entrySet()) {
-                sb.append("### ").append(entry.getKey()).append("\n\n");
+                report.section(entry.getKey());
                 for (ReleaseNotesSupport.IssueRef ref : entry.getValue()) {
-                    sb.append("- ").append(ref.repo()).append("#")
-                            .append(ref.number()).append('\n');
+                    report.bullet(ref.repo() + "#" + ref.number());
                 }
-                sb.append('\n');
             }
         }
 
         if (ctx.draft()) {
-            sb.append("## Checkpoint YAML (preview)\n\n");
-            sb.append("```yaml\n")
-                    .append(ctx.yamlContent().stripTrailing())
-                    .append("\n```\n");
+            report.section("Checkpoint YAML (preview)")
+                    .codeBlock("yaml", ctx.yamlContent().stripTrailing());
         }
 
-        return sb.toString();
+        return report.build();
     }
 
     // ── YAML generation (pure, static, testable) ──────────────────────

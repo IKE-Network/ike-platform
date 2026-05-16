@@ -2,6 +2,7 @@ package network.ike.plugin.ws;
 
 import network.ike.workspace.Subproject;
 import network.ike.workspace.WorkspaceGraph;
+import network.ike.plugin.support.GoalReportBuilder;
 import network.ike.plugin.ws.vcs.VcsOperations;
 import network.ike.plugin.ws.vcs.VcsState;
 import org.apache.maven.api.plugin.MojoException;
@@ -244,22 +245,20 @@ public class FeatureFinishMergeDraftMojo extends AbstractWorkspaceMojo {
     private String buildMergeReport(List<String> components, String branch,
                                      String target, int merged,
                                      boolean isDraft, boolean kept) {
-        var sb = new StringBuilder();
-        sb.append("**Branch:** `").append(branch).append("` → `")
-          .append(target).append("`\n");
-        sb.append("**Strategy:** no-fast-forward merge\n\n");
+        GoalReportBuilder report = new GoalReportBuilder();
+        report.paragraph("**Branch:** `" + branch + "` → `" + target + "`  \n"
+                + "**Strategy:** no-fast-forward merge");
 
-        sb.append("| Subproject | Status |\n");
-        sb.append("|-----------|--------|\n");
+        List<String[]> rows = new ArrayList<>();
         for (String name : components) {
-            sb.append("| ").append(name).append(" | ")
-              .append(isDraft ? "would merge" : "merged").append(" |\n");
+            rows.add(new String[]{name, isDraft ? "would merge" : "merged"});
         }
+        report.table(List.of("Subproject", "Status"), rows);
 
-        sb.append("\n**").append(merged).append(" subproject(s)** ")
-          .append(isDraft ? "would be merged" : "merged")
-          .append(". Branch ").append(kept ? "kept" : "deleted").append(".\n");
-        return sb.toString();
+        report.paragraph("**" + merged + " subproject(s)** "
+                + (isDraft ? "would be merged" : "merged")
+                + ". Branch " + (kept ? "kept" : "deleted") + ".");
+        return report.build();
     }
 
     private WorkspaceReportSpec executeBareMode(String branchName)

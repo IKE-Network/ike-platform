@@ -6,6 +6,7 @@ import network.ike.plugin.ws.preflight.Preflight;
 import network.ike.plugin.ws.preflight.PreflightCondition;
 import network.ike.plugin.ws.preflight.PreflightContext;
 import network.ike.plugin.ws.preflight.PreflightResult;
+import network.ike.plugin.support.GoalReportBuilder;
 import network.ike.plugin.ws.vcs.VcsOperations;
 import network.ike.plugin.ws.vcs.VcsState;
 import org.apache.maven.api.plugin.MojoException;
@@ -256,17 +257,20 @@ public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
         getLog().info("");
 
         // Write report
-        var sb = new StringBuilder();
-        sb.append("**From:** `").append(currentBranch)
-          .append("` **To:** `").append(branch).append("`\n\n");
-        sb.append("**").append(switched).append("** switched, **")
-          .append(skipped).append("** skipped");
-        if (stashed > 0) sb.append(", **").append(stashed).append("** stashed");
-        if (applied > 0) sb.append(", **").append(applied).append("** applied");
-        sb.append(".\n");
+        StringBuilder counts = new StringBuilder();
+        counts.append("**").append(switched).append("** switched, **")
+              .append(skipped).append("** skipped");
+        if (stashed > 0) counts.append(", **").append(stashed).append("** stashed");
+        if (applied > 0) counts.append(", **").append(applied).append("** applied");
+        counts.append(".");
+
+        GoalReportBuilder report = new GoalReportBuilder();
+        report.paragraph("**From:** `" + currentBranch
+                        + "` **To:** `" + branch + "`")
+                .paragraph(counts.toString());
         return new WorkspaceReportSpec(
                 publish ? WsGoal.SWITCH_PUBLISH : WsGoal.SWITCH_DRAFT,
-                sb.toString());
+                report.build());
     }
 
     /**

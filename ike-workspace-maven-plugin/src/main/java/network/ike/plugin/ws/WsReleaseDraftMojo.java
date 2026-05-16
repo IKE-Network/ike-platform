@@ -14,6 +14,7 @@ import network.ike.plugin.ws.preflight.Preflight;
 import network.ike.plugin.ws.preflight.PreflightCondition;
 import network.ike.plugin.ws.preflight.PreflightContext;
 import network.ike.plugin.ws.preflight.PreflightResult;
+import network.ike.plugin.support.GoalReportBuilder;
 
 import network.ike.workspace.ManifestWriter;
 import network.ike.workspace.Subproject;
@@ -689,34 +690,31 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
     private String buildReleasePlanMarkdownReport(
             List<String> releaseOrder,
             Map<String, ReleaseCandidate> releasable) {
-        var sb = new StringBuilder();
-        sb.append(releaseOrder.size())
-                .append(" subproject(s) would be released (draft).\n\n");
-        sb.append("| Subproject | Version | Reason |\n");
-        sb.append("|-----------|---------|--------|\n");
+        List<String[]> rows = new ArrayList<>();
         for (String name : releaseOrder) {
             ReleaseCandidate rc = releasable.get(name);
-            sb.append("| ").append(rc.name)
-                    .append(" | ").append(currentVersion(rc.dir))
-                    .append(" | ").append(rc.reason)
-                    .append(" |\n");
+            rows.add(new String[] {
+                    rc.name, currentVersion(rc.dir), rc.reason });
         }
-        return sb.toString();
+        GoalReportBuilder report = new GoalReportBuilder();
+        report.paragraph(releaseOrder.size()
+                        + " subproject(s) would be released (draft).")
+                .table(List.of("Subproject", "Version", "Reason"), rows);
+        return report.build();
     }
 
     private String buildReleaseMarkdownReport(
             Map<String, String> releasedVersions) {
-        var sb = new StringBuilder();
-        sb.append(releasedVersions.size())
-                .append(" subproject(s) released.\n\n");
-        sb.append("| Subproject | Version | Status |\n");
-        sb.append("|-----------|---------|--------|\n");
+        List<String[]> rows = new ArrayList<>();
         for (var entry : releasedVersions.entrySet()) {
-            sb.append("| ").append(entry.getKey())
-                    .append(" | ").append(entry.getValue())
-                    .append(" | ✓ |\n");
+            rows.add(new String[] {
+                    entry.getKey(), entry.getValue(), "✓" });
         }
-        return sb.toString();
+        GoalReportBuilder report = new GoalReportBuilder();
+        report.paragraph(releasedVersions.size()
+                        + " subproject(s) released.")
+                .table(List.of("Subproject", "Version", "Status"), rows);
+        return report.build();
     }
 
     // ── Helper: find latest release tag ──────────────────────────────

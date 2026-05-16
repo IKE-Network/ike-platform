@@ -1,6 +1,7 @@
 package network.ike.plugin.ws;
 
 import network.ike.plugin.ReleaseSupport;
+import network.ike.plugin.support.GoalReportBuilder;
 import network.ike.plugin.ws.vcs.VcsOperations;
 import network.ike.workspace.Subproject;
 import network.ike.workspace.Dependency;
@@ -352,11 +353,14 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
             getLog().info("  Subproject added. Run 'mvn ws:scaffold-init' to clone.");
         }
         getLog().info("");
+        GoalReportBuilder report = new GoalReportBuilder();
+        report.paragraph("Added subproject **" + subproject + "**");
+        report.table(List.of("Field", "Value"), List.of(
+                new String[]{"Repo", repo},
+                new String[]{"Cloned",
+                        cloned ? "yes" : "no — run ws:scaffold-init"}));
         WorkspaceReportSpec spec = new WorkspaceReportSpec(WsGoal.ADD,
-                "Added subproject **" + subproject + "**\n\n"
-                + "| Field | Value |\n|-------|-------|\n"
-                + "| Repo | " + repo + " |\n"
-                + "| Cloned | " + (cloned ? "yes" : "no — run ws:scaffold-init") + " |\n");
+                report.build());
 
         PostMutationSync.refresh(workspaceRoot(), getLog());
         return spec;

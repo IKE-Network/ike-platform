@@ -1,6 +1,7 @@
 package network.ike.plugin.ws;
 
 import network.ike.plugin.ReleaseSupport;
+import network.ike.plugin.support.GoalReportBuilder;
 import network.ike.plugin.ws.reconcile.DriftReport;
 import network.ike.plugin.ws.reconcile.Reconciler;
 import network.ike.plugin.ws.reconcile.ReconcilerOptions;
@@ -80,9 +81,8 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
         // Accumulate the markdown report alongside the console output
         // (IKE-Network/ike-issues#407) so the goal writes its
         // ws꞉scaffold-{draft,publish}.md like every other goal.
-        StringBuilder report = new StringBuilder();
-        report.append("# ").append(goalLabel).append("\n\n");
-        report.append("**Workspace:** `").append(root).append("`\n\n");
+        GoalReportBuilder report = new GoalReportBuilder();
+        report.paragraph("**Workspace:** `" + root + "`");
 
         // Workspace-wide verification (formerly ws:verify, retired in
         // #393). Runs in both draft and publish modes — it's read-only,
@@ -93,17 +93,17 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
                 resolveManifest(), false /* checkConvergence */,
                 isWorkspaceMode());
         verifier.runAllChecks();
-        report.append("Workspace verification ran — see the console "
-                + "output for the full check list.\n\n");
+        report.paragraph("Workspace verification ran — see the console "
+                + "output for the full check list.");
 
         // Workspace-level reconcilers run next (#393). Each owns one
         // dimension of workspace state (denormalized YAML fields,
         // parent version, alignment, etc.) and is reported (draft) or
         // applied (publish) before the per-subproject ike:scaffold
         // delegation runs.
-        report.append(publish
-                ? "## Workspace reconcilers applied\n\n"
-                : "## Workspace reconciler drift\n\n");
+        report.section(publish
+                ? "Workspace reconcilers applied"
+                : "Workspace reconciler drift");
         runWorkspaceReconcilers(graph, root, report);
 
         // Walk each subproject in topological order, then the
@@ -122,7 +122,7 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
         // Workspace root last (mirrors ws:release-publish ordering).
         boolean walkRoot = new File(root, "pom.xml").exists();
 
-        report.append("\n## Subprojects walked\n\n");
+        report.section("Subprojects walked");
         int processed = 0;
         int failed = 0;
         for (String name : targets) {
@@ -131,12 +131,11 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
             getLog().info("── " + name + " ".repeat(Math.max(1, 60 - name.length())) + "──");
             try {
                 runScaffoldInSubproject(subDir, goal);
-                report.append("- ✓ ").append(name).append("\n");
+                report.bullet("✓ " + name);
                 processed++;
             } catch (MojoException e) {
                 getLog().error("  ✗ " + name + ": " + e.getMessage());
-                report.append("- ✗ ").append(name).append(" — ")
-                      .append(e.getMessage()).append("\n");
+                report.bullet("✗ " + name + " — " + e.getMessage());
                 failed++;
             }
         }
@@ -145,12 +144,11 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
             getLog().info("── (workspace root)" + " ".repeat(43) + "──");
             try {
                 runScaffoldInSubproject(root, goal);
-                report.append("- ✓ (workspace root)\n");
+                report.bullet("✓ (workspace root)");
                 processed++;
             } catch (MojoException e) {
                 getLog().error("  ✗ workspace root: " + e.getMessage());
-                report.append("- ✗ (workspace root) — ")
-                      .append(e.getMessage()).append("\n");
+                report.bullet("✗ (workspace root) — " + e.getMessage());
                 failed++;
             }
         }
@@ -160,13 +158,11 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
         getLog().info("  Walked " + processed + " project(s)"
                 + (failed > 0 ? "; " + failed + " failed" : ""));
 
-        report.append("\n").append(processed).append(" project(s) walked")
-              .append(failed > 0 ? "; " + failed + " failed" : "")
-              .append(".\n\n");
-        report.append("Per-subproject scaffold detail is in each "
-                + "subproject's own `ike꞉scaffold-")
-              .append(publish ? "publish" : "draft")
-              .append(".md` report.\n");
+        report.paragraph(processed + " project(s) walked"
+                + (failed > 0 ? "; " + failed + " failed" : "") + ".");
+        report.paragraph("Per-subproject scaffold detail is in each "
+                + "subproject's own `ike꞉scaffold-"
+                + (publish ? "publish" : "draft") + ".md` report.");
 
         if (failed > 0) {
             throw new MojoException(
@@ -177,7 +173,7 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
 
         return new WorkspaceReportSpec(
                 publish ? WsGoal.SCAFFOLD_PUBLISH : WsGoal.SCAFFOLD_DRAFT,
-                report.toString());
+                report.build());
     }
 
     /**
@@ -213,19 +209,18 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
      * per-subproject {@code ike:scaffold-*} pass that follows.
      */
     private void runWorkspaceReconcilers(WorkspaceGraph graph, File root,
-            StringBuilder report) throws MojoException {
+            GoalReportBuilder report) throws MojoException {
         WorkspaceContext ctx = new WorkspaceContext(
                 root, resolveManifest(), graph,
                 readReconcilerOptions(), getLog());
         for (Reconciler reconciler : ReconcilerRegistry.all()) {
             if (publish) {
                 reconciler.apply(ctx);
-                report.append("- ").append(reconciler.dimension())
-                      .append("\n");
+                report.bullet(reconciler.dimension());
             } else {
                 DriftReport drift = reconciler.detect(ctx);
                 printDriftReport(drift);
-                report.append(drift.toMarkdown());
+                report.raw(drift.toMarkdown());
             }
         }
     }

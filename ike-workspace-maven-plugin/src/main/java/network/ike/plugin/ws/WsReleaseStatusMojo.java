@@ -1,6 +1,7 @@
 package network.ike.plugin.ws;
 
 import network.ike.plugin.ReleaseSupport;
+import network.ike.plugin.support.GoalReportBuilder;
 import network.ike.plugin.ws.vcs.VcsOperations;
 import network.ike.workspace.WorkspaceGraph;
 
@@ -250,18 +251,18 @@ public class WsReleaseStatusMojo extends AbstractWorkspaceMojo {
 
     private String buildMarkdownReport(
             List<ReleaseStatusInspector.Finding> findings) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("| Subproject | Status | Version | Branch | Notes |\n");
-        sb.append("|-----------|--------|---------|--------|-------|\n");
+        List<String[]> rows = new ArrayList<>();
         for (ReleaseStatusInspector.Finding f : findings) {
-            sb.append("| ").append(f.subprojectName())
-                    .append(" | ").append(f.status().badge())
-                    .append(' ').append(f.status().label())
-                    .append(" | ").append(f.currentVersion())
-                    .append(" | ").append(f.currentBranch())
-                    .append(" | ").append(String.join("<br>", f.details()))
-                    .append(" |\n");
+            rows.add(new String[]{
+                    f.subprojectName(),
+                    f.status().badge() + " " + f.status().label(),
+                    f.currentVersion(),
+                    f.currentBranch(),
+                    String.join("<br>", f.details())});
         }
-        return sb.toString();
+        GoalReportBuilder report = new GoalReportBuilder();
+        report.table(List.of("Subproject", "Status", "Version", "Branch",
+                "Notes"), rows);
+        return report.build();
     }
 }

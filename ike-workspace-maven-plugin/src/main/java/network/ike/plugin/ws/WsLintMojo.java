@@ -4,6 +4,7 @@ import network.ike.plugin.ws.preflight.Preflight;
 import network.ike.plugin.ws.preflight.PreflightCondition;
 import network.ike.plugin.ws.preflight.PreflightContext;
 import network.ike.plugin.ws.preflight.PreflightResult;
+import network.ike.plugin.support.GoalReportBuilder;
 import network.ike.workspace.WorkspaceGraph;
 
 import org.apache.maven.api.plugin.MojoException;
@@ -62,23 +63,23 @@ public class WsLintMojo extends AbstractWorkspaceMojo {
         // throws. Pass LINT so the diagnostic context names this goal.
         result.warnIfFailed(getLog(), WsGoal.LINT);
 
-        StringBuilder md = new StringBuilder();
-        md.append("**Conditions checked:** ").append(all.size()).append("\n\n");
+        GoalReportBuilder report = new GoalReportBuilder();
+        report.paragraph("**Conditions checked:** " + all.size());
 
         if (result.passed()) {
-            md.append("All preflight conditions passed.  ✓\n");
+            report.paragraph("All preflight conditions passed.  ✓");
             getLog().info("  All preflight conditions passed  ✓");
         } else {
-            md.append(result.failures().size())
-              .append(" preflight condition(s) reported issues:\n\n");
+            report.paragraph(result.failures().size()
+                    + " preflight condition(s) reported issues:");
             for (PreflightResult.Failure f : result.failures()) {
-                md.append("- **").append(f.condition().name()).append("** — ")
-                  .append(f.condition().description()).append("\n");
+                report.bullet("**" + f.condition().name() + "** — "
+                        + f.condition().description());
             }
-            md.append("\n_See goal log for remediation details._\n");
+            report.paragraph("_See goal log for remediation details._");
         }
         getLog().info("");
 
-        return new WorkspaceReportSpec(WsGoal.LINT, md.toString());
+        return new WorkspaceReportSpec(WsGoal.LINT, report.build());
     }
 }

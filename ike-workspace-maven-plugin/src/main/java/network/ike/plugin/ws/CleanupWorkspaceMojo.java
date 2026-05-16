@@ -1,6 +1,7 @@
 package network.ike.plugin.ws;
 
 import network.ike.workspace.WorkspaceGraph;
+import network.ike.plugin.support.GoalReportBuilder;
 import network.ike.plugin.ws.vcs.VcsOperations;
 import org.apache.maven.api.plugin.MojoException;
 import org.apache.maven.api.plugin.annotations.Mojo;
@@ -176,16 +177,13 @@ public class CleanupWorkspaceMojo extends AbstractWorkspaceMojo {
     private String buildCleanupReport(Set<String> merged, Set<String> active,
                                        Map<String, List<String>> mergedBySubproject,
                                        File root) {
-        var sb = new StringBuilder();
-        sb.append(merged.size()).append(" merged, ")
-          .append(active.size()).append(" active feature branch")
-          .append(active.size() == 1 ? "" : "es")
-          .append(".\n\n");
+        GoalReportBuilder report = new GoalReportBuilder();
+        report.paragraph(merged.size() + " merged, "
+                + active.size() + " active feature branch"
+                + (active.size() == 1 ? "" : "es") + ".");
 
         if (!merged.isEmpty()) {
-            sb.append("### Merged (safe to delete)\n\n");
-            sb.append("| Branch | Subprojects | Last Commit |\n");
-            sb.append("|--------|-------------|-------------|\n");
+            List<String[]> mergedRows = new ArrayList<>();
             for (String branch : merged) {
                 int count = (int) mergedBySubproject.values().stream()
                         .filter(list -> list.contains(branch))
@@ -198,27 +196,26 @@ public class CleanupWorkspaceMojo extends AbstractWorkspaceMojo {
                         break;
                     }
                 }
-                sb.append("| ").append(branch)
-                  .append(" | ").append(count)
-                  .append(" | ").append(date)
-                  .append(" |\n");
+                mergedRows.add(new String[]{branch,
+                        String.valueOf(count), date});
             }
+            report.section("Merged (safe to delete)")
+                    .table(List.of("Branch", "Subprojects", "Last Commit"),
+                            mergedRows);
         }
 
         if (!active.isEmpty()) {
-            sb.append("\n### Active\n\n");
-            sb.append("| Branch | Subprojects |\n");
-            sb.append("|--------|-------------|\n");
+            List<String[]> activeRows = new ArrayList<>();
             for (String branch : active) {
                 int count = (int) mergedBySubproject.values().stream()
                         .filter(list -> list.contains(branch))
                         .count();
-                sb.append("| ").append(branch)
-                  .append(" | ").append(count)
-                  .append(" |\n");
+                activeRows.add(new String[]{branch, String.valueOf(count)});
             }
+            report.section("Active")
+                    .table(List.of("Branch", "Subprojects"), activeRows);
         }
 
-        return sb.toString();
+        return report.build();
     }
 }

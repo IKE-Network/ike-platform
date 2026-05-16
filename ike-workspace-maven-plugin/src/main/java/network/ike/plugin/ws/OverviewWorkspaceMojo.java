@@ -3,6 +3,7 @@ package network.ike.plugin.ws;
 import network.ike.workspace.Subproject;
 import network.ike.workspace.Dependency;
 import network.ike.workspace.WorkspaceGraph;
+import network.ike.plugin.support.GoalReportBuilder;
 import network.ike.plugin.ws.vcs.VcsOperations;
 import org.apache.maven.api.plugin.MojoException;
 import org.apache.maven.api.plugin.annotations.Mojo;
@@ -287,74 +288,36 @@ public class OverviewWorkspaceMojo extends AbstractWorkspaceMojo {
                                         int cloned, int notCloned,
                                         int modified,
                                         WorkspaceGraph graph) {
-        var sb = new StringBuilder();
+        GoalReportBuilder report = new GoalReportBuilder();
 
-        // Manifest
-        if (manifestErrors.isEmpty()) {
-            sb.append("**Manifest:** consistent.\n\n");
-        } else {
-            sb.append("**Manifest:** ").append(manifestErrors.size())
-              .append(" error(s).\n\n");
-        }
-
-        // Graph table
-        sb.append("### Dependency Graph\n\n");
-        sb.append("| # | Subproject | Dependencies |\n");
-        sb.append("|---|-----------|--------------|\n");
-        for (String[] row : graphRows) {
-            sb.append("| ").append(row[0])
-              .append(" | ").append(row[1])
-              .append(" | ").append(row[2])
-              .append(" |\n");
-        }
+        report.paragraph(manifestErrors.isEmpty()
+                ? "**Manifest:** consistent."
+                : "**Manifest:** " + manifestErrors.size() + " error(s).");
 
         // GraphViz dependency graph — IKE-DIAGRAMS.md mandates
         // GraphViz for dependency graphs (IKE-Network/ike-issues#406).
-        sb.append('\n');
-        sb.append(DotGraphSupport.buildDotReportBlock(graph));
+        report.section("Dependency Graph")
+                .table(List.of("#", "Subproject", "Dependencies"), graphRows)
+                .raw(DotGraphSupport.buildDotReportBlock(graph));
 
-        // Status table
-        sb.append("\n### Status\n\n");
-        sb.append(cloned).append(" cloned, ").append(notCloned)
-          .append(" not cloned, ").append(modified).append(" with uncommitted changes.\n\n");
-        sb.append("| Subproject | Branch | SHA | Status |\n");
-        sb.append("|-----------|--------|-----|--------|\n");
-        for (String[] row : statusRows) {
-            sb.append("| ").append(row[0])
-              .append(" | ").append(row[1])
-              .append(" | ").append(row[2])
-              .append(" | ").append(row[3])
-              .append(" |\n");
-        }
+        report.section("Status")
+                .paragraph(cloned + " cloned, " + notCloned + " not cloned, "
+                        + modified + " with uncommitted changes.")
+                .table(List.of("Subproject", "Branch", "SHA", "Status"),
+                        statusRows);
 
-        // Divergence
         if (!divergenceRows.isEmpty()) {
-            sb.append("\n### Feature Branch Divergence\n\n");
-            sb.append("| Subproject | Branch | Behind | Ahead | Status |\n");
-            sb.append("|-----------|--------|--------|-------|--------|\n");
-            for (String[] row : divergenceRows) {
-                sb.append("| ").append(row[0])
-                  .append(" | ").append(row[1])
-                  .append(" | ").append(row[2])
-                  .append(" | ").append(row[3])
-                  .append(" | ").append(row[4])
-                  .append(" |\n");
-            }
+            report.section("Feature Branch Divergence")
+                    .table(List.of("Subproject", "Branch", "Behind", "Ahead",
+                            "Status"), divergenceRows);
         }
 
-        // Cascade
         if (!cascadeRows.isEmpty()) {
-            sb.append("\n### Cascade\n\n");
-            sb.append("| Subproject | Triggered By |\n");
-            sb.append("|-----------|-------------|\n");
-            for (String[] row : cascadeRows) {
-                sb.append("| ").append(row[0])
-                  .append(" | ").append(row[1])
-                  .append(" |\n");
-            }
+            report.section("Cascade")
+                    .table(List.of("Subproject", "Triggered By"), cascadeRows);
         }
 
-        return sb.toString();
+        return report.build();
     }
 
     // ── DOT output ──────────────────────────────────────────────────

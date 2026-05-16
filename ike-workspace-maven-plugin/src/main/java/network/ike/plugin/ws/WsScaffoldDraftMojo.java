@@ -63,6 +63,18 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
                defaultValue = "false")
     boolean applyFoundation;
 
+    /**
+     * Forwarded to per-subproject {@code ike:scaffold-publish}: resolve
+     * the latest released foundation versions instead of the snapshot
+     * baked into the scaffold zip, so a stale subproject jumps straight
+     * to current. The escape hatch for the scaffold bootstrap loop.
+     * Only consulted when {@link #publish} and {@link #applyFoundation}
+     * are both {@code true}.
+     */
+    @Parameter(property = "ike.scaffold.resolve-foundation",
+               defaultValue = "false")
+    boolean resolveFoundation;
+
     /** Creates this goal instance. */
     public WsScaffoldDraftMojo() {}
 
@@ -180,7 +192,9 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
      * Run {@code mvn <goal>} in the given subproject directory. When
      * {@code goal} is {@code ike:scaffold-publish} and the
      * {@link #applyFoundation} flag is set, forwards
-     * {@code -Dike.scaffold.apply-foundation=true}.
+     * {@code -Dike.scaffold.apply-foundation=true} — and
+     * {@code -Dike.scaffold.resolve-foundation=true} too when
+     * {@link #resolveFoundation} is set.
      *
      * @param subDir the subproject directory
      * @param goal   the ike goal to invoke (draft or publish)
@@ -194,6 +208,9 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
         args.add("-B");
         if (publish && applyFoundation) {
             args.add("-Dike.scaffold.apply-foundation=true");
+            if (resolveFoundation) {
+                args.add("-Dike.scaffold.resolve-foundation=true");
+            }
         }
         ReleaseSupport.exec(subDir, getLog(), args.toArray(new String[0]));
     }

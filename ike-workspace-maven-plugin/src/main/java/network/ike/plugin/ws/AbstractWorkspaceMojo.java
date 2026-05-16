@@ -9,17 +9,17 @@ import network.ike.workspace.ManifestReader;
 import network.ike.workspace.MavenVersion;
 import network.ike.workspace.SubprojectName;
 import network.ike.workspace.WorkspaceGraph;
+import network.ike.plugin.support.ConsoleIkePrompter;
+import network.ike.plugin.support.IkePrompter;
+import org.apache.maven.api.Session;
 import org.apache.maven.api.di.Inject;
 import org.apache.maven.api.plugin.Log;
 import org.apache.maven.api.plugin.Mojo;
 import org.apache.maven.api.plugin.MojoException;
 import org.apache.maven.api.plugin.annotations.Parameter;
-import org.apache.maven.api.services.Prompter;
-import org.apache.maven.api.services.PrompterException;
 
 import java.io.File;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -38,17 +38,19 @@ abstract class AbstractWorkspaceMojo implements Mojo {
     private Log log;
 
     /**
-     * Maven 4 prompter service, injected by the DI container. Used for
-     * all interactive prompts ({@link #requireParam}, {@link #confirm},
-     * {@link #selectFromList}). The Prompter coordinates stdout flushing
-     * and stdin reads correctly across terminal sessions, IntelliJ's
-     * Maven runner, and batch mode — replacing the older
-     * {@link System#console()} pattern, which silently fell through to
-     * "no prompt at all" in IntelliJ. Package-private setter is provided
-     * for test injection.
+     * Maven session, injected by the DI container — consulted for
+     * {@code interactiveMode} when building the {@link IkePrompter}.
      */
     @Inject
-    private Prompter prompter;
+    private Session session;
+
+    /**
+     * Interactive-prompt abstraction (IKE-Network/ike-issues#385).
+     * Lazily built by {@link #getPrompter()} from the session's
+     * interactive flag; package-private setter injects a
+     * {@link network.ike.plugin.support.ScriptedIkePrompter} in tests.
+     */
+    private IkePrompter prompter;
 
     /**
      * Path to workspace.yaml. If not set, searches upward from the
@@ -77,24 +79,30 @@ abstract class AbstractWorkspaceMojo implements Mojo {
     }
 
     /**
-     * Inject a {@link Prompter} (or a stub) for tests. Production code
-     * receives one via the Maven 4 DI container.
+     * Inject an {@link IkePrompter} (typically a
+     * {@link network.ike.plugin.support.ScriptedIkePrompter}) for
+     * tests. Production code lets {@link #getPrompter()} build one.
      *
      * @param prompter the prompter implementation to use
      */
-    void setPrompter(Prompter prompter) {
+    void setPrompter(IkePrompter prompter) {
         this.prompter = prompter;
     }
 
     /**
-     * The injected {@link Prompter} for callers that need to pass it
-     * through to a static helper (e.g.,
-     * {@link FeatureFinishSupport#promptStaleBranchCleanup}).
+     * The {@link IkePrompter} for this goal — built lazily from the
+     * session's interactive flag, or the test-injected instance.
+     * Callers that pass it to a static helper (e.g.
+     * {@link FeatureFinishSupport#promptStaleBranchCleanup}) use this.
      *
-     * @return the prompter, or {@code null} when running in a context
-     *         without DI (some unit tests)
+     * @return the prompter (never {@code null})
      */
-    protected Prompter getPrompter() {
+    protected IkePrompter getPrompter() {
+        if (prompter == null) {
+            boolean interactive = session == null
+                    || session.getSettings().isInteractiveMode();
+            prompter = new ConsoleIkePrompter(getLog(), interactive);
+        }
         return prompter;
     }
 
@@ -217,27 +225,16 @@ abstract class AbstractWorkspaceMojo implements Mojo {
      * Prompt the user interactively for a required parameter when it
      * was not supplied on the command line.
      *
-     * <p>Delegates to the injected Maven 4 {@link Prompter} which
-     * renders the label inline with the input cursor in both terminal
-     * sessions and IntelliJ's Maven runner via the same jline-backed
-     * line renderer Maven uses for every other interactive surface.
-     * In batch mode (or when no Prompter is wired), throws a clear
-     * error directing the user to pass the property explicitly.
-     *
-     * <p>ike-issues#385: an earlier revision of this method called a
-     * {@code surfacePromptLabel} helper that emitted the label through
-     * {@code getLog().info()} before invoking the Prompter, which
-     * forced the label onto a separate line from the input. That
-     * workaround predated Maven 4's jline rewrite of the Prompter
-     * service; the current implementation talks to the Prompter
-     * directly with the full label as the prompt string, which the
-     * jline renderer displays inline.
+     * <p>Delegates to the {@link IkePrompter} (IKE-Network/ike-issues#385):
+     * an inline prompt on a real terminal, an own-line prompt in a
+     * piped IDE runner. In batch mode it throws a clear error
+     * directing the user to pass the property explicitly.
      *
      * @param currentValue the value from the {@code @Parameter} field (may be null)
      * @param propertyName the {@code -D} property name (for the error message)
-     * @param promptLabel  human-readable label shown in the prompt; the
-     *                     Prompter appends its own ": " separator, so
-     *                     callers should not include trailing punctuation
+     * @param promptLabel  human-readable label shown in the prompt;
+     *                     callers pass it without trailing punctuation
+     *                     (a {@code ": "} separator is appended here)
      * @return the resolved value — either the original or user-supplied
      * @throws MojoException if no value can be obtained
      */
@@ -246,25 +243,13 @@ abstract class AbstractWorkspaceMojo implements Mojo {
         if (currentValue != null && !currentValue.isBlank()) {
             return currentValue.trim();
         }
-
-        if (prompter == null) {
-            throw new MojoException(
-                    propertyName + " is required. Specify -D" + propertyName
-                            + "=<value> (no Prompter wired in this context).");
-        }
-
-        try {
-            String input = prompter.prompt(promptLabel);
+        IkePrompter p = getPrompter();
+        if (p.isInteractive()) {
+            String input = p.prompt(promptLabel + ": ");
             if (input != null && !input.isBlank()) {
                 return input.trim();
             }
-        } catch (PrompterException e) {
-            throw new MojoException(
-                    propertyName + " is required. Specify -D" + propertyName
-                            + "=<value> or run interactively. ("
-                            + e.getMessage() + ")");
         }
-
         throw new MojoException(
                 propertyName + " is required. Specify -D" + propertyName
                         + "=<value> or run interactively.");
@@ -345,26 +330,7 @@ abstract class AbstractWorkspaceMojo implements Mojo {
      * @throws MojoException if no answer can be obtained
      */
     protected boolean confirm(String label, boolean defaultYes) {
-        if (prompter == null) {
-            return defaultYes;
-        }
-        String suffix = defaultYes ? " [Y/n]" : " [y/N]";
-        try {
-            // ike-issues#385: pass the full label to the Prompter so
-            // jline renders the question and the input cursor on the
-            // same line. The two-argument prompt form supplies the
-            // default reply when the user hits Enter without typing.
-            String input = prompter.prompt(label + suffix,
-                    defaultYes ? "y" : "n");
-            if (input == null || input.isBlank()) {
-                return defaultYes;
-            }
-            String trimmed = input.trim().toLowerCase();
-            return trimmed.equals("y") || trimmed.equals("yes");
-        } catch (PrompterException e) {
-            throw new MojoException(
-                    "Could not read confirmation: " + e.getMessage());
-        }
+        return getPrompter().confirm(label, defaultYes);
     }
 
     /**
@@ -380,34 +346,12 @@ abstract class AbstractWorkspaceMojo implements Mojo {
         if (options == null || options.isEmpty()) {
             return null;
         }
-        if (prompter == null) {
+        String chosen = getPrompter().select(label, options);
+        if (chosen == null) {
             throw new MojoException(
-                    label + ": no Prompter wired in this context");
+                    "Could not read a valid selection for: " + label);
         }
-        try {
-            // Print the numbered menu via getLog (each line is its own
-            // log entry so it threads correctly with surrounding INFO
-            // output) and then let the Prompter handle the actual
-            // selection input. ike-issues#385: pass the full
-            // "Select [1-N]" prompt to the Prompter so jline renders
-            // it inline with the input cursor.
-            getLog().info("");
-            getLog().info("  " + label + ":");
-            List<String> indices = new ArrayList<>(options.size());
-            for (int i = 0; i < options.size(); i++) {
-                getLog().info("    " + (i + 1) + ") " + options.get(i));
-                indices.add(String.valueOf(i + 1));
-            }
-            String pick = prompter.prompt(
-                    "Select [1-" + options.size() + "]",
-                    indices, "1");
-            int idx = Integer.parseInt(pick.trim()) - 1;
-            return options.get(idx);
-        } catch (PrompterException | NumberFormatException
-                 | IndexOutOfBoundsException e) {
-            throw new MojoException(
-                    "Could not read selection: " + e.getMessage());
-        }
+        return chosen;
     }
 
     /**

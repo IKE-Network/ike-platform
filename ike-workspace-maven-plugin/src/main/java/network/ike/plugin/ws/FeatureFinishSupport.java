@@ -382,20 +382,20 @@ class FeatureFinishSupport {
      * <p>Stale branches are feature branches that are fully merged into
      * the target branch and are not the branch just finished. The
      * interactive prompt defaults to "no" so unattended/batch runs
-     * (where the {@link Prompter} returns the default) leave stale
-     * branches in place rather than deleting them silently.
+     * leave stale branches in place rather than deleting them
+     * silently.
      *
      * @param root           workspace root directory
      * @param components     subproject names to scan
      * @param finishedBranch the branch that was just finished (excluded
      *                       from the stale list)
      * @param targetBranch   the merge target (e.g., "main")
-     * @param prompter       Maven 4 prompter for the cleanup confirmation
+     * @param prompter       prompter for the cleanup confirmation
      * @param log            Maven logger
      */
     static void promptStaleBranchCleanup(File root, List<String> components,
                                            String finishedBranch, String targetBranch,
-                                           org.apache.maven.api.services.Prompter prompter,
+                                           network.ike.plugin.support.IkePrompter prompter,
                                            Log log) {
         // Collect stale branches across all subprojects
         Map<String, List<String>> staleBranches = new LinkedHashMap<>();
@@ -439,28 +439,13 @@ class FeatureFinishSupport {
                     + ", last commit: " + date + ")");
         }
 
-        // Prompt for deletion. Default "n" so non-interactive runs
-        // (batch mode, missing Prompter) leave the branches in place.
+        // Prompt for deletion. Default "no" so non-interactive runs
+        // (batch mode) leave the branches in place.
         log.info("");
         String prompt = "Delete " + uniqueBranches.size() + " stale branch"
-                + (uniqueBranches.size() == 1 ? "" : "es") + "? [y/N]";
+                + (uniqueBranches.size() == 1 ? "" : "es") + "?";
 
-        boolean delete = false;
-        if (prompter != null) {
-            try {
-                // ike-issues#385: pass the full prompt string to the
-                // Prompter so jline renders the question and the input
-                // cursor on the same line.
-                String input = prompter.prompt(prompt, "n");
-                if (input != null) {
-                    String trimmed = input.trim().toLowerCase();
-                    delete = trimmed.equals("y") || trimmed.equals("yes");
-                }
-            } catch (org.apache.maven.api.services.PrompterException e) {
-                log.debug("Prompt failed: " + e.getMessage()
-                        + " — defaulting to no");
-            }
-        }
+        boolean delete = prompter != null && prompter.confirm(prompt, false);
 
         if (delete) {
             for (var entry : staleBranches.entrySet()) {

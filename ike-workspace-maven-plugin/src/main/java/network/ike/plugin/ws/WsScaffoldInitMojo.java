@@ -10,13 +10,14 @@ import network.ike.workspace.MavenVersion;
 import network.ike.workspace.SubprojectName;
 import network.ike.workspace.WorkspaceGraph;
 
+import network.ike.plugin.support.ConsoleIkePrompter;
+import network.ike.plugin.support.IkePrompter;
+import org.apache.maven.api.Session;
 import org.apache.maven.api.di.Inject;
 import org.apache.maven.api.plugin.Log;
 import org.apache.maven.api.plugin.Mojo;
 import org.apache.maven.api.plugin.MojoException;
 import org.apache.maven.api.plugin.annotations.Parameter;
-import org.apache.maven.api.services.Prompter;
-import org.apache.maven.api.services.PrompterException;
 
 import java.io.File;
 import java.io.IOException;
@@ -77,9 +78,12 @@ public class WsScaffoldInitMojo implements Mojo {
     @Inject
     private Log log;
 
-    /** Maven 4 prompter for interactive parameter resolution. */
+    /** Maven session — consulted for interactive mode (#385). */
     @Inject
-    private Prompter prompter;
+    private Session session;
+
+    /** Interactive prompter, lazily built (IKE-Network/ike-issues#385). */
+    private IkePrompter prompter;
 
     /**
      * Workspace name. Used as the directory name (bootstrap mode), Maven
@@ -337,24 +341,18 @@ public class WsScaffoldInitMojo implements Mojo {
     private String promptParam(String propertyName, String label)
             throws MojoException {
         if (prompter == null) {
-            throw new MojoException(
-                    propertyName + " is required. Specify -D" + propertyName
-                            + "=<value> (no Prompter wired in this context).");
+            boolean interactive = session == null
+                    || session.getSettings().isInteractiveMode();
+            prompter = new ConsoleIkePrompter(log, interactive);
         }
-        try {
-            // ike-issues#385: pass the full label so jline renders the
-            // label and input cursor on the same line.
-            String input = prompter.prompt(label);
+        if (prompter.isInteractive()) {
+            String input = prompter.prompt(label + ": ");
             if (input != null && !input.isBlank()) {
                 return input.trim();
             }
-        } catch (PrompterException e) {
-            throw new MojoException(
-                    propertyName + " is required. Specify -D" + propertyName
-                            + "=<value>. (" + e.getMessage() + ")");
         }
         throw new MojoException(
                 propertyName + " is required. Specify -D" + propertyName
-                        + "=<value>");
+                        + "=<value> or run interactively.");
     }
 }

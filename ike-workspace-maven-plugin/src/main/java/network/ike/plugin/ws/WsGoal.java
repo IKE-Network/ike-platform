@@ -2,13 +2,10 @@ package network.ike.plugin.ws;
 
 import org.apache.maven.api.plugin.annotations.Mojo;
 
-import java.util.Optional;
-
 /**
  * Compile-time identity for every {@code ws:*} goal in this plugin. Each
  * value wraps the bare goal name, the mojo class that implements it, and
- * a short human description. Draft/publish siblings expose each other
- * through {@link #pair()}.
+ * a short human description.
  *
  * <p>Callers that invoke ws goals from Java — for subprocess exec, for
  * {@code writeReport} / {@code startReport} / {@code finishReport}, for
@@ -127,9 +124,6 @@ public enum WsGoal {
     /** Shared {@code ws:} prefix for all goals in this plugin. */
     public static final String PLUGIN_PREFIX = "ws";
 
-    private static final String DRAFT_SUFFIX = "-draft";
-    private static final String PUBLISH_SUFFIX = "-publish";
-
     private final String goalName;
     private final Class<? extends org.apache.maven.api.plugin.Mojo> mojoClass;
     private final String description;
@@ -160,47 +154,5 @@ public enum WsGoal {
     /** One-line human description of what this goal does. */
     public String description() {
         return description;
-    }
-
-    /** True if this is the {@code -draft} counterpart of a draft/publish pair. */
-    public boolean isDraft() {
-        return goalName.endsWith(DRAFT_SUFFIX);
-    }
-
-    /** True if this is the {@code -publish} counterpart of a draft/publish pair. */
-    public boolean isPublish() {
-        return goalName.endsWith(PUBLISH_SUFFIX);
-    }
-
-    /**
-     * The paired draft/publish sibling, if this goal belongs to a pair.
-     *
-     * @return the sibling goal, or empty if this goal is a singleton
-     */
-    public Optional<WsGoal> pair() {
-        if (isDraft()) {
-            return byName(stripSuffix(goalName, DRAFT_SUFFIX) + PUBLISH_SUFFIX);
-        }
-        if (isPublish()) {
-            return byName(stripSuffix(goalName, PUBLISH_SUFFIX) + DRAFT_SUFFIX);
-        }
-        return Optional.empty();
-    }
-
-    /**
-     * Look up a goal by its bare name (e.g. {@code "align-publish"}).
-     *
-     * @param goalName the bare goal name, without the {@code ws:} prefix
-     * @return the matching goal, or empty if none
-     */
-    public static Optional<WsGoal> byName(String goalName) {
-        for (WsGoal g : values()) {
-            if (g.goalName.equals(goalName)) return Optional.of(g);
-        }
-        return Optional.empty();
-    }
-
-    private static String stripSuffix(String s, String suffix) {
-        return s.substring(0, s.length() - suffix.length());
     }
 }

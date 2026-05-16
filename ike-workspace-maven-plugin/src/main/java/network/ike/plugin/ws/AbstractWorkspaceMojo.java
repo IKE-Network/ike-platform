@@ -393,6 +393,12 @@ abstract class AbstractWorkspaceMojo implements Mojo {
      * browsers. The nearest {@code .gitignore} is self-healed to include
      * {@code ws꞉*.md} so reports never land in git.
      *
+     * <p>Each goal owns exactly its own report file. A {@code -publish}
+     * run does not delete the matching {@code -draft} report: the draft
+     * is the recorded plan and the publish report is the recorded
+     * outcome, both timestamped, so keeping them side by side is
+     * history rather than staleness (ike-issues#413).
+     *
      * @param goal    the goal whose output is being reported
      * @param content markdown content to write
      */
@@ -400,16 +406,6 @@ abstract class AbstractWorkspaceMojo implements Mojo {
         try {
             java.nio.file.Path root = workspaceRoot().toPath();
             WorkspaceReport.write(root, goal.qualified(), content, getLog());
-            // After a successful -publish, the matching -draft report is
-            // now stale — it described what WOULD happen, but it has
-            // happened. Leaving both files alongside each other misleads
-            // readers (ike-issues#300). Best-effort delete; debug-log on
-            // failure.
-            if (goal.isPublish()) {
-                goal.pair().ifPresent(draft ->
-                        WorkspaceReport.deleteReport(
-                                root, draft.qualified(), getLog()));
-            }
         } catch (MojoException e) {
             getLog().debug("Could not resolve workspace root for report: "
                     + e.getMessage());

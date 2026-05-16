@@ -205,9 +205,11 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
      * Run {@code mvn <goal>} in the given subproject directory. When
      * {@code goal} is {@code ike:scaffold-publish} and the
      * {@link #applyFoundation} flag is set, forwards
-     * {@code -Dike.scaffold.apply-foundation=true} — and
-     * {@code -Dike.scaffold.resolve-foundation=true} too when
-     * {@link #resolveFoundation} is set.
+     * {@code -Dike.scaffold.apply-foundation=true} — plus
+     * {@code -Dike.scaffold.skip-parent=true} always (the workspace's
+     * {@code ParentVersionReconciler} owns the {@code <parent>}
+     * cascade, #418), and {@code -Dike.scaffold.resolve-foundation=true}
+     * when {@link #resolveFoundation} is set.
      *
      * @param subDir the subproject directory
      * @param goal   the ike goal to invoke (draft or publish)
@@ -221,6 +223,10 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
         args.add("-B");
         if (publish && applyFoundation) {
             args.add("-Dike.scaffold.apply-foundation=true");
+            // The workspace ParentVersionReconciler owns <parent>; the
+            // per-subproject foundation-apply must not overwrite its
+            // cascade — apply the property pins only (#418).
+            args.add("-Dike.scaffold.skip-parent=true");
             if (resolveFoundation) {
                 args.add("-Dike.scaffold.resolve-foundation=true");
             }

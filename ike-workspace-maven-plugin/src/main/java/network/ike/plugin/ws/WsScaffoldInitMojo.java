@@ -341,8 +341,10 @@ public class WsScaffoldInitMojo implements Mojo {
     private String promptParam(String propertyName, String label)
             throws MojoException {
         if (prompter == null) {
-            boolean interactive = session == null
-                    || session.getSettings().isInteractiveMode();
+            // No session (unit tests) or batch mode -> not interactive,
+            // so the prompter declines rather than blocking on stdin.
+            boolean interactive = session != null
+                    && session.getSettings().isInteractiveMode();
             prompter = new ConsoleIkePrompter(log, interactive);
         }
         if (prompter.isInteractive()) {

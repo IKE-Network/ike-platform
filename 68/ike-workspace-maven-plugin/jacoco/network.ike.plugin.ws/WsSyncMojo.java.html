@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>WsSyncMojo.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">WsSyncMojo.java</span></div><h1>WsSyncMojo.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.workspace.WorkspaceGraph;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
+
+import java.io.File;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
+
+/**
+ * Pull then push across the workspace — the everyday &quot;sync&quot; operation:
+ * bring down what teammates have committed, then push up what I have
+ * committed. Replaces the daily two-step of {@code ws:pull} followed by
+ * {@code ws:push}.
+ *
+ * &lt;p&gt;Between the pull and the push, this goal also refreshes local
+ * {@code main} from {@code origin/main} across the workspace via
+ * {@link RefreshMainSupport}. This keeps local main coherent with the
+ * remote even when the user is working on a feature branch and never
+ * checks main out directly &amp;mdash; especially relevant in the
+ * Syncthing + independent-{@code .git} architecture where each machine
+ * evolves its local main ref independently. See ike-issues#284.
+ *
+ * &lt;p&gt;The push half runs in fail-fast mode: a non-fast-forward (or any
+ * other push failure) halts the goal with a clear error rather than
+ * reporting partial success and continuing. This keeps the workspace
+ * in a known state for the user to resolve, rather than leaving some
+ * subprojects pushed and others not.
+ *
+ * &lt;p&gt;Use {@code -DpullOnly} to run only the pull half (still refreshes
+ * main), or {@code -DpushOnly} to run only the push half (skips both
+ * pull and refresh-main). For the standalone operations, prefer
+ * {@link PullWorkspaceMojo ws:pull},
+ * {@link WsRefreshMainMojo ws:refresh-main}, or
+ * {@link PushMojo ws:push} directly.
+ *
+ * &lt;pre&gt;{@code
+ * mvn ws:sync                       # pull, refresh main, push
+ * mvn ws:sync -DpullOnly            # pull and refresh main only
+ * mvn ws:sync -DpushOnly            # push only (fail-fast)
+ * mvn ws:sync -Dremote=upstream     # push to a non-default remote
+ * }&lt;/pre&gt;
+ *
+ * &lt;p&gt;See issue #194 and the {@code dev-workspace-ops-completion} topic
+ * in {@code ike-lab-documents} for the design rationale.
+ */
+@Mojo(name = &quot;sync&quot;, projectRequired = false, aggregator = true)
+public class WsSyncMojo extends AbstractWorkspaceMojo {
+
+    /** Creates this goal instance. */
+<span class="nc" id="L54">    public WsSyncMojo() {}</span>
+
+    /**
+     * Remote name to push to. Forwarded to the push half.
+     */
+    @Parameter(property = &quot;remote&quot;, defaultValue = &quot;origin&quot;)
+    String remote;
+
+    /**
+     * Run the pull half only and skip the push. Mutually exclusive
+     * with {@link #pushOnly}.
+     */
+    @Parameter(property = &quot;pullOnly&quot;, defaultValue = &quot;false&quot;)
+    boolean pullOnly;
+
+    /**
+     * Run the push half only and skip the pull. Mutually exclusive
+     * with {@link #pullOnly}.
+     */
+    @Parameter(property = &quot;pushOnly&quot;, defaultValue = &quot;false&quot;)
+    boolean pushOnly;
+
+    @Override
+    protected WorkspaceReportSpec runGoal() throws MojoException {
+<span class="nc bnc" id="L78" title="All 4 branches missed.">        if (pullOnly &amp;&amp; pushOnly) {</span>
+<span class="nc" id="L79">            throw new MojoException(</span>
+                    &quot;-DpullOnly and -DpushOnly are mutually exclusive —&quot;
+                            + &quot; use ws:pull or ws:push directly if you&quot;
+                            + &quot; want only one half&quot;);
+        }
+
+<span class="nc" id="L85">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L86">        getLog().info(header(&quot;Sync&quot;));</span>
+<span class="nc" id="L87">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+<span class="nc" id="L88">        getLog().info(&quot;&quot;);</span>
+
+<span class="nc bnc" id="L90" title="All 2 branches missed.">        if (!pushOnly) {</span>
+<span class="nc" id="L91">            PullWorkspaceMojo pull = new PullWorkspaceMojo();</span>
+<span class="nc" id="L92">            pull.setLog(getLog());</span>
+<span class="nc" id="L93">            pull.manifest = this.manifest;</span>
+<span class="nc" id="L94">            pull.execute();</span>
+
+            // Refresh local main from origin/main between pull and push,
+            // so a feature-branch sync also keeps main coherent. Skipped
+            // on push-only, where the user has explicitly opted out of
+            // any pull-side work. See ike-issues#284.
+<span class="nc bnc" id="L100" title="All 2 branches missed.">            if (isWorkspaceMode()) {</span>
+<span class="nc" id="L101">                WorkspaceGraph graph = loadGraph();</span>
+<span class="nc" id="L102">                File root = workspaceRoot();</span>
+<span class="nc" id="L103">                Set&lt;String&gt; targets = graph.manifest().subprojects().keySet();</span>
+<span class="nc" id="L104">                List&lt;String&gt; sorted = graph.topologicalSort(</span>
+                        new LinkedHashSet&lt;&gt;(targets));
+<span class="nc" id="L106">                RefreshMainSupport.refreshOrThrow(root, sorted, &quot;main&quot;, getLog());</span>
+            }
+        }
+
+<span class="nc bnc" id="L110" title="All 2 branches missed.">        if (!pullOnly) {</span>
+<span class="nc" id="L111">            PushMojo push = new PushMojo();</span>
+<span class="nc" id="L112">            push.setLog(getLog());</span>
+<span class="nc" id="L113">            push.manifest = this.manifest;</span>
+<span class="nc" id="L114">            push.remote = this.remote;</span>
+<span class="nc" id="L115">            push.failFast = true;</span>
+<span class="nc" id="L116">            push.execute();</span>
+        }
+
+<span class="nc" id="L119">        StringBuilder summary = new StringBuilder();</span>
+<span class="nc bnc" id="L120" title="All 2 branches missed.">        summary.append(pushOnly ? &quot;skipped pull&quot; : &quot;pulled&quot;);</span>
+<span class="nc" id="L121">        summary.append(&quot; then &quot;);</span>
+<span class="nc bnc" id="L122" title="All 2 branches missed.">        summary.append(pullOnly ? &quot;skipped push&quot; : &quot;pushed&quot;);</span>
+<span class="nc" id="L123">        summary.append(&quot;.\n&quot;);</span>
+
+<span class="nc" id="L125">        PostMutationSync.refresh(workspaceRoot(), getLog());</span>
+
+<span class="nc" id="L127">        return new WorkspaceReportSpec(WsGoal.SYNC, summary.toString());</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

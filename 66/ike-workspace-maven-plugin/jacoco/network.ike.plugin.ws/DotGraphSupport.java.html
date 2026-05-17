@@ -1,0 +1,121 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>DotGraphSupport.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">DotGraphSupport.java</span></div><h1>DotGraphSupport.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.workspace.Subproject;
+import network.ike.workspace.WorkspaceGraph;
+
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Graphviz DOT rendering for the workspace dependency graph.
+ *
+ * &lt;p&gt;Pure, stateless helpers — no mojo state, no I/O. Shared by
+ * {@link GraphWorkspaceMojo} ({@code ws:graph}) and
+ * {@link OverviewWorkspaceMojo} ({@code ws:overview}), both of which
+ * emit the graph as DOT on the console ({@code -Dformat=dot}) and as a
+ * fenced {@code ```dot} block in their markdown reports.
+ *
+ * &lt;p&gt;Extracted from {@code GraphWorkspaceMojo} so diagram rendering
+ * lives in a support class rather than on a mojo, and so
+ * {@code ws:overview} no longer reaches into a sibling mojo statically
+ * (IKE-Network/ike-issues#408, closing the #406 leftover).
+ *
+ * &lt;p&gt;IKE-DIAGRAMS.md mandates GraphViz for dependency graphs and
+ * IKE-DOC.md discourages Mermaid; this class is the single place the
+ * workspace graph becomes DOT.
+ */
+final class DotGraphSupport {
+
+    private DotGraphSupport() {
+    }
+
+    /**
+     * Build Graphviz DOT source for a whole workspace graph.
+     *
+     * &lt;p&gt;Extracts the subproject names and dependency edges from the
+     * {@link WorkspaceGraph} and delegates to {@link #buildDotGraph}.
+     *
+     * @param graph the workspace graph
+     * @return complete DOT source (a {@code digraph} block)
+     */
+    static String dotFromGraph(WorkspaceGraph graph) {
+<span class="fc" id="L43">        List&lt;String&gt; subprojectNames = graph.manifest().subprojects()</span>
+<span class="fc" id="L44">                .values().stream()</span>
+<span class="fc" id="L45">                .map(Subproject::name)</span>
+<span class="fc" id="L46">                .toList();</span>
+
+<span class="fc" id="L48">        Map&lt;String, List&lt;String[]&gt;&gt; edges = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc bfc" id="L49" title="All 2 branches covered.">        for (Subproject sub : graph.manifest().subprojects().values()) {</span>
+<span class="fc" id="L50">            List&lt;String[]&gt; compEdges = sub.dependsOn().stream()</span>
+<span class="fc" id="L51">                    .map(dep -&gt; new String[]{</span>
+<span class="fc" id="L52">                            dep.subproject(), dep.relationship()})</span>
+<span class="fc" id="L53">                    .toList();</span>
+<span class="fc bfc" id="L54" title="All 2 branches covered.">            if (!compEdges.isEmpty()) {</span>
+<span class="fc" id="L55">                edges.put(sub.name(), compEdges);</span>
+            }
+<span class="fc" id="L57">        }</span>
+<span class="fc" id="L58">        return buildDotGraph(&quot;workspace&quot;, subprojectNames, edges);</span>
+    }
+
+    /**
+     * Build a fenced Graphviz DOT block for a markdown report.
+     *
+     * &lt;p&gt;The workspace reports embed the graph as a {@code ```dot}
+     * block (IKE-Network/ike-issues#406).
+     *
+     * @param graph the workspace graph
+     * @return a fenced {@code ```dot} block, newline-terminated
+     */
+    static String buildDotReportBlock(WorkspaceGraph graph) {
+<span class="fc" id="L71">        return &quot;```dot\n&quot; + dotFromGraph(graph) + &quot;```\n&quot;;</span>
+    }
+
+    /**
+     * Build a Graphviz DOT graph from subproject names and edges.
+     *
+     * &lt;p&gt;This is a pure function with no workspace-model dependencies,
+     * suitable for direct unit testing.
+     *
+     * @param title           graph name used in {@code digraph &lt;title&gt;}
+     * @param subprojectNames names of subprojects to include as nodes
+     * @param edges           map of source subproject to list of
+     *                        {@code [target, relationship]} pairs
+     * @return complete DOT source
+     */
+    static String buildDotGraph(String title,
+                                List&lt;String&gt; subprojectNames,
+                                Map&lt;String, List&lt;String[]&gt;&gt; edges) {
+<span class="fc" id="L89">        StringBuilder dot = new StringBuilder(1024);</span>
+<span class="fc" id="L90">        dot.append(&quot;digraph &quot;).append(title).append(&quot; {\n&quot;);</span>
+<span class="fc" id="L91">        dot.append(&quot;    rankdir=BT;\n&quot;);</span>
+<span class="fc" id="L92">        dot.append(&quot;    node [shape=box, style=rounded, &quot;</span>
+                + &quot;fontname=\&quot;Helvetica\&quot;];\n&quot;);
+<span class="fc" id="L94">        dot.append(&quot;\n&quot;);</span>
+
+        // Node declarations
+<span class="fc bfc" id="L97" title="All 2 branches covered.">        for (String subName : subprojectNames) {</span>
+<span class="fc" id="L98">            dot.append(&quot;    \&quot;&quot;).append(subName).append(&quot;\&quot;;\n&quot;);</span>
+<span class="fc" id="L99">        }</span>
+
+<span class="fc" id="L101">        dot.append(&quot;\n&quot;);</span>
+
+        // Edges
+<span class="fc bfc" id="L104" title="All 2 branches covered.">        for (var entry : edges.entrySet()) {</span>
+<span class="fc" id="L105">            String source = entry.getKey();</span>
+<span class="fc bfc" id="L106" title="All 2 branches covered.">            for (String[] edge : entry.getValue()) {</span>
+<span class="fc" id="L107">                String target = edge[0];</span>
+<span class="fc" id="L108">                String relationship = edge[1];</span>
+<span class="fc bfc" id="L109" title="All 2 branches covered.">                String style = &quot;content&quot;.equals(relationship)</span>
+<span class="fc" id="L110">                        ? &quot; [style=dashed]&quot; : &quot;&quot;;</span>
+<span class="fc" id="L111">                dot.append(&quot;    \&quot;&quot;).append(source).append(&quot;\&quot; -&gt; \&quot;&quot;)</span>
+<span class="fc" id="L112">                   .append(target).append(&quot;\&quot;&quot;).append(style)</span>
+<span class="fc" id="L113">                   .append(&quot;;\n&quot;);</span>
+<span class="fc" id="L114">            }</span>
+<span class="fc" id="L115">        }</span>
+
+<span class="fc" id="L117">        dot.append(&quot;}\n&quot;);</span>
+<span class="fc" id="L118">        return dot.toString();</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

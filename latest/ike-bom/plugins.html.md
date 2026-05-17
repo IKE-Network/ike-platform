@@ -8,7 +8,7 @@ canonical_url: https://ike.network/ike-platform/ike-bom/plugins.html
 
 | GroupId | ArtifactId | Version |
 | --- | --- | --- |
-| network.ike.tooling | [ike-maven-plugin](https://ike.network/ike-tooling/ike-maven-plugin/)[1] | 182 |
+| network.ike.tooling | [ike-maven-plugin](https://ike.network/ike-tooling/ike-maven-plugin/)[1] | 183 |
 | org.apache.maven.plugins | [maven-clean-plugin](https://maven.apache.org/plugins/maven-clean-plugin/)[2] | 3.4.0 |
 | org.apache.maven.plugins | [maven-compiler-plugin](https://maven.apache.org/plugins/maven-compiler-plugin/)[3] | 3.14.0 |
 | org.apache.maven.plugins | [maven-dependency-plugin](https://maven.apache.org/plugins/maven-dependency-plugin/)[4] | 3.9.0 |

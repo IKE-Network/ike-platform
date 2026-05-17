@@ -67,4 +67,33 @@ public record DriftReport(
         }
         return sb.toString();
     }
+
+    /**
+     * Render this report as a Markdown fragment describing what a
+     * {@code scaffold-publish} reconciler <em>applied</em> — the
+     * past-tense counterpart of {@link #toMarkdown}
+     * (IKE-Network/ike-issues#431).
+     *
+     * <p>A reconciler's {@link Reconciler#apply} does exactly what its
+     * {@link Reconciler#detect} reported when the two are called back
+     * to back on an unchanged workspace, so the same {@code detailLines}
+     * (e.g. {@code doc-example: ike-parent:66 → 67}) describe the
+     * applied changes. The drift {@code summary}, {@code defaultAction},
+     * and {@code optOutCommand} are future-tense and omitted here.
+     *
+     * @return a Markdown fragment, newline-terminated
+     */
+    public String toAppliedMarkdown() {
+        if (!hasDrift) {
+            return "- ✓ **" + dimension
+                    + "** — already current, nothing to apply\n";
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("- ✓ **").append(dimension).append("** — applied ")
+                .append(detailLines.size()).append(" change(s)\n");
+        for (String line : detailLines) {
+            sb.append("  - ").append(line).append("\n");
+        }
+        return sb.toString();
+    }
 }

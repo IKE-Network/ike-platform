@@ -189,6 +189,13 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
                 + "subproject's own `ike꞉scaffold-"
                 + (publish ? "publish" : "draft") + ".md` report.");
 
+        // ws:scaffold-publish edits POMs and scaffold files in place
+        // without committing — surface the resulting uncommitted state
+        // so the operator can see what to review (#431).
+        if (publish) {
+            reportUncommittedState(root, targets, walkRoot, report);
+        }
+
         if (failed > 0) {
             throw new MojoException(
                     "ws:" + (publish ? "scaffold-publish" : "scaffold-draft")
@@ -235,6 +242,75 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
     }
 
     /**
+     * Append an "Uncommitted changes" section listing the files
+     * {@code ws:scaffold-publish} left modified and uncommitted, per
+     * repo (IKE-Network/ike-issues#431).
+     *
+     * <p>The goal edits POMs and scaffold files in place and does not
+     * commit, so this section is the operator's checklist of what to
+     * review and commit, and in which repo.
+     *
+     * @param root     the workspace root directory
+     * @param targets  the subproject names that were walked
+     * @param walkRoot whether the workspace root itself was walked
+     * @param report   the goal report being accumulated
+     */
+    private void reportUncommittedState(File root, List<String> targets,
+            boolean walkRoot, GoalReportBuilder report) {
+        report.section("Uncommitted changes");
+        StringBuilder body = new StringBuilder();
+        boolean any = false;
+        for (String name : targets) {
+            any |= appendRepoStatus(name, new File(root, name), body);
+        }
+        if (walkRoot) {
+            any |= appendRepoStatus("(workspace root)", root, body);
+        }
+        if (any) {
+            report.paragraph("`ws:scaffold-publish` edits files in place "
+                    + "and does not commit. Review and commit per repo:");
+            report.raw(body.toString());
+        } else {
+            report.paragraph("No files were modified.");
+        }
+    }
+
+    /**
+     * Append one repo's {@code git status --porcelain} to {@code body}
+     * as a Markdown bullet listing its changed files.
+     *
+     * @param label the repo label shown in the report
+     * @param dir   the repo directory
+     * @param body  the Markdown buffer to append to
+     * @return {@code true} if the repo had uncommitted changes
+     */
+    private boolean appendRepoStatus(String label, File dir,
+            StringBuilder body) {
+        if (!new File(dir, ".git").isDirectory()) {
+            return false;
+        }
+        String status;
+        try {
+            status = ReleaseSupport.execCapture(dir,
+                    "git", "status", "--porcelain");
+        } catch (RuntimeException e) {
+            getLog().debug("  " + label + ": git status failed — "
+                    + e.getMessage());
+            return false;
+        }
+        if (status == null || status.isBlank()) {
+            return false;
+        }
+        List<String> lines = status.strip().lines().toList();
+        body.append("- **").append(label).append("** — ")
+                .append(lines.size()).append(" file(s)\n");
+        for (String line : lines) {
+            body.append("  - `").append(line.strip()).append("`\n");
+        }
+        return true;
+    }
+
+    /**
      * Run the workspace-level {@link Reconciler}s registered in
      * {@link ReconcilerRegistry}. In draft mode each reconciler's
      * {@link Reconciler#detect} result is printed; in publish mode
@@ -251,8 +327,23 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
                 readReconcilerOptions(), getLog());
         for (Reconciler reconciler : ReconcilerRegistry.all()) {
             if (publish) {
-                reconciler.apply(ctx);
-                report.bullet(reconciler.dimension());
+                if (ctx.options().isOptedOut(reconciler.optOutFlag())) {
+                    // apply() self-checks the opt-out and no-ops; the
+                    // report says so rather than claiming a change.
+                    reconciler.apply(ctx);
+                    report.raw("- ⊘ **" + reconciler.dimension()
+                            + "** — skipped (opted out via -D"
+                            + reconciler.optOutFlag() + "=false)\n");
+                } else {
+                    // detect() is read-only and the workspace is
+                    // unchanged until apply() runs, so the captured
+                    // report describes exactly what apply() does —
+                    // including the per-subproject before → after
+                    // detail (IKE-Network/ike-issues#431).
+                    DriftReport applied = reconciler.detect(ctx);
+                    reconciler.apply(ctx);
+                    report.raw(applied.toAppliedMarkdown());
+                }
             } else {
                 DriftReport drift = reconciler.detect(ctx);
                 printDriftReport(drift);

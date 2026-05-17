@@ -1,0 +1,367 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>WorkspaceBootstrap.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws.bootstrap</a> &gt; <span class="el_source">WorkspaceBootstrap.java</span></div><h1>WorkspaceBootstrap.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws.bootstrap;
+
+import network.ike.plugin.ReleaseSupport;
+import network.ike.plugin.ws.Ansi;
+import network.ike.plugin.ws.MavenWrapper;
+import org.apache.maven.api.plugin.Log;
+import org.apache.maven.api.plugin.MojoException;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.LocalDate;
+
+/**
+ * Generates the on-disk scaffold for a brand-new IKE workspace.
+ *
+ * &lt;p&gt;Subsumes the file-generation half of the retired
+ * {@code WsCreateMojo} (folded into {@code ws:scaffold-init} per
+ * IKE-Network/ike-issues#393): given a target directory and a small
+ * parameter bag, writes the standard workspace files
+ * ({@code pom.xml}, {@code workspace.yaml}, {@code .gitignore},
+ * {@code .mvn/maven.config}, {@code .mvn/jvm.config},
+ * {@code README.adoc}) and installs the Maven wrapper via
+ * {@link MavenWrapper#writeMissingFiles}.
+ *
+ * &lt;p&gt;The generated files follow current IKE conventions:
+ * &lt;ul&gt;
+ *   &lt;li&gt;POM uses Maven 4.1.0 model with {@code root=&quot;true&quot;}&lt;/li&gt;
+ *   &lt;li&gt;.gitignore uses whitelist strategy (ignore everything,
+ *       whitelist workspace-owned files)&lt;/li&gt;
+ *   &lt;li&gt;workspace.yaml has schema-version 1.1 with a typed
+ *       {@code workspace-root:} block holding the workspace's GAV
+ *       (ike-issues#183) and an empty {@code subprojects:} list&lt;/li&gt;
+ *   &lt;li&gt;.mvn/maven.config sets {@code -T 1C}&lt;/li&gt;
+ * &lt;/ul&gt;
+ *
+ * &lt;p&gt;This class is a pure scaffold writer — it does not consult
+ * {@code workspace.yaml} (none exists yet), does not iterate
+ * subprojects, and never extends {@code AbstractWorkspaceMojo}.
+ *
+ * @see SubprojectInitializer for the &quot;workspace.yaml already exists&quot;
+ *      half of {@code ws:scaffold-init}
+ */
+public final class WorkspaceBootstrap {
+
+    /** Parameters captured from the user-facing mojo. */
+<span class="fc" id="L48">    public record Params(String name,</span>
+                          String description,
+                          String org,
+                          String group,
+                          String artifactId,
+                          String version,
+                          String mavenVersion,
+                          String defaultBranch,
+                          boolean skipGit,
+                          String parentVersion) {}
+
+    private final Params params;
+    private final Log log;
+
+    /**
+     * Create a workspace bootstrapper bound to a parameter bag and a
+     * logger. Construction is cheap; the actual filesystem writes
+     * happen in {@link #createAt(Path)}.
+     *
+     * @param params the resolved create-time parameters
+     * @param log    the mojo logger
+     */
+<span class="fc" id="L70">    public WorkspaceBootstrap(Params params, Log log) {</span>
+<span class="fc" id="L71">        this.params = params;</span>
+<span class="fc" id="L72">        this.log = log;</span>
+<span class="fc" id="L73">    }</span>
+
+    /**
+     * Write the full workspace scaffold into {@code wsDir} and
+     * optionally initialize git. The directory must not already
+     * contain {@code pom.xml} or {@code workspace.yaml}; the caller
+     * is responsible for that pre-check.
+     *
+     * @param wsDir the workspace directory to populate
+     * @throws MojoException on file or git failures
+     */
+    public void createAt(Path wsDir) throws MojoException {
+        try {
+<span class="nc" id="L86">            Files.createDirectories(wsDir);</span>
+<span class="nc" id="L87">            Files.createDirectories(wsDir.resolve(&quot;.mvn&quot;));</span>
+
+<span class="nc" id="L89">            writeFile(wsDir.resolve(&quot;pom.xml&quot;), generatePom());</span>
+<span class="nc" id="L90">            writeFile(wsDir.resolve(&quot;workspace.yaml&quot;), generateManifest());</span>
+<span class="nc" id="L91">            writeFile(wsDir.resolve(&quot;.gitignore&quot;), generateGitignore());</span>
+<span class="nc" id="L92">            writeFile(wsDir.resolve(&quot;.mvn/maven.config&quot;), &quot;-T 1C\n&quot;);</span>
+            // .mvn/jvm.config is parsed as raw JVM args, one token per line,
+            // with NO comment syntax. A `#` at column 0 is passed to the JVM
+            // as a main-class name and fails with ClassNotFoundException: #.
+            // Seed a single standard flag so downstream hand-edits start
+            // from a correct baseline. The flag suppresses sun.misc.Unsafe
+            // deprecation warnings from JRuby/AsciidoctorJ on JDK 24+.
+<span class="nc" id="L99">            writeFile(wsDir.resolve(&quot;.mvn/jvm.config&quot;),</span>
+                    &quot;--sun-misc-unsafe-memory-access=allow\n&quot;);
+<span class="nc" id="L101">            writeFile(wsDir.resolve(&quot;README.adoc&quot;), generateReadme());</span>
+<span class="nc" id="L102">            MavenWrapper.writeMissingFiles(wsDir, params.mavenVersion());</span>
+
+<span class="nc" id="L104">            log.info(Ansi.green(&quot;  ✓ &quot;) + &quot;pom.xml&quot;);</span>
+<span class="nc" id="L105">            log.info(Ansi.green(&quot;  ✓ &quot;) + &quot;workspace.yaml&quot;);</span>
+<span class="nc" id="L106">            log.info(Ansi.green(&quot;  ✓ &quot;) + &quot;.gitignore&quot;);</span>
+<span class="nc" id="L107">            log.info(Ansi.green(&quot;  ✓ &quot;) + &quot;.mvn/maven.config&quot;);</span>
+<span class="nc" id="L108">            log.info(Ansi.green(&quot;  ✓ &quot;) + &quot;.mvn/jvm.config&quot;);</span>
+<span class="nc" id="L109">            log.info(Ansi.green(&quot;  ✓ &quot;) + &quot;README.adoc&quot;);</span>
+<span class="nc" id="L110">            log.info(Ansi.green(&quot;  ✓ &quot;) + &quot;mvnw (Maven &quot; + params.mavenVersion() + &quot;)&quot;);</span>
+
+<span class="nc" id="L112">        } catch (IOException e) {</span>
+<span class="nc" id="L113">            throw new MojoException(</span>
+<span class="nc" id="L114">                    &quot;Failed to create workspace files: &quot; + e.getMessage(), e);</span>
+<span class="nc" id="L115">        }</span>
+
+<span class="nc bnc" id="L117" title="All 2 branches missed.">        if (!params.skipGit()) {</span>
+            try {
+<span class="nc" id="L119">                initGit(wsDir);</span>
+<span class="nc" id="L120">            } catch (Exception e) {</span>
+<span class="nc" id="L121">                log.warn(&quot;  Git init failed (non-fatal): &quot; + e.getMessage());</span>
+<span class="nc" id="L122">                log.warn(&quot;  Initialize git manually in &quot; + wsDir);</span>
+<span class="nc" id="L123">            }</span>
+        }
+<span class="nc" id="L125">    }</span>
+
+    // ── File generators (pure, testable) ─────────────────────────
+
+    /**
+     * Generate the workspace root POM content. Package-private so
+     * tests can invoke it directly.
+     *
+     * @return the {@code pom.xml} text
+     */
+    String generatePom() {
+        // ike-parent version is the same as ike-platform version (reactor sibling).
+<span class="fc" id="L137">        String parentVersion = params.parentVersion();</span>
+
+<span class="fc" id="L139">        StringBuilder xml = new StringBuilder(2048);</span>
+<span class="fc" id="L140">        xml.append(&quot;&lt;?xml version=\&quot;1.0\&quot; encoding=\&quot;UTF-8\&quot;?&gt;\n&quot;);</span>
+<span class="fc" id="L141">        xml.append(&quot;&lt;!--\n&quot;);</span>
+<span class="fc" id="L142">        xml.append(&quot;  &quot;).append(params.description()).append(&quot;\n&quot;);</span>
+<span class="fc" id="L143">        xml.append(&quot;\n&quot;);</span>
+<span class="fc" id="L144">        xml.append(&quot;  Inherits from ike-parent to get plugin version management for\n&quot;);</span>
+<span class="fc" id="L145">        xml.append(&quot;  ike-maven-plugin and ike-workspace-maven-plugin automatically.\n&quot;);</span>
+<span class="fc" id="L146">        xml.append(&quot;\n&quot;);</span>
+<span class="fc" id="L147">        xml.append(&quot;  Every subproject is inside a file-activated profile so the reactor\n&quot;);</span>
+<span class="fc" id="L148">        xml.append(&quot;  automatically includes only the repos that are physically cloned.\n&quot;);</span>
+<span class="fc" id="L149">        xml.append(&quot;  Clone more repos and they join the reactor on the next build.\n&quot;);</span>
+
+<span class="fc" id="L151">        xml.append(&quot;\n&quot;);</span>
+<span class="fc" id="L152">        xml.append(&quot;  Usage:\n&quot;);</span>
+<span class="fc" id="L153">        xml.append(&quot;    mvn clean install                        # All cloned repos\n&quot;);</span>
+<span class="fc" id="L154">        xml.append(&quot;    mvn ws:scaffold-init                     # Clone all repos\n&quot;);</span>
+<span class="fc" id="L155">        xml.append(&quot;    mvn ws:overview                          # Workspace overview\n&quot;);</span>
+<span class="fc" id="L156">        xml.append(&quot;--&gt;\n&quot;);</span>
+<span class="fc" id="L157">        xml.append(&quot;&lt;project xmlns=\&quot;http://maven.apache.org/POM/4.1.0\&quot;\n&quot;);</span>
+<span class="fc" id="L158">        xml.append(&quot;         xmlns:xsi=\&quot;http://www.w3.org/2001/XMLSchema-instance\&quot;\n&quot;);</span>
+<span class="fc" id="L159">        xml.append(&quot;         xsi:schemaLocation=\&quot;http://maven.apache.org/POM/4.1.0\n&quot;);</span>
+<span class="fc" id="L160">        xml.append(&quot;                             https://maven.apache.org/xsd/maven-4.1.0.xsd\&quot;\n&quot;);</span>
+<span class="fc" id="L161">        xml.append(&quot;         root=\&quot;true\&quot;&gt;\n&quot;);</span>
+<span class="fc" id="L162">        xml.append(&quot;    &lt;modelVersion&gt;4.1.0&lt;/modelVersion&gt;\n\n&quot;);</span>
+<span class="fc" id="L163">        xml.append(&quot;    &lt;parent&gt;\n&quot;);</span>
+<span class="fc" id="L164">        xml.append(&quot;        &lt;groupId&gt;network.ike.platform&lt;/groupId&gt;\n&quot;);</span>
+<span class="fc" id="L165">        xml.append(&quot;        &lt;artifactId&gt;ike-parent&lt;/artifactId&gt;\n&quot;);</span>
+<span class="fc" id="L166">        xml.append(&quot;        &lt;version&gt;&quot;).append(parentVersion).append(&quot;&lt;/version&gt;\n&quot;);</span>
+<span class="fc" id="L167">        xml.append(&quot;        &lt;relativePath/&gt;\n&quot;);</span>
+<span class="fc" id="L168">        xml.append(&quot;    &lt;/parent&gt;\n\n&quot;);</span>
+<span class="fc" id="L169">        xml.append(&quot;    &lt;groupId&gt;&quot;).append(params.group()).append(&quot;&lt;/groupId&gt;\n&quot;);</span>
+<span class="fc" id="L170">        xml.append(&quot;    &lt;artifactId&gt;&quot;).append(params.artifactId()).append(&quot;&lt;/artifactId&gt;\n&quot;);</span>
+<span class="fc" id="L171">        xml.append(&quot;    &lt;version&gt;&quot;).append(params.version()).append(&quot;&lt;/version&gt;\n&quot;);</span>
+<span class="fc" id="L172">        xml.append(&quot;    &lt;packaging&gt;pom&lt;/packaging&gt;\n\n&quot;);</span>
+<span class="fc" id="L173">        xml.append(&quot;    &lt;name&gt;&quot;).append(params.description()).append(&quot;&lt;/name&gt;\n\n&quot;);</span>
+<span class="fc" id="L174">        xml.append(&quot;    &lt;build&gt;\n&quot;);</span>
+<span class="fc" id="L175">        xml.append(&quot;        &lt;plugins&gt;\n&quot;);</span>
+<span class="fc" id="L176">        xml.append(&quot;            &lt;plugin&gt;\n&quot;);</span>
+<span class="fc" id="L177">        xml.append(&quot;                &lt;groupId&gt;network.ike.tooling&lt;/groupId&gt;\n&quot;);</span>
+<span class="fc" id="L178">        xml.append(&quot;                &lt;artifactId&gt;ike-maven-plugin&lt;/artifactId&gt;\n&quot;);</span>
+<span class="fc" id="L179">        xml.append(&quot;                &lt;!-- version from ike-parent pluginManagement --&gt;\n&quot;);</span>
+<span class="fc" id="L180">        xml.append(&quot;            &lt;/plugin&gt;\n&quot;);</span>
+<span class="fc" id="L181">        xml.append(&quot;            &lt;plugin&gt;\n&quot;);</span>
+<span class="fc" id="L182">        xml.append(&quot;                &lt;groupId&gt;network.ike.platform&lt;/groupId&gt;\n&quot;);</span>
+<span class="fc" id="L183">        xml.append(&quot;                &lt;artifactId&gt;ike-workspace-maven-plugin&lt;/artifactId&gt;\n&quot;);</span>
+<span class="fc" id="L184">        xml.append(&quot;                &lt;!-- version from ike-parent pluginManagement --&gt;\n&quot;);</span>
+<span class="fc" id="L185">        xml.append(&quot;            &lt;/plugin&gt;\n&quot;);</span>
+<span class="fc" id="L186">        xml.append(&quot;        &lt;/plugins&gt;\n&quot;);</span>
+<span class="fc" id="L187">        xml.append(&quot;    &lt;/build&gt;\n\n&quot;);</span>
+<span class="fc" id="L188">        xml.append(&quot;    &lt;!-- Profiles are added by ws:add --&gt;\n&quot;);</span>
+<span class="fc" id="L189">        xml.append(&quot;    &lt;profiles&gt;\n&quot;);</span>
+<span class="fc" id="L190">        xml.append(&quot;    &lt;/profiles&gt;\n\n&quot;);</span>
+<span class="fc" id="L191">        xml.append(&quot;&lt;/project&gt;\n&quot;);</span>
+<span class="fc" id="L192">        return xml.toString();</span>
+    }
+
+    /**
+     * Generate the {@code workspace.yaml} manifest content. Package-private
+     * for tests.
+     *
+     * @return the YAML text
+     */
+    String generateManifest() {
+<span class="fc" id="L202">        String today = LocalDate.now().toString();</span>
+<span class="pc bpc" id="L203" title="1 of 2 branches missed.">        String orgName = params.org() != null ? params.org() : &quot;&lt;org&gt;&quot;;</span>
+
+<span class="fc" id="L205">        StringBuilder yaml = new StringBuilder(1024);</span>
+<span class="fc" id="L206">        yaml.append(&quot;# workspace.yaml — &quot;).append(params.name()).append(&quot;\n&quot;);</span>
+<span class="fc" id="L207">        yaml.append(&quot;# &quot;).append(&quot;═&quot;.repeat(params.name().length() + 22)).append(&quot;\n&quot;);</span>
+<span class="fc" id="L208">        yaml.append(&quot;#\n&quot;);</span>
+<span class="fc" id="L209">        yaml.append(&quot;# &quot;).append(params.description()).append(&quot;\n&quot;);</span>
+<span class="fc" id="L210">        yaml.append(&quot;#\n&quot;);</span>
+<span class="fc" id="L211">        yaml.append(&quot;# Bootstrap:\n&quot;);</span>
+<span class="fc" id="L212">        yaml.append(&quot;#   git clone https://github.com/&quot;).append(orgName).append(&quot;/&quot;).append(params.name()).append(&quot;.git\n&quot;);</span>
+<span class="fc" id="L213">        yaml.append(&quot;#   cd &quot;).append(params.name()).append(&quot;\n&quot;);</span>
+<span class="fc" id="L214">        yaml.append(&quot;#   mvn ws:scaffold-init\n&quot;);</span>
+<span class="fc" id="L215">        yaml.append(&quot;#   mvn clean install\n\n&quot;);</span>
+<span class="fc" id="L216">        yaml.append(&quot;schema-version: \&quot;1.1\&quot;\n&quot;);</span>
+<span class="fc" id="L217">        yaml.append(&quot;generated: &quot;).append(today).append(&quot;\n\n&quot;);</span>
+        // Workspace root coordinates (#183) — real GAV for ws:release-publish,
+        // ws:align-publish, and site deploy to address. Single-segment monotonic
+        // version (not semver — per feedback_no_semver_assumption).
+<span class="fc" id="L221">        yaml.append(&quot;workspace-root:\n&quot;);</span>
+<span class="fc" id="L222">        yaml.append(&quot;  groupId: &quot;).append(params.group()).append(&quot;\n&quot;);</span>
+<span class="fc" id="L223">        yaml.append(&quot;  artifactId: &quot;).append(params.artifactId()).append(&quot;\n&quot;);</span>
+<span class="fc" id="L224">        yaml.append(&quot;  version: &quot;).append(params.version()).append(&quot;\n\n&quot;);</span>
+<span class="fc" id="L225">        yaml.append(&quot;defaults:\n&quot;);</span>
+<span class="fc" id="L226">        yaml.append(&quot;  branch: &quot;).append(params.defaultBranch()).append(&quot;\n&quot;);</span>
+<span class="fc" id="L227">        yaml.append(&quot;  maven-version: \&quot;&quot;).append(params.mavenVersion()).append(&quot;\&quot;\n\n&quot;);</span>
+<span class="fc" id="L228">        yaml.append(&quot;subprojects:\n&quot;);</span>
+<span class="fc" id="L229">        yaml.append(&quot;  # Add subprojects with: mvn ws:add -Drepo=&lt;git-url&gt;\n\n&quot;);</span>
+<span class="fc" id="L230">        yaml.append(&quot;# Optional: IntelliJ project settings shared across collaborators.\n&quot;);</span>
+<span class="fc" id="L231">        yaml.append(&quot;# Uncomment and set to have `ws:scaffold-publish` enforce these values in\n&quot;);</span>
+<span class="fc" id="L232">        yaml.append(&quot;# .idea/misc.xml on every run. Useful when the project uses\n&quot;);</span>
+<span class="fc" id="L233">        yaml.append(&quot;# --enable-preview (set language-level to JDK_NN_PREVIEW).\n&quot;);</span>
+<span class="fc" id="L234">        yaml.append(&quot;# ide:\n&quot;);</span>
+<span class="fc" id="L235">        yaml.append(&quot;#   language-level: JDK_25_PREVIEW\n&quot;);</span>
+<span class="fc" id="L236">        yaml.append(&quot;#   jdk-name: \&quot;25\&quot;\n&quot;);</span>
+<span class="fc" id="L237">        return yaml.toString();</span>
+    }
+
+    /**
+     * Generate the workspace {@code .gitignore} using the whitelist
+     * strategy: ignore everything by default, then allowlist only
+     * workspace-owned files. Subproject repos are independent git
+     * repos cloned by {@code ws:scaffold-init}, so they must stay
+     * ignored at the workspace level.
+     *
+     * &lt;p&gt;The generated file includes a curated {@code .idea/} slice so
+     * that fresh checkouts land at the correct IntelliJ project
+     * settings (JDK, language level including preview mode, encoding,
+     * Maven repositories) without per-collaborator manual setup.
+     * {@code compiler.xml} and {@code vcs.xml} are intentionally not
+     * allowlisted — they regenerate on every Maven reload or per
+     * workspace membership and would cause constant diff churn.
+     * User-specific state ({@code workspace.xml}, {@code shelf/},
+     * {@code httpRequests/}) is excluded by IntelliJ's own
+     * {@code .idea/.gitignore}.
+     *
+     * @return the {@code .gitignore} content
+     */
+    String generateGitignore() {
+<span class="nc" id="L261">        StringBuilder gi = new StringBuilder(768);</span>
+<span class="nc" id="L262">        gi.append(&quot;# &quot;).append(params.name()).append(&quot; .gitignore\n&quot;);</span>
+<span class="nc" id="L263">        gi.append(&quot;# &quot;).append(&quot;═&quot;.repeat(params.name().length() + 11)).append(&quot;\n&quot;);</span>
+<span class="nc" id="L264">        gi.append(&quot;#\n&quot;);</span>
+<span class="nc" id="L265">        gi.append(&quot;# Ignore everything, whitelist only workspace-owned files.\n&quot;);</span>
+<span class="nc" id="L266">        gi.append(&quot;# Subproject repos are independent git repos cloned by ws:scaffold-init.\n\n&quot;);</span>
+<span class="nc" id="L267">        gi.append(&quot;# ── Ignore everything by default ─────────────────────────────────\n&quot;);</span>
+<span class="nc" id="L268">        gi.append(&quot;*\n\n&quot;);</span>
+<span class="nc" id="L269">        gi.append(&quot;# ── Whitelist workspace-level files ──────────────────────────────\n&quot;);</span>
+<span class="nc" id="L270">        gi.append(&quot;!.gitignore\n&quot;);</span>
+<span class="nc" id="L271">        gi.append(&quot;!pom.xml\n&quot;);</span>
+<span class="nc" id="L272">        gi.append(&quot;!workspace.yaml\n&quot;);</span>
+<span class="nc" id="L273">        gi.append(&quot;!README.adoc\n&quot;);</span>
+<span class="nc" id="L274">        gi.append(&quot;!GOALS.md\n&quot;);</span>
+<span class="nc" id="L275">        gi.append(&quot;!WS-REFERENCE.md\n&quot;);</span>
+<span class="nc" id="L276">        gi.append(&quot;!mvnw\n&quot;);</span>
+<span class="nc" id="L277">        gi.append(&quot;!mvnw.cmd\n\n&quot;);</span>
+<span class="nc" id="L278">        gi.append(&quot;# ── Whitelist workspace-owned directories ────────────────────────\n&quot;);</span>
+<span class="nc" id="L279">        gi.append(&quot;!.mvn/\n&quot;);</span>
+<span class="nc" id="L280">        gi.append(&quot;!.mvn/**\n&quot;);</span>
+<span class="nc" id="L281">        gi.append(&quot;!checkpoints/\n&quot;);</span>
+<span class="nc" id="L282">        gi.append(&quot;!checkpoints/**\n&quot;);</span>
+<span class="nc" id="L283">        gi.append(&quot;!.run/\n&quot;);</span>
+<span class="nc" id="L284">        gi.append(&quot;!.run/**\n\n&quot;);</span>
+<span class="nc" id="L285">        gi.append(&quot;# ── IntelliJ project config (curated slice) ──────────────────────\n&quot;);</span>
+<span class="nc" id="L286">        gi.append(&quot;# Small, stable project-wide settings shared across collaborators.\n&quot;);</span>
+<span class="nc" id="L287">        gi.append(&quot;# compiler.xml and vcs.xml are excluded — they regenerate per\n&quot;);</span>
+<span class="nc" id="L288">        gi.append(&quot;# Maven reload or per workspace membership.\n&quot;);</span>
+<span class="nc" id="L289">        gi.append(&quot;!.idea/\n&quot;);</span>
+<span class="nc" id="L290">        gi.append(&quot;!.idea/.gitignore\n&quot;);</span>
+<span class="nc" id="L291">        gi.append(&quot;!.idea/misc.xml\n&quot;);</span>
+<span class="nc" id="L292">        gi.append(&quot;!.idea/kotlinc.xml\n&quot;);</span>
+<span class="nc" id="L293">        gi.append(&quot;!.idea/encodings.xml\n&quot;);</span>
+<span class="nc" id="L294">        gi.append(&quot;!.idea/jarRepositories.xml\n&quot;);</span>
+<span class="nc" id="L295">        return gi.toString();</span>
+    }
+
+    /**
+     * Generate the boilerplate {@code README.adoc}.
+     *
+     * @return the AsciiDoc content
+     */
+    String generateReadme() {
+<span class="nc bnc" id="L304" title="All 2 branches missed.">        String orgName = params.org() != null ? params.org() : &quot;&lt;org&gt;&quot;;</span>
+
+<span class="nc" id="L306">        StringBuilder adoc = new StringBuilder(1024);</span>
+<span class="nc" id="L307">        adoc.append(&quot;= &quot;).append(params.description()).append(&quot;\n&quot;);</span>
+<span class="nc" id="L308">        adoc.append(&quot;:toc:\n&quot;);</span>
+<span class="nc" id="L309">        adoc.append(&quot;:toc-placement!:\n\n&quot;);</span>
+<span class="nc" id="L310">        adoc.append(params.description()).append(&quot;\n\n&quot;);</span>
+<span class="nc" id="L311">        adoc.append(&quot;toc::[]\n\n&quot;);</span>
+<span class="nc" id="L312">        adoc.append(&quot;== Bootstrap\n\n&quot;);</span>
+<span class="nc" id="L313">        adoc.append(&quot;[source,bash]\n&quot;);</span>
+<span class="nc" id="L314">        adoc.append(&quot;----\n&quot;);</span>
+<span class="nc" id="L315">        adoc.append(&quot;git clone https://github.com/&quot;).append(orgName).append(&quot;/&quot;).append(params.name()).append(&quot;.git\n&quot;);</span>
+<span class="nc" id="L316">        adoc.append(&quot;cd &quot;).append(params.name()).append(&quot;\n&quot;);</span>
+<span class="nc" id="L317">        adoc.append(&quot;mvn ws:scaffold-init   # &lt;1&gt;\n&quot;);</span>
+<span class="nc" id="L318">        adoc.append(&quot;mvn clean install      # &lt;2&gt;\n&quot;);</span>
+<span class="nc" id="L319">        adoc.append(&quot;----\n&quot;);</span>
+<span class="nc" id="L320">        adoc.append(&quot;&lt;1&gt; Clones all subproject repos in dependency order; installs Maven\n&quot;);</span>
+<span class="nc" id="L321">        adoc.append(&quot;    wrapper and JVM config per subproject.\n&quot;);</span>
+<span class="nc" id="L322">        adoc.append(&quot;&lt;2&gt; Builds the full stack.\n\n&quot;);</span>
+<span class="nc" id="L323">        adoc.append(&quot;== Workspace Commands\n\n&quot;);</span>
+<span class="nc" id="L324">        adoc.append(&quot;All `ws:` goals appear in the IntelliJ Maven tool window\n&quot;);</span>
+<span class="nc" id="L325">        adoc.append(&quot;(under _Plugins &gt; ws_). Double-click any goal to run it.\n\n&quot;);</span>
+<span class="nc" id="L326">        adoc.append(&quot;[source,bash]\n&quot;);</span>
+<span class="nc" id="L327">        adoc.append(&quot;----\n&quot;);</span>
+<span class="nc" id="L328">        adoc.append(&quot;mvn ws:overview          # Workspace overview\n&quot;);</span>
+<span class="nc" id="L329">        adoc.append(&quot;mvn ws:add -Drepo=      # Add a subproject repo\n&quot;);</span>
+<span class="nc" id="L330">        adoc.append(&quot;mvn ws:scaffold-draft          # Preview scaffold and reconciliation drift\n&quot;);</span>
+<span class="nc" id="L331">        adoc.append(&quot;----\n&quot;);</span>
+<span class="nc" id="L332">        return adoc.toString();</span>
+    }
+
+    // ── Git init ────────────────────────────────────────────────
+
+    private void initGit(Path wsDir) throws MojoException {
+<span class="nc" id="L338">        ReleaseSupport.exec(wsDir.toFile(), log, &quot;git&quot;, &quot;init&quot;);</span>
+<span class="nc" id="L339">        log.info(Ansi.green(&quot;  ✓ &quot;) + &quot;git init&quot;);</span>
+
+<span class="nc bnc" id="L341" title="All 4 branches missed.">        if (params.org() != null &amp;&amp; !params.org().isBlank()) {</span>
+<span class="nc" id="L342">            String remoteUrl = &quot;https://github.com/&quot; + params.org() + &quot;/&quot;</span>
+<span class="nc" id="L343">                    + params.name() + &quot;.git&quot;;</span>
+<span class="nc" id="L344">            ReleaseSupport.exec(wsDir.toFile(), log,</span>
+                    &quot;git&quot;, &quot;remote&quot;, &quot;add&quot;, &quot;origin&quot;, remoteUrl);
+<span class="nc" id="L346">            log.info(Ansi.green(&quot;  ✓ &quot;) + &quot;remote: &quot; + remoteUrl);</span>
+        }
+
+        // Auto-commit scaffold so ws:add and ws:feature-start have a
+        // baseline commit to work from.
+        try {
+<span class="nc" id="L352">            ReleaseSupport.exec(wsDir.toFile(), log,</span>
+                    &quot;git&quot;, &quot;add&quot;, &quot;.&quot;);
+<span class="nc" id="L354">            ReleaseSupport.exec(wsDir.toFile(), log,</span>
+                    &quot;git&quot;, &quot;commit&quot;, &quot;-m&quot;, &quot;workspace: initial scaffold&quot;);
+<span class="nc" id="L356">            log.info(Ansi.green(&quot;  ✓ &quot;) + &quot;initial commit&quot;);</span>
+<span class="nc" id="L357">        } catch (MojoException e) {</span>
+<span class="nc" id="L358">            log.warn(&quot;  Auto-commit failed (set git user.email/user.name): &quot;</span>
+<span class="nc" id="L359">                    + e.getMessage());</span>
+<span class="nc" id="L360">        }</span>
+<span class="nc" id="L361">    }</span>
+
+    private static void writeFile(Path path, String content) throws IOException {
+<span class="nc" id="L364">        Files.writeString(path, content, StandardCharsets.UTF_8);</span>
+<span class="nc" id="L365">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

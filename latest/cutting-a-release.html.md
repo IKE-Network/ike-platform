@@ -1,6 +1,6 @@
 ---
-date_published: 2026-05-15
-date_modified: 2026-05-15
+date_published: 2026-05-16
+date_modified: 2026-05-16
 canonical_url: https://ike.network/ike-platform/cutting-a-release.html
 ---
 
@@ -13,7 +13,7 @@ How to ship a release of an IKE Network repo or a full workspace cascade. Read t
 | Flavor | When |
 | --- | --- |
 | Single-repo release (`mvn ike:release-publish`) | You’re inside one repo and want to ship just that repo’s artifact. Used for one-off promotions of a single workspace subproject, or when a single foundation repo has changes that need to ship in isolation. |
-| Foundation cascade (`mvn ws:cascade-foundation-publish`) | From any workspace, walk `ike-tooling → ike-docs → ike-platform` as siblings of the workspace and release each one that has unreleased changes, then release the workspace itself. Skips foundation repos that are up-to-date or not checked out. Pass `-DskipWorkspace=true` for foundation-only (rare case). ike-issues#375. |
+| Foundation cascade (`mvn ike:release-cascade`) | From any foundation repo, walk `ike-tooling → ike-docs → ike-platform` as sibling checkouts and release each one that has unreleased changes. The order is assembled from each repo’s own `src/main/cascade/release-cascade.yaml`; `ike:release-publish` aligns each repo to its upstreams before cutting its release. ike-issues#375. |
 | Workspace cascade (`mvn ws:release-publish`) | You’re inside a workspace aggregator (a `-ws` repo) and want to release every subproject whose source has changed since its last tag, in topological order. Each subproject runs through `ike:release-publish` internally; the workspace root tags itself last so the cycle has a single anchor. |
 
 ## [#cascade-order-across-the-ike-network](#cascade-order-across-the-ike-network)Cascade order across the IKE Network
@@ -26,7 +26,7 @@ Always upstream-first. `ike-docs` consumes `ike-tooling’s `ike-maven-plugin`. 
 
 This cascade is **structural**, not driven by extension-realm timing. See [Design rationale](index.html#design_rationale)[1] on the overview page for why no plugin in this ecosystem uses `<extensions>true</extensions>`.
 
-The order above is not maintained by hand. It is declared in `release-cascade.yaml` — authored in `ike-build-standards/src/main/cascade/` and shipped as the `ike-build-standards` `cascade` classified artifact, which `ike-parent` unpacks to `target/release-cascade.yaml`. `ike:release-draft` previews the downstream repos a release will make stale; `ike:release-publish` prints a footer naming the next cascade step; `ws:cascade-foundation-publish` walks the manifest order. To change the cascade, edit that one file — see IKE-Network/ike-issues#402.
+The order above is not maintained by hand, and not maintained centrally. Each foundation repo version-controls its own `src/main/cascade/release-cascade.yaml` declaring only its own `upstream` and `downstream` edges; the full ordered graph is assembled by traversal (IKE-Network/ike-issues#420). `ike:release-draft` previews the downstream repos a release will make stale; `ike:release-publish` aligns upstream `${X.version}` pins and prints a footer naming the next cascade step; `ike:release-cascade` assembles the graph and walks it end to end. To change the cascade, edit the relevant repo’s own manifest.
 
 ## [#wall-clock-budget](#wall-clock-budget)Wall-clock budget
 
@@ -62,11 +62,8 @@ The draft writes a markdown report and makes no on-disk changes. Both gate varia
 ### [#2-publish](#2-publish)2. Publish
 
 ```
-# Foundation + workspace, end to end (default behavior):
-mvn ws:cascade-foundation-publish
-
-# Foundation only (skip workspace release):
-mvn ws:cascade-foundation-publish -DskipWorkspace=true
+# Foundation cascade, end to end (from any foundation repo):
+mvn ike:release-cascade
 
 # Workspace cascade (foundations assumed already released):
 mvn ws:release-publish

@@ -1,6 +1,6 @@
 ---
-date_published: 2026-05-15
-date_modified: 2026-05-15
+date_published: 2026-05-16
+date_modified: 2026-05-16
 canonical_url: https://ike.network/ike-platform/ike-workspace-maven-plugin/ws-goals.html
 ---
 
@@ -44,7 +44,6 @@ Draft / publish split Most state-mutating goals come in two forms — `**-draft*
 | [reconcile-branches](#reconcile-branches-draft) | recovery | Reconcile `workspace.yaml` branch fields with on-disk git |
 | [ws:reconcile-branches — recover yaml/git mismatch](#reconcile-branches-publish) | recovery | Apply branch reconciliation |
 | [ws:refresh-main — refresh local main from origin](#refresh-main) | sync | Refresh local main from origin/main across the workspace |
-| [cascade-foundation-publish](cascade-foundation-publish.html)[3] | release | Cross-repo cascade: release `ike-tooling → ike-docs → ike-platform → workspace`, with upstream-property catch-up. See the [dedicated reference page](cascade-foundation-publish.html)[3] for layout, anchor-vs-membership semantics, and bootstrap-invocation notes. |
 | [ws:release-draft — preview a coordinated release](#release-draft) | release | Preview a coordinated multi-repo release |
 | [ws:release-notes — milestone-derived release notes](#release-notes) | release | Generate notes from a GitHub milestone |
 | [ws:release-publish — execute the coordinated release](#release-publish) | release | Execute the coordinated release |
@@ -493,6 +492,6 @@ mvn ws:cleanup-publish -Dforce=true            # delete without prompting
 ## [#see-also](#see-also)See also
 
 - [Workspace Lifecycle](workspace-lifecycle.html)[1] — narrative tour showing how the goals connect across a typical day, week, and release.
-- [Workspace Getting Started](../workspace-getting-started.html)[4] — hands-on first-time setup walkthrough.
-- [Workspace Plugin Home](index.html)[5] — module overview.
+- [Workspace Getting Started](../workspace-getting-started.html)[3] — hands-on first-time setup walkthrough.
+- [Workspace Plugin Home](index.html)[4] — module overview.
 - `ws:help` — runtime help generated from the `WsGoal` enum (single source of truth; never drifts from the actual plugin).

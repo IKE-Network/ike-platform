@@ -66,8 +66,10 @@ can still align dependency versions by importing the BOM:
 ike-tooling → ike-docs → [ike-platform] → { doc-example, example-project, ike-example-its } → ike-example-ws
 ```
 
-The cascade is orchestrated end-to-end by
-`ike-workspace-maven-plugin:cascade-foundation-publish`. See
+The foundation cascade (`ike-tooling → ike-docs → ike-platform`) is
+orchestrated by `ike-maven-plugin:release-cascade`, which assembles
+the order from each repo's own `src/main/cascade/release-cascade.yaml`
+(IKE-Network/ike-issues#420). See
 [`cutting-a-release.adoc`](https://ike.network/ike-platform/cutting-a-release.html)
 for the full procedure.
 

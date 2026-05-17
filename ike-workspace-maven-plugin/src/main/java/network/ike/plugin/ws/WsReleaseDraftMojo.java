@@ -973,9 +973,8 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
      * Extract the project's own {@code <artifactId>}. Skips a
      * preceding {@code <parent>} block so we don't return the parent's
      * artifactId. Same shape as the helper in
-     * {@code WsCascadeFoundationPublishMojo} and
      * {@code RegisterSiteDraftMojo} — repeated here to keep the
-     * dependency direction (this mojo doesn't depend on those).
+     * dependency direction (this mojo doesn't depend on it).
      */
     private static String extractArtifactId(String pomContent) {
         if (pomContent == null) return null;
@@ -1102,9 +1101,7 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
 
     /**
      * Pure-string extract of a {@code <properties>}-block value by
-     * name. Returns {@code null} when absent. Mirrors the helper
-     * used in {@code WsCascadeFoundationPublishMojo} — keeping a
-     * local copy so the two goals don't tightly couple.
+     * name. Returns {@code null} when absent.
      */
     static String extractPropertyValue(String pomContent,
                                                  String propertyName) {

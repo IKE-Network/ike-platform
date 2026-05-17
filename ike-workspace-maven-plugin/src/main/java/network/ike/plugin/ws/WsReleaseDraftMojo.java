@@ -133,6 +133,15 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
     boolean push;
 
     /**
+     * Release even when a subproject's release preflight reports
+     * warnings (e.g. commits without an issue trailer). Forwarded to
+     * each subproject's {@code ike:release-publish} invocation as
+     * {@code -Dike.release.ignoreWarnings}. Errors remain fatal.
+     */
+    @Parameter(property = "ike.release.ignoreWarnings", defaultValue = "false")
+    boolean ignoreWarnings;
+
+    /**
      * GitHub repository for release creation (e.g., "IKE-Network/komet").
      * If set, creates a GitHub Release for each released subproject and
      * attaches any platform installers found in the subproject's
@@ -407,9 +416,7 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
                 String mvn = findMvn(rc.dir);
 
                 ReleaseSupport.exec(rc.dir, getLog(),
-                        mvn, "ike:release-publish",
-                        "-DpushRelease=" + push,
-                        "-B");
+                        releaseCommand(mvn));
 
                 released.add(rc.name);
                 releasedVersions.put(rc.name, releaseVersion);
@@ -494,10 +501,7 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
                 // pom only; subprojects already published their own
                 // sites in step 6 above. ike-issues#356.
                 ReleaseSupport.exec(root, getLog(),
-                        mvn, "ike:release-publish",
-                        "-DpushRelease=" + push,
-                        "-DnonRecursiveSite=true",
-                        "-B");
+                        releaseCommand(mvn, "-DnonRecursiveSite=true"));
                 released.add("(workspace root)");
                 releasedVersions.put("(workspace root)", workspaceVersion);
                 getLog().info(Ansi.green("  ✓ ") + "Released workspace root "
@@ -1775,6 +1779,33 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
 
     private String findMvn(File subDir) {
         return resolveMvnCommand(subDir);
+    }
+
+    /**
+     * Build the {@code ike:release-publish} command line for a
+     * subproject, threading the workspace-level {@code push} and
+     * {@code ignoreWarnings} flags through to the subprocess. Without
+     * the {@code ignoreWarnings} pass-through, a workspace release
+     * could never clear a subproject whose history predates the
+     * issue-trailer convention.
+     *
+     * @param mvn the resolved Maven executable
+     * @param extra any goal-specific arguments to append
+     * @return the full command, ready for {@link ReleaseSupport#exec}
+     */
+    private String[] releaseCommand(String mvn, String... extra) {
+        List<String> cmd = new ArrayList<>();
+        cmd.add(mvn);
+        cmd.add("ike:release-publish");
+        cmd.add("-DpushRelease=" + push);
+        if (ignoreWarnings) {
+            cmd.add("-Dike.release.ignoreWarnings=true");
+        }
+        for (String arg : extra) {
+            cmd.add(arg);
+        }
+        cmd.add("-B");
+        return cmd.toArray(new String[0]);
     }
 
     /**

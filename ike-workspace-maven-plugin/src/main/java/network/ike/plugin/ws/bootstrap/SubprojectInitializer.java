@@ -652,8 +652,6 @@ public final class SubprojectInitializer {
                 | `ws:reconcile-branches-draft` / `-publish` | Reconcile branch fields against on-disk state |
                 | `ws:scaffold-draft -DupdateParent=true` | Preview parent-POM version cascade (along with other reconciliation) |
                 | `ws:scaffold-publish -DparentVersion=<v>` | Pin parent to specific version and cascade |
-                | `ws:versions-upgrade-draft` | Preview version upgrades against the configured ruleset |
-                | `ws:versions-upgrade-publish` | Apply the workspace version-upgrade plan |
 
                 ## Branch Coordination
 

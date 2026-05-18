@@ -28,8 +28,7 @@ import java.io.File;
  * {@code ws:feature-finish-merge-publish},
  * {@code ws:feature-finish-squash-publish},
  * {@code ws:align-publish}, {@code ws:scaffold-publish}
- * (which subsumes the retired ws:set-parent and folds in
- * ws:versions-upgrade-publish via -Dplan=).
+ * (which subsumes the retired ws:set-parent).
  *
  * <p>See {@code IKE-Network/ike-issues#279}.
  */

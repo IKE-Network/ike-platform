@@ -152,7 +152,7 @@ public class WsHelpMojo extends AbstractWorkspaceMojo {
         if (name.startsWith("set-parent") || name.startsWith("align")) {
             return "Parent & Version Alignment";
         }
-        if (name.equals("commit") || name.equals("push")
+        if (name.startsWith("commit") || name.equals("push")
                 || name.equals("sync") || name.equals("check-branch")) {
             return "VCS Bridge";
         }

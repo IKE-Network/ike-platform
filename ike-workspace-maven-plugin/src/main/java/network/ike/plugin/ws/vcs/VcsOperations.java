@@ -890,7 +890,7 @@ public class VcsOperations {
         }
         // Common case after a routine local commit: state.sha is an
         // ancestor of HEAD, so the state file is just stale relative to
-        // post-ws:commit work. No sync needed.
+        // post-ws:commit-publish work. No sync needed.
         try {
             if (isAncestor(dir, s.sha(), localSha)) {
                 return false;

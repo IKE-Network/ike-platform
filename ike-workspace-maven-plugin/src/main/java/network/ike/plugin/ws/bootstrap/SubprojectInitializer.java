@@ -296,7 +296,8 @@ public final class SubprojectInitializer {
             String hookScript = "#!/bin/sh\n"
                     + "# Installed by ws:scaffold-init — warns on direct branching.\n"
                     + "# Remove this file to disable the check.\n"
-                    + "mvn -q ike:check-branch 2>/dev/null\n";
+                    + "mvn -q " + WsGoal.CHECK_BRANCH.qualified()
+                    + " 2>/dev/null\n";
             Files.writeString(postCheckout.toPath(), hookScript,
                     StandardCharsets.UTF_8);
             postCheckout.setExecutable(true);
@@ -692,7 +693,8 @@ public final class SubprojectInitializer {
                 | Goal | Description |
                 |------|-------------|
                 | `ws:sync` | Pull then push across the workspace (the daily sync op) |
-                | `ws:commit` | Commit across repos (stages all by default; `-DstagedOnly` to opt out) |
+                | `ws:commit-draft` | Preview what would be committed across repos (read-only) |
+                | `ws:commit-publish` | Commit across repos (stages all by default; `-DstagedOnly` to opt out) |
                 | `ws:pull` | Git pull --rebase across all subprojects |
                 | `ws:push` | Push all subprojects (warns about uncommitted changes) |
                 | `ws:report` | Aggregate ws:* goal reports into a single document |
@@ -826,7 +828,7 @@ public final class SubprojectInitializer {
 
                 | Goal | Description |
                 |------|-------------|
-                | `ws:commit` | Commit across repos (`-Dpush=true -Dmessage="..."`) |
+                | `ws:commit-publish` | Commit across repos (`-Dpush=true -Dmessage="..."`) |
                 | `ws:push` | Push all subprojects (warns about uncommitted changes) |
                 | `ws:sync` | Pull then push across the workspace |
                 | `ws:cleanup-draft` / `-publish` | List/delete merged feature branches |
@@ -847,7 +849,7 @@ public final class SubprojectInitializer {
                 **Draft goals:** warn about uncommitted changes that would block the
                 corresponding `-publish` goal, but still run the preview.
 
-                **`ws:commit`:** skips VCS bridge catch-up when there are pending
+                **`ws:commit-publish`:** skips VCS bridge catch-up when there are pending
                 changes to commit, preventing branch-switch conflicts.
 
                 **`ws:push`:** warns about uncommitted changes after pushing, and
@@ -855,11 +857,11 @@ public final class SubprojectInitializer {
 
                 ## Troubleshooting
 
-                **"Cannot X — uncommitted changes in:"** — Run `mvn ws:commit -Dmessage="..."` to commit all pending changes, then retry.
+                **"Cannot X — uncommitted changes in:"** — Run `mvn ws:commit-publish -Dmessage="..."` to commit all pending changes, then retry.
 
                 **Maven discovers `.teamcity/pom.xml`** — Add `-pl !.teamcity` to `.mvn/maven.config`.
 
-                **Feature finish: "uncommitted changes"** — Run `mvn ws:commit -Dmessage="..."` first.
+                **Feature finish: "uncommitted changes"** — Run `mvn ws:commit-publish -Dmessage="..."` first.
 
                 **Feature start: "already on feature branch"** — Finish/abandon the current feature first.
 

@@ -1081,7 +1081,7 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
 
         File pomDir = pomFile.getParentFile();
         if (!new File(pomDir, ".git").isDirectory()) {
-            // No git repo here — leave the worktree edit for ws:commit
+            // No git repo here — leave the worktree edit for ws:commit-publish
             // (or a sibling tool) to pick up later. Same fail-soft
             // pattern as #371 manifest sync.
             getLog().info("  Pre-release alignment: " + pomDir.getName()
@@ -1209,8 +1209,8 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
 
         // Stage and commit on the workspace root only if it's a git
         // repo. If staging or commit fails, the file write already
-        // happened — leave it for ws:commit to pick up rather than
-        // wedging the cascade.
+        // happened — leave it for ws:commit-publish to pick up rather
+        // than wedging the cascade.
         if (!new File(root, ".git").exists()) {
             return;
         }
@@ -1223,7 +1223,7 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
         } catch (Exception e) {
             getLog().warn("  ⚠ workspace.yaml updated on disk but "
                     + "could not commit (#371): " + e.getMessage()
-                    + ". Pick it up with ws:commit.");
+                    + ". Pick it up with ws:commit-publish.");
         }
     }
 

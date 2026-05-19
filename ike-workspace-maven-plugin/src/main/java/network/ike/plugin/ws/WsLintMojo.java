@@ -33,7 +33,7 @@ import java.util.List;
  * mvn ws:lint                        # run every preflight check, warn on failures
  * }</pre>
  *
- * <p>{@code ws:commit} also invokes the {@code JVM_CONFIG_NO_HASH_COMMENTS}
+ * <p>{@code ws:commit-publish} also invokes the {@code JVM_CONFIG_NO_HASH_COMMENTS}
  * subset by default so the typo'd-comment failure mode (which crashes
  * the JVM before any Maven plugin can run) is caught at the transport
  * boundary.

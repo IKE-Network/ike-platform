@@ -30,10 +30,12 @@ import java.util.Map;
  * Workspace-walking variant of {@code ike:scaffold-draft} (#350).
  *
  * <p>Iterates the workspace's subprojects (and the workspace root)
- * in declaration order, invoking {@code ike:scaffold-draft} in each
- * via a subprocess {@code mvn} call. Each per-subproject invocation
- * is independent — output is streamed straight through, drift
- * reports surface inline.
+ * in declaration order, invoking {@code mvn validate ike:scaffold-draft}
+ * in each via a subprocess {@code mvn} call. The {@code validate} phase
+ * runs first so {@code ike-parent}'s {@code unpack-scaffold-templates}
+ * execution populates {@code target/scaffold} before the scaffold goal
+ * reads it (#449). Each per-subproject invocation is independent —
+ * output is streamed straight through, drift reports surface inline.
  *
  * <p>Mirrors the {@code ws:release-publish} → per-subproject
  * {@code ike:release-publish} cascade pattern. Read-only: no POM
@@ -226,6 +228,12 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
         String mvn = WsReleaseDraftMojo.resolveMvnCommand(subDir);
         List<String> args = new ArrayList<>();
         args.add(mvn);
+        // Run the validate phase ahead of the scaffold goal so
+        // ike-parent's unpack-scaffold-templates execution (bound to
+        // validate) populates target/scaffold. Without it the scaffold
+        // goal fails with "scaffoldDir is not a directory" on any
+        // checkout that has not been built yet (#449).
+        args.add("validate");
         args.add(goal);
         args.add("-B");
         if (publish && applyFoundation) {

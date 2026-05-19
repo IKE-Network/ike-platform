@@ -20,7 +20,7 @@ import java.util.List;
  * <p>Intended to be called from a {@code post-checkout} git hook:
  * <pre>{@code
  * #!/bin/sh
- * mvn -q ike:check-branch -- "$@"
+ * mvn -q ws:check-branch -- "$@"
  * }</pre>
  *
  * <p>In workspace mode, compares the current branch to the expected

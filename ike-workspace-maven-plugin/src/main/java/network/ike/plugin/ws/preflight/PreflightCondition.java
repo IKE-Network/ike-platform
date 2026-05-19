@@ -80,7 +80,7 @@ public enum PreflightCondition {
                   .append(files).append("\n");
             }
             sb.append("  To resolve:\n");
-            sb.append("    mvn ws:commit"
+            sb.append("    mvn ws:commit-publish"
                     + " -Dmessage=\"<your message>\"\n");
             sb.append("  Or stash changes in each affected subproject.");
             if (anyGhPagesLeak) {

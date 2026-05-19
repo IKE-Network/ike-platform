@@ -186,7 +186,7 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
             for (String name : uncommitted) {
                 sb.append("  ").append(name).append("\n");
             }
-            sb.append("Please commit these changes first (mvn ws:commit), ")
+            sb.append("Please commit these changes first (mvn ws:commit-publish), ")
               .append("then re-run feature-finish.");
             if (draft) {
                 getLog().warn("");

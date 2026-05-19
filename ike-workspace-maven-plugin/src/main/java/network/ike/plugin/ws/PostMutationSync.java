@@ -24,7 +24,7 @@ import java.io.File;
  * not stop the other.
  *
  * <p>Triggered from: {@code ws:add}, {@code ws:remove}, {@code ws:sync},
- * {@code ws:pull}, {@code ws:commit}, {@code ws:scaffold-init},
+ * {@code ws:pull}, {@code ws:commit-publish}, {@code ws:scaffold-init},
  * {@code ws:feature-finish-merge-publish},
  * {@code ws:feature-finish-squash-publish},
  * {@code ws:align-publish}, {@code ws:scaffold-publish}

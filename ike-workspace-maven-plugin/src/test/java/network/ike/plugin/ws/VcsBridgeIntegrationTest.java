@@ -340,7 +340,7 @@ class VcsBridgeIntegrationTest {
         exec(machineADir, "git", "add", ".");
 
         System.setProperty("user.dir", machineADir.toAbsolutePath().toString());
-        CommitMojo mojo = TestLog.createMojo(CommitMojo.class);
+        WsCommitPublishMojo mojo = TestLog.createMojo(WsCommitPublishMojo.class);
         mojo.message = "Test commit via plugin";
 
         mojo.execute();

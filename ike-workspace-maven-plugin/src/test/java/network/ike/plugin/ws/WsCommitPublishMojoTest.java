@@ -7,18 +7,18 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Tests for the formatting helpers in {@link CommitMojo}.
+ * Tests for the formatting helpers in {@link WsCommitPublishMojo}.
  *
  * <p>Covers ike-issues#231 — when {@code -DstagedOnly} causes
- * {@code ws:commit} to skip a repo with uncommitted work, the message
- * must surface both tracked-unstaged and untracked file paths so the
- * developer sees exactly what would be missed.
+ * {@code ws:commit-publish} to skip a repo with uncommitted work, the
+ * message must surface both tracked-unstaged and untracked file paths
+ * so the developer sees exactly what would be missed.
  */
-class CommitMojoTest {
+class WsCommitPublishMojoTest {
 
     @Test
     void suffix_unstaged_only_lists_tracked_paths() {
-        String suffix = CommitMojo.formatUncommittedSuffix(
+        String suffix = WsCommitPublishMojo.formatUncommittedSuffix(
                 "src/main/java/A.java, src/main/java/B.java",
                 List.of());
         assertThat(suffix).isEqualTo(
@@ -27,7 +27,7 @@ class CommitMojoTest {
 
     @Test
     void suffix_untracked_only_lists_new_file_paths() {
-        String suffix = CommitMojo.formatUncommittedSuffix(
+        String suffix = WsCommitPublishMojo.formatUncommittedSuffix(
                 "",
                 List.of("src/main/java/Foo.java", "src/main/java/Bar.java"));
         assertThat(suffix).isEqualTo(
@@ -36,7 +36,7 @@ class CommitMojoTest {
 
     @Test
     void suffix_both_kinds_shows_both_lists_separated_by_semicolon() {
-        String suffix = CommitMojo.formatUncommittedSuffix(
+        String suffix = WsCommitPublishMojo.formatUncommittedSuffix(
                 "src/main/java/Existing.java",
                 List.of("src/main/java/New.java"));
         assertThat(suffix).isEqualTo(
@@ -47,18 +47,18 @@ class CommitMojoTest {
     void suffix_neither_emits_uncommitted_placeholder() {
         // Defensive fallback — if the caller invoked us with empty
         // inputs (shouldn't happen in practice), don't emit empty parens.
-        assertThat(CommitMojoTest_invoke("", List.of())).isEqualTo("uncommitted");
+        assertThat(invokeSuffix("", List.of())).isEqualTo("uncommitted");
     }
 
     @Test
     void suffix_handles_null_inputs_defensively() {
-        assertThat(CommitMojoTest_invoke(null, null)).isEqualTo("uncommitted");
-        assertThat(CommitMojoTest_invoke(null, List.of("x"))).isEqualTo("untracked: x");
-        assertThat(CommitMojoTest_invoke("y", null)).isEqualTo("unstaged: y");
+        assertThat(invokeSuffix(null, null)).isEqualTo("uncommitted");
+        assertThat(invokeSuffix(null, List.of("x"))).isEqualTo("untracked: x");
+        assertThat(invokeSuffix("y", null)).isEqualTo("unstaged: y");
     }
 
     /** Test-internal alias to keep the test names readable. */
-    private static String CommitMojoTest_invoke(String unstaged, List<String> newFiles) {
-        return CommitMojo.formatUncommittedSuffix(unstaged, newFiles);
+    private static String invokeSuffix(String unstaged, List<String> newFiles) {
+        return WsCommitPublishMojo.formatUncommittedSuffix(unstaged, newFiles);
     }
 }

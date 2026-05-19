@@ -34,21 +34,27 @@ import java.util.List;
  * committing changes in each. When run from a single repository, operates
  * on the current directory only.
  *
+ * <p>The {@code -publish} half of the commit pair — it mutates
+ * (stages, commits, optionally pushes). The read-only preview is
+ * {@link WsCommitDraftMojo ws:commit-draft}.
+ *
  * <p>Usage:
  * <pre>{@code
- * mvn ws:commit -Dmessage="my commit message"               # stage all + commit (default)
- * mvn ws:commit -Dmessage="..." -DstagedOnly                # commit only what is already staged
- * mvn ws:commit -Dmessage="..." -Dpush=true                 # commit then push
+ * mvn ws:commit-publish -Dmessage="my commit message"        # stage all + commit (default)
+ * mvn ws:commit-publish -Dmessage="..." -DstagedOnly         # commit only what is already staged
+ * mvn ws:commit-publish -Dmessage="..." -Dpush=true          # commit then push
  * }</pre>
  *
  * <p>See issue #195 and the {@code dev-workspace-ops-completion} topic
  * in {@code ike-lab-documents} for the design rationale.
+ *
+ * @see WsCommitDraftMojo
  */
-@Mojo(name = "commit", projectRequired = false, aggregator = true)
-public class CommitMojo extends AbstractWorkspaceMojo {
+@Mojo(name = "commit-publish", projectRequired = false, aggregator = true)
+public class WsCommitPublishMojo extends AbstractWorkspaceMojo {
 
     /** Creates this goal instance. */
-    public CommitMojo() {}
+    public WsCommitPublishMojo() {}
 
     /**
      * Commit message. Required. When omitted on the command line, the
@@ -91,7 +97,7 @@ public class CommitMojo extends AbstractWorkspaceMojo {
             return executeWorkspace();
         }
         executeSingleRepo(new File(System.getProperty("user.dir")));
-        return new WorkspaceReportSpec(WsGoal.COMMIT,
+        return new WorkspaceReportSpec(WsGoal.COMMIT_PUBLISH,
                 "Committed in single-repo mode (no workspace).\n");
     }
 
@@ -113,7 +119,7 @@ public class CommitMojo extends AbstractWorkspaceMojo {
                             .PreflightCondition.JVM_CONFIG_NO_HASH_COMMENTS),
                     network.ike.plugin.ws.preflight.PreflightContext.of(
                             root, graph, sorted))
-                    .requirePassed(WsGoal.COMMIT);
+                    .requirePassed(WsGoal.COMMIT_PUBLISH);
         }
 
         // Resolve the message before any work — prompts interactively
@@ -181,7 +187,7 @@ public class CommitMojo extends AbstractWorkspaceMojo {
                     + " commit(s) failed — check output above for details.");
         }
 
-        return new WorkspaceReportSpec(WsGoal.COMMIT, summary + "\n");
+        return new WorkspaceReportSpec(WsGoal.COMMIT_PUBLISH, summary + "\n");
     }
 
     /**
@@ -291,7 +297,7 @@ public class CommitMojo extends AbstractWorkspaceMojo {
      * (.idea/kotlinc.xml)"}. New file paths are listed inline so the
      * developer can see at a glance what {@code addAll} pulled in.
      */
-    private static String previewSummary(int modCount, List<String> newFiles) {
+    static String previewSummary(int modCount, List<String> newFiles) {
         StringBuilder sb = new StringBuilder();
         sb.append(modCount).append(" modified");
         if (!newFiles.isEmpty()) {

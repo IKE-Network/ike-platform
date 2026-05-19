@@ -2,6 +2,7 @@ package network.ike.plugin.ws.reconcile;
 
 import network.ike.plugin.ReleaseSupport;
 import network.ike.plugin.ws.PomModel;
+import network.ike.plugin.ws.WsGoal;
 import network.ike.workspace.Dependency;
 import network.ike.workspace.PublishedArtifactSet;
 import network.ike.workspace.Subproject;
@@ -94,7 +95,8 @@ public class AlignmentReconciler implements Reconciler {
                 + plan.changedSubprojectCount() + " subproject(s)";
         String action = "rewrite POM versions to match workspace truth"
                 + " on scaffold-publish";
-        String optOut = "mvn ws:scaffold-publish -D" + optOutFlag() + "=false";
+        String optOut = "mvn " + WsGoal.SCAFFOLD_PUBLISH.qualified()
+                + " -D" + optOutFlag() + "=false";
         return new DriftReport(dimension(), true, summary, detail,
                 action, optOut);
     }

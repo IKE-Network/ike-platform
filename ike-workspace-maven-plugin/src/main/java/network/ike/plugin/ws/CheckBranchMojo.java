@@ -111,12 +111,15 @@ public class CheckBranchMojo extends AbstractWorkspaceMojo {
             getLog().warn("  To fix:");
             getLog().warn("    git checkout " + expectedBranch);
             getLog().warn("    git branch -D " + actualBranch);
-            getLog().warn("    mvn ike:feature-start -Dfeature=" + featureName);
+            getLog().warn("    mvn " + WsGoal.FEATURE_START_PUBLISH.qualified()
+                    + " -Dfeature=" + featureName);
             getLog().warn("");
-            getLog().warn("  ike:feature-start creates aligned branches across all workspace");
+            getLog().warn("  " + WsGoal.FEATURE_START_PUBLISH.qualified()
+                    + " creates aligned branches across all workspace");
             getLog().warn("  subprojects and sets version-qualified SNAPSHOTs.");
             getLog().warn("");
-            scenario = "new feature branch created directly (should use ws:feature-start)";
+            scenario = "new feature branch created directly (should use "
+                    + WsGoal.FEATURE_START_PUBLISH.qualified() + ")";
         } else if (isNewBranch) {
             // Created a non-feature branch directly
             getLog().warn("");
@@ -136,7 +139,7 @@ public class CheckBranchMojo extends AbstractWorkspaceMojo {
             getLog().warn("");
             getLog().warn("  The workspace expects branch '" + expectedBranch + "' for this subproject.");
             getLog().warn("  If this is intentional, update the workspace:");
-            getLog().warn("    mvn ike:ws-sync");
+            getLog().warn("    mvn " + WsGoal.SYNC.qualified());
             getLog().warn("");
             getLog().warn("  If not:");
             getLog().warn("    git checkout " + expectedBranch);
@@ -216,8 +219,9 @@ public class CheckBranchMojo extends AbstractWorkspaceMojo {
             }
             getLog().warn("");
             getLog().warn("  Repair with:");
-            getLog().warn("    mvn ws:reconcile-branches-publish "
-                    + "-Dfrom=workspace-head");
+            getLog().warn("    mvn "
+                    + WsGoal.RECONCILE_BRANCHES_PUBLISH.qualified()
+                    + " -Dfrom=workspace-head");
             getLog().warn("");
         }
 
@@ -240,8 +244,9 @@ public class CheckBranchMojo extends AbstractWorkspaceMojo {
         report.table(List.of("Subproject", "YAML branch", "Repo branch", "Status"),
                 driftTableRows);
         if (driftCount > 0) {
-            report.paragraph("_Repair: `mvn ws:reconcile-branches-publish "
-                    + "-Dfrom=workspace-head`_");
+            report.paragraph("_Repair: `mvn "
+                    + WsGoal.RECONCILE_BRANCHES_PUBLISH.qualified()
+                    + " -Dfrom=workspace-head`_");
         }
         return new WorkspaceReportSpec(WsGoal.CHECK_BRANCH, report.build());
     }

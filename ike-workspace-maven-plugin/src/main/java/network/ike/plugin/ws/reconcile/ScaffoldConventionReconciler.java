@@ -1,6 +1,7 @@
 package network.ike.plugin.ws.reconcile;
 
 import network.ike.plugin.ws.MavenWrapper;
+import network.ike.plugin.ws.WsGoal;
 import network.ike.workspace.IdeSettings;
 import network.ike.workspace.Manifest;
 import network.ike.workspace.ManifestException;
@@ -81,7 +82,8 @@ public class ScaffoldConventionReconciler implements Reconciler {
         List<String> detail = new ArrayList<>(run.drift);
         String summary = run.drift.size() + " scaffold convention(s) drift";
         String action = "apply scaffold upgrades on scaffold-publish";
-        String optOut = "mvn ws:scaffold-publish -D" + optOutFlag() + "=false";
+        String optOut = "mvn " + WsGoal.SCAFFOLD_PUBLISH.qualified()
+                + " -D" + optOutFlag() + "=false";
         return new DriftReport(dimension(), true, summary, detail, action, optOut);
     }
 
@@ -395,8 +397,10 @@ public class ScaffoldConventionReconciler implements Reconciler {
      * Header comment block emitted when {@code .gitattributes} is
      * created from scratch.
      */
-    static final String GITATTRIBUTES_HEADER = """
-            # Line-ending policy — managed by ws:scaffold-publish
+    static final String GITATTRIBUTES_HEADER =
+            "# Line-ending policy — managed by "
+            + WsGoal.SCAFFOLD_PUBLISH.qualified() + "\n"
+            + """
             # ──────────────────────────────────────────────────────
             #
             # Windows batch files MUST be CRLF or cmd.exe chokes — symptoms range

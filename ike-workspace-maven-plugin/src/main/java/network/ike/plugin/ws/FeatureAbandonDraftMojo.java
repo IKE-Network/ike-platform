@@ -199,7 +199,8 @@ public class FeatureAbandonDraftMojo extends AbstractWorkspaceMojo {
 
         if (draft) {
             getLog().info("");
-            getLog().info("  Next: mvn ws:feature-abandon-publish"
+            getLog().info("  Next: mvn "
+                    + WsGoal.FEATURE_ABANDON_PUBLISH.qualified()
                     + (force ? "" : " (will prompt for confirmation)"));
             getLog().info("");
             return writeAbandonReport(branchName, reportRows, eligible, skipped, draft);
@@ -352,7 +353,8 @@ public class FeatureAbandonDraftMojo extends AbstractWorkspaceMojo {
             getLog().info("  [draft] Would abandon " + branchName
                     + " and switch to " + targetBranch);
             getLog().info("");
-            getLog().info("  Next: mvn ws:feature-abandon-publish");
+            getLog().info("  Next: mvn "
+                    + WsGoal.FEATURE_ABANDON_PUBLISH.qualified());
             getLog().info("");
             return new WorkspaceReportSpec(WsGoal.FEATURE_ABANDON_DRAFT,
                     "Bare repo: would abandon `" + branchName + "` and switch to `"

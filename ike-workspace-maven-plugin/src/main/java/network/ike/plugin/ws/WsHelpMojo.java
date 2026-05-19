@@ -57,7 +57,7 @@ public class WsHelpMojo extends AbstractWorkspaceMojo {
                     + "─".repeat(Math.max(1,
                     56 - entry.getKey().length())) + "─");
             for (GoalInfo g : entry.getValue()) {
-                String goalName = "ws:" + g.name;
+                String goalName = g.goal.qualified();
                 String padding = " ".repeat(
                         Math.max(1, 46 - goalName.length()));
                 getLog().info("  " + goalName + padding + g.summary);
@@ -81,7 +81,7 @@ public class WsHelpMojo extends AbstractWorkspaceMojo {
     private static String buildHelpReport(List<GoalInfo> goals) {
         List<String[]> rows = new ArrayList<>();
         for (GoalInfo g : goals) {
-            rows.add(new String[]{"`ws:" + g.name() + "`", g.summary()});
+            rows.add(new String[]{"`" + g.goal().qualified() + "`", g.summary()});
         }
         GoalReportBuilder report = new GoalReportBuilder();
         report.paragraph(goals.size() + " `ws:*` goals.")
@@ -101,7 +101,7 @@ public class WsHelpMojo extends AbstractWorkspaceMojo {
     private static List<GoalInfo> discoverGoals() {
         List<GoalInfo> goals = new ArrayList<>();
         for (WsGoal goal : WsGoal.values()) {
-            goals.add(new GoalInfo(goal.goalName(), goal.description()));
+            goals.add(new GoalInfo(goal, goal.goalName(), goal.description()));
         }
         goals.sort(Comparator.comparing(g -> g.name));
         return goals;
@@ -174,8 +174,10 @@ public class WsHelpMojo extends AbstractWorkspaceMojo {
         getLog().info("  -Dpublish=true                Execute (most goals default to draft)");
         getLog().info("");
         getLog().info("Parent version:");
-        getLog().info("  -DparentVersion=<version>     Pin parent version for ws:scaffold-publish cascade");
-        getLog().info("  -DupdateParent=false          Skip parent cascade in ws:scaffold-publish");
+        getLog().info("  -DparentVersion=<version>     Pin parent version for "
+                + WsGoal.SCAFFOLD_PUBLISH.qualified() + " cascade");
+        getLog().info("  -DupdateParent=false          Skip parent cascade in "
+                + WsGoal.SCAFFOLD_PUBLISH.qualified());
         getLog().info("");
         getLog().info("Feature branching:");
         getLog().info("  -Dfeature=<name>              Feature name (branch: feature/<name>)");
@@ -193,10 +195,12 @@ public class WsHelpMojo extends AbstractWorkspaceMojo {
     // ── Internal record ─────────────────────────────────────────
 
     /**
-     * A discovered goal with its name and summary description.
+     * A discovered goal with its registry entry, name and summary
+     * description.
      *
+     * @param goal    the {@link WsGoal} registry entry
      * @param name    goal name (without prefix)
      * @param summary first sentence of the javadoc description
      */
-    private record GoalInfo(String name, String summary) {}
+    private record GoalInfo(WsGoal goal, String name, String summary) {}
 }

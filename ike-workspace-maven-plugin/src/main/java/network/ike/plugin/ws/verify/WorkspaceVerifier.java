@@ -3,6 +3,7 @@ package network.ike.plugin.ws.verify;
 import network.ike.plugin.ReleaseSupport;
 import network.ike.plugin.ws.Ansi;
 import network.ike.plugin.ws.PomParentSupport;
+import network.ike.plugin.ws.WsGoal;
 import network.ike.plugin.ws.vcs.VcsOperations;
 import network.ike.plugin.ws.vcs.VcsState;
 import network.ike.workspace.BomAnalysis;
@@ -511,7 +512,8 @@ public final class WorkspaceVerifier {
                 log.warn(indent + "               You are on '"
                         + localBranch + "'.");
                 log.warn(indent + "Action:        run 'mvnw ws:switch -Dbranch="
-                        + state.branch() + "' or 'mvnw ws:reconcile-branches-publish"
+                        + state.branch() + "' or 'mvnw "
+                        + WsGoal.RECONCILE_BRANCHES_PUBLISH.qualified()
                         + " -Dfrom=manifest'");
             }
             case COMMIT, PUSH, RELEASE, CHECKPOINT -> {
@@ -540,13 +542,14 @@ public final class WorkspaceVerifier {
                 if (shaOnRemote) {
                     log.warn(indent + "Status:        commit on "
                             + state.machine() + " at " + state.timestamp());
-                    log.warn(indent + "Action:        run 'mvnw ws:pull'");
+                    log.warn(indent + "Action:        run 'mvnw " + WsGoal.PULL.qualified() + "'");
                 } else {
                     log.warn(indent + "Status:        commit on "
                             + state.machine() + " at " + state.timestamp()
                             + ", but push did not complete");
                     log.warn(indent + "Action:        push from "
-                            + state.machine() + " first, then 'mvnw ws:pull' here");
+                            + state.machine() + " first, then 'mvnw "
+                            + WsGoal.PULL.qualified() + "' here");
                     log.warn(indent + "               Or: IKE_VCS_OVERRIDE=1 to proceed independently");
                 }
             }
@@ -554,28 +557,29 @@ public final class WorkspaceVerifier {
                 log.warn(indent + "Status:        push from "
                         + state.machine() + " at " + state.timestamp());
                 log.warn(indent + "               Local HEAD behind remote.");
-                log.warn(indent + "Action:        run 'mvnw ws:pull'");
+                log.warn(indent + "Action:        run 'mvnw " + WsGoal.PULL.qualified() + "'");
             }
             case RELEASE -> {
                 log.warn(indent + "Status:        release performed on "
                         + state.machine() + " at " + state.timestamp());
-                log.warn(indent + "Action:        run 'mvnw ws:pull'");
+                log.warn(indent + "Action:        run 'mvnw " + WsGoal.PULL.qualified() + "'");
             }
             case CHECKPOINT -> {
                 log.warn(indent + "Status:        checkpoint created on "
                         + state.machine() + " at " + state.timestamp());
-                log.warn(indent + "Action:        run 'mvnw ws:pull'");
+                log.warn(indent + "Action:        run 'mvnw " + WsGoal.PULL.qualified() + "'");
             }
             case SWITCH -> {
                 log.warn(indent + "Status:        switched on "
                         + state.machine() + " at " + state.timestamp());
-                log.warn(indent + "Action:        run 'mvnw ws:reconcile-branches-publish"
+                log.warn(indent + "Action:        run 'mvnw "
+                        + WsGoal.RECONCILE_BRANCHES_PUBLISH.qualified()
                         + " -Dfrom=manifest'");
             }
             case FEATURE_START, FEATURE_FINISH -> {
                 log.warn(indent + "Status:        behind ("
                         + state.action().label() + " on " + state.machine() + ")");
-                log.warn(indent + "Action:        run 'mvnw ws:pull'");
+                log.warn(indent + "Action:        run 'mvnw " + WsGoal.PULL.qualified() + "'");
             }
         }
     }

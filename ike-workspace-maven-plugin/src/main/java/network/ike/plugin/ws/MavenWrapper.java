@@ -177,7 +177,8 @@ public final class MavenWrapper {
      */
     public static void writePropertiesFile(Path propsFile, String mavenVersion) throws IOException {
         Files.createDirectories(propsFile.getParent());
-        String props = "# Maven Wrapper properties — managed by ws:scaffold-init from workspace.yaml\n"
+        String props = "# Maven Wrapper properties — managed by "
+                + WsGoal.SCAFFOLD_INIT.qualified() + " from workspace.yaml\n"
                 + "wrapperVersion=" + WRAPPER_VERSION + "\n"
                 + "distributionType=" + DISTRIBUTION_TYPE + "\n"
                 + "distributionUrl=https://repo.maven.apache.org/maven2/org/apache/maven/"

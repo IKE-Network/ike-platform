@@ -80,7 +80,7 @@ public enum PreflightCondition {
                   .append(files).append("\n");
             }
             sb.append("  To resolve:\n");
-            sb.append("    mvn ws:commit-publish"
+            sb.append("    mvn " + WsGoal.COMMIT_PUBLISH.qualified()
                     + " -Dmessage=\"<your message>\"\n");
             sb.append("  Or stash changes in each affected subproject.");
             if (anyGhPagesLeak) {
@@ -541,7 +541,8 @@ public enum PreflightCondition {
             sb.append("  Subprojects sharing the workspace's parent GA must\n");
             sb.append("  agree on parent version AND declare an empty\n");
             sb.append("  <relativePath/> to prevent the Maven 4\n");
-            sb.append("  \"parents form a cycle\" error. ws:scaffold-draft\n");
+            sb.append("  \"parents form a cycle\" error. "
+                    + WsGoal.SCAFFOLD_DRAFT.qualified() + "\n");
             sb.append("  reports the same coherence check as a warning (folded\n");
             sb.append("  from the retired ws:verify per #393); the release gate\n");
             sb.append("  promotes it to a hard requirement.");

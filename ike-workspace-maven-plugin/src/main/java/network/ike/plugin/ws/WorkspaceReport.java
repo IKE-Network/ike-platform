@@ -227,8 +227,9 @@ public final class WorkspaceReport {
      * "ws:overview" → "overview", "ws:feature-start-draft" → "feature-start-draft"
      */
     private static String stripPrefix(String goalName) {
-        if (goalName.startsWith("ws:")) {
-            return goalName.substring(3);
+        String prefix = WsGoal.PLUGIN_PREFIX + ":";
+        if (goalName.startsWith(prefix)) {
+            return goalName.substring(prefix.length());
         }
         return goalName;
     }

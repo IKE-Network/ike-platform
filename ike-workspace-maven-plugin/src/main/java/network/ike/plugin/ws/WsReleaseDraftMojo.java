@@ -439,7 +439,7 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
                     getLog().warn("  ⚠ Could not read post-release version "
                             + "for " + rc.name + " — workspace.yaml "
                             + "version: field will stay stale until the "
-                            + "next ws:scaffold-publish. "
+                            + "next " + WsGoal.SCAFFOLD_PUBLISH.qualified() + ". "
                             + readFail.getMessage());
                 }
             } catch (Exception e) {
@@ -1223,7 +1223,8 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
         } catch (Exception e) {
             getLog().warn("  ⚠ workspace.yaml updated on disk but "
                     + "could not commit (#371): " + e.getMessage()
-                    + ". Pick it up with ws:commit-publish.");
+                    + ". Pick it up with " + WsGoal.COMMIT_PUBLISH.qualified()
+                    + ".");
         }
     }
 

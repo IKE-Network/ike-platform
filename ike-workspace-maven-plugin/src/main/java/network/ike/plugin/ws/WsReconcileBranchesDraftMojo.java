@@ -107,8 +107,9 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
         if (!"branches".equals(scope) && !"all".equals(scope)) {
             throw new MojoException(
                     "ws:reconcile-branches only supports -Dscope=branches "
-                            + "(default). For POM alignment, use ws:align-"
-                            + (publish ? "publish" : "draft") + ".");
+                            + "(default). For POM alignment, use "
+                            + (publish ? WsGoal.ALIGN_PUBLISH
+                                       : WsGoal.ALIGN_DRAFT).qualified() + ".");
         }
         if (!"repos".equals(from)
                 && !"manifest".equals(from)
@@ -141,7 +142,8 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
             summary = "Nothing to reconcile — branches already coherent.\n";
         } else if (draft) {
             getLog().info("  " + totalChanges + " change(s) would be applied");
-            getLog().info("  Use ws:reconcile-branches-publish to apply.");
+            getLog().info("  Use " + WsGoal.RECONCILE_BRANCHES_PUBLISH.qualified()
+                    + " to apply.");
             summary = totalChanges + " branch change(s) would be applied "
                     + "(" + describeFromMode() + ").\n";
         } else {

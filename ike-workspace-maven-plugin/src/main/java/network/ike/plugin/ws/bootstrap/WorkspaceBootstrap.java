@@ -3,6 +3,7 @@ package network.ike.plugin.ws.bootstrap;
 import network.ike.plugin.ReleaseSupport;
 import network.ike.plugin.ws.Ansi;
 import network.ike.plugin.ws.MavenWrapper;
+import network.ike.plugin.ws.WsGoal;
 import org.apache.maven.api.plugin.Log;
 import org.apache.maven.api.plugin.MojoException;
 
@@ -151,8 +152,10 @@ public final class WorkspaceBootstrap {
         xml.append("\n");
         xml.append("  Usage:\n");
         xml.append("    mvn clean install                        # All cloned repos\n");
-        xml.append("    mvn ws:scaffold-init                     # Clone all repos\n");
-        xml.append("    mvn ws:overview                          # Workspace overview\n");
+        xml.append("    mvn " + WsGoal.SCAFFOLD_INIT.qualified()
+                + "                     # Clone all repos\n");
+        xml.append("    mvn " + WsGoal.OVERVIEW.qualified()
+                + "                          # Workspace overview\n");
         xml.append("-->\n");
         xml.append("<project xmlns=\"http://maven.apache.org/POM/4.1.0\"\n");
         xml.append("         xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n");
@@ -185,7 +188,8 @@ public final class WorkspaceBootstrap {
         xml.append("            </plugin>\n");
         xml.append("        </plugins>\n");
         xml.append("    </build>\n\n");
-        xml.append("    <!-- Profiles are added by ws:add -->\n");
+        xml.append("    <!-- Profiles are added by " + WsGoal.ADD.qualified()
+                + " -->\n");
         xml.append("    <profiles>\n");
         xml.append("    </profiles>\n\n");
         xml.append("</project>\n");
@@ -211,7 +215,7 @@ public final class WorkspaceBootstrap {
         yaml.append("# Bootstrap:\n");
         yaml.append("#   git clone https://github.com/").append(orgName).append("/").append(params.name()).append(".git\n");
         yaml.append("#   cd ").append(params.name()).append("\n");
-        yaml.append("#   mvn ws:scaffold-init\n");
+        yaml.append("#   mvn " + WsGoal.SCAFFOLD_INIT.qualified() + "\n");
         yaml.append("#   mvn clean install\n\n");
         yaml.append("schema-version: \"1.1\"\n");
         yaml.append("generated: ").append(today).append("\n\n");
@@ -226,9 +230,11 @@ public final class WorkspaceBootstrap {
         yaml.append("  branch: ").append(params.defaultBranch()).append("\n");
         yaml.append("  maven-version: \"").append(params.mavenVersion()).append("\"\n\n");
         yaml.append("subprojects:\n");
-        yaml.append("  # Add subprojects with: mvn ws:add -Drepo=<git-url>\n\n");
+        yaml.append("  # Add subprojects with: mvn " + WsGoal.ADD.qualified()
+                + " -Drepo=<git-url>\n\n");
         yaml.append("# Optional: IntelliJ project settings shared across collaborators.\n");
-        yaml.append("# Uncomment and set to have `ws:scaffold-publish` enforce these values in\n");
+        yaml.append("# Uncomment and set to have `" + WsGoal.SCAFFOLD_PUBLISH.qualified()
+                + "` enforce these values in\n");
         yaml.append("# .idea/misc.xml on every run. Useful when the project uses\n");
         yaml.append("# --enable-preview (set language-level to JDK_NN_PREVIEW).\n");
         yaml.append("# ide:\n");
@@ -263,7 +269,8 @@ public final class WorkspaceBootstrap {
         gi.append("# ").append("═".repeat(params.name().length() + 11)).append("\n");
         gi.append("#\n");
         gi.append("# Ignore everything, whitelist only workspace-owned files.\n");
-        gi.append("# Subproject repos are independent git repos cloned by ws:scaffold-init.\n\n");
+        gi.append("# Subproject repos are independent git repos cloned by "
+                + WsGoal.SCAFFOLD_INIT.qualified() + ".\n\n");
         gi.append("# ── Ignore everything by default ─────────────────────────────────\n");
         gi.append("*\n\n");
         gi.append("# ── Whitelist workspace-level files ──────────────────────────────\n");
@@ -314,7 +321,7 @@ public final class WorkspaceBootstrap {
         adoc.append("----\n");
         adoc.append("git clone https://github.com/").append(orgName).append("/").append(params.name()).append(".git\n");
         adoc.append("cd ").append(params.name()).append("\n");
-        adoc.append("mvn ws:scaffold-init   # <1>\n");
+        adoc.append("mvn " + WsGoal.SCAFFOLD_INIT.qualified() + "   # <1>\n");
         adoc.append("mvn clean install      # <2>\n");
         adoc.append("----\n");
         adoc.append("<1> Clones all subproject repos in dependency order; installs Maven\n");
@@ -325,9 +332,12 @@ public final class WorkspaceBootstrap {
         adoc.append("(under _Plugins > ws_). Double-click any goal to run it.\n\n");
         adoc.append("[source,bash]\n");
         adoc.append("----\n");
-        adoc.append("mvn ws:overview          # Workspace overview\n");
-        adoc.append("mvn ws:add -Drepo=      # Add a subproject repo\n");
-        adoc.append("mvn ws:scaffold-draft          # Preview scaffold and reconciliation drift\n");
+        adoc.append("mvn " + WsGoal.OVERVIEW.qualified()
+                + "          # Workspace overview\n");
+        adoc.append("mvn " + WsGoal.ADD.qualified()
+                + " -Drepo=      # Add a subproject repo\n");
+        adoc.append("mvn " + WsGoal.SCAFFOLD_DRAFT.qualified()
+                + "          # Preview scaffold and reconciliation drift\n");
         adoc.append("----\n");
         return adoc.toString();
     }

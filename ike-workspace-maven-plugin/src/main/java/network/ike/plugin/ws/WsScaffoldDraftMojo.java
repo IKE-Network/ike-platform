@@ -91,8 +91,8 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
         WorkspaceGraph graph = loadGraph();
         File root = workspaceRoot();
         String goal = publish ? "ike:scaffold-publish" : "ike:scaffold-draft";
-        String goalLabel = publish ? "ws:scaffold-publish"
-                                   : "ws:scaffold-draft";
+        String goalLabel = (publish ? WsGoal.SCAFFOLD_PUBLISH
+                                    : WsGoal.SCAFFOLD_DRAFT).qualified();
 
         getLog().info("");
         getLog().info(goalLabel);
@@ -200,7 +200,8 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
 
         if (failed > 0) {
             throw new MojoException(
-                    "ws:" + (publish ? "scaffold-publish" : "scaffold-draft")
+                    (publish ? WsGoal.SCAFFOLD_PUBLISH : WsGoal.SCAFFOLD_DRAFT)
+                            .qualified()
                     + " saw " + failed + " per-subproject failure(s); "
                     + "see logs above.");
         }
@@ -275,7 +276,8 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
             any |= appendRepoStatus("(workspace root)", root, body);
         }
         if (any) {
-            report.paragraph("`ws:scaffold-publish` edits files in place "
+            report.paragraph("`" + WsGoal.SCAFFOLD_PUBLISH.qualified()
+                    + "` edits files in place "
                     + "and does not commit. Review and commit per repo:");
             report.raw(body.toString());
         } else {
@@ -407,7 +409,8 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
         if (latest == null) {
             return;
         }
-        String command = "mvn ws:scaffold-publish -DparentVersion=" + latest;
+        String command = "mvn " + WsGoal.SCAFFOLD_PUBLISH.qualified()
+                + " -DparentVersion=" + latest;
         getLog().info("");
         getLog().info("Foundation currency:");
         getLog().info("  Latest released " + rootParent.artifactId()

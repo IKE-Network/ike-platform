@@ -199,10 +199,13 @@ public class WsScaffoldInitMojo implements Mojo {
         // is gone — no known workspace still uses it.
         if (group == null || group.isBlank()) {
             throw new MojoException(
-                    "ws:scaffold-init in bootstrap mode requires -Dgroup=<groupId> "
+                    WsGoal.SCAFFOLD_INIT.qualified()
+                            + " in bootstrap mode requires -Dgroup=<groupId> "
                             + "(e.g. network.ike.workspace). The workspace root "
-                            + "needs real Maven coordinates so ws:release-publish, "
-                            + "ws:align-publish, and site deploy can address it. "
+                            + "needs real Maven coordinates so "
+                            + WsGoal.RELEASE_PUBLISH.qualified() + ", "
+                            + WsGoal.ALIGN_PUBLISH.qualified()
+                            + ", and site deploy can address it. "
                             + "See ike-issues#183.");
         }
 
@@ -262,8 +265,10 @@ public class WsScaffoldInitMojo implements Mojo {
         log.info(Ansi.yellow("  ⚠  You must change into the workspace directory before running ws: goals:"));
         log.info("");
         log.info("    " + Ansi.cyan("cd " + name));
-        log.info("    mvn ws:add -Drepo=<git-url>    # add components");
-        log.info("    mvn ws:scaffold-init           # clone components");
+        log.info("    mvn " + WsGoal.ADD.qualified()
+                + " -Drepo=<git-url>    # add components");
+        log.info("    mvn " + WsGoal.SCAFFOLD_INIT.qualified()
+                + "           # clone components");
         log.info("");
 
         WorkspaceReport.write(wsDir, WsGoal.SCAFFOLD_INIT.qualified(),

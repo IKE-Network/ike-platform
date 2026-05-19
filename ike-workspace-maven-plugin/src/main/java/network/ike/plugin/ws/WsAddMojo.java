@@ -139,7 +139,7 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
         if (!Files.exists(manifestPath)) {
             throw new MojoException(
                     "No workspace.yaml found in " + wsDir
-                    + ". Run ws:scaffold-init first.");
+                    + ". Run " + WsGoal.SCAFFOLD_INIT.qualified() + " first.");
         }
 
         // Resolve the target branch up front: workspace repo HEAD is
@@ -350,7 +350,8 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
         if (cloned) {
             getLog().info("  Subproject added and cloned.");
         } else {
-            getLog().info("  Subproject added. Run 'mvn ws:scaffold-init' to clone.");
+            getLog().info("  Subproject added. Run 'mvn "
+                    + WsGoal.SCAFFOLD_INIT.qualified() + "' to clone.");
         }
         getLog().info("");
         GoalReportBuilder report = new GoalReportBuilder();
@@ -358,7 +359,8 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
         report.table(List.of("Field", "Value"), List.of(
                 new String[]{"Repo", repo},
                 new String[]{"Cloned",
-                        cloned ? "yes" : "no — run ws:scaffold-init"}));
+                        cloned ? "yes"
+                               : "no — run " + WsGoal.SCAFFOLD_INIT.qualified()}));
         WorkspaceReportSpec spec = new WorkspaceReportSpec(WsGoal.ADD,
                 report.build());
 
@@ -1405,8 +1407,9 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
                     + coords + ":" + parentInfo.version()
                     + " != workspace " + coords + ":" + wsParent.version()
                     + " (#324 coherence violation — fix before "
-                    + "ws:release-publish or expect ws:scaffold-draft "
-                    + "to flag it)");
+                    + WsGoal.RELEASE_PUBLISH.qualified() + " or expect "
+                    + WsGoal.SCAFFOLD_DRAFT.qualified()
+                    + " to flag it)");
             return;
         }
 
@@ -1439,6 +1442,7 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
         }
         throw new MojoException(
                 "Cannot find workspace.yaml. Run from within a workspace "
-                + "directory or use ws:scaffold-init first.");
+                + "directory or use " + WsGoal.SCAFFOLD_INIT.qualified()
+                + " first.");
     }
 }

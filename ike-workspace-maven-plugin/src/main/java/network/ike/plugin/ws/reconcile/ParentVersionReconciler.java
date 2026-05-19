@@ -2,6 +2,7 @@ package network.ike.plugin.ws.reconcile;
 
 import network.ike.plugin.ReleaseSupport;
 import network.ike.plugin.ws.PomParentSupport;
+import network.ike.plugin.ws.WsGoal;
 import network.ike.plugin.ws.PomParentSupport.ParentInfo;
 import network.ike.workspace.Subproject;
 import org.apache.maven.api.plugin.MojoException;
@@ -68,7 +69,8 @@ public class ParentVersionReconciler implements Reconciler {
                 + " cascaded to " + plan.targetVersion();
         String action = "cascade to " + plan.targetVersion()
                 + " on scaffold-publish";
-        String optOut = "mvn ws:scaffold-publish -D" + optOutFlag() + "=false";
+        String optOut = "mvn " + WsGoal.SCAFFOLD_PUBLISH.qualified()
+                + " -D" + optOutFlag() + "=false";
         return new DriftReport(dimension(), true, summary, detail,
                 action, optOut);
     }

@@ -60,7 +60,8 @@ public class WsRefreshMainMojo extends AbstractWorkspaceMojo {
     protected WorkspaceReportSpec runGoal() throws MojoException {
         if (!isWorkspaceMode()) {
             throw new MojoException(
-                    "ws:refresh-main requires a workspace (workspace.yaml).");
+                    WsGoal.REFRESH_MAIN.qualified()
+                            + " requires a workspace (workspace.yaml).");
         }
 
         WorkspaceGraph graph = loadGraph();

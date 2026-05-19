@@ -78,7 +78,8 @@ public class WsSyncMojo extends AbstractWorkspaceMojo {
         if (pullOnly && pushOnly) {
             throw new MojoException(
                     "-DpullOnly and -DpushOnly are mutually exclusive —"
-                            + " use ws:pull or ws:push directly if you"
+                            + " use " + WsGoal.PULL.qualified() + " or "
+                            + WsGoal.PUSH.qualified() + " directly if you"
                             + " want only one half");
         }
 

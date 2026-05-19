@@ -204,7 +204,7 @@ public class UpdateFeatureDraftMojo extends AbstractWorkspaceMojo {
                             getLog().warn("      • " + file);
                         }
                         getLog().warn("      Resolve in IntelliJ after running"
-                                + " ws:update-feature-publish");
+                                + " " + WsGoal.UPDATE_FEATURE_PUBLISH.qualified());
                         reportRows.add(new String[]{name,
                                 String.valueOf(behind.size()),
                                 String.valueOf(ahead.size()),
@@ -247,7 +247,8 @@ public class UpdateFeatureDraftMojo extends AbstractWorkspaceMojo {
                 getLog().error("    3. Git → Resolve Conflicts → resolve each file"
                         + " with the 3-way merge editor");
                 getLog().error("    4. Commit the merge resolution");
-                getLog().error("    5. Re-run: mvn ws:update-feature-publish");
+                getLog().error("    5. Re-run: mvn "
+                        + WsGoal.UPDATE_FEATURE_PUBLISH.qualified());
                 getLog().error("       (already-updated components will be skipped)");
                 getLog().error("");
                 throw new MojoException(
@@ -263,7 +264,8 @@ public class UpdateFeatureDraftMojo extends AbstractWorkspaceMojo {
             getLog().info("  Components to update: " + eligible.size()
                     + " | Skipped: " + skipped.size());
             getLog().info("");
-            getLog().info("  Next: mvn ws:update-feature-publish");
+            getLog().info("  Next: mvn "
+                    + WsGoal.UPDATE_FEATURE_PUBLISH.qualified());
         } else {
             getLog().info("  Updated: " + eligible.size() + " subproject(s)"
                     + " | Skipped: " + skipped.size());

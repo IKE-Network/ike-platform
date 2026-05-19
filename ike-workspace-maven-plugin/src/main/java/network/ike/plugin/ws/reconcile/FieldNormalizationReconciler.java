@@ -1,6 +1,7 @@
 package network.ike.plugin.ws.reconcile;
 
 import network.ike.plugin.ReleaseSupport;
+import network.ike.plugin.ws.WsGoal;
 import network.ike.workspace.ManifestWriter;
 import network.ike.workspace.Subproject;
 import org.apache.maven.api.plugin.MojoException;
@@ -90,7 +91,8 @@ public class FieldNormalizationReconciler implements Reconciler {
             summary = "duplicate subproject field keys to collapse";
         }
         String action = "sync from POM truth on scaffold-publish";
-        String optOut = "mvn ws:scaffold-publish -D" + optOutFlag() + "=false";
+        String optOut = "mvn " + WsGoal.SCAFFOLD_PUBLISH.qualified()
+                + " -D" + optOutFlag() + "=false";
 
         return new DriftReport(dimension(), true, summary, detail, action, optOut);
     }

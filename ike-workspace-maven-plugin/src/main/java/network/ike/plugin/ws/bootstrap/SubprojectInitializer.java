@@ -713,10 +713,8 @@ public final class SubprojectInitializer {
                 | `ike:release-draft` | Preview single-repo release |
                 | `ike:release-publish` | Execute single-repo release |
                 | `ike:generate-bom` | Generate BOM with resolved versions |
-                | `ike:deploy-site-draft` | Preview site deployment |
-                | `ike:deploy-site-publish` | Deploy project site |
-                | `ike:register-site-draft` | Preview org site registration |
-                | `ike:register-site-publish` | Register project on org site |
+                | `ike:site-draft` | Preview site deployment + org-site registration |
+                | `ike:site-publish` | Deploy project site and register it on the org site |
                 | `ike:help` | List all ike: goals with descriptions |
 
                 ---
@@ -778,7 +776,6 @@ public final class SubprojectInitializer {
 
                 **`ws:feature-finish-squash-publish`** (recommended) — single commit on target.
                 **`ws:feature-finish-merge-publish`** — no-ff merge, preserves history.
-                **`ws:feature-finish-rebase-publish`** — linear history, no merge commit.
 
                 All strategies:
                 - Auto-generate commit message from per-subproject commit history
@@ -843,7 +840,7 @@ public final class SubprojectInitializer {
                 modifications occur.
 
                 **Goals with hard preflight (publish mode):**
-                `release`, `align`, `set-parent`, `checkpoint`, `pull`, `switch`,
+                `release`, `align`, `scaffold`, `checkpoint`, `pull`, `switch`,
                 `feature-start`, `feature-finish-*`, `feature-abandon`, `update-feature`
 
                 **Draft goals:** warn about uncommitted changes that would block the

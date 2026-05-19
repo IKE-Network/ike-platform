@@ -83,12 +83,13 @@ public class WsAlignDraftMojo extends AbstractWorkspaceMojo {
         // Migration gate (ike-issues#200): the align goals are POM-only.
         // Branch reconciliation moved to ws:reconcile-branches-{draft,publish}.
         if ("branches".equals(scope) || "all".equals(scope)) {
-            String invokedGoal = "ws:align-" + (publish ? "publish" : "draft");
+            String invokedGoal = (publish ? WsGoal.ALIGN_PUBLISH
+                                           : WsGoal.ALIGN_DRAFT).qualified();
             throw new MojoException(
                     invokedGoal + " no longer supports -Dscope=" + scope
                             + " (ike-issues#200). Branch reconciliation moved to:\n"
-                            + "  mvn ws:reconcile-branches-"
-                            + (publish ? "publish" : "draft")
+                            + "  mvn " + (publish ? WsGoal.RECONCILE_BRANCHES_PUBLISH
+                                                  : WsGoal.RECONCILE_BRANCHES_DRAFT).qualified()
                             + "\n  " + invokedGoal
                             + " is now POM-only — drop -Dscope=.");
         }

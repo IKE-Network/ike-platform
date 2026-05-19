@@ -96,7 +96,8 @@ public class WsCommitDraftMojo extends AbstractWorkspaceMojo {
         getLog().info("");
         getLog().info("  " + summary);
         if (pending > 0) {
-            getLog().info("  Run ws:commit-publish -Dmessage=\"...\" to commit.");
+            getLog().info("  Run " + WsGoal.COMMIT_PUBLISH.qualified()
+                    + " -Dmessage=\"...\" to commit.");
         }
         getLog().info("");
 
@@ -109,7 +110,8 @@ public class WsCommitDraftMojo extends AbstractWorkspaceMojo {
         getLog().info("══════════════════════════════════════════════════════════════");
         boolean pending = previewOne(dir, dir.getName());
         String summary = pending
-                ? "Uncommitted work present — run ws:commit-publish to commit."
+                ? "Uncommitted work present — run "
+                        + WsGoal.COMMIT_PUBLISH.qualified() + " to commit."
                 : "Clean — nothing to commit.";
         getLog().info("");
         getLog().info("  " + summary);

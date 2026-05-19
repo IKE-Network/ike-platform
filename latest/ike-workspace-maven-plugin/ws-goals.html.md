@@ -26,7 +26,8 @@ Draft / publish split Most state-mutating goals come in two forms — `**-draft*
 | [ws:checkpoint — tag without releasing](#checkpoint-publish) | release | Apply the checkpoint tags |
 | [cleanup](#cleanup-draft) | cleanup | List merged feature branches across the workspace |
 | [ws:cleanup-publish — interactive cleanup](#cleanup-publish) | cleanup | Delete merged feature branches interactively |
-| [ws:commit — stage + commit workspace-wide](#commit) | sync | Stage + commit across all subprojects with VCS-bridge preamble |
+| [commit](#commit-draft) | sync | Preview what would be committed across all subprojects (read-only) |
+| [ws:commit-publish — stage + commit workspace-wide](#commit-publish) | sync | Stage + commit across all subprojects with VCS-bridge preamble |
 | [feature-abandon](#feature-abandon-draft) | feature | Preview deletion of a feature branch workspace-wide |
 | [ws:feature-abandon — discard a feature branch](#feature-abandon-publish) | feature | Delete a feature branch workspace-wide |
 | [feature-finish-merge](#feature-finish-merge-draft) | feature | Preview a no-fast-forward merge back to main |
@@ -226,7 +227,15 @@ mvn ws:push
 mvn ws:push -DskipUpToDate=false   # show "already up to date" lines
 ```
 
-### [#ws-commit--stage-commit-workspace-wide](#ws-commit--stage-commit-workspace-wide)ws:commit — stage + commit workspace-wide
+### [#ws-commit-draft--preview-a-workspace-wide-commit](#ws-commit-draft--preview-a-workspace-wide-commit)ws:commit-draft — preview a workspace-wide commit
+
+Read-only preview of what `ws:commit-publish` would commit. Scans every repository (workspace root plus each cloned subproject) and reports, per repo, the tracked-modified and untracked-not-ignored work that would be staged and committed. No catch-up, no `git add`, no commit, no push, and no `-Dmessage` required. The `.mvn/jvm.config` preflight lint still runs as a hard gate, since a hash-comment’d `jvm.config` would block the real commit.
+
+```
+mvn ws:commit-draft
+```
+
+### [#ws-commit-publish--stage-commit-workspace-wide](#ws-commit-publish--stage-commit-workspace-wide)ws:commit-publish — stage + commit workspace-wide
 
 Commit with a VCS-bridge catch-up preamble. By default stages all tracked-modified and untracked-not-ignored files before committing — workspace-wide goals routinely create new files (scaffold writes, IDE settings cleanup, generated configs) and a staged-only default silently dropped them. Pass `-DstagedOnly` to commit only what is already in the index.
 
@@ -237,8 +246,8 @@ Each subproject’s commit line includes a count of modified vs. new files, with
 ```
 
 ```
-mvn ws:commit -Dmessage="fix: deploy-path bug"
-mvn ws:commit -Dmessage="..." -DstagedOnly
+mvn ws:commit-publish -Dmessage="fix: deploy-path bug"
+mvn ws:commit-publish -Dmessage="..." -DstagedOnly
 ```
 
 ### [#ws-refresh-main--refresh-local-main-from-origin](#ws-refresh-main--refresh-local-main-from-origin)ws:refresh-main — refresh local main from origin

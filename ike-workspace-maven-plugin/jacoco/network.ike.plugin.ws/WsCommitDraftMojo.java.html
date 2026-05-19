@@ -1,0 +1,147 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>WsCommitDraftMojo.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">WsCommitDraftMojo.java</span></div><h1>WsCommitDraftMojo.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.plugin.ws.vcs.VcsOperations;
+import network.ike.workspace.WorkspaceGraph;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+
+import java.io.File;
+import java.util.List;
+
+/**
+ * Preview what {@code ws:commit-publish} would commit across the
+ * workspace — read-only.
+ *
+ * &lt;p&gt;The {@code -draft} half of the commit pair. Scans every repository
+ * (workspace root plus each cloned subproject) and reports, per repo,
+ * the uncommitted work that {@link WsCommitPublishMojo ws:commit-publish}
+ * would stage and commit: tracked-modified file counts plus
+ * untracked-not-ignored paths. Repos with nothing to commit are
+ * reported clean.
+ *
+ * &lt;p&gt;Read-only: no VCS bridge catch-up, no {@code git add}, no
+ * {@code git commit}, no push, and no {@code -Dmessage} required. The
+ * {@code .mvn/jvm.config} preflight lint still runs as a hard gate — a
+ * hash-comment'd {@code jvm.config} would block the real commit, so the
+ * draft surfaces it the same way rather than previewing a commit that
+ * could not happen (ike-issues#217).
+ *
+ * &lt;p&gt;Usage:
+ * &lt;pre&gt;{@code
+ * mvn ws:commit-draft
+ * }&lt;/pre&gt;
+ *
+ * @see WsCommitPublishMojo
+ */
+@Mojo(name = &quot;commit-draft&quot;, projectRequired = false, aggregator = true)
+public class WsCommitDraftMojo extends AbstractWorkspaceMojo {
+
+    /** Creates this goal instance. */
+<span class="nc" id="L40">    public WsCommitDraftMojo() {}</span>
+
+    @Override
+    protected WorkspaceReportSpec runGoal() throws MojoException {
+<span class="nc bnc" id="L44" title="All 2 branches missed.">        if (isWorkspaceMode()) {</span>
+<span class="nc" id="L45">            return previewWorkspace();</span>
+        }
+<span class="nc" id="L47">        return previewSingleRepo(new File(System.getProperty(&quot;user.dir&quot;)));</span>
+    }
+
+    private WorkspaceReportSpec previewWorkspace() throws MojoException {
+<span class="nc" id="L51">        WorkspaceGraph graph = loadGraph();</span>
+<span class="nc" id="L52">        File root = workspaceRoot();</span>
+<span class="nc" id="L53">        List&lt;String&gt; sorted = graph.topologicalSort();</span>
+
+        // Same pre-commit hygiene gate as ws:commit-publish — a
+        // #-comment'd .mvn/jvm.config would block the real commit, so
+        // the draft fails the same way rather than previewing a commit
+        // that cannot happen (ike-issues#217).
+<span class="nc" id="L59">        network.ike.plugin.ws.preflight.Preflight.of(</span>
+<span class="nc" id="L60">                java.util.List.of(network.ike.plugin.ws.preflight</span>
+                        .PreflightCondition.JVM_CONFIG_NO_HASH_COMMENTS),
+<span class="nc" id="L62">                network.ike.plugin.ws.preflight.PreflightContext.of(</span>
+                        root, graph, sorted))
+<span class="nc" id="L64">                .requirePassed(WsGoal.COMMIT_DRAFT);</span>
+
+<span class="nc" id="L66">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L67">        getLog().info(header(&quot;Commit (draft)&quot;));</span>
+<span class="nc" id="L68">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+<span class="nc" id="L69">        getLog().info(&quot;&quot;);</span>
+
+<span class="nc" id="L71">        int pending = 0;</span>
+<span class="nc" id="L72">        int clean = 0;</span>
+
+<span class="nc bnc" id="L74" title="All 2 branches missed.">        if (new File(root, &quot;.git&quot;).exists()) {</span>
+<span class="nc bnc" id="L75" title="All 2 branches missed.">            if (previewOne(root, &quot;workspace root&quot;)) {</span>
+<span class="nc" id="L76">                pending++;</span>
+            } else {
+<span class="nc" id="L78">                clean++;</span>
+            }
+        }
+<span class="nc bnc" id="L81" title="All 2 branches missed.">        for (String name : sorted) {</span>
+<span class="nc" id="L82">            File dir = new File(root, name);</span>
+<span class="nc bnc" id="L83" title="All 2 branches missed.">            if (!new File(dir, &quot;.git&quot;).exists()) {</span>
+<span class="nc" id="L84">                getLog().debug(name + &quot; — not cloned, skipping&quot;);</span>
+<span class="nc" id="L85">                continue;</span>
+            }
+<span class="nc bnc" id="L87" title="All 2 branches missed.">            if (previewOne(dir, name)) {</span>
+<span class="nc" id="L88">                pending++;</span>
+            } else {
+<span class="nc" id="L90">                clean++;</span>
+            }
+<span class="nc" id="L92">        }</span>
+
+<span class="nc" id="L94">        String summary = pending + &quot; repo(s) with uncommitted work, &quot;</span>
+                + clean + &quot; clean&quot;;
+<span class="nc" id="L96">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L97">        getLog().info(&quot;  &quot; + summary);</span>
+<span class="nc bnc" id="L98" title="All 2 branches missed.">        if (pending &gt; 0) {</span>
+<span class="nc" id="L99">            getLog().info(&quot;  Run &quot; + WsGoal.COMMIT_PUBLISH.qualified()</span>
+                    + &quot; -Dmessage=\&quot;...\&quot; to commit.&quot;);
+        }
+<span class="nc" id="L102">        getLog().info(&quot;&quot;);</span>
+
+<span class="nc" id="L104">        return new WorkspaceReportSpec(WsGoal.COMMIT_DRAFT, summary + &quot;\n&quot;);</span>
+    }
+
+    private WorkspaceReportSpec previewSingleRepo(File dir) {
+<span class="nc" id="L108">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L109">        getLog().info(&quot;IKE VCS Bridge — Commit (draft)&quot;);</span>
+<span class="nc" id="L110">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+<span class="nc" id="L111">        boolean pending = previewOne(dir, dir.getName());</span>
+<span class="nc bnc" id="L112" title="All 2 branches missed.">        String summary = pending</span>
+                ? &quot;Uncommitted work present — run &quot;
+<span class="nc" id="L114">                        + WsGoal.COMMIT_PUBLISH.qualified() + &quot; to commit.&quot;</span>
+<span class="nc" id="L115">                : &quot;Clean — nothing to commit.&quot;;</span>
+<span class="nc" id="L116">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L117">        getLog().info(&quot;  &quot; + summary);</span>
+<span class="nc" id="L118">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L119">        return new WorkspaceReportSpec(WsGoal.COMMIT_DRAFT, summary + &quot;\n&quot;);</span>
+    }
+
+    /**
+     * Report one repository's pending work without mutating it.
+     *
+     * @param dir   the repository directory
+     * @param label the label shown in the output line
+     * @return {@code true} if the repo has uncommitted work
+     */
+    private boolean previewOne(File dir, String label) {
+<span class="nc" id="L130">        int modCount = VcsOperations.modifiedTrackedCount(dir);</span>
+<span class="nc" id="L131">        List&lt;String&gt; newFiles = VcsOperations.untrackedFiles(dir);</span>
+
+<span class="nc bnc" id="L133" title="All 4 branches missed.">        if (modCount == 0 &amp;&amp; newFiles.isEmpty()) {</span>
+<span class="nc bnc" id="L134" title="All 2 branches missed.">            if (VcsOperations.hasStagedChanges(dir)) {</span>
+<span class="nc" id="L135">                getLog().info(Ansi.yellow(&quot;  ⟳ &quot;) + label</span>
+                        + &quot; — would commit: staged changes&quot;);
+<span class="nc" id="L137">                return true;</span>
+            }
+<span class="nc" id="L139">            getLog().info(&quot;  · &quot; + label + &quot; — clean&quot;);</span>
+<span class="nc" id="L140">            return false;</span>
+        }
+<span class="nc" id="L142">        getLog().info(Ansi.yellow(&quot;  ⟳ &quot;) + label + &quot; — would commit: &quot;</span>
+<span class="nc" id="L143">                + WsCommitPublishMojo.previewSummary(modCount, newFiles));</span>
+<span class="nc" id="L144">        return true;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

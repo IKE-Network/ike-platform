@@ -56,7 +56,7 @@ Once bootstrapped, the daily rhythm is `sync` → work → `commit` → `sync`:
 ```
 mvn ws:sync                # pull, refresh-main, push (everything)
 # ... edit code ...
-mvn ws:commit -Dmessage="..."
+mvn ws:commit-publish -Dmessage="..."
 mvn ws:sync
 ```
 
@@ -75,7 +75,7 @@ mvn ws:feature-start-publish -Dfeature=my-thing
 # Inter-subproject deps auto-align so the branch starts consistent.
 
 # ... edit code ...
-mvn ws:commit -Dmessage="my work in progress"
+mvn ws:commit-publish -Dmessage="my work in progress"
 mvn ws:push                # publish the feature branch
 
 # Periodically catch up with main:

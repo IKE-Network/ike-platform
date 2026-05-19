@@ -143,7 +143,7 @@ The release flow’s own commits already use explicit paths; the risk is in huma
 
 | Symptom | First move |
 | --- | --- |
-| Preflight fails on `WORKING_TREE_CLEAN` | Commit (or stash) the listed changes. `mvn ws:commit -Dmessage=…​` on the workspace, or `git commit` in the listed repo. |
+| Preflight fails on `WORKING_TREE_CLEAN` | Commit (or stash) the listed changes. `mvn ws:commit-publish -Dmessage=…​` on the workspace, or `git commit` in the listed repo. |
 | Preflight fails on `NO_ON_DISK_GHPAGES_LEAK` | `rm -rf <listed directories>`. Safe — see the gotcha above. |
 | `mvn site:stage` fails with "untracked content" error | You’re hitting ike-issues#358. Run the on-disk leak detection above and delete the leak directory. |
 | Nexus deploy fails with auth error | Check `~/.m2/settings.xml` for current credentials. Bouncy Castle GPG signing is wired through the same settings. |

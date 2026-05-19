@@ -81,7 +81,7 @@ Consolidated dashboard: replaces the former separate `ws:dashboard`, `ws:status`
 mvn ws:feature-start-publish -Dfeature=my-feature
 ```
 
-This creates a `feature/my-feature` branch in every checked-out component and sets branch-qualified POM versions (e.g., `24-my-feature-SNAPSHOT`). Use the bare `ws:feature-start` (or `ws:feature-start-draft`) to preview without writing.
+This creates a `feature/my-feature` branch in every checked-out component and sets branch-qualified POM versions (e.g., `24-my-feature-SNAPSHOT`). Use `ws:feature-start-draft` to preview without writing.
 
 ### [#work-and-commit](#work-and-commit)Work and commit
 

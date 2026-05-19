@@ -45,7 +45,7 @@ mvn ws:align-publish      # apply the changes
 
 The bare goal name (`ws:align`) is wired to the draft variant. This is a deliberate convention from ike-issues#200: every workspace mutation is two-phase, with a real chance to audit the draft before committing.
 
-Goals that are purely read-only (e.g., `ws:overview`, `ws:verify`, `ws:graph`) do not have a publish counterpart — they are always safe.
+Goals that are purely read-only (e.g., `ws:overview`, `ws:graph`) do not have a publish counterpart — they are always safe.
 
 ## [#per-goal-markdown-reports](#per-goal-markdown-reports)Per-goal markdown reports
 

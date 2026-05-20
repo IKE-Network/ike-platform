@@ -7,6 +7,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.nio.file.Files;
 import java.nio.file.Path;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -92,6 +93,109 @@ class WsScaffoldInitMojoTest {
         String yaml = invokeGenerateManifest(bootstrap);
 
         assertThat(yaml).contains("version: 1-SNAPSHOT");
+    }
+
+    // ── Managed header (#458) ───────────────────────────────────
+
+    @Test
+    void managed_header_is_sentinel_bounded_and_uses_enum_goal_name() {
+        String header = WorkspaceBootstrap.managedHeader(
+                "my-ws", "An example workspace", "MyOrg");
+
+        assertThat(header)
+                .startsWith(WorkspaceBootstrap.MANAGED_BEGIN + "\n")
+                .contains("# workspace.yaml — my-ws")
+                .contains("# An example workspace")
+                .contains("#   git clone https://github.com/MyOrg/my-ws.git")
+                .contains("#   mvn " + WsGoal.SCAFFOLD_INIT.qualified())
+                .contains("\n" + WorkspaceBootstrap.MANAGED_END + "\n")
+                // No retired goal name slips back in.
+                .doesNotContain("ws:init")
+                .doesNotContain("ws:create");
+    }
+
+    @Test
+    void managed_header_renders_org_placeholder_when_null_or_blank() {
+        assertThat(WorkspaceBootstrap.managedHeader("my-ws", "desc", null))
+                .contains("https://github.com/<org>/my-ws.git");
+        assertThat(WorkspaceBootstrap.managedHeader("my-ws", "desc", "  "))
+                .contains("https://github.com/<org>/my-ws.git");
+    }
+
+    @Test
+    void refresh_replaces_sentinel_bounded_block_in_place() throws Exception {
+        Path yaml = tempDir.resolve("workspace.yaml");
+        String body = "schema-version: \"1.1\"\n"
+                + "workspace-root:\n  groupId: x\n  artifactId: my-ws\n  version: 1\n";
+        Files.writeString(yaml,
+                WorkspaceBootstrap.managedHeader("my-ws", "old desc", "OldOrg")
+                        + body);
+
+        boolean refreshed = WorkspaceBootstrap.refreshManagedHeader(
+                yaml, "my-ws", "new desc", "NewOrg");
+
+        assertThat(refreshed).isTrue();
+        String result = Files.readString(yaml);
+        assertThat(result)
+                .contains("# new desc")
+                .contains("https://github.com/NewOrg/my-ws.git")
+                .doesNotContain("old desc")
+                .doesNotContain("OldOrg")
+                .contains(body); // body untouched
+    }
+
+    @Test
+    void refresh_migrates_legacy_header_with_no_sentinels() throws Exception {
+        Path yaml = tempDir.resolve("workspace.yaml");
+        // Pre-#458 shape: leading #-prefix comment block, no sentinels.
+        String legacy = """
+                # workspace.yaml — my-ws
+                # ═══════════════════════
+                #
+                # my-ws
+                #
+                # Bootstrap:
+                #   git clone https://github.com/<org>/my-ws.git
+                #   cd my-ws
+                #   mvn ws:init
+                #   mvn clean install
+
+                schema-version: "1.1"
+                workspace-root:
+                  groupId: x
+                  artifactId: my-ws
+                  version: 1
+                """;
+        Files.writeString(yaml, legacy);
+
+        boolean refreshed = WorkspaceBootstrap.refreshManagedHeader(
+                yaml, "my-ws", "my-ws", "MyOrg");
+
+        assertThat(refreshed).isTrue();
+        String result = Files.readString(yaml);
+        assertThat(result)
+                .startsWith(WorkspaceBootstrap.MANAGED_BEGIN)
+                .contains("https://github.com/MyOrg/my-ws.git")
+                .contains("#   mvn " + WsGoal.SCAFFOLD_INIT.qualified())
+                .doesNotContain("ws:init")
+                // Data section preserved unchanged.
+                .contains("schema-version: \"1.1\"")
+                .contains("artifactId: my-ws");
+    }
+
+    @Test
+    void refresh_is_noop_when_header_already_matches() throws Exception {
+        Path yaml = tempDir.resolve("workspace.yaml");
+        String content =
+                WorkspaceBootstrap.managedHeader("my-ws", "my-ws", "MyOrg")
+                        + "schema-version: \"1.1\"\n";
+        Files.writeString(yaml, content);
+
+        boolean refreshed = WorkspaceBootstrap.refreshManagedHeader(
+                yaml, "my-ws", "my-ws", "MyOrg");
+
+        assertThat(refreshed).isFalse();
+        assertThat(Files.readString(yaml)).isEqualTo(content);
     }
 
     // ── Helpers ──────────────────────────────────────────────────

@@ -291,6 +291,21 @@ public class WsScaffoldInitMojo implements Mojo {
         File root = manifestPath.getParent().toFile();
         String wsName = resolveWorkspaceName(root);
 
+        // Refresh the managed comment header in workspace.yaml so the
+        // bootstrap instructions stay in lockstep with current goal
+        // names (#458). Best-effort — a failure here doesn't abort the
+        // init since subproject cloning is the primary effect.
+        try {
+            String org = resolveGitHubOrg(root);
+            boolean refreshed = WorkspaceBootstrap.refreshManagedHeader(
+                    manifestPath, wsName, wsName, org);
+            if (refreshed) {
+                log.info(Ansi.green("  ✓ ") + "Refreshed workspace.yaml header.");
+            }
+        } catch (IOException e) {
+            log.warn("Could not refresh workspace.yaml header: " + e.getMessage());
+        }
+
         SubprojectInitializer initializer =
                 new SubprojectInitializer(graph, root, wsName, log);
         SubprojectInitializer.Result result = initializer.run();
@@ -299,6 +314,41 @@ public class WsScaffoldInitMojo implements Mojo {
             log.info(Ansi.green("  ✓ ") + "All " + result.alreadyClean()
                     + " declared subproject(s) already initialized.");
         }
+    }
+
+    /**
+     * Parse the GitHub org from {@code git config --get remote.origin.url}
+     * in the workspace root. Returns {@code null} when the URL is absent
+     * or not a recognized GitHub form — callers fall back to the
+     * {@code <org>} placeholder in the managed header.
+     *
+     * @param root the workspace root directory
+     * @return the GitHub org, or {@code null} when not derivable
+     */
+    private static String resolveGitHubOrg(File root) {
+        try {
+            String url = ReleaseSupport.execCapture(root,
+                    "git", "config", "--get", "remote.origin.url");
+            if (url == null) return null;
+            url = url.trim();
+            // https://github.com/<org>/<repo>(.git)?
+            int idx = url.indexOf("github.com/");
+            if (idx >= 0) {
+                String tail = url.substring(idx + "github.com/".length());
+                int slash = tail.indexOf('/');
+                if (slash > 0) return tail.substring(0, slash);
+            }
+            // git@github.com:<org>/<repo>(.git)?
+            idx = url.indexOf("github.com:");
+            if (idx >= 0) {
+                String tail = url.substring(idx + "github.com:".length());
+                int slash = tail.indexOf('/');
+                if (slash > 0) return tail.substring(0, slash);
+            }
+        } catch (RuntimeException e) {
+            // git not available or no remote — fall through.
+        }
+        return null;
     }
 
     /**

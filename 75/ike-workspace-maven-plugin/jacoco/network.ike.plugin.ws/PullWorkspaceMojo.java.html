@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>PullWorkspaceMojo.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">PullWorkspaceMojo.java</span></div><h1>PullWorkspaceMojo.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.plugin.ReleaseSupport;
+import network.ike.plugin.ws.preflight.Preflight;
+import network.ike.plugin.ws.preflight.PreflightCondition;
+import network.ike.plugin.ws.preflight.PreflightContext;
+
+import network.ike.workspace.Subproject;
+import network.ike.workspace.WorkspaceGraph;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+
+import java.io.File;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
+
+/**
+ * Pull latest changes across the workspace.
+ *
+ * &lt;p&gt;When the workspace root is itself a git repository (i.e., it has a
+ * {@code .git} directory), it is pulled first so any changes to the root
+ * POM or {@code workspace.yaml} land before subproject operations run.
+ * Runs {@code git pull --rebase} in each cloned subproject directory in
+ * topological order (dependencies first). Uninitialized components are
+ * skipped with a warning.
+ *
+ * &lt;pre&gt;{@code
+ * mvn ws:pull
+ * }&lt;/pre&gt;
+ */
+@Mojo(name = &quot;pull&quot;, projectRequired = false, aggregator = true)
+public class PullWorkspaceMojo extends AbstractWorkspaceMojo {
+
+    /** Creates this goal instance. */
+<span class="nc" id="L36">    public PullWorkspaceMojo() {}</span>
+
+    @Override
+    protected WorkspaceReportSpec runGoal() throws MojoException {
+<span class="nc" id="L40">        WorkspaceGraph graph = loadGraph();</span>
+<span class="nc" id="L41">        File root = workspaceRoot();</span>
+
+<span class="nc" id="L43">        Set&lt;String&gt; targets = graph.manifest().subprojects().keySet();</span>
+
+<span class="nc" id="L45">        List&lt;String&gt; sorted = graph.topologicalSort(new LinkedHashSet&lt;&gt;(targets));</span>
+
+        // Preflight: all working trees must be clean (#132, #154)
+<span class="nc" id="L48">        Preflight.of(</span>
+<span class="nc" id="L49">                List.of(PreflightCondition.WORKING_TREE_CLEAN),</span>
+<span class="nc" id="L50">                PreflightContext.of(root, graph, sorted))</span>
+<span class="nc" id="L51">                .requirePassed(WsGoal.PULL);</span>
+
+<span class="nc" id="L53">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L54">        getLog().info(header(&quot;Pull&quot;));</span>
+<span class="nc" id="L55">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+<span class="nc" id="L56">        getLog().info(&quot;&quot;);</span>
+
+<span class="nc" id="L58">        int pulled = 0;</span>
+<span class="nc" id="L59">        int skipped = 0;</span>
+<span class="nc" id="L60">        int failed = 0;</span>
+
+        // Pull workspace root if it has a .git directory (#179). Must run
+        // before subproject pulls so any update to the root POM or
+        // workspace.yaml is observed by downstream steps.
+<span class="nc bnc" id="L65" title="All 2 branches missed.">        if (new File(root, &quot;.git&quot;).exists()) {</span>
+<span class="nc" id="L66">            getLog().info(Ansi.cyan(&quot;  ↓ &quot;) + &quot;workspace root&quot;);</span>
+            try {
+<span class="nc" id="L68">                ReleaseSupport.exec(root, getLog(),</span>
+                        &quot;git&quot;, &quot;pull&quot;, &quot;--rebase&quot;);
+<span class="nc" id="L70">                pulled++;</span>
+<span class="nc" id="L71">            } catch (MojoException e) {</span>
+<span class="nc" id="L72">                getLog().warn(Ansi.red(&quot;  ✗ &quot;) + &quot;workspace root — pull failed: &quot;</span>
+<span class="nc" id="L73">                        + e.getMessage());</span>
+<span class="nc" id="L74">                failed++;</span>
+<span class="nc" id="L75">            }</span>
+        }
+
+<span class="nc bnc" id="L78" title="All 2 branches missed.">        for (String name : sorted) {</span>
+<span class="nc" id="L79">            File dir = new File(root, name);</span>
+<span class="nc" id="L80">            File gitDir = new File(dir, &quot;.git&quot;);</span>
+
+<span class="nc bnc" id="L82" title="All 2 branches missed.">            if (!gitDir.exists()) {</span>
+<span class="nc" id="L83">                getLog().info(Ansi.yellow(&quot;  ⚠ &quot;) + name + &quot; — not cloned, skipping&quot;);</span>
+<span class="nc" id="L84">                skipped++;</span>
+<span class="nc" id="L85">                continue;</span>
+            }
+
+<span class="nc" id="L88">            getLog().info(Ansi.cyan(&quot;  ↓ &quot;) + name);</span>
+            try {
+<span class="nc" id="L90">                ReleaseSupport.exec(dir, getLog(),</span>
+                        &quot;git&quot;, &quot;pull&quot;, &quot;--rebase&quot;);
+<span class="nc" id="L92">                pulled++;</span>
+<span class="nc" id="L93">            } catch (MojoException e) {</span>
+<span class="nc" id="L94">                getLog().warn(Ansi.red(&quot;  ✗ &quot;) + name + &quot; — pull failed: &quot; + e.getMessage());</span>
+<span class="nc" id="L95">                failed++;</span>
+<span class="nc" id="L96">            }</span>
+<span class="nc" id="L97">        }</span>
+
+<span class="nc" id="L99">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L100">        getLog().info(&quot;  Done: &quot; + pulled + &quot; pulled, &quot; + skipped</span>
+                + &quot; skipped, &quot; + failed + &quot; failed&quot;);
+<span class="nc" id="L102">        getLog().info(&quot;&quot;);</span>
+
+<span class="nc bnc" id="L104" title="All 2 branches missed.">        if (failed &gt; 0) {</span>
+<span class="nc" id="L105">            getLog().warn(&quot;  Some pulls failed — check output above for details.&quot;);</span>
+        }
+
+        // Structured markdown report
+<span class="nc" id="L109">        WorkspaceReportSpec spec = new WorkspaceReportSpec(WsGoal.PULL,</span>
+                pulled + &quot; pulled, &quot; + skipped
+                + &quot; skipped, &quot; + failed + &quot; failed.\n&quot;);
+
+<span class="nc" id="L113">        PostMutationSync.refresh(root, getLog());</span>
+<span class="nc" id="L114">        return spec;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

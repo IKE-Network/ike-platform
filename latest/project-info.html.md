@@ -1,6 +1,6 @@
 ---
-date_published: 2026-05-18
-date_modified: 2026-05-18
+date_published: 2026-05-19
+date_modified: 2026-05-19
 canonical_url: https://ike.network/ike-platform/project-info.html
 ---
 

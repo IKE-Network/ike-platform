@@ -255,7 +255,8 @@ public class WsScaffoldInitMojo implements Mojo {
         WorkspaceBootstrap.Params params = new WorkspaceBootstrap.Params(
                 name, description, org, group, artifactId, version,
                 mavenVersion, defaultBranch, skipGit,
-                loadBuildProperty("ike-platform.version"));
+                loadBuildProperty("ike-platform.version"),
+                loadBuildProperty("ike-workspace-extension.version"));
         WorkspaceBootstrap bootstrap = new WorkspaceBootstrap(params, log);
         bootstrap.createAt(wsDir);
 
@@ -304,6 +305,25 @@ public class WsScaffoldInitMojo implements Mojo {
             }
         } catch (IOException e) {
             log.warn("Could not refresh workspace.yaml header: " + e.getMessage());
+        }
+
+        // Refresh the managed ike-workspace-extension entry in
+        // .mvn/extensions.xml so the literal version stays in lockstep
+        // with the ike-parent property (#460). Best-effort — a failure
+        // here doesn't abort the init.
+        try {
+            Path extensionsXml = root.toPath().resolve(".mvn/extensions.xml");
+            if (Files.exists(extensionsXml)) {
+                String extVersion = loadBuildProperty("ike-workspace-extension.version");
+                boolean refreshed = WorkspaceBootstrap
+                        .refreshExtensionsManagedBlock(extensionsXml, extVersion);
+                if (refreshed) {
+                    log.info(Ansi.green("  ✓ ") + "Refreshed .mvn/extensions.xml ("
+                            + extVersion + ").");
+                }
+            }
+        } catch (IOException e) {
+            log.warn("Could not refresh .mvn/extensions.xml: " + e.getMessage());
         }
 
         SubprojectInitializer initializer =

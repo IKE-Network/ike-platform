@@ -38,7 +38,13 @@ public final class ReconcilerRegistry {
                 // standalone ws:align-{draft,publish} goals also wrap
                 // this reconciler — see AlignmentReconciler's class
                 // javadoc for why both entry points coexist.
-                new AlignmentReconciler()
+                new AlignmentReconciler(),
+                // .mvn/extensions.xml — keep the literal version of
+                // ike-workspace-extension in lockstep with the
+                // ike-parent property (#460). Maven 4 does not
+                // interpolate POM properties in extensions.xml at
+                // extension-load time, so the literal is rewritten.
+                new ExtensionsXmlReconciler()
                 // Future reconcilers added here in the order they
                 // should run (see #393 for the full migration plan).
         );

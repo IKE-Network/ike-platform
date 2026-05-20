@@ -95,6 +95,165 @@ class WsScaffoldInitMojoTest {
         assertThat(yaml).contains("version: 1-SNAPSHOT");
     }
 
+    // ── Simplified POM + extensions.xml (#460) ──────────────────
+
+    @Test
+    void generated_pom_uses_top_level_subprojects_no_with_profiles() throws Exception {
+        WorkspaceBootstrap bootstrap = bootstrap("my-ws", "org.example",
+                "1-SNAPSHOT", null);
+
+        String pom = invokeGeneratePom(bootstrap);
+
+        assertThat(pom)
+                .contains("<subprojects>")
+                .contains("</subprojects>")
+                .doesNotContain("<profiles>")
+                .doesNotContain("with-")
+                .doesNotContain("file-activated profile");
+    }
+
+    @Test
+    void generated_extensions_xml_carries_managed_block_with_literal_version()
+            throws Exception {
+        WorkspaceBootstrap bootstrap = bootstrap("my-ws", "org.example",
+                "1-SNAPSHOT", null);
+
+        Method m = WorkspaceBootstrap.class.getDeclaredMethod("generateExtensionsXml");
+        m.setAccessible(true);
+        String xml = (String) m.invoke(bootstrap);
+
+        assertThat(xml)
+                .contains("wagon-ssh-external")
+                .contains("ike-workspace-extension")
+                .contains("<version>1-test</version>") // literal, from Params
+                .contains(WorkspaceBootstrap.EXTENSIONS_MANAGED_BEGIN)
+                .contains(WorkspaceBootstrap.EXTENSIONS_MANAGED_END);
+    }
+
+    @Test
+    void refresh_extensions_block_updates_version_in_place() throws Exception {
+        Path xml = tempDir.resolve("extensions.xml");
+        String original = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <extensions>
+                    <extension>
+                        <groupId>org.apache.maven.wagon</groupId>
+                        <artifactId>wagon-ssh-external</artifactId>
+                        <version>3.5.3</version>
+                    </extension>
+                """
+                + WorkspaceBootstrap.EXTENSIONS_MANAGED_BEGIN + "\n"
+                + "    <extension>\n"
+                + "        <groupId>network.ike.tooling</groupId>\n"
+                + "        <artifactId>ike-workspace-extension</artifactId>\n"
+                + "        <version>1-OLD</version>\n"
+                + "    </extension>\n"
+                + WorkspaceBootstrap.EXTENSIONS_MANAGED_END + "\n"
+                + "</extensions>\n";
+        Files.writeString(xml, original);
+
+        boolean refreshed = WorkspaceBootstrap.refreshExtensionsManagedBlock(xml, "2");
+
+        assertThat(refreshed).isTrue();
+        String result = Files.readString(xml);
+        assertThat(result)
+                .contains("<version>2</version>")
+                .doesNotContain("1-OLD")
+                .contains("wagon-ssh-external"); // pre-block content preserved
+    }
+
+    @Test
+    void refresh_extensions_block_migrates_legacy_file_without_block()
+            throws Exception {
+        Path xml = tempDir.resolve("extensions.xml");
+        // Pre-#460 shape: just the wagon entry, no managed block.
+        String legacy = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <extensions>
+                    <extension>
+                        <groupId>org.apache.maven.wagon</groupId>
+                        <artifactId>wagon-ssh-external</artifactId>
+                        <version>3.5.3</version>
+                    </extension>
+                </extensions>
+                """;
+        Files.writeString(xml, legacy);
+
+        boolean refreshed = WorkspaceBootstrap.refreshExtensionsManagedBlock(xml, "1");
+
+        assertThat(refreshed).isTrue();
+        String result = Files.readString(xml);
+        assertThat(result)
+                .contains("wagon-ssh-external") // preserved
+                .contains(WorkspaceBootstrap.EXTENSIONS_MANAGED_BEGIN)
+                .contains("ike-workspace-extension")
+                .contains("<version>1</version>")
+                .contains(WorkspaceBootstrap.EXTENSIONS_MANAGED_END);
+    }
+
+    @Test
+    void refresh_extensions_block_dedups_existing_standalone_entry()
+            throws Exception {
+        Path xml = tempDir.resolve("extensions.xml");
+        // Pre-#460-managed shape: someone added the extension entry by
+        // hand, no sentinel markers. Refresh must strip the existing
+        // entry and replace with a sentinel-wrapped block — otherwise
+        // Maven 4 refuses on duplicate GA.
+        String legacy = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <extensions>
+                    <extension>
+                        <groupId>org.apache.maven.wagon</groupId>
+                        <artifactId>wagon-ssh-external</artifactId>
+                        <version>3.5.3</version>
+                    </extension>
+                    <extension>
+                        <groupId>network.ike.tooling</groupId>
+                        <artifactId>ike-workspace-extension</artifactId>
+                        <version>1-SNAPSHOT</version>
+                    </extension>
+                </extensions>
+                """;
+        Files.writeString(xml, legacy);
+
+        boolean refreshed = WorkspaceBootstrap.refreshExtensionsManagedBlock(xml, "1");
+
+        assertThat(refreshed).isTrue();
+        String result = Files.readString(xml);
+        // Only ONE ike-workspace-extension entry remains, inside the
+        // managed block.
+        int count = result.split("ike-workspace-extension", -1).length - 1;
+        // <artifactId>ike-workspace-extension</artifactId> appears once.
+        assertThat(count).isEqualTo(1);
+        assertThat(result)
+                .contains(WorkspaceBootstrap.EXTENSIONS_MANAGED_BEGIN)
+                .contains("<version>1</version>")
+                .contains("wagon-ssh-external"); // unrelated entry preserved
+    }
+
+    @Test
+    void refresh_extensions_block_is_noop_when_version_matches() throws Exception {
+        Path xml = tempDir.resolve("extensions.xml");
+        String content = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <extensions>
+                """
+                + WorkspaceBootstrap.EXTENSIONS_MANAGED_BEGIN + "\n"
+                + "    <extension>\n"
+                + "        <groupId>network.ike.tooling</groupId>\n"
+                + "        <artifactId>ike-workspace-extension</artifactId>\n"
+                + "        <version>1</version>\n"
+                + "    </extension>\n"
+                + WorkspaceBootstrap.EXTENSIONS_MANAGED_END + "\n"
+                + "</extensions>\n";
+        Files.writeString(xml, content);
+
+        boolean refreshed = WorkspaceBootstrap.refreshExtensionsManagedBlock(xml, "1");
+
+        assertThat(refreshed).isFalse();
+        assertThat(Files.readString(xml)).isEqualTo(content);
+    }
+
     // ── Managed header (#458) ───────────────────────────────────
 
     @Test
@@ -239,7 +398,8 @@ class WsScaffoldInitMojoTest {
                 /*mavenVersion*/ "4.0.0-rc-5",
                 /*defaultBranch*/ "main",
                 /*skipGit*/ true,
-                /*parentVersion*/ "test");
+                /*parentVersion*/ "test",
+                /*extensionVersion*/ "1-test");
         return new WorkspaceBootstrap(params, new TestLog());
     }
 

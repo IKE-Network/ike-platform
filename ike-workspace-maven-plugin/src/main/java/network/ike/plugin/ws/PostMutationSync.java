@@ -9,19 +9,26 @@ import java.io.File;
  * Called at the end of any goal whose effect can change which siblings
  * are present on disk or what their POMs declare.
  *
- * <p>Combines two independent derivations into one call:
+ * <p>Currently one derivation:
  * <ul>
- *   <li>{@link IdeProfileSync} — writes the {@code -P} block in
- *       {@code .mvn/maven.config} so IntelliJ activates the right
- *       {@code with-*} profiles for the current sibling set.</li>
  *   <li>{@link YamlDepsSync} — re-derives each subproject's
  *       {@code depends-on} edges from POM contents and rewrites
  *       {@code workspace.yaml} when the graph has drifted.</li>
  * </ul>
  *
- * <p>Each step is idempotent — running this hook back-to-back produces
- * no further changes. Failures in one step are logged at WARN and do
- * not stop the other.
+ * <p>Earlier revisions also ran {@code IdeProfileSync} here to
+ * maintain a {@code -P?with-*} block in {@code .mvn/maven.config}
+ * (IKE-Network/ike-issues#276), so IntelliJ would activate the
+ * {@code with-*} profiles that scoped subprojects into the reactor.
+ * That whole mechanism was retired in
+ * {@code IKE-Network/ike-issues#460}: the
+ * {@code ike-workspace-extension} prunes non-existent
+ * {@code <subprojects>} from workspace POMs at model-read time, so
+ * IntelliJ sees the right reactor without any profile activation.
+ *
+ * <p>The step is idempotent — running this hook back-to-back produces
+ * no further changes. Failures are logged at WARN and do not abort
+ * the caller.
  *
  * <p>Triggered from: {@code ws:add}, {@code ws:remove}, {@code ws:sync},
  * {@code ws:pull}, {@code ws:commit-publish}, {@code ws:scaffold-init},
@@ -30,7 +37,8 @@ import java.io.File;
  * {@code ws:align-publish}, {@code ws:scaffold-publish}
  * (which subsumes the retired ws:set-parent).
  *
- * <p>See {@code IKE-Network/ike-issues#279}.
+ * <p>See {@code IKE-Network/ike-issues#279} (origin) and
+ * {@code IKE-Network/ike-issues#460} (IdeProfileSync retirement).
  */
 public final class PostMutationSync {
 
@@ -44,7 +52,6 @@ public final class PostMutationSync {
      * @param log           plugin log for status messages
      */
     public static void refresh(File workspaceRoot, Log log) {
-        IdeProfileSync.run(workspaceRoot, log);
         YamlDepsSync.run(workspaceRoot, log);
     }
 }

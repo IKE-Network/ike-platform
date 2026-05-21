@@ -38,14 +38,31 @@ class VcsBridgeIntegrationTest {
     void setUp() throws Exception {
         originalUserDir = System.getProperty("user.dir");
 
+        // Empty hooks directory. Every test repo points core.hooksPath
+        // here so the developer-global IKE VCS Bridge hooks
+        // (git config --global core.hooksPath ~/.git-hooks) do NOT
+        // fire during the test. Without this, `git commit` in a test
+        // repo triggers the global post-commit hook, which auto-pushes
+        // — silently turning a deliberate local-only commit into a
+        // pushed one and breaking the bridge assertions. The test
+        // exercises the Java VcsOperations bridge; the shell hooks are
+        // a separate mechanism and pure interference here.
+        // IKE-Network/ike-issues#487.
+        Path noHooksDir = tempDir.resolve("no-hooks");
+        Files.createDirectories(noHooksDir);
+
         // Create a bare "remote" repo
         remoteDir = tempDir.resolve("remote.git");
         Files.createDirectories(remoteDir);
         exec(remoteDir, "git", "init", "--bare", "-b", "main");
+        exec(remoteDir, "git", "config", "core.hooksPath",
+                noHooksDir.toString());
 
         // Clone to machine A
         machineADir = tempDir.resolve("machine-a");
         exec(tempDir, "git", "clone", remoteDir.toString(), machineADir.getFileName().toString());
+        exec(machineADir, "git", "config", "core.hooksPath",
+                noHooksDir.toString());
         exec(machineADir, "git", "config", "user.email", "a@test.com");
         exec(machineADir, "git", "config", "user.name", "Machine A");
         Files.writeString(machineADir.resolve("file.txt"), "initial", StandardCharsets.UTF_8);
@@ -57,6 +74,8 @@ class VcsBridgeIntegrationTest {
         // Clone to machine B
         machineBDir = tempDir.resolve("machine-b");
         exec(tempDir, "git", "clone", remoteDir.toString(), machineBDir.getFileName().toString());
+        exec(machineBDir, "git", "config", "core.hooksPath",
+                noHooksDir.toString());
         exec(machineBDir, "git", "config", "user.email", "b@test.com");
         exec(machineBDir, "git", "config", "user.name", "Machine B");
     }

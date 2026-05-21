@@ -6,7 +6,7 @@ canonical_url: https://ike.network/ike-platform/ike-bom/built-with.html
 
 # Built With
 
-Open-source software that `ike-bom` 79 depends on, links against, ships within, or invokes at runtime.
+Open-source software that `ike-bom` 80 depends on, links against, ships within, or invokes at runtime.
 
 Three layers of attribution ship with each release:
 
@@ -87,8 +87,8 @@ Direct dependencies of this module, grouped by SPDX expression. Generated from `
 
 | SPDX Expression | Components |
 | --- | --- |
-| `Apache-2.0` | 2 |
-| **Total** | **2** |
+| `Apache-2.0` | 3 |
+| **Total** | **3** |
 
 For full per-component detail (group, artifact, version, hashes, transitive deps), see [bom.json](bom.json)[1] or [licenses.html](licenses.html)[2].
 

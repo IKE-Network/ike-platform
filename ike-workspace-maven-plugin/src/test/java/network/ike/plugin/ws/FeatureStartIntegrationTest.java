@@ -276,6 +276,131 @@ class FeatureStartIntegrationTest {
         assertThat(integPom).contains("<scope>test</scope>");
     }
 
+    // ── --affected subset (IKE-Network/ike-issues#499) ───────────────
+
+    @Test
+    void affected_subset_branches_only_the_listed_components()
+            throws Exception {
+        FeatureStartDraftMojo mojo = TestLog.createMojo(
+                FeatureStartDraftMojo.class);
+        mojo.manifest = helper.workspaceYaml().toFile();
+        mojo.feature = "scoped-feature";
+        mojo.publish = true;
+        mojo.affected = "lib-a,lib-b";
+
+        mojo.execute();
+
+        // lib-a and lib-b on the feature branch.
+        assertThat(execCapture(tempDir.resolve("lib-a"),
+                "git", "rev-parse", "--abbrev-ref", "HEAD"))
+                .isEqualTo("feature/scoped-feature");
+        assertThat(execCapture(tempDir.resolve("lib-b"),
+                "git", "rev-parse", "--abbrev-ref", "HEAD"))
+                .isEqualTo("feature/scoped-feature");
+
+        // app-c stays on its original branch — not in the affected set.
+        assertThat(execCapture(tempDir.resolve("app-c"),
+                "git", "rev-parse", "--abbrev-ref", "HEAD"))
+                .isNotEqualTo("feature/scoped-feature");
+
+        // app-c's POM is also untouched: no branch-qualified version.
+        String appCPom = Files.readString(
+                tempDir.resolve("app-c").resolve("pom.xml"),
+                StandardCharsets.UTF_8);
+        assertThat(appCPom).doesNotContain("scoped-feature");
+    }
+
+    @Test
+    void affected_subset_with_single_component_branches_only_that_one()
+            throws Exception {
+        FeatureStartDraftMojo mojo = TestLog.createMojo(
+                FeatureStartDraftMojo.class);
+        mojo.manifest = helper.workspaceYaml().toFile();
+        mojo.feature = "single";
+        mojo.publish = true;
+        mojo.affected = "lib-a";
+
+        mojo.execute();
+
+        assertThat(execCapture(tempDir.resolve("lib-a"),
+                "git", "rev-parse", "--abbrev-ref", "HEAD"))
+                .isEqualTo("feature/single");
+        assertThat(execCapture(tempDir.resolve("lib-b"),
+                "git", "rev-parse", "--abbrev-ref", "HEAD"))
+                .isNotEqualTo("feature/single");
+        assertThat(execCapture(tempDir.resolve("app-c"),
+                "git", "rev-parse", "--abbrev-ref", "HEAD"))
+                .isNotEqualTo("feature/single");
+    }
+
+    @Test
+    void affected_subset_handles_whitespace_and_trailing_commas()
+            throws Exception {
+        // Operators may pass the parameter via a comma-separated build
+        // arg that has stray whitespace or an accidental trailing
+        // separator; tolerating those keeps shell-style invocations
+        // ergonomic.
+        FeatureStartDraftMojo mojo = TestLog.createMojo(
+                FeatureStartDraftMojo.class);
+        mojo.manifest = helper.workspaceYaml().toFile();
+        mojo.feature = "punctuation";
+        mojo.publish = true;
+        mojo.affected = " lib-a , lib-b ,";
+
+        mojo.execute();
+
+        assertThat(execCapture(tempDir.resolve("lib-a"),
+                "git", "rev-parse", "--abbrev-ref", "HEAD"))
+                .isEqualTo("feature/punctuation");
+        assertThat(execCapture(tempDir.resolve("lib-b"),
+                "git", "rev-parse", "--abbrev-ref", "HEAD"))
+                .isEqualTo("feature/punctuation");
+    }
+
+    @Test
+    void affected_subset_rejects_unknown_subproject_names()
+            throws Exception {
+        FeatureStartDraftMojo mojo = TestLog.createMojo(
+                FeatureStartDraftMojo.class);
+        mojo.manifest = helper.workspaceYaml().toFile();
+        mojo.feature = "should-fail";
+        mojo.publish = true;
+        mojo.affected = "lib-a,no-such-thing";
+
+        assertThatCode(mojo::execute)
+                .hasMessageContaining("no-such-thing")
+                .hasMessageContaining("Unknown subproject");
+
+        // And nothing got branched — the goal failed before touching
+        // any working tree.
+        for (String name : new String[]{"lib-a", "lib-b", "app-c"}) {
+            assertThat(execCapture(tempDir.resolve(name),
+                    "git", "rev-parse", "--abbrev-ref", "HEAD"))
+                    .isNotEqualTo("feature/should-fail");
+        }
+    }
+
+    @Test
+    void affected_subset_blank_falls_back_to_full_workspace()
+            throws Exception {
+        // Empty / blank --affected is treated the same as omitting it
+        // — full-workspace branching, matching the historical behaviour.
+        FeatureStartDraftMojo mojo = TestLog.createMojo(
+                FeatureStartDraftMojo.class);
+        mojo.manifest = helper.workspaceYaml().toFile();
+        mojo.feature = "full";
+        mojo.publish = true;
+        mojo.affected = "   ";
+
+        mojo.execute();
+
+        for (String name : new String[]{"lib-a", "lib-b", "app-c"}) {
+            assertThat(execCapture(tempDir.resolve(name),
+                    "git", "rev-parse", "--abbrev-ref", "HEAD"))
+                    .isEqualTo("feature/full");
+        }
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────
 
     private void exec(Path workDir, String... command) throws Exception {

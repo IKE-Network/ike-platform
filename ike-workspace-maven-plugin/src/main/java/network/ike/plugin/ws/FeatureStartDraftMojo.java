@@ -86,6 +86,25 @@ public class FeatureStartDraftMojo extends AbstractWorkspaceMojo {
     @Parameter(property = "publish", defaultValue = "false")
     boolean publish;
 
+    /**
+     * Comma-separated subset of workspace subproject names to branch.
+     * When set, only these subprojects are branched and version-cascaded;
+     * the rest of the workspace is left on its current branch. When
+     * unset (the default), every subproject in the workspace is branched
+     * — the historical behaviour.
+     *
+     * <p>The release cascade (IKE-Network/ike-issues#499, part of #488)
+     * computes its release-set closure from the derived graph
+     * (#496) and passes that closure here as {@code -Daffected=...},
+     * so feature-start branches only what the cascade is about to
+     * release rather than the whole workspace.
+     *
+     * <p>Each name must match a subproject declared in
+     * {@code workspace.yaml}; unknown names fail the goal early.
+     */
+    @Parameter(property = "affected")
+    String affected;
+
     /** Creates this goal instance. */
     public FeatureStartDraftMojo() {}
 
@@ -124,7 +143,9 @@ public class FeatureStartDraftMojo extends AbstractWorkspaceMojo {
         // VCS bridge: catch-up before branching
         VcsOperations.catchUp(root, getLog());
 
-        Set<String> targets = graph.manifest().subprojects().keySet();
+        Set<String> known = graph.manifest().subprojects().keySet();
+        Set<String> targets = resolveAffectedSubset(known);
+        boolean scoped = targets.size() < known.size();
 
         List<String> sorted = graph.topologicalSort(new LinkedHashSet<>(targets));
 
@@ -133,7 +154,12 @@ public class FeatureStartDraftMojo extends AbstractWorkspaceMojo {
         getLog().info("══════════════════════════════════════════════════════════════");
         getLog().info("  Feature: " + feature);
         getLog().info("  Branch:  " + branchName);
-        getLog().info("  Scope:   " + sorted.size() + " components");
+        if (scoped) {
+            getLog().info("  Scope:   " + sorted.size() + " of "
+                    + known.size() + " components (--affected)");
+        } else {
+            getLog().info("  Scope:   " + sorted.size() + " components");
+        }
         if (draft) {
             getLog().info("  Mode:    DRAFT");
         }
@@ -584,5 +610,46 @@ public class FeatureStartDraftMojo extends AbstractWorkspaceMojo {
         return gaps;
     }
 
-
+    /**
+     * Resolves the {@code --affected} parameter into a concrete
+     * subset of workspace subproject names. Returns {@code known}
+     * unchanged when {@code --affected} is unset; otherwise parses
+     * the comma-separated list, trims each name, validates every
+     * one against the workspace manifest, and returns the resulting
+     * ordered set.
+     *
+     * <p>An empty or blank token is silently discarded so trailing
+     * commas don't trip the goal. An unknown name fails the goal
+     * with a message naming the offender — the release cascade is
+     * the primary consumer of {@code --affected}, and it should
+     * never pass a name that isn't in the manifest; if it does,
+     * that is a bug in the cascade's release-set computation that
+     * deserves a hard error rather than a silent drop.
+     */
+    private Set<String> resolveAffectedSubset(Set<String> known) {
+        if (affected == null || affected.isBlank()) {
+            return known;
+        }
+        Set<String> selected = new LinkedHashSet<>();
+        for (String raw : affected.split(",")) {
+            String name = raw.trim();
+            if (name.isEmpty()) {
+                continue;
+            }
+            if (!known.contains(name)) {
+                throw new MojoException(
+                        "Unknown subproject in --affected: '" + name
+                        + "'. Known subprojects: " + known);
+            }
+            selected.add(name);
+        }
+        if (selected.isEmpty()) {
+            throw new MojoException(
+                    "--affected was set but resolved to an empty"
+                    + " subset; supply at least one subproject name"
+                    + " or omit the parameter to branch the whole"
+                    + " workspace.");
+        }
+        return selected;
+    }
 }

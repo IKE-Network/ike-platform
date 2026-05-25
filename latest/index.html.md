@@ -92,7 +92,7 @@ For first-time setup of a workspace, see [Workspace Getting Started](workspace-g
 ike-tooling -> ike-docs -> [ike-platform] -> { downstream consumers }
 ```
 
-`ike-platform` releases after `ike-tooling` (whose `ike-maven-plugin` this POM declares at `211` in `ike-parent’s `<pluginManagement>`) and after `ike-docs` (whose `ike-doc-maven-plugin` is declared at `61`). The upstream plugins must be on Nexus before `ike-platform` can build — ordinary `<pluginManagement>` resolution, like any other managed plugin.
+`ike-platform` releases after `ike-tooling` (whose `ike-maven-plugin` this POM declares at `212` in `ike-parent’s `<pluginManagement>`) and after `ike-docs` (whose `ike-doc-maven-plugin` is declared at `62`). The upstream plugins must be on Nexus before `ike-platform` can build — ordinary `<pluginManagement>` resolution, like any other managed plugin.
 
 Earlier revisions of this page cited Maven extension-realm timing (`<extensions>true</extensions>` plugins resolving at project-load time, before property interpolation) as the reason for literal- version pinning. That constraint was eliminated in [ike-issues#321](https://github.com/IKE-Network/ike-issues/issues/321)[8]: both upstream plugins retired their custom-packaging registrations, and `ike-parent` dropped both `<extensions>true</extensions>` declarations along with their literal-version requirements. The cascade ordering is unchanged; the literal-version pinning and the extension realm are both gone. See [ike-parent module page](ike-parent/index.html)[2] for the full design rationale.
 

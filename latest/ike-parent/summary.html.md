@@ -1,6 +1,6 @@
 ---
-date_published: 2026-05-24
-date_modified: 2026-05-24
+date_published: 2026-05-25
+date_modified: 2026-05-25
 canonical_url: https://ike.network/ike-platform/ike-parent/summary.html
 ---
 
@@ -27,5 +27,5 @@ canonical_url: https://ike.network/ike-platform/ike-parent/summary.html
 | --- | --- |
 | GroupId | network.ike.platform |
 | ArtifactId | ike-parent |
-| Version | 90 |
+| Version | 91 |
 | Type | pom |

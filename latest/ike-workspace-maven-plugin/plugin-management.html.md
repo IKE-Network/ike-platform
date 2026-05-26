@@ -1,6 +1,6 @@
 ---
-date_published: 2026-05-24
-date_modified: 2026-05-24
+date_published: 2026-05-25
+date_modified: 2026-05-25
 canonical_url: https://ike.network/ike-platform/ike-workspace-maven-plugin/plugin-management.html
 ---
 
@@ -8,9 +8,9 @@ canonical_url: https://ike.network/ike-platform/ike-workspace-maven-plugin/plugi
 
 | GroupId | ArtifactId | Version |
 | --- | --- | --- |
-| network.ike.docs | [semantic-linebreak](https://github.com/IKE-Network/ike-docs)[1] | 62 |
-| network.ike.platform | [ike-workspace-maven-plugin](https://ike.network/ike-platform/ike-workspace-maven-plugin/)[2] | 90 |
-| network.ike.tooling | [ike-maven-plugin](https://ike.network/ike-tooling/ike-maven-plugin/)[3] | 212 |
+| network.ike.docs | [semantic-linebreak](https://github.com/IKE-Network/ike-docs)[1] | 63 |
+| network.ike.platform | [ike-workspace-maven-plugin](https://ike.network/ike-platform/ike-workspace-maven-plugin/)[2] | 91 |
+| network.ike.tooling | [ike-maven-plugin](https://ike.network/ike-tooling/ike-maven-plugin/)[3] | 213 |
 | org.apache.maven.plugins | [maven-assembly-plugin](https://maven.apache.org/plugins/maven-assembly-plugin/)[4] | 3.7.1 |
 | org.apache.maven.plugins | [maven-clean-plugin](https://maven.apache.org/plugins/maven-clean-plugin/)[5] | 3.4.0 |
 | org.apache.maven.plugins | [maven-compiler-plugin](https://maven.apache.org/plugins/maven-compiler-plugin/)[6] | 3.14.0 |
@@ -32,4 +32,5 @@ canonical_url: https://ike.network/ike-platform/ike-workspace-maven-plugin/plugi
 | org.codehaus.mojo | [xml-maven-plugin](https://www.mojohaus.org/xml-maven-plugin/)[22] | 1.1.0 |
 | org.cyclonedx | [cyclonedx-maven-plugin](https://github.com/CycloneDX/cyclonedx-maven-plugin)[23] | 2.9.0 |
 | org.jacoco | [jacoco-maven-plugin](https://www.jacoco.org/jacoco/trunk/doc/maven.html)[24] | 0.8.14 |
-| org.openrewrite.maven | [rewrite-maven-plugin](https://openrewrite.github.io/rewrite-maven-plugin/)[25] | 6.36.0 |
+| org.jreleaser | [jreleaser-maven-plugin](https://github.com/jreleaser/jreleaser)[25] | 1.24.0 |
+| org.openrewrite.maven | [rewrite-maven-plugin](https://openrewrite.github.io/rewrite-maven-plugin/)[26] | 6.36.0 |

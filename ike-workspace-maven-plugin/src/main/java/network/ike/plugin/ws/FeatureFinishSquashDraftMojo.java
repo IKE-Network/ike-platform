@@ -154,14 +154,25 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
         // Validate and collect eligible components
         List<String> eligible = new ArrayList<>();
         List<String> uncommitted = new ArrayList<>();
+        // #535: subprojects whose local checkout is on the target branch
+        // but whose workspace.yaml branch field still points at the
+        // feature branch — fallout from a prior partially-failed
+        // feature-finish run. They don't need a re-squash; they only
+        // need workspace.yaml reconciliation, which happens below.
+        List<String> alreadyDone = new ArrayList<>();
         for (String name : reversed) {
             Subproject subproject = graph.manifest().subprojects().get(name);
             String reason = FeatureFinishSupport.validateComponent(
-                    root, name, branchName, subproject, this);
+                    root, name, branchName, targetBranch, subproject, this);
             if (reason == null) {
                 eligible.add(name);
             } else if ("MODIFIED".equals(reason)) {
                 uncommitted.add(name);
+            } else if (FeatureFinishSupport.ALREADY_DONE.equals(reason)) {
+                alreadyDone.add(name);
+                getLog().info(Ansi.green("  ✓ ") + name
+                        + " — already on " + targetBranch
+                        + " from a prior run (workspace.yaml will be reconciled)");
             } else {
                 getLog().info(Ansi.yellow("  · ") + name + " — " + reason + ", skipping");
             }
@@ -190,7 +201,7 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
             }
         }
 
-        if (eligible.isEmpty()) {
+        if (eligible.isEmpty() && alreadyDone.isEmpty()) {
             getLog().info("  No components on " + branchName + " — nothing to do.");
             return new WorkspaceReportSpec(
                     publish ? WsGoal.FEATURE_FINISH_SQUASH_PUBLISH
@@ -264,13 +275,33 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
             merged++;
         }
 
-        // Clean up sites
+        // #535: workspace.yaml branch reconciliation runs for both
+        // subprojects squashed in this invocation AND those that a
+        // prior partial run already moved onto the target branch but
+        // never got around to recording. Without this second group,
+        // the manifest stays pinned to a dead feature branch and the
+        // next scaffold/init/clone fails.
+        List<String> needsYamlReconcile = new ArrayList<>(eligible);
+        for (String name : alreadyDone) {
+            if (!needsYamlReconcile.contains(name)) {
+                needsYamlReconcile.add(name);
+            }
+        }
+
+        // Clean up sites (only for what we actually touched this run)
         if (merged > 0 && publish) {
             FeatureFinishSupport.cleanFeatureSites(root, eligible, branchName, getLog());
-            FeatureFinishSupport.updateWorkspaceYaml(
-                    manifestPath, eligible, targetBranch, feature, getLog());
             FeatureFinishSupport.mergeWorkspaceRepo(
                     manifestPath, branchName, targetBranch, keepBranch, push, getLog());
+        }
+
+        // YAML reconciliation runs regardless of whether anything was
+        // squashed THIS invocation — a re-run after a partial failure
+        // may have nothing to squash but still need to clear stale
+        // branch fields for the already-done subprojects.
+        if (publish && !needsYamlReconcile.isEmpty()) {
+            FeatureFinishSupport.updateWorkspaceYaml(
+                    manifestPath, needsYamlReconcile, targetBranch, feature, getLog());
         }
 
         // Offer stale branch cleanup (#100)
@@ -282,6 +313,10 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
 
         getLog().info("");
         getLog().info("  Squash-merged: " + merged + " components");
+        if (!alreadyDone.isEmpty()) {
+            getLog().info("  Already-done from prior run: " + alreadyDone.size()
+                    + " (workspace.yaml reconciled)");
+        }
         if (!keepBranch) {
             getLog().info("  Branch deleted: " + branchName);
         }
@@ -310,7 +345,7 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
                         eligible, branchName, targetBranch, merged, draft,
                         keepBranch, effectiveMessage,
                         message == null || message.isBlank(),
-                        undeletedRemote));
+                        undeletedRemote, alreadyDone));
     }
 
     /**
@@ -337,7 +372,8 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
                                       boolean isDraft, boolean kept,
                                       String effectiveMessage,
                                       boolean messageAutoGenerated,
-                                      java.util.Map<String, String> undeletedRemote) {
+                                      java.util.Map<String, String> undeletedRemote,
+                                      List<String> alreadyDone) {
         GoalReportBuilder report = new GoalReportBuilder();
         report.paragraph("**Branch:** `" + branch + "` → `" + target + "`  \n"
                 + "**Strategy:** squash-merge");
@@ -346,10 +382,25 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
         for (String name : components) {
             rows.add(new String[]{name, isDraft ? "would squash" : "squashed"});
         }
+        for (String name : alreadyDone) {
+            // #535: surface these explicitly so the report makes the
+            // partial-recovery state obvious. They are NOT being squashed
+            // again; only workspace.yaml is being brought into line.
+            rows.add(new String[]{name, isDraft
+                    ? "would reconcile workspace.yaml only"
+                    : "reconciled workspace.yaml only (already on "
+                            + target + " from a prior run)"});
+        }
         report.table(List.of("Subproject", "Status"), rows);
 
         report.paragraph("**" + merged + " subproject(s)** "
                 + (isDraft ? "would be squash-merged" : "squash-merged")
+                + (alreadyDone.isEmpty()
+                        ? ""
+                        : "; **" + alreadyDone.size() + "** already-done "
+                                + "from a prior run (workspace.yaml "
+                                + (isDraft ? "would be" : "was")
+                                + " reconciled)")
                 + ". Branch " + (kept ? "kept" : "deleted") + ".");
 
         report.section("Commit message");

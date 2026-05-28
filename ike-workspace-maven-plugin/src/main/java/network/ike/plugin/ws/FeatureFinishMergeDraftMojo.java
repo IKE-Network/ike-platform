@@ -137,14 +137,21 @@ public class FeatureFinishMergeDraftMojo extends AbstractWorkspaceMojo {
 
         List<String> eligible = new ArrayList<>();
         List<String> uncommitted = new ArrayList<>();
+        // #535: see FeatureFinishSquashDraftMojo for the rationale.
+        List<String> alreadyDone = new ArrayList<>();
         for (String name : reversed) {
             Subproject subproject = graph.manifest().subprojects().get(name);
             String reason = FeatureFinishSupport.validateComponent(
-                    root, name, branchName, subproject, this);
+                    root, name, branchName, targetBranch, subproject, this);
             if (reason == null) {
                 eligible.add(name);
             } else if ("MODIFIED".equals(reason)) {
                 uncommitted.add(name);
+            } else if (FeatureFinishSupport.ALREADY_DONE.equals(reason)) {
+                alreadyDone.add(name);
+                getLog().info(Ansi.green("  ✓ ") + name
+                        + " — already on " + targetBranch
+                        + " from a prior run (workspace.yaml will be reconciled)");
             } else {
                 getLog().info(Ansi.yellow("  · ") + name + " — " + reason + ", skipping");
             }
@@ -173,7 +180,7 @@ public class FeatureFinishMergeDraftMojo extends AbstractWorkspaceMojo {
             }
         }
 
-        if (eligible.isEmpty()) {
+        if (eligible.isEmpty() && alreadyDone.isEmpty()) {
             getLog().info("  No components on " + branchName + " — nothing to do.");
             return new WorkspaceReportSpec(
                     publish ? WsGoal.FEATURE_FINISH_MERGE_PUBLISH
@@ -232,12 +239,24 @@ public class FeatureFinishMergeDraftMojo extends AbstractWorkspaceMojo {
             merged++;
         }
 
+        // #535: yaml reconciliation list includes already-done from
+        // prior partial runs.
+        List<String> needsYamlReconcile = new ArrayList<>(eligible);
+        for (String name : alreadyDone) {
+            if (!needsYamlReconcile.contains(name)) {
+                needsYamlReconcile.add(name);
+            }
+        }
+
         if (merged > 0 && publish) {
             FeatureFinishSupport.cleanFeatureSites(root, eligible, branchName, getLog());
-            FeatureFinishSupport.updateWorkspaceYaml(
-                    manifestPath, eligible, targetBranch, feature, getLog());
             FeatureFinishSupport.mergeWorkspaceRepo(
                     manifestPath, branchName, targetBranch, keepBranch, push, getLog());
+        }
+
+        if (publish && !needsYamlReconcile.isEmpty()) {
+            FeatureFinishSupport.updateWorkspaceYaml(
+                    manifestPath, needsYamlReconcile, targetBranch, feature, getLog());
         }
 
         // Offer stale branch cleanup (#100)
@@ -249,6 +268,10 @@ public class FeatureFinishMergeDraftMojo extends AbstractWorkspaceMojo {
 
         getLog().info("");
         getLog().info("  Merged: " + merged + " components (no-ff)");
+        if (!alreadyDone.isEmpty()) {
+            getLog().info("  Already-done from prior run: " + alreadyDone.size()
+                    + " (workspace.yaml reconciled)");
+        }
         getLog().info("  Branch " + (keepBranch ? "kept" : "deleted") + ": " + branchName);
         if (!undeletedRemote.isEmpty()) {
             getLog().warn("");
@@ -272,7 +295,8 @@ public class FeatureFinishMergeDraftMojo extends AbstractWorkspaceMojo {
                 publish ? WsGoal.FEATURE_FINISH_MERGE_PUBLISH
                         : WsGoal.FEATURE_FINISH_MERGE_DRAFT,
                 buildMergeReport(eligible, branchName, targetBranch,
-                        merged, draft, keepBranch, undeletedRemote));
+                        merged, draft, keepBranch, undeletedRemote,
+                        alreadyDone));
     }
 
     /**
@@ -292,7 +316,8 @@ public class FeatureFinishMergeDraftMojo extends AbstractWorkspaceMojo {
     private String buildMergeReport(List<String> components, String branch,
                                      String target, int merged,
                                      boolean isDraft, boolean kept,
-                                     java.util.Map<String, String> undeletedRemote) {
+                                     java.util.Map<String, String> undeletedRemote,
+                                     List<String> alreadyDone) {
         GoalReportBuilder report = new GoalReportBuilder();
         report.paragraph("**Branch:** `" + branch + "` → `" + target + "`  \n"
                 + "**Strategy:** no-fast-forward merge");
@@ -301,10 +326,22 @@ public class FeatureFinishMergeDraftMojo extends AbstractWorkspaceMojo {
         for (String name : components) {
             rows.add(new String[]{name, isDraft ? "would merge" : "merged"});
         }
+        for (String name : alreadyDone) {
+            rows.add(new String[]{name, isDraft
+                    ? "would reconcile workspace.yaml only"
+                    : "reconciled workspace.yaml only (already on "
+                            + target + " from a prior run)"});
+        }
         report.table(List.of("Subproject", "Status"), rows);
 
         report.paragraph("**" + merged + " subproject(s)** "
                 + (isDraft ? "would be merged" : "merged")
+                + (alreadyDone.isEmpty()
+                        ? ""
+                        : "; **" + alreadyDone.size() + "** already-done "
+                                + "from a prior run (workspace.yaml "
+                                + (isDraft ? "would be" : "was")
+                                + " reconciled)")
                 + ". Branch " + (kept ? "kept" : "deleted") + ".");
 
         if (!undeletedRemote.isEmpty()) {

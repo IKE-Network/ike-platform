@@ -168,6 +168,72 @@ class FeatureFinishIntegrationTest {
         }
     }
 
+    // ── #535: workspace.yaml reconciliation across partial runs ──
+
+    @Test
+    void squash_priorRunLeftYamlStale_reconcilesAlongsideFreshSquashes()
+            throws Exception {
+        // Simulate the user's two-step recovery from #532's pre-fix
+        // abort: lib-a was processed by a prior run (local now on main,
+        // local feature branch deleted) but workspace.yaml still pins
+        // it to feature/test-finish. The current invocation should
+        // squash lib-b and app-c AND reconcile lib-a's yaml entry, not
+        // leave it stale.
+        Path libA = tempDir.resolve("lib-a");
+        exec(libA, "git", "checkout", "main");
+        // Roll lib-a's main forward to where the squash would have left
+        // it: just take the feature branch's final state as a single
+        // commit on main.
+        exec(libA, "git", "merge", "--squash", BRANCH_NAME);
+        exec(libA, "git", "commit", "-m", "Prior-run squash of "
+                + BRANCH_NAME);
+        // Mirror the prior-run cleanup — local feature branch gone.
+        exec(libA, "git", "branch", "-D", BRANCH_NAME);
+
+        // Sanity-check the precondition: git on main, yaml still on
+        // feature.
+        String yaml = Files.readString(helper.workspaceYaml(),
+                StandardCharsets.UTF_8);
+        assertThat(yaml)
+                .as("precondition: yaml still pins lib-a to feature branch")
+                .contains("lib-a:")
+                .contains("branch: " + BRANCH_NAME);
+
+        FeatureFinishSquashDraftMojo mojo = TestLog.createMojo(
+                FeatureFinishSquashDraftMojo.class);
+        mojo.manifest = helper.workspaceYaml().toFile();
+        mojo.feature = FEATURE_NAME;
+        mojo.targetBranch = "main";
+        mojo.message = "Finish across partial-run boundary";
+        mojo.publish = true;
+
+        mojo.execute();
+
+        // Every subproject ends up on main.
+        for (String name : new String[]{"lib-a", "lib-b", "app-c"}) {
+            assertThat(execCapture(tempDir.resolve(name),
+                    "git", "rev-parse", "--abbrev-ref", "HEAD"))
+                    .as("subproject " + name + " should end on main")
+                    .isEqualTo("main");
+        }
+
+        // workspace.yaml's lib-a branch is now main, not the stale
+        // feature branch. Check the lib-a section specifically — the
+        // workspace-level defaults block can still reference the
+        // feature branch without affecting subproject pinning.
+        String yamlAfter = Files.readString(helper.workspaceYaml(),
+                StandardCharsets.UTF_8);
+        int libAStart = yamlAfter.indexOf("  lib-a:");
+        int libAEnd = yamlAfter.indexOf("  lib-b:");
+        assertThat(libAStart).as("lib-a section must exist").isGreaterThan(0);
+        assertThat(libAEnd).as("lib-b section must exist").isGreaterThan(libAStart);
+        String libASection = yamlAfter.substring(libAStart, libAEnd);
+        assertThat(libASection)
+                .as("lib-a's workspace.yaml branch must be reconciled (#535)")
+                .contains("branch: main")
+                .doesNotContain("branch: " + BRANCH_NAME);
+    }
+
     // ── Helpers ──────────────────────────────────────────────────
 
     private void exec(Path workDir, String... command) throws Exception {

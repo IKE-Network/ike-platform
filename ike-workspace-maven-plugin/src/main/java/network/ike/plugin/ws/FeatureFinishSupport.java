@@ -115,7 +115,19 @@ class FeatureFinishSupport {
      * @return null if eligible, "MODIFIED" for uncommitted changes,
      *         or a descriptive skip/error reason string
      */
+    /**
+     * Sentinel returned by {@link #validateComponent} when a subproject's
+     * local checkout is on the target branch but workspace.yaml still
+     * names the feature branch. Indicates the subproject was processed
+     * by a prior, partially-failed invocation (its squash/merge already
+     * landed) and the only remaining work is to bring workspace.yaml in
+     * line. Callers should auto-reconcile the yaml rather than skip.
+     * IKE-Network/ike-issues#535.
+     */
+    static final String ALREADY_DONE = "ALREADY_DONE";
+
     static String validateComponent(File root, String name, String branchName,
+                                     String targetBranch,
                                      Subproject subproject,
                                      AbstractWorkspaceMojo mojo) {
         File dir = new File(root, name);
@@ -126,13 +138,23 @@ class FeatureFinishSupport {
         }
 
         String currentBranch = mojo.gitBranch(dir);
+        String yamlBranch = subproject.branch();
         if (!currentBranch.equals(branchName)) {
+            // #535: distinguish the "already done from a prior partial
+            // run" state (local on target, yaml still on the feature
+            // branch) from a generic skip. A subsequent re-run treats
+            // these as needing yaml reconciliation only.
+            if (targetBranch != null
+                    && currentBranch.equals(targetBranch)
+                    && yamlBranch != null
+                    && yamlBranch.equals(branchName)) {
+                return ALREADY_DONE;
+            }
             return "on " + currentBranch + ", not " + branchName;
         }
 
         // Verify workspace.yaml agrees with git — a mismatch means
         // branches were switched outside the ws: workflow.
-        String yamlBranch = subproject.branch();
         if (yamlBranch != null && !yamlBranch.equals(currentBranch)) {
             return "INCONSISTENT: git is on " + currentBranch
                     + " but workspace.yaml says " + yamlBranch

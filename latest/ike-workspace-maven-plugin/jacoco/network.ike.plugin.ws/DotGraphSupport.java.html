@@ -3,9 +3,13 @@
 import network.ike.workspace.Subproject;
 import network.ike.workspace.WorkspaceGraph;
 
+import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.zip.Deflater;
 
 /**
  * Graphviz DOT rendering for the workspace dependency graph.
@@ -40,22 +44,22 @@ final class DotGraphSupport {
      * @return complete DOT source (a {@code digraph} block)
      */
     static String dotFromGraph(WorkspaceGraph graph) {
-<span class="fc" id="L43">        List&lt;String&gt; subprojectNames = graph.manifest().subprojects()</span>
-<span class="fc" id="L44">                .values().stream()</span>
-<span class="fc" id="L45">                .map(Subproject::name)</span>
-<span class="fc" id="L46">                .toList();</span>
+<span class="fc" id="L47">        List&lt;String&gt; subprojectNames = graph.manifest().subprojects()</span>
+<span class="fc" id="L48">                .values().stream()</span>
+<span class="fc" id="L49">                .map(Subproject::name)</span>
+<span class="fc" id="L50">                .toList();</span>
 
-<span class="fc" id="L48">        Map&lt;String, List&lt;String[]&gt;&gt; edges = new LinkedHashMap&lt;&gt;();</span>
-<span class="fc bfc" id="L49" title="All 2 branches covered.">        for (Subproject sub : graph.manifest().subprojects().values()) {</span>
-<span class="fc" id="L50">            List&lt;String[]&gt; compEdges = sub.dependsOn().stream()</span>
-<span class="fc" id="L51">                    .map(dep -&gt; new String[]{</span>
-<span class="fc" id="L52">                            dep.subproject(), dep.relationship()})</span>
-<span class="fc" id="L53">                    .toList();</span>
-<span class="fc bfc" id="L54" title="All 2 branches covered.">            if (!compEdges.isEmpty()) {</span>
-<span class="fc" id="L55">                edges.put(sub.name(), compEdges);</span>
+<span class="fc" id="L52">        Map&lt;String, List&lt;String[]&gt;&gt; edges = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc bfc" id="L53" title="All 2 branches covered.">        for (Subproject sub : graph.manifest().subprojects().values()) {</span>
+<span class="fc" id="L54">            List&lt;String[]&gt; compEdges = sub.dependsOn().stream()</span>
+<span class="fc" id="L55">                    .map(dep -&gt; new String[]{</span>
+<span class="fc" id="L56">                            dep.subproject(), dep.relationship()})</span>
+<span class="fc" id="L57">                    .toList();</span>
+<span class="fc bfc" id="L58" title="All 2 branches covered.">            if (!compEdges.isEmpty()) {</span>
+<span class="fc" id="L59">                edges.put(sub.name(), compEdges);</span>
             }
-<span class="fc" id="L57">        }</span>
-<span class="fc" id="L58">        return buildDotGraph(&quot;workspace&quot;, subprojectNames, edges);</span>
+<span class="fc" id="L61">        }</span>
+<span class="fc" id="L62">        return buildDotGraph(&quot;workspace&quot;, subprojectNames, edges);</span>
     }
 
     /**
@@ -68,7 +72,88 @@ final class DotGraphSupport {
      * @return a fenced {@code ```dot} block, newline-terminated
      */
     static String buildDotReportBlock(WorkspaceGraph graph) {
-<span class="fc" id="L71">        return &quot;```dot\n&quot; + dotFromGraph(graph) + &quot;```\n&quot;;</span>
+<span class="fc" id="L75">        return &quot;```dot\n&quot; + dotFromGraph(graph) + &quot;```\n&quot;;</span>
+    }
+
+    /**
+     * Build the dependency-graph markdown section for a workspace
+     * report. Renders a Kroki-served SVG image for any markdown
+     * viewer that loads images (GitHub web, VS Code preview, Claude
+     * Code's session viewer) and keeps the DOT source under a
+     * collapsible {@code &lt;details&gt;} block for the IntelliJ Kroki /
+     * Graphviz IDE plugins and for offline source-of-truth. Replaces
+     * the bare {@code ```dot} fence that most markdown renderers
+     * showed as a wall of unformatted source (#533).
+     *
+     * @param graph     the workspace graph
+     * @param krokiBase Kroki server base URL (e.g. {@code https://kroki.io}),
+     *                  trailing slash optional. When {@code null} or blank
+     *                  the rendered image is omitted and only the DOT
+     *                  block remains, matching the pre-#533 shape — useful
+     *                  for fully air-gapped runs.
+     * @return markdown for the graph section, newline-terminated
+     */
+    static String buildDotReportSection(WorkspaceGraph graph, String krokiBase) {
+<span class="fc" id="L97">        String dot = dotFromGraph(graph);</span>
+<span class="fc" id="L98">        StringBuilder out = new StringBuilder();</span>
+<span class="fc bfc" id="L99" title="All 4 branches covered.">        if (krokiBase != null &amp;&amp; !krokiBase.isBlank()) {</span>
+<span class="fc" id="L100">            out.append(&quot;![workspace dependency graph](&quot;)</span>
+<span class="fc" id="L101">                    .append(krokiSvgUrl(dot, krokiBase))</span>
+<span class="fc" id="L102">                    .append(&quot;)\n\n&quot;);</span>
+<span class="fc" id="L103">            out.append(&quot;&lt;details&gt;&lt;summary&gt;DOT source&lt;/summary&gt;\n\n&quot;);</span>
+<span class="fc" id="L104">            out.append(&quot;```dot\n&quot;).append(dot).append(&quot;```\n\n&quot;);</span>
+<span class="fc" id="L105">            out.append(&quot;&lt;/details&gt;\n&quot;);</span>
+        } else {
+<span class="fc" id="L107">            out.append(&quot;```dot\n&quot;).append(dot).append(&quot;```\n&quot;);</span>
+        }
+<span class="fc" id="L109">        return out.toString();</span>
+    }
+
+    /**
+     * Encode a DOT source string as a Kroki SVG image URL.
+     *
+     * &lt;p&gt;Kroki accepts the diagram source as a zlib-deflated, URL-safe-
+     * base64-encoded path segment, so the URL itself carries the
+     * complete diagram — no client-side state, no server-side
+     * persistence. See &lt;a href=&quot;https://docs.kroki.io/kroki/setup/encode-diagram/&quot;&gt;
+     * the Kroki encoding docs&lt;/a&gt;.
+     *
+     * @param dot       Graphviz DOT source
+     * @param krokiBase Kroki server base URL (trailing slash optional);
+     *                  e.g. {@code https://kroki.io} or an internal
+     *                  self-hosted endpoint
+     * @return full image URL ready to drop into a markdown
+     *         {@code ![alt](...)} link
+     */
+    static String krokiSvgUrl(String dot, String krokiBase) {
+<span class="fc bfc" id="L129" title="All 2 branches covered.">        String base = krokiBase.endsWith(&quot;/&quot;)</span>
+<span class="fc" id="L130">                ? krokiBase.substring(0, krokiBase.length() - 1)</span>
+<span class="fc" id="L131">                : krokiBase;</span>
+<span class="fc" id="L132">        return base + &quot;/graphviz/svg/&quot; + krokiEncode(dot);</span>
+    }
+
+    /**
+     * Encode a diagram source string the way Kroki expects: zlib
+     * deflate at best compression, then URL-safe base64 without
+     * padding.
+     *
+     * @param source diagram source text
+     * @return encoded path segment for the Kroki URL
+     */
+    static String krokiEncode(String source) {
+<span class="fc" id="L144">        byte[] input = source.getBytes(StandardCharsets.UTF_8);</span>
+<span class="fc" id="L145">        Deflater deflater = new Deflater(Deflater.BEST_COMPRESSION);</span>
+<span class="fc" id="L146">        deflater.setInput(input);</span>
+<span class="fc" id="L147">        deflater.finish();</span>
+<span class="fc" id="L148">        ByteArrayOutputStream out = new ByteArrayOutputStream();</span>
+<span class="fc" id="L149">        byte[] buf = new byte[1024];</span>
+<span class="fc bfc" id="L150" title="All 2 branches covered.">        while (!deflater.finished()) {</span>
+<span class="fc" id="L151">            int n = deflater.deflate(buf);</span>
+<span class="fc" id="L152">            out.write(buf, 0, n);</span>
+<span class="fc" id="L153">        }</span>
+<span class="fc" id="L154">        deflater.end();</span>
+<span class="fc" id="L155">        return Base64.getUrlEncoder().withoutPadding()</span>
+<span class="fc" id="L156">                .encodeToString(out.toByteArray());</span>
     }
 
     /**
@@ -86,36 +171,36 @@ final class DotGraphSupport {
     static String buildDotGraph(String title,
                                 List&lt;String&gt; subprojectNames,
                                 Map&lt;String, List&lt;String[]&gt;&gt; edges) {
-<span class="fc" id="L89">        StringBuilder dot = new StringBuilder(1024);</span>
-<span class="fc" id="L90">        dot.append(&quot;digraph &quot;).append(title).append(&quot; {\n&quot;);</span>
-<span class="fc" id="L91">        dot.append(&quot;    rankdir=BT;\n&quot;);</span>
-<span class="fc" id="L92">        dot.append(&quot;    node [shape=box, style=rounded, &quot;</span>
+<span class="fc" id="L174">        StringBuilder dot = new StringBuilder(1024);</span>
+<span class="fc" id="L175">        dot.append(&quot;digraph &quot;).append(title).append(&quot; {\n&quot;);</span>
+<span class="fc" id="L176">        dot.append(&quot;    rankdir=BT;\n&quot;);</span>
+<span class="fc" id="L177">        dot.append(&quot;    node [shape=box, style=rounded, &quot;</span>
                 + &quot;fontname=\&quot;Helvetica\&quot;];\n&quot;);
-<span class="fc" id="L94">        dot.append(&quot;\n&quot;);</span>
+<span class="fc" id="L179">        dot.append(&quot;\n&quot;);</span>
 
         // Node declarations
-<span class="fc bfc" id="L97" title="All 2 branches covered.">        for (String subName : subprojectNames) {</span>
-<span class="fc" id="L98">            dot.append(&quot;    \&quot;&quot;).append(subName).append(&quot;\&quot;;\n&quot;);</span>
-<span class="fc" id="L99">        }</span>
+<span class="fc bfc" id="L182" title="All 2 branches covered.">        for (String subName : subprojectNames) {</span>
+<span class="fc" id="L183">            dot.append(&quot;    \&quot;&quot;).append(subName).append(&quot;\&quot;;\n&quot;);</span>
+<span class="fc" id="L184">        }</span>
 
-<span class="fc" id="L101">        dot.append(&quot;\n&quot;);</span>
+<span class="fc" id="L186">        dot.append(&quot;\n&quot;);</span>
 
         // Edges
-<span class="fc bfc" id="L104" title="All 2 branches covered.">        for (var entry : edges.entrySet()) {</span>
-<span class="fc" id="L105">            String source = entry.getKey();</span>
-<span class="fc bfc" id="L106" title="All 2 branches covered.">            for (String[] edge : entry.getValue()) {</span>
-<span class="fc" id="L107">                String target = edge[0];</span>
-<span class="fc" id="L108">                String relationship = edge[1];</span>
-<span class="fc bfc" id="L109" title="All 2 branches covered.">                String style = &quot;content&quot;.equals(relationship)</span>
-<span class="fc" id="L110">                        ? &quot; [style=dashed]&quot; : &quot;&quot;;</span>
-<span class="fc" id="L111">                dot.append(&quot;    \&quot;&quot;).append(source).append(&quot;\&quot; -&gt; \&quot;&quot;)</span>
-<span class="fc" id="L112">                   .append(target).append(&quot;\&quot;&quot;).append(style)</span>
-<span class="fc" id="L113">                   .append(&quot;;\n&quot;);</span>
-<span class="fc" id="L114">            }</span>
-<span class="fc" id="L115">        }</span>
+<span class="fc bfc" id="L189" title="All 2 branches covered.">        for (var entry : edges.entrySet()) {</span>
+<span class="fc" id="L190">            String source = entry.getKey();</span>
+<span class="fc bfc" id="L191" title="All 2 branches covered.">            for (String[] edge : entry.getValue()) {</span>
+<span class="fc" id="L192">                String target = edge[0];</span>
+<span class="fc" id="L193">                String relationship = edge[1];</span>
+<span class="fc bfc" id="L194" title="All 2 branches covered.">                String style = &quot;content&quot;.equals(relationship)</span>
+<span class="fc" id="L195">                        ? &quot; [style=dashed]&quot; : &quot;&quot;;</span>
+<span class="fc" id="L196">                dot.append(&quot;    \&quot;&quot;).append(source).append(&quot;\&quot; -&gt; \&quot;&quot;)</span>
+<span class="fc" id="L197">                   .append(target).append(&quot;\&quot;&quot;).append(style)</span>
+<span class="fc" id="L198">                   .append(&quot;;\n&quot;);</span>
+<span class="fc" id="L199">            }</span>
+<span class="fc" id="L200">        }</span>
 
-<span class="fc" id="L117">        dot.append(&quot;}\n&quot;);</span>
-<span class="fc" id="L118">        return dot.toString();</span>
+<span class="fc" id="L202">        dot.append(&quot;}\n&quot;);</span>
+<span class="fc" id="L203">        return dot.toString();</span>
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

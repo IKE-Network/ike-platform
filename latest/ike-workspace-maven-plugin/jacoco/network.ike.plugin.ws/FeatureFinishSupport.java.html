@@ -115,36 +115,58 @@ class FeatureFinishSupport {
      * @return null if eligible, &quot;MODIFIED&quot; for uncommitted changes,
      *         or a descriptive skip/error reason string
      */
+    /**
+     * Sentinel returned by {@link #validateComponent} when a subproject's
+     * local checkout is on the target branch but workspace.yaml still
+     * names the feature branch. Indicates the subproject was processed
+     * by a prior, partially-failed invocation (its squash/merge already
+     * landed) and the only remaining work is to bring workspace.yaml in
+     * line. Callers should auto-reconcile the yaml rather than skip.
+     * IKE-Network/ike-issues#535.
+     */
+    static final String ALREADY_DONE = &quot;ALREADY_DONE&quot;;
+
     static String validateComponent(File root, String name, String branchName,
+                                     String targetBranch,
                                      Subproject subproject,
                                      AbstractWorkspaceMojo mojo) {
-<span class="fc" id="L121">        File dir = new File(root, name);</span>
-<span class="fc" id="L122">        File gitDir = new File(dir, &quot;.git&quot;);</span>
+<span class="fc" id="L133">        File dir = new File(root, name);</span>
+<span class="fc" id="L134">        File gitDir = new File(dir, &quot;.git&quot;);</span>
 
-<span class="pc bpc" id="L124" title="1 of 2 branches missed.">        if (!gitDir.exists()) {</span>
-<span class="nc" id="L125">            return &quot;not cloned&quot;;</span>
+<span class="pc bpc" id="L136" title="1 of 2 branches missed.">        if (!gitDir.exists()) {</span>
+<span class="nc" id="L137">            return &quot;not cloned&quot;;</span>
         }
 
-<span class="fc" id="L128">        String currentBranch = mojo.gitBranch(dir);</span>
-<span class="pc bpc" id="L129" title="1 of 2 branches missed.">        if (!currentBranch.equals(branchName)) {</span>
-<span class="nc" id="L130">            return &quot;on &quot; + currentBranch + &quot;, not &quot; + branchName;</span>
+<span class="fc" id="L140">        String currentBranch = mojo.gitBranch(dir);</span>
+<span class="fc" id="L141">        String yamlBranch = subproject.branch();</span>
+<span class="fc bfc" id="L142" title="All 2 branches covered.">        if (!currentBranch.equals(branchName)) {</span>
+            // #535: distinguish the &quot;already done from a prior partial
+            // run&quot; state (local on target, yaml still on the feature
+            // branch) from a generic skip. A subsequent re-run treats
+            // these as needing yaml reconciliation only.
+<span class="pc bpc" id="L147" title="1 of 2 branches missed.">            if (targetBranch != null</span>
+<span class="pc bpc" id="L148" title="2 of 4 branches missed.">                    &amp;&amp; currentBranch.equals(targetBranch)</span>
+                    &amp;&amp; yamlBranch != null
+<span class="pc bpc" id="L150" title="1 of 2 branches missed.">                    &amp;&amp; yamlBranch.equals(branchName)) {</span>
+<span class="fc" id="L151">                return ALREADY_DONE;</span>
+            }
+<span class="nc" id="L153">            return &quot;on &quot; + currentBranch + &quot;, not &quot; + branchName;</span>
         }
 
         // Verify workspace.yaml agrees with git — a mismatch means
         // branches were switched outside the ws: workflow.
-<span class="fc" id="L135">        String yamlBranch = subproject.branch();</span>
-<span class="pc bpc" id="L136" title="1 of 4 branches missed.">        if (yamlBranch != null &amp;&amp; !yamlBranch.equals(currentBranch)) {</span>
-<span class="fc" id="L137">            return &quot;INCONSISTENT: git is on &quot; + currentBranch</span>
+<span class="pc bpc" id="L158" title="1 of 4 branches missed.">        if (yamlBranch != null &amp;&amp; !yamlBranch.equals(currentBranch)) {</span>
+<span class="fc" id="L159">            return &quot;INCONSISTENT: git is on &quot; + currentBranch</span>
                     + &quot; but workspace.yaml says &quot; + yamlBranch
                     + &quot; — resolve with ws:feature-start or update workspace.yaml&quot;;
         }
 
-<span class="fc" id="L142">        String status = mojo.gitStatus(dir);</span>
-<span class="pc bpc" id="L143" title="1 of 2 branches missed.">        if (!status.isEmpty()) {</span>
-<span class="nc" id="L144">            return &quot;MODIFIED&quot;;  // Caller should throw</span>
+<span class="fc" id="L164">        String status = mojo.gitStatus(dir);</span>
+<span class="pc bpc" id="L165" title="1 of 2 branches missed.">        if (!status.isEmpty()) {</span>
+<span class="nc" id="L166">            return &quot;MODIFIED&quot;;  // Caller should throw</span>
         }
 
-<span class="fc" id="L147">        return null;</span>
+<span class="fc" id="L169">        return null;</span>
     }
 
     /**
@@ -154,50 +176,50 @@ class FeatureFinishSupport {
     static String generateFeatureMessage(File root, List&lt;String&gt; components,
                                           String branchName, String targetBranch,
                                           String userMessage, Log log) {
-<span class="fc" id="L157">        var sb = new StringBuilder();</span>
-<span class="pc bpc" id="L158" title="3 of 4 branches missed.">        if (userMessage != null &amp;&amp; !userMessage.isBlank()) {</span>
-<span class="nc" id="L159">            sb.append(userMessage).append(&quot;\n\n&quot;);</span>
+<span class="fc" id="L179">        var sb = new StringBuilder();</span>
+<span class="pc bpc" id="L180" title="1 of 4 branches missed.">        if (userMessage != null &amp;&amp; !userMessage.isBlank()) {</span>
+<span class="fc" id="L181">            sb.append(userMessage).append(&quot;\n\n&quot;);</span>
         }
-<span class="fc" id="L161">        sb.append(branchName).append(&quot;\n&quot;);</span>
+<span class="fc" id="L183">        sb.append(branchName).append(&quot;\n&quot;);</span>
 
-<span class="fc bfc" id="L163" title="All 2 branches covered.">        for (String name : components) {</span>
-<span class="fc" id="L164">            File dir = new File(root, name);</span>
+<span class="fc bfc" id="L185" title="All 2 branches covered.">        for (String name : components) {</span>
+<span class="fc" id="L186">            File dir = new File(root, name);</span>
             try {
-<span class="fc" id="L166">                List&lt;String&gt; commits = VcsOperations.commitLog(</span>
+<span class="fc" id="L188">                List&lt;String&gt; commits = VcsOperations.commitLog(</span>
                         dir, targetBranch, branchName);
-<span class="pc bpc" id="L168" title="1 of 2 branches missed.">                if (commits.isEmpty()) continue;</span>
-<span class="fc" id="L169">                sb.append(&quot;\n## &quot;).append(name)</span>
-<span class="fc" id="L170">                  .append(&quot; (&quot;).append(commits.size()).append(&quot; commit&quot;)</span>
-<span class="pc bpc" id="L171" title="1 of 2 branches missed.">                  .append(commits.size() == 1 ? &quot;&quot; : &quot;s&quot;).append(&quot;)\n&quot;);</span>
-<span class="fc bfc" id="L172" title="All 2 branches covered.">                for (String line : commits) {</span>
-<span class="pc bpc" id="L173" title="1 of 2 branches missed.">                    String msg = line.contains(&quot; &quot;)</span>
-<span class="pc" id="L174">                            ? line.substring(line.indexOf(' ') + 1) : line;</span>
-<span class="fc" id="L175">                    sb.append(&quot;- &quot;).append(msg).append(&quot;\n&quot;);</span>
-<span class="fc" id="L176">                }</span>
-<span class="nc" id="L177">            } catch (MojoException e) {</span>
-<span class="nc" id="L178">                log.debug(&quot;Could not get log for &quot; + name + &quot;: &quot; + e.getMessage());</span>
-<span class="fc" id="L179">            }</span>
-<span class="fc" id="L180">        }</span>
+<span class="pc bpc" id="L190" title="1 of 2 branches missed.">                if (commits.isEmpty()) continue;</span>
+<span class="fc" id="L191">                sb.append(&quot;\n## &quot;).append(name)</span>
+<span class="fc" id="L192">                  .append(&quot; (&quot;).append(commits.size()).append(&quot; commit&quot;)</span>
+<span class="pc bpc" id="L193" title="1 of 2 branches missed.">                  .append(commits.size() == 1 ? &quot;&quot; : &quot;s&quot;).append(&quot;)\n&quot;);</span>
+<span class="fc bfc" id="L194" title="All 2 branches covered.">                for (String line : commits) {</span>
+<span class="pc bpc" id="L195" title="1 of 2 branches missed.">                    String msg = line.contains(&quot; &quot;)</span>
+<span class="pc" id="L196">                            ? line.substring(line.indexOf(' ') + 1) : line;</span>
+<span class="fc" id="L197">                    sb.append(&quot;- &quot;).append(msg).append(&quot;\n&quot;);</span>
+<span class="fc" id="L198">                }</span>
+<span class="nc" id="L199">            } catch (MojoException e) {</span>
+<span class="nc" id="L200">                log.debug(&quot;Could not get log for &quot; + name + &quot;: &quot; + e.getMessage());</span>
+<span class="fc" id="L201">            }</span>
+<span class="fc" id="L202">        }</span>
 
         // Workspace repo changes
         try {
-<span class="nc" id="L184">            List&lt;String&gt; wsCommits = VcsOperations.commitLog(</span>
+<span class="nc" id="L206">            List&lt;String&gt; wsCommits = VcsOperations.commitLog(</span>
                     root, targetBranch, branchName);
-<span class="nc bnc" id="L186" title="All 2 branches missed.">            if (!wsCommits.isEmpty()) {</span>
-<span class="nc" id="L187">                sb.append(&quot;\n## workspace (&quot;).append(wsCommits.size())</span>
-<span class="nc bnc" id="L188" title="All 2 branches missed.">                  .append(&quot; commit&quot;).append(wsCommits.size() == 1 ? &quot;&quot; : &quot;s&quot;)</span>
-<span class="nc" id="L189">                  .append(&quot;)\n&quot;);</span>
-<span class="nc bnc" id="L190" title="All 2 branches missed.">                for (String line : wsCommits) {</span>
-<span class="nc bnc" id="L191" title="All 2 branches missed.">                    String msg = line.contains(&quot; &quot;)</span>
-<span class="nc" id="L192">                            ? line.substring(line.indexOf(' ') + 1) : line;</span>
-<span class="nc" id="L193">                    sb.append(&quot;- &quot;).append(msg).append(&quot;\n&quot;);</span>
-<span class="nc" id="L194">                }</span>
+<span class="nc bnc" id="L208" title="All 2 branches missed.">            if (!wsCommits.isEmpty()) {</span>
+<span class="nc" id="L209">                sb.append(&quot;\n## workspace (&quot;).append(wsCommits.size())</span>
+<span class="nc bnc" id="L210" title="All 2 branches missed.">                  .append(&quot; commit&quot;).append(wsCommits.size() == 1 ? &quot;&quot; : &quot;s&quot;)</span>
+<span class="nc" id="L211">                  .append(&quot;)\n&quot;);</span>
+<span class="nc bnc" id="L212" title="All 2 branches missed.">                for (String line : wsCommits) {</span>
+<span class="nc bnc" id="L213" title="All 2 branches missed.">                    String msg = line.contains(&quot; &quot;)</span>
+<span class="nc" id="L214">                            ? line.substring(line.indexOf(' ') + 1) : line;</span>
+<span class="nc" id="L215">                    sb.append(&quot;- &quot;).append(msg).append(&quot;\n&quot;);</span>
+<span class="nc" id="L216">                }</span>
             }
-<span class="fc" id="L196">        } catch (MojoException e) {</span>
-<span class="fc" id="L197">            log.debug(&quot;Could not get workspace log: &quot; + e.getMessage());</span>
-<span class="nc" id="L198">        }</span>
+<span class="fc" id="L218">        } catch (MojoException e) {</span>
+<span class="fc" id="L219">            log.debug(&quot;Could not get workspace log: &quot; + e.getMessage());</span>
+<span class="nc" id="L220">        }</span>
 
-<span class="fc" id="L200">        return sb.toString().stripTrailing();</span>
+<span class="fc" id="L222">        return sb.toString().stripTrailing();</span>
     }
 
     /**
@@ -209,28 +231,28 @@ class FeatureFinishSupport {
             throws MojoException {
         // Read actual version from POM on disk — workspace.yaml may be stale
         // if the branch update commit failed (#83).
-<span class="fc" id="L212">        String currentVersion = readCurrentVersion(dir, log);</span>
-<span class="fc" id="L213">        String qualifier = qualifierFromBranch(branchName);</span>
-<span class="pc bpc" id="L214" title="1 of 2 branches missed.">        if (currentVersion == null</span>
-<span class="pc bpc" id="L215" title="1 of 2 branches missed.">                || !containsBranchQualifier(currentVersion, qualifier)) {</span>
-<span class="nc" id="L216">            return null;</span>
+<span class="fc" id="L234">        String currentVersion = readCurrentVersion(dir, log);</span>
+<span class="fc" id="L235">        String qualifier = qualifierFromBranch(branchName);</span>
+<span class="pc bpc" id="L236" title="1 of 2 branches missed.">        if (currentVersion == null</span>
+<span class="pc bpc" id="L237" title="1 of 2 branches missed.">                || !containsBranchQualifier(currentVersion, qualifier)) {</span>
+<span class="nc" id="L238">            return null;</span>
         }
 
-<span class="fc" id="L219">        String baseVersion = stripQualifier(currentVersion, qualifier);</span>
+<span class="fc" id="L241">        String baseVersion = stripQualifier(currentVersion, qualifier);</span>
 
-<span class="fc" id="L221">        log.info(&quot;    version: &quot; + currentVersion + &quot; → &quot; + baseVersion);</span>
-<span class="fc" id="L222">        setAllVersions(dir, currentVersion, baseVersion, log);</span>
+<span class="fc" id="L243">        log.info(&quot;    version: &quot; + currentVersion + &quot; → &quot; + baseVersion);</span>
+<span class="fc" id="L244">        setAllVersions(dir, currentVersion, baseVersion, log);</span>
 
         // Also strip any other branch-qualified versions in the POM tree
         // (BOM imports, version properties, etc. set by cascadeBomProperties
         // and cascadeBomImports during feature-start).
-<span class="fc" id="L227">        stripAllBranchQualifiedVersions(dir, qualifier, log);</span>
+<span class="fc" id="L249">        stripAllBranchQualifiedVersions(dir, qualifier, log);</span>
 
-<span class="fc" id="L229">        ReleaseSupport.exec(dir, log, &quot;git&quot;, &quot;add&quot;, &quot;-A&quot;);</span>
-<span class="fc" id="L230">        ReleaseSupport.exec(dir, log, &quot;git&quot;, &quot;commit&quot;, &quot;-m&quot;,</span>
+<span class="fc" id="L251">        ReleaseSupport.exec(dir, log, &quot;git&quot;, &quot;add&quot;, &quot;-A&quot;);</span>
+<span class="fc" id="L252">        ReleaseSupport.exec(dir, log, &quot;git&quot;, &quot;commit&quot;, &quot;-m&quot;,</span>
                 &quot;merge-prep: strip branch qualifier → &quot; + baseVersion);
 
-<span class="fc" id="L233">        return baseVersion;</span>
+<span class="fc" id="L255">        return baseVersion;</span>
     }
 
     /**
@@ -238,70 +260,122 @@ class FeatureFinishSupport {
      */
     static String stripBranchVersionBare(File dir, String branchName, Log log)
             throws MojoException {
-<span class="fc" id="L241">        File pom = new File(dir, &quot;pom.xml&quot;);</span>
-<span class="pc bpc" id="L242" title="1 of 2 branches missed.">        if (!pom.exists()) return null;</span>
+<span class="fc" id="L263">        File pom = new File(dir, &quot;pom.xml&quot;);</span>
+<span class="pc bpc" id="L264" title="1 of 2 branches missed.">        if (!pom.exists()) return null;</span>
 
         String currentVersion;
         try {
-<span class="fc" id="L246">            currentVersion = ReleaseSupport.readPomVersion(pom);</span>
-<span class="nc" id="L247">        } catch (MojoException e) {</span>
-<span class="nc" id="L248">            return null;</span>
-<span class="fc" id="L249">        }</span>
+<span class="fc" id="L268">            currentVersion = ReleaseSupport.readPomVersion(pom);</span>
+<span class="nc" id="L269">        } catch (MojoException e) {</span>
+<span class="nc" id="L270">            return null;</span>
+<span class="fc" id="L271">        }</span>
 
-<span class="fc" id="L251">        String qualifier = qualifierFromBranch(branchName);</span>
-<span class="pc bpc" id="L252" title="1 of 2 branches missed.">        if (currentVersion == null</span>
-<span class="pc bpc" id="L253" title="1 of 2 branches missed.">                || !containsBranchQualifier(currentVersion, qualifier)) {</span>
-<span class="nc" id="L254">            return null;</span>
+<span class="fc" id="L273">        String qualifier = qualifierFromBranch(branchName);</span>
+<span class="pc bpc" id="L274" title="1 of 2 branches missed.">        if (currentVersion == null</span>
+<span class="pc bpc" id="L275" title="1 of 2 branches missed.">                || !containsBranchQualifier(currentVersion, qualifier)) {</span>
+<span class="nc" id="L276">            return null;</span>
         }
 
-<span class="fc" id="L257">        String baseVersion = stripQualifier(currentVersion, qualifier);</span>
+<span class="fc" id="L279">        String baseVersion = stripQualifier(currentVersion, qualifier);</span>
 
-<span class="fc" id="L259">        log.info(&quot;  Version: &quot; + currentVersion + &quot; → &quot; + baseVersion);</span>
-<span class="fc" id="L260">        setAllVersions(dir, currentVersion, baseVersion, log);</span>
-<span class="fc" id="L261">        stripAllBranchQualifiedVersions(dir, qualifier, log);</span>
-<span class="fc" id="L262">        ReleaseSupport.exec(dir, log, &quot;git&quot;, &quot;add&quot;, &quot;-A&quot;);</span>
-<span class="fc" id="L263">        ReleaseSupport.exec(dir, log, &quot;git&quot;, &quot;commit&quot;, &quot;-m&quot;,</span>
+<span class="fc" id="L281">        log.info(&quot;  Version: &quot; + currentVersion + &quot; → &quot; + baseVersion);</span>
+<span class="fc" id="L282">        setAllVersions(dir, currentVersion, baseVersion, log);</span>
+<span class="fc" id="L283">        stripAllBranchQualifiedVersions(dir, qualifier, log);</span>
+<span class="fc" id="L284">        ReleaseSupport.exec(dir, log, &quot;git&quot;, &quot;add&quot;, &quot;-A&quot;);</span>
+<span class="fc" id="L285">        ReleaseSupport.exec(dir, log, &quot;git&quot;, &quot;commit&quot;, &quot;-m&quot;,</span>
                 &quot;merge-prep: strip branch qualifier → &quot; + baseVersion);
 
-<span class="fc" id="L266">        return baseVersion;</span>
+<span class="fc" id="L288">        return baseVersion;</span>
     }
 
     /**
-     * Delete feature branch locally and remotely.
+     * Delete the local branch and, unless {@code keepRemoteBranch} is
+     * set, attempt to delete the matching {@code origin/&lt;branch&gt;}.
+     * Remote-deletion failures are &lt;strong&gt;soft&lt;/strong&gt; — the method
+     * logs a warning and returns the failure reason so the caller can
+     * aggregate undeleted branches into the end-of-run report rather
+     * than aborting the whole feature-finish (IKE-Network/ike-issues#532).
+     *
+     * &lt;p&gt;Local deletion still throws on failure — that's a real
+     * problem, not a typical branch-protection rule.
+     *
+     * @param dir              repository root
+     * @param log              Maven logger
+     * @param branchName       branch to delete
+     * @param keepRemoteBranch when {@code true}, skip the remote
+     *                         deletion entirely (e.g. branch protection
+     *                         is known to forbid it)
+     * @return {@code null} on success (or no remote present, or
+     *         {@code keepRemoteBranch=true}); the underlying git error
+     *         message when the remote deletion was attempted and failed
+     * @throws MojoException if the local branch deletion fails
+     */
+    static String deleteBranch(File dir, Log log, String branchName,
+                                boolean keepRemoteBranch) throws MojoException {
+<span class="fc" id="L315">        VcsOperations.deleteBranch(dir, log, branchName);</span>
+<span class="fc" id="L316">        log.info(&quot;    deleted local branch: &quot; + branchName);</span>
+
+<span class="fc bfc" id="L318" title="All 2 branches covered.">        if (keepRemoteBranch) {</span>
+<span class="fc" id="L319">            log.info(&quot;    -DkeepRemoteBranch=true — keeping origin/&quot;</span>
+                    + branchName);
+<span class="fc" id="L321">            return null;</span>
+        }
+
+<span class="fc" id="L324">        Optional&lt;String&gt; remoteSha = VcsOperations.remoteSha(dir, &quot;origin&quot;, branchName);</span>
+<span class="fc bfc" id="L325" title="All 2 branches covered.">        if (remoteSha.isEmpty()) {</span>
+<span class="fc" id="L326">            log.info(&quot;    remote branch origin/&quot; + branchName</span>
+                    + &quot; does not exist (never pushed) — skipping&quot;);
+<span class="fc" id="L328">            return null;</span>
+        }
+
+        try {
+<span class="nc" id="L332">            VcsOperations.deleteRemoteBranch(dir, log, &quot;origin&quot;, branchName);</span>
+<span class="nc" id="L333">            log.info(&quot;    deleted remote branch: origin/&quot; + branchName);</span>
+<span class="nc" id="L334">            return null;</span>
+<span class="fc" id="L335">        } catch (MojoException e) {</span>
+<span class="fc" id="L336">            String reason = e.getMessage();</span>
+<span class="fc" id="L337">            log.warn(&quot;    ⚠ could not delete remote branch origin/&quot;</span>
+                    + branchName + &quot;: &quot; + reason);
+<span class="fc" id="L339">            return reason;</span>
+        }
+    }
+
+    /**
+     * Convenience overload that calls {@link #deleteBranch(File, Log,
+     * String, boolean)} with {@code keepRemoteBranch=false} and treats
+     * a soft-fail as a no-op. Existing callers (e.g. the workspace-repo
+     * merge step) used to depend on the void-returning behaviour and
+     * just wanted a best-effort delete; preserved here so they keep
+     * working without per-call refactoring.
+     *
+     * @param dir        repository root
+     * @param log        Maven logger
+     * @param branchName branch to delete
+     * @throws MojoException if the local branch deletion fails
      */
     static void deleteBranch(File dir, Log log, String branchName)
             throws MojoException {
-<span class="fc" id="L274">        VcsOperations.deleteBranch(dir, log, branchName);</span>
-<span class="fc" id="L275">        log.info(&quot;    deleted local branch: &quot; + branchName);</span>
-
-<span class="fc" id="L277">        Optional&lt;String&gt; remoteSha = VcsOperations.remoteSha(dir, &quot;origin&quot;, branchName);</span>
-<span class="pc bpc" id="L278" title="1 of 2 branches missed.">        if (remoteSha.isPresent()) {</span>
-<span class="nc" id="L279">            VcsOperations.deleteRemoteBranch(dir, log, &quot;origin&quot;, branchName);</span>
-<span class="nc" id="L280">            log.info(&quot;    deleted remote branch: origin/&quot; + branchName);</span>
-        } else {
-<span class="fc" id="L282">            log.info(&quot;    remote branch origin/&quot; + branchName</span>
-                    + &quot; does not exist (never pushed) — skipping&quot;);
-        }
-<span class="fc" id="L285">    }</span>
+<span class="nc" id="L358">        deleteBranch(dir, log, branchName, false);</span>
+<span class="nc" id="L359">    }</span>
 
     /**
      * Clean up feature branch snapshot sites.
      */
     static void cleanFeatureSites(File root, List&lt;String&gt; components,
                                     String branchName, Log log) {
-<span class="fc" id="L292">        String featurePath = ReleaseSupport.branchToSitePath(branchName);</span>
-<span class="fc bfc" id="L293" title="All 2 branches covered.">        for (String name : components) {</span>
-<span class="fc" id="L294">            String siteDisk = ReleaseSupport.siteDiskPath(</span>
+<span class="fc" id="L366">        String featurePath = ReleaseSupport.branchToSitePath(branchName);</span>
+<span class="fc bfc" id="L367" title="All 2 branches covered.">        for (String name : components) {</span>
+<span class="fc" id="L368">            String siteDisk = ReleaseSupport.siteDiskPath(</span>
                     name, &quot;snapshot&quot;, featurePath);
             try {
-<span class="fc" id="L297">                ReleaseSupport.cleanRemoteSiteDir(</span>
+<span class="fc" id="L371">                ReleaseSupport.cleanRemoteSiteDir(</span>
                         new File(root, name), log, siteDisk);
-<span class="nc" id="L299">            } catch (MojoException e) {</span>
-<span class="nc" id="L300">                log.debug(&quot;No snapshot site to clean for &quot; + name</span>
-<span class="nc" id="L301">                        + &quot;: &quot; + e.getMessage());</span>
-<span class="fc" id="L302">            }</span>
-<span class="fc" id="L303">        }</span>
-<span class="fc" id="L304">    }</span>
+<span class="nc" id="L373">            } catch (MojoException e) {</span>
+<span class="nc" id="L374">                log.debug(&quot;No snapshot site to clean for &quot; + name</span>
+<span class="nc" id="L375">                        + &quot;: &quot; + e.getMessage());</span>
+<span class="fc" id="L376">            }</span>
+<span class="fc" id="L377">        }</span>
+<span class="fc" id="L378">    }</span>
 
     /**
      * Update workspace.yaml branch fields back to targetBranch and commit.
@@ -310,27 +384,27 @@ class FeatureFinishSupport {
                                       String targetBranch, String feature,
                                       Log log) {
         try {
-<span class="fc" id="L313">            Map&lt;String, String&gt; updates = new LinkedHashMap&lt;&gt;();</span>
-<span class="fc bfc" id="L314" title="All 2 branches covered.">            for (String name : components) {</span>
-<span class="fc" id="L315">                updates.put(name, targetBranch);</span>
-<span class="fc" id="L316">            }</span>
-<span class="fc" id="L317">            ManifestWriter.updateBranches(manifestPath, updates);</span>
-<span class="fc" id="L318">            log.info(&quot;  Updated workspace.yaml branches → &quot; + targetBranch);</span>
+<span class="fc" id="L387">            Map&lt;String, String&gt; updates = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc bfc" id="L388" title="All 2 branches covered.">            for (String name : components) {</span>
+<span class="fc" id="L389">                updates.put(name, targetBranch);</span>
+<span class="fc" id="L390">            }</span>
+<span class="fc" id="L391">            ManifestWriter.updateBranches(manifestPath, updates);</span>
+<span class="fc" id="L392">            log.info(&quot;  Updated workspace.yaml branches → &quot; + targetBranch);</span>
 
-<span class="fc" id="L320">            File wsRoot = manifestPath.getParent().toFile();</span>
-<span class="fc" id="L321">            File wsGit = new File(wsRoot, &quot;.git&quot;);</span>
-<span class="pc bpc" id="L322" title="1 of 2 branches missed.">            if (wsGit.exists()) {</span>
-<span class="nc" id="L323">                ReleaseSupport.exec(wsRoot, log, &quot;git&quot;, &quot;add&quot;, &quot;workspace.yaml&quot;);</span>
-<span class="nc bnc" id="L324" title="All 2 branches missed.">                if (VcsOperations.hasStagedChanges(wsRoot)) {</span>
-<span class="nc" id="L325">                    ReleaseSupport.exec(wsRoot, log, &quot;git&quot;, &quot;commit&quot;, &quot;-m&quot;,</span>
+<span class="fc" id="L394">            File wsRoot = manifestPath.getParent().toFile();</span>
+<span class="fc" id="L395">            File wsGit = new File(wsRoot, &quot;.git&quot;);</span>
+<span class="pc bpc" id="L396" title="1 of 2 branches missed.">            if (wsGit.exists()) {</span>
+<span class="nc" id="L397">                ReleaseSupport.exec(wsRoot, log, &quot;git&quot;, &quot;add&quot;, &quot;workspace.yaml&quot;);</span>
+<span class="nc bnc" id="L398" title="All 2 branches missed.">                if (VcsOperations.hasStagedChanges(wsRoot)) {</span>
+<span class="nc" id="L399">                    ReleaseSupport.exec(wsRoot, log, &quot;git&quot;, &quot;commit&quot;, &quot;-m&quot;,</span>
                             &quot;workspace: restore branches to &quot; + targetBranch
                                     + &quot; after feature/&quot; + feature);
                 }
             }
-<span class="nc" id="L330">        } catch (IOException | MojoException e) {</span>
-<span class="nc" id="L331">            log.warn(&quot;  Could not update workspace.yaml: &quot; + e.getMessage());</span>
-<span class="fc" id="L332">        }</span>
-<span class="fc" id="L333">    }</span>
+<span class="nc" id="L404">        } catch (IOException | MojoException e) {</span>
+<span class="nc" id="L405">            log.warn(&quot;  Could not update workspace.yaml: &quot; + e.getMessage());</span>
+<span class="fc" id="L406">        }</span>
+<span class="fc" id="L407">    }</span>
 
     /**
      * Merge the workspace aggregator repo from the feature branch to the
@@ -341,39 +415,39 @@ class FeatureFinishSupport {
                                      String targetBranch, boolean keepBranch,
                                      boolean push, Log log)
             throws MojoException {
-<span class="fc" id="L344">        File wsRoot = manifestPath.getParent().toFile();</span>
-<span class="pc bpc" id="L345" title="1 of 2 branches missed.">        if (!new File(wsRoot, &quot;.git&quot;).exists()) return;</span>
+<span class="fc" id="L418">        File wsRoot = manifestPath.getParent().toFile();</span>
+<span class="pc bpc" id="L419" title="1 of 2 branches missed.">        if (!new File(wsRoot, &quot;.git&quot;).exists()) return;</span>
 
-<span class="nc" id="L347">        String wsBranch = null;</span>
+<span class="nc" id="L421">        String wsBranch = null;</span>
         try {
-<span class="nc" id="L349">            wsBranch = VcsOperations.currentBranch(wsRoot);</span>
-<span class="nc" id="L350">        } catch (MojoException e) {</span>
-<span class="nc" id="L351">            return;</span>
-<span class="nc" id="L352">        }</span>
+<span class="nc" id="L423">            wsBranch = VcsOperations.currentBranch(wsRoot);</span>
+<span class="nc" id="L424">        } catch (MojoException e) {</span>
+<span class="nc" id="L425">            return;</span>
+<span class="nc" id="L426">        }</span>
 
-<span class="nc bnc" id="L354" title="All 4 branches missed.">        if (wsBranch != null &amp;&amp; wsBranch.equals(branchName)) {</span>
-<span class="nc" id="L355">            log.info(&quot;  Merging workspace repo: &quot; + branchName + &quot; → &quot; + targetBranch);</span>
-<span class="nc" id="L356">            VcsOperations.checkout(wsRoot, log, targetBranch);</span>
-<span class="nc" id="L357">            VcsOperations.mergeNoFf(wsRoot, log, branchName,</span>
+<span class="nc bnc" id="L428" title="All 4 branches missed.">        if (wsBranch != null &amp;&amp; wsBranch.equals(branchName)) {</span>
+<span class="nc" id="L429">            log.info(&quot;  Merging workspace repo: &quot; + branchName + &quot; → &quot; + targetBranch);</span>
+<span class="nc" id="L430">            VcsOperations.checkout(wsRoot, log, targetBranch);</span>
+<span class="nc" id="L431">            VcsOperations.mergeNoFf(wsRoot, log, branchName,</span>
                     &quot;Merge &quot; + branchName + &quot; into &quot; + targetBranch);
-<span class="nc bnc" id="L359" title="All 2 branches missed.">            if (push) {</span>
-<span class="nc" id="L360">                VcsOperations.pushIfRemoteExists(wsRoot, log, &quot;origin&quot;, targetBranch);</span>
+<span class="nc bnc" id="L433" title="All 2 branches missed.">            if (push) {</span>
+<span class="nc" id="L434">                VcsOperations.pushIfRemoteExists(wsRoot, log, &quot;origin&quot;, targetBranch);</span>
             }
         }
 
-<span class="nc bnc" id="L364" title="All 2 branches missed.">        if (!keepBranch) {</span>
+<span class="nc bnc" id="L438" title="All 2 branches missed.">        if (!keepBranch) {</span>
             try {
-<span class="nc" id="L366">                deleteBranch(wsRoot, log, branchName);</span>
-<span class="nc" id="L367">            } catch (MojoException e) {</span>
-<span class="nc" id="L368">                log.warn(&quot;  Could not delete ws branch: &quot; + e.getMessage());</span>
-<span class="nc" id="L369">            }</span>
+<span class="nc" id="L440">                deleteBranch(wsRoot, log, branchName);</span>
+<span class="nc" id="L441">            } catch (MojoException e) {</span>
+<span class="nc" id="L442">                log.warn(&quot;  Could not delete ws branch: &quot; + e.getMessage());</span>
+<span class="nc" id="L443">            }</span>
         }
 
         // Write state file for ws
-<span class="nc bnc" id="L373" title="All 2 branches missed.">        if (VcsState.isIkeManaged(wsRoot.toPath())) {</span>
-<span class="nc" id="L374">            VcsOperations.writeVcsState(wsRoot, VcsState.Action.FEATURE_FINISH);</span>
+<span class="nc bnc" id="L447" title="All 2 branches missed.">        if (VcsState.isIkeManaged(wsRoot.toPath())) {</span>
+<span class="nc" id="L448">            VcsOperations.writeVcsState(wsRoot, VcsState.Action.FEATURE_FINISH);</span>
         }
-<span class="nc" id="L376">    }</span>
+<span class="nc" id="L450">    }</span>
 
     /**
      * Scan for stale feature branches across all subprojects and offer
@@ -398,73 +472,73 @@ class FeatureFinishSupport {
                                            network.ike.plugin.support.IkePrompter prompter,
                                            Log log) {
         // Collect stale branches across all subprojects
-<span class="fc" id="L401">        Map&lt;String, List&lt;String&gt;&gt; staleBranches = new LinkedHashMap&lt;&gt;();</span>
-<span class="fc bfc" id="L402" title="All 2 branches covered.">        for (String name : components) {</span>
-<span class="fc" id="L403">            File dir = new File(root, name);</span>
-<span class="pc bpc" id="L404" title="1 of 2 branches missed.">            if (!new File(dir, &quot;.git&quot;).exists()) continue;</span>
+<span class="fc" id="L475">        Map&lt;String, List&lt;String&gt;&gt; staleBranches = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc bfc" id="L476" title="All 2 branches covered.">        for (String name : components) {</span>
+<span class="fc" id="L477">            File dir = new File(root, name);</span>
+<span class="pc bpc" id="L478" title="1 of 2 branches missed.">            if (!new File(dir, &quot;.git&quot;).exists()) continue;</span>
 
-<span class="fc" id="L406">            List&lt;String&gt; merged = VcsOperations.mergedBranches(</span>
+<span class="fc" id="L480">            List&lt;String&gt; merged = VcsOperations.mergedBranches(</span>
                     dir, targetBranch, &quot;feature/&quot;);
-<span class="fc" id="L408">            List&lt;String&gt; stale = merged.stream()</span>
-<span class="pc bpc" id="L409" title="1 of 2 branches missed.">                    .filter(b -&gt; !b.equals(finishedBranch))</span>
-<span class="fc" id="L410">                    .toList();</span>
-<span class="pc bpc" id="L411" title="1 of 2 branches missed.">            if (!stale.isEmpty()) {</span>
-<span class="nc" id="L412">                staleBranches.put(name, stale);</span>
+<span class="fc" id="L482">            List&lt;String&gt; stale = merged.stream()</span>
+<span class="pc bpc" id="L483" title="1 of 2 branches missed.">                    .filter(b -&gt; !b.equals(finishedBranch))</span>
+<span class="fc" id="L484">                    .toList();</span>
+<span class="pc bpc" id="L485" title="1 of 2 branches missed.">            if (!stale.isEmpty()) {</span>
+<span class="nc" id="L486">                staleBranches.put(name, stale);</span>
             }
-<span class="fc" id="L414">        }</span>
+<span class="fc" id="L488">        }</span>
 
-<span class="pc bpc" id="L416" title="1 of 2 branches missed.">        if (staleBranches.isEmpty()) return;</span>
+<span class="pc bpc" id="L490" title="1 of 2 branches missed.">        if (staleBranches.isEmpty()) return;</span>
 
         // Collect unique branch names with last-commit dates
-<span class="nc" id="L419">        Set&lt;String&gt; uniqueBranches = new TreeSet&lt;&gt;();</span>
-<span class="nc" id="L420">        staleBranches.values().forEach(uniqueBranches::addAll);</span>
+<span class="nc" id="L493">        Set&lt;String&gt; uniqueBranches = new TreeSet&lt;&gt;();</span>
+<span class="nc" id="L494">        staleBranches.values().forEach(uniqueBranches::addAll);</span>
 
-<span class="nc" id="L422">        log.info(&quot;&quot;);</span>
-<span class="nc" id="L423">        log.info(&quot;  Stale feature branches (merged into &quot; + targetBranch + &quot;):&quot;);</span>
-<span class="nc bnc" id="L424" title="All 2 branches missed.">        for (String branch : uniqueBranches) {</span>
+<span class="nc" id="L496">        log.info(&quot;&quot;);</span>
+<span class="nc" id="L497">        log.info(&quot;  Stale feature branches (merged into &quot; + targetBranch + &quot;):&quot;);</span>
+<span class="nc bnc" id="L498" title="All 2 branches missed.">        for (String branch : uniqueBranches) {</span>
             // Get date from first subproject that has it
-<span class="nc" id="L426">            String date = &quot;unknown&quot;;</span>
-<span class="nc bnc" id="L427" title="All 2 branches missed.">            for (var entry : staleBranches.entrySet()) {</span>
-<span class="nc bnc" id="L428" title="All 2 branches missed.">                if (entry.getValue().contains(branch)) {</span>
-<span class="nc" id="L429">                    date = VcsOperations.branchLastCommitDate(</span>
-<span class="nc" id="L430">                            new File(root, entry.getKey()), branch);</span>
-<span class="nc" id="L431">                    break;</span>
+<span class="nc" id="L500">            String date = &quot;unknown&quot;;</span>
+<span class="nc bnc" id="L501" title="All 2 branches missed.">            for (var entry : staleBranches.entrySet()) {</span>
+<span class="nc bnc" id="L502" title="All 2 branches missed.">                if (entry.getValue().contains(branch)) {</span>
+<span class="nc" id="L503">                    date = VcsOperations.branchLastCommitDate(</span>
+<span class="nc" id="L504">                            new File(root, entry.getKey()), branch);</span>
+<span class="nc" id="L505">                    break;</span>
                 }
-<span class="nc" id="L433">            }</span>
-<span class="nc" id="L434">            int subprojectCount = (int) staleBranches.values().stream()</span>
-<span class="nc" id="L435">                    .filter(list -&gt; list.contains(branch))</span>
-<span class="nc" id="L436">                    .count();</span>
-<span class="nc" id="L437">            log.info(&quot;    &quot; + branch + &quot; (&quot; + subprojectCount</span>
-<span class="nc bnc" id="L438" title="All 2 branches missed.">                    + &quot; subproject&quot; + (subprojectCount == 1 ? &quot;&quot; : &quot;s&quot;)</span>
+<span class="nc" id="L507">            }</span>
+<span class="nc" id="L508">            int subprojectCount = (int) staleBranches.values().stream()</span>
+<span class="nc" id="L509">                    .filter(list -&gt; list.contains(branch))</span>
+<span class="nc" id="L510">                    .count();</span>
+<span class="nc" id="L511">            log.info(&quot;    &quot; + branch + &quot; (&quot; + subprojectCount</span>
+<span class="nc bnc" id="L512" title="All 2 branches missed.">                    + &quot; subproject&quot; + (subprojectCount == 1 ? &quot;&quot; : &quot;s&quot;)</span>
                     + &quot;, last commit: &quot; + date + &quot;)&quot;);
-<span class="nc" id="L440">        }</span>
+<span class="nc" id="L514">        }</span>
 
         // Prompt for deletion. Default &quot;no&quot; so non-interactive runs
         // (batch mode) leave the branches in place.
-<span class="nc" id="L444">        log.info(&quot;&quot;);</span>
-<span class="nc" id="L445">        String prompt = &quot;Delete &quot; + uniqueBranches.size() + &quot; stale branch&quot;</span>
-<span class="nc bnc" id="L446" title="All 2 branches missed.">                + (uniqueBranches.size() == 1 ? &quot;&quot; : &quot;es&quot;) + &quot;?&quot;;</span>
+<span class="nc" id="L518">        log.info(&quot;&quot;);</span>
+<span class="nc" id="L519">        String prompt = &quot;Delete &quot; + uniqueBranches.size() + &quot; stale branch&quot;</span>
+<span class="nc bnc" id="L520" title="All 2 branches missed.">                + (uniqueBranches.size() == 1 ? &quot;&quot; : &quot;es&quot;) + &quot;?&quot;;</span>
 
-<span class="nc bnc" id="L448" title="All 4 branches missed.">        boolean delete = prompter != null &amp;&amp; prompter.confirm(prompt, false);</span>
+<span class="nc bnc" id="L522" title="All 4 branches missed.">        boolean delete = prompter != null &amp;&amp; prompter.confirm(prompt, false);</span>
 
-<span class="nc bnc" id="L450" title="All 2 branches missed.">        if (delete) {</span>
-<span class="nc bnc" id="L451" title="All 2 branches missed.">            for (var entry : staleBranches.entrySet()) {</span>
-<span class="nc" id="L452">                File dir = new File(root, entry.getKey());</span>
-<span class="nc bnc" id="L453" title="All 2 branches missed.">                for (String branch : entry.getValue()) {</span>
+<span class="nc bnc" id="L524" title="All 2 branches missed.">        if (delete) {</span>
+<span class="nc bnc" id="L525" title="All 2 branches missed.">            for (var entry : staleBranches.entrySet()) {</span>
+<span class="nc" id="L526">                File dir = new File(root, entry.getKey());</span>
+<span class="nc bnc" id="L527" title="All 2 branches missed.">                for (String branch : entry.getValue()) {</span>
                     try {
-<span class="nc" id="L455">                        VcsOperations.deleteBranch(dir, log, branch);</span>
-<span class="nc" id="L456">                        log.info(&quot;    deleted: &quot; + entry.getKey() + &quot;/&quot; + branch);</span>
-<span class="nc" id="L457">                    } catch (MojoException e) {</span>
-<span class="nc" id="L458">                        log.warn(&quot;    could not delete &quot; + entry.getKey()</span>
-<span class="nc" id="L459">                                + &quot;/&quot; + branch + &quot;: &quot; + e.getMessage());</span>
-<span class="nc" id="L460">                    }</span>
-<span class="nc" id="L461">                }</span>
-<span class="nc" id="L462">            }</span>
-<span class="nc" id="L463">            log.info(&quot;  Stale branches cleaned up.&quot;);</span>
+<span class="nc" id="L529">                        VcsOperations.deleteBranch(dir, log, branch);</span>
+<span class="nc" id="L530">                        log.info(&quot;    deleted: &quot; + entry.getKey() + &quot;/&quot; + branch);</span>
+<span class="nc" id="L531">                    } catch (MojoException e) {</span>
+<span class="nc" id="L532">                        log.warn(&quot;    could not delete &quot; + entry.getKey()</span>
+<span class="nc" id="L533">                                + &quot;/&quot; + branch + &quot;: &quot; + e.getMessage());</span>
+<span class="nc" id="L534">                    }</span>
+<span class="nc" id="L535">                }</span>
+<span class="nc" id="L536">            }</span>
+<span class="nc" id="L537">            log.info(&quot;  Stale branches cleaned up.&quot;);</span>
         } else {
-<span class="nc" id="L465">            log.info(&quot;  Skipping stale branch cleanup.&quot;);</span>
+<span class="nc" id="L539">            log.info(&quot;  Skipping stale branch cleanup.&quot;);</span>
         }
-<span class="nc" id="L467">    }</span>
+<span class="nc" id="L541">    }</span>
 
     // ── Post-merge qualifier guard ────────────────────────────────
 
@@ -484,11 +558,11 @@ class FeatureFinishSupport {
      */
     static void verifyAndFixQualifiers(File dir, String branchName, Log log)
             throws MojoException {
-<span class="fc" id="L487">        String qualifier = qualifierFromBranch(branchName);</span>
-<span class="pc bpc" id="L488" title="1 of 2 branches missed.">        if (qualifier == null) return;</span>
+<span class="fc" id="L561">        String qualifier = qualifierFromBranch(branchName);</span>
+<span class="pc bpc" id="L562" title="1 of 2 branches missed.">        if (qualifier == null) return;</span>
 
-<span class="fc" id="L490">        List&lt;File&gt; allPoms = ReleaseSupport.findPomFiles(dir);</span>
-<span class="fc" id="L491">        List&lt;String&gt; contaminated = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L564">        List&lt;File&gt; allPoms = ReleaseSupport.findPomFiles(dir);</span>
+<span class="fc" id="L565">        List&lt;String&gt; contaminated = new ArrayList&lt;&gt;();</span>
 
         // Match only Maven version coordinates that still carry the
         // branch qualifier — i.e. &lt;digits&gt;(.&lt;digits&gt;)*-&lt;qualifier&gt;-SNAPSHOT.
@@ -496,50 +570,50 @@ class FeatureFinishSupport {
         // also flagged legitimate artifactIds, groupIds, and property
         // names that happened to share the qualifier substring
         // (ike-issues#292).
-<span class="fc" id="L499">        Pattern qualifiedVersion = Pattern.compile(</span>
-<span class="fc" id="L500">                &quot;\\b\\d+(?:\\.\\d+)*-&quot; + Pattern.quote(qualifier) + &quot;-SNAPSHOT\\b&quot;);</span>
+<span class="fc" id="L573">        Pattern qualifiedVersion = Pattern.compile(</span>
+<span class="fc" id="L574">                &quot;\\b\\d+(?:\\.\\d+)*-&quot; + Pattern.quote(qualifier) + &quot;-SNAPSHOT\\b&quot;);</span>
 
-<span class="fc bfc" id="L502" title="All 2 branches covered.">        for (File pom : allPoms) {</span>
+<span class="fc bfc" id="L576" title="All 2 branches covered.">        for (File pom : allPoms) {</span>
             try {
-<span class="fc" id="L504">                String content = Files.readString(pom.toPath(), StandardCharsets.UTF_8);</span>
-<span class="fc bfc" id="L505" title="All 2 branches covered.">                if (qualifiedVersion.matcher(content).find()) {</span>
-<span class="fc" id="L506">                    contaminated.add(dir.toPath().relativize(pom.toPath()).toString());</span>
+<span class="fc" id="L578">                String content = Files.readString(pom.toPath(), StandardCharsets.UTF_8);</span>
+<span class="fc bfc" id="L579" title="All 2 branches covered.">                if (qualifiedVersion.matcher(content).find()) {</span>
+<span class="fc" id="L580">                    contaminated.add(dir.toPath().relativize(pom.toPath()).toString());</span>
                 }
-<span class="nc" id="L508">            } catch (IOException e) {</span>
-<span class="nc" id="L509">                log.warn(&quot;    Could not read &quot; + pom + &quot;: &quot; + e.getMessage());</span>
-<span class="fc" id="L510">            }</span>
-<span class="fc" id="L511">        }</span>
+<span class="nc" id="L582">            } catch (IOException e) {</span>
+<span class="nc" id="L583">                log.warn(&quot;    Could not read &quot; + pom + &quot;: &quot; + e.getMessage());</span>
+<span class="fc" id="L584">            }</span>
+<span class="fc" id="L585">        }</span>
 
-<span class="fc bfc" id="L513" title="All 2 branches covered.">        if (contaminated.isEmpty()) return;</span>
+<span class="fc bfc" id="L587" title="All 2 branches covered.">        if (contaminated.isEmpty()) return;</span>
 
-<span class="fc" id="L515">        log.warn(&quot;    Post-merge guard: &quot; + contaminated.size()</span>
+<span class="fc" id="L589">        log.warn(&quot;    Post-merge guard: &quot; + contaminated.size()</span>
                 + &quot; POM(s) still contain branch qualifier '&quot; + qualifier + &quot;'&quot;);
-<span class="fc bfc" id="L517" title="All 2 branches covered.">        for (String path : contaminated) {</span>
-<span class="fc" id="L518">            log.warn(&quot;      &quot; + path);</span>
-<span class="fc" id="L519">        }</span>
+<span class="fc bfc" id="L591" title="All 2 branches covered.">        for (String path : contaminated) {</span>
+<span class="fc" id="L592">            log.warn(&quot;      &quot; + path);</span>
+<span class="fc" id="L593">        }</span>
 
         // Auto-strip and commit
-<span class="fc" id="L522">        stripAllBranchQualifiedVersions(dir, qualifier, log);</span>
+<span class="fc" id="L596">        stripAllBranchQualifiedVersions(dir, qualifier, log);</span>
 
         // Also strip the artifact version if still qualified
-<span class="fc" id="L525">        String currentVersion = readCurrentVersion(dir, log);</span>
-<span class="pc bpc" id="L526" title="1 of 2 branches missed.">        if (currentVersion != null</span>
-<span class="pc bpc" id="L527" title="1 of 2 branches missed.">                &amp;&amp; containsBranchQualifier(currentVersion, qualifier)) {</span>
-<span class="fc" id="L528">            String baseVersion = stripQualifier(currentVersion, qualifier);</span>
-<span class="fc" id="L529">            setAllVersions(dir, currentVersion, baseVersion, log);</span>
-<span class="fc" id="L530">            log.info(&quot;    Auto-fixed: &quot; + currentVersion + &quot; → &quot; + baseVersion);</span>
+<span class="fc" id="L599">        String currentVersion = readCurrentVersion(dir, log);</span>
+<span class="pc bpc" id="L600" title="1 of 2 branches missed.">        if (currentVersion != null</span>
+<span class="pc bpc" id="L601" title="1 of 2 branches missed.">                &amp;&amp; containsBranchQualifier(currentVersion, qualifier)) {</span>
+<span class="fc" id="L602">            String baseVersion = stripQualifier(currentVersion, qualifier);</span>
+<span class="fc" id="L603">            setAllVersions(dir, currentVersion, baseVersion, log);</span>
+<span class="fc" id="L604">            log.info(&quot;    Auto-fixed: &quot; + currentVersion + &quot; → &quot; + baseVersion);</span>
         }
 
-<span class="fc" id="L533">        ReleaseSupport.exec(dir, log, &quot;git&quot;, &quot;add&quot;, &quot;-A&quot;);</span>
-<span class="fc" id="L534">        String status = ReleaseSupport.execCapture(dir,</span>
+<span class="fc" id="L607">        ReleaseSupport.exec(dir, log, &quot;git&quot;, &quot;add&quot;, &quot;-A&quot;);</span>
+<span class="fc" id="L608">        String status = ReleaseSupport.execCapture(dir,</span>
                 &quot;git&quot;, &quot;status&quot;, &quot;--porcelain&quot;);
-<span class="pc bpc" id="L536" title="1 of 2 branches missed.">        if (!status.isEmpty()) {</span>
-<span class="fc" id="L537">            ReleaseSupport.exec(dir, log, &quot;git&quot;, &quot;commit&quot;, &quot;-m&quot;,</span>
+<span class="pc bpc" id="L610" title="1 of 2 branches missed.">        if (!status.isEmpty()) {</span>
+<span class="fc" id="L611">            ReleaseSupport.exec(dir, log, &quot;git&quot;, &quot;commit&quot;, &quot;-m&quot;,</span>
                     &quot;fixup: strip residual branch qualifier '&quot;
                             + qualifier + &quot;' after merge&quot;);
-<span class="fc" id="L540">            log.info(&quot;    Auto-fixed and committed qualifier cleanup&quot;);</span>
+<span class="fc" id="L614">            log.info(&quot;    Auto-fixed and committed qualifier cleanup&quot;);</span>
         }
-<span class="fc" id="L542">    }</span>
+<span class="fc" id="L616">    }</span>
 
     /**
      * Scan a subproject directory for any version strings containing a
@@ -554,38 +628,38 @@ class FeatureFinishSupport {
      * @return list of relative POM paths containing the qualifier
      */
     static List&lt;String&gt; findQualifierContamination(File dir, String qualifier) {
-<span class="nc" id="L557">        List&lt;String&gt; contaminated = new ArrayList&lt;&gt;();</span>
-<span class="nc bnc" id="L558" title="All 2 branches missed.">        if (qualifier == null) return contaminated;</span>
+<span class="nc" id="L631">        List&lt;String&gt; contaminated = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L632" title="All 2 branches missed.">        if (qualifier == null) return contaminated;</span>
 
         List&lt;File&gt; allPoms;
         try {
-<span class="nc" id="L562">            allPoms = ReleaseSupport.findPomFiles(dir);</span>
-<span class="nc" id="L563">        } catch (MojoException e) {</span>
-<span class="nc" id="L564">            return contaminated;</span>
-<span class="nc" id="L565">        }</span>
+<span class="nc" id="L636">            allPoms = ReleaseSupport.findPomFiles(dir);</span>
+<span class="nc" id="L637">        } catch (MojoException e) {</span>
+<span class="nc" id="L638">            return contaminated;</span>
+<span class="nc" id="L639">        }</span>
 
-<span class="nc bnc" id="L567" title="All 2 branches missed.">        for (File pom : allPoms) {</span>
+<span class="nc bnc" id="L641" title="All 2 branches missed.">        for (File pom : allPoms) {</span>
             try {
-<span class="nc" id="L569">                String content = Files.readString(pom.toPath(), StandardCharsets.UTF_8);</span>
-<span class="nc bnc" id="L570" title="All 2 branches missed.">                if (content.contains(&quot;-&quot; + qualifier + &quot;-&quot;)) {</span>
-<span class="nc" id="L571">                    contaminated.add(dir.toPath().relativize(pom.toPath()).toString());</span>
+<span class="nc" id="L643">                String content = Files.readString(pom.toPath(), StandardCharsets.UTF_8);</span>
+<span class="nc bnc" id="L644" title="All 2 branches missed.">                if (content.contains(&quot;-&quot; + qualifier + &quot;-&quot;)) {</span>
+<span class="nc" id="L645">                    contaminated.add(dir.toPath().relativize(pom.toPath()).toString());</span>
                 }
-<span class="nc" id="L573">            } catch (IOException ignored) {</span>
-<span class="nc" id="L574">            }</span>
-<span class="nc" id="L575">        }</span>
+<span class="nc" id="L647">            } catch (IOException ignored) {</span>
+<span class="nc" id="L648">            }</span>
+<span class="nc" id="L649">        }</span>
 
-<span class="nc" id="L577">        return contaminated;</span>
+<span class="nc" id="L651">        return contaminated;</span>
     }
 
     // ── Internal helpers ─────────────────────────────────────────
 
     private static String readCurrentVersion(File dir, Log log) {
         try {
-<span class="fc" id="L584">            return ReleaseSupport.readPomVersion(new File(dir, &quot;pom.xml&quot;));</span>
-<span class="nc" id="L585">        } catch (MojoException e) {</span>
-<span class="nc" id="L586">            log.warn(&quot;    Could not read version from &quot; + dir.getName()</span>
-<span class="nc" id="L587">                    + &quot;/pom.xml: &quot; + e.getMessage());</span>
-<span class="nc" id="L588">            return null;</span>
+<span class="fc" id="L658">            return ReleaseSupport.readPomVersion(new File(dir, &quot;pom.xml&quot;));</span>
+<span class="nc" id="L659">        } catch (MojoException e) {</span>
+<span class="nc" id="L660">            log.warn(&quot;    Could not read version from &quot; + dir.getName()</span>
+<span class="nc" id="L661">                    + &quot;/pom.xml: &quot; + e.getMessage());</span>
+<span class="nc" id="L662">            return null;</span>
         }
     }
 
@@ -605,7 +679,7 @@ class FeatureFinishSupport {
      * @return the qualifier as it appears in version strings
      */
     private static String qualifierFromBranch(String branchName) {
-<span class="fc" id="L608">        return VersionSupport.safeBranchName(branchName);</span>
+<span class="fc" id="L682">        return VersionSupport.safeBranchName(branchName);</span>
     }
 
     /**
@@ -618,9 +692,9 @@ class FeatureFinishSupport {
      * @return true if the version is a SNAPSHOT containing the qualifier
      */
     private static boolean containsBranchQualifier(String version, String qualifier) {
-<span class="pc bpc" id="L621" title="1 of 2 branches missed.">        return version != null</span>
-<span class="fc bfc" id="L622" title="All 2 branches covered.">                &amp;&amp; version.endsWith(&quot;-SNAPSHOT&quot;)</span>
-<span class="fc bfc" id="L623" title="All 2 branches covered.">                &amp;&amp; version.contains(&quot;-&quot; + qualifier + &quot;-&quot;);</span>
+<span class="pc bpc" id="L695" title="1 of 2 branches missed.">        return version != null</span>
+<span class="fc bfc" id="L696" title="All 2 branches covered.">                &amp;&amp; version.endsWith(&quot;-SNAPSHOT&quot;)</span>
+<span class="fc bfc" id="L697" title="All 2 branches covered.">                &amp;&amp; version.contains(&quot;-&quot; + qualifier + &quot;-&quot;);</span>
     }
 
     /**
@@ -631,7 +705,7 @@ class FeatureFinishSupport {
      * @return base SNAPSHOT version
      */
     private static String stripQualifier(String version, String qualifier) {
-<span class="fc" id="L634">        return version.replace(&quot;-&quot; + qualifier + &quot;-SNAPSHOT&quot;, &quot;-SNAPSHOT&quot;);</span>
+<span class="fc" id="L708">        return version.replace(&quot;-&quot; + qualifier + &quot;-SNAPSHOT&quot;, &quot;-SNAPSHOT&quot;);</span>
     }
 
     /**
@@ -660,88 +734,88 @@ class FeatureFinishSupport {
                                                          String qualifier,
                                                          Log log)
             throws MojoException {
-<span class="pc bpc" id="L663" title="1 of 2 branches missed.">        if (qualifier == null) return;</span>
+<span class="pc bpc" id="L737" title="1 of 2 branches missed.">        if (qualifier == null) return;</span>
 
-<span class="fc" id="L665">        List&lt;File&gt; allPoms = ReleaseSupport.findPomFiles(dir);</span>
+<span class="fc" id="L739">        List&lt;File&gt; allPoms = ReleaseSupport.findPomFiles(dir);</span>
 
-<span class="fc bfc" id="L667" title="All 2 branches covered.">        for (File pom : allPoms) {</span>
+<span class="fc bfc" id="L741" title="All 2 branches covered.">        for (File pom : allPoms) {</span>
             try {
-<span class="fc" id="L669">                PomModel model = PomModel.parse(pom.toPath());</span>
-<span class="fc" id="L670">                String content = model.content();</span>
-<span class="fc" id="L671">                String updated = content;</span>
+<span class="fc" id="L743">                PomModel model = PomModel.parse(pom.toPath());</span>
+<span class="fc" id="L744">                String content = model.content();</span>
+<span class="fc" id="L745">                String updated = content;</span>
 
                 // Strip qualified properties
-<span class="fc bfc" id="L674" title="All 2 branches covered.">                for (var entry : model.properties().entrySet()) {</span>
-<span class="fc" id="L675">                    String value = entry.getValue();</span>
-<span class="fc bfc" id="L676" title="All 2 branches covered.">                    if (containsBranchQualifier(value, qualifier)) {</span>
-<span class="fc" id="L677">                        String base = stripQualifier(value, qualifier);</span>
-<span class="fc" id="L678">                        updated = PomModel.updateProperty(</span>
-<span class="fc" id="L679">                                updated, entry.getKey(), base);</span>
-<span class="fc" id="L680">                        log.debug(&quot;    property &quot; + entry.getKey()</span>
+<span class="fc bfc" id="L748" title="All 2 branches covered.">                for (var entry : model.properties().entrySet()) {</span>
+<span class="fc" id="L749">                    String value = entry.getValue();</span>
+<span class="fc bfc" id="L750" title="All 2 branches covered.">                    if (containsBranchQualifier(value, qualifier)) {</span>
+<span class="fc" id="L751">                        String base = stripQualifier(value, qualifier);</span>
+<span class="fc" id="L752">                        updated = PomModel.updateProperty(</span>
+<span class="fc" id="L753">                                updated, entry.getKey(), base);</span>
+<span class="fc" id="L754">                        log.debug(&quot;    property &quot; + entry.getKey()</span>
                                 + &quot;: &quot; + value + &quot; → &quot; + base
-<span class="fc" id="L682">                                + &quot; in &quot; + pom.getName());</span>
+<span class="fc" id="L756">                                + &quot; in &quot; + pom.getName());</span>
                     }
-<span class="fc" id="L684">                }</span>
+<span class="fc" id="L758">                }</span>
 
                 // Strip qualified dependencies (including BOM imports)
-<span class="fc bfc" id="L687" title="All 2 branches covered.">                for (var dep : model.allDependencies()) {</span>
-<span class="fc" id="L688">                    String version = dep.getVersion();</span>
-<span class="fc bfc" id="L689" title="All 2 branches covered.">                    if (containsBranchQualifier(version, qualifier)) {</span>
-<span class="fc" id="L690">                        String base = stripQualifier(version, qualifier);</span>
-<span class="fc" id="L691">                        updated = PomModel.updateDependencyVersion(</span>
-<span class="fc" id="L692">                                updated, dep.getGroupId(),</span>
-<span class="fc" id="L693">                                dep.getArtifactId(), base);</span>
-<span class="fc" id="L694">                        log.debug(&quot;    dependency &quot; + dep.getGroupId()</span>
-<span class="fc" id="L695">                                + &quot;:&quot; + dep.getArtifactId()</span>
+<span class="fc bfc" id="L761" title="All 2 branches covered.">                for (var dep : model.allDependencies()) {</span>
+<span class="fc" id="L762">                    String version = dep.getVersion();</span>
+<span class="fc bfc" id="L763" title="All 2 branches covered.">                    if (containsBranchQualifier(version, qualifier)) {</span>
+<span class="fc" id="L764">                        String base = stripQualifier(version, qualifier);</span>
+<span class="fc" id="L765">                        updated = PomModel.updateDependencyVersion(</span>
+<span class="fc" id="L766">                                updated, dep.getGroupId(),</span>
+<span class="fc" id="L767">                                dep.getArtifactId(), base);</span>
+<span class="fc" id="L768">                        log.debug(&quot;    dependency &quot; + dep.getGroupId()</span>
+<span class="fc" id="L769">                                + &quot;:&quot; + dep.getArtifactId()</span>
                                 + &quot;: &quot; + version + &quot; → &quot; + base
-<span class="fc" id="L697">                                + &quot; in &quot; + pom.getName());</span>
+<span class="fc" id="L771">                                + &quot; in &quot; + pom.getName());</span>
                     }
-<span class="fc" id="L699">                }</span>
+<span class="fc" id="L773">                }</span>
 
                 // Strip qualified parent version (#241: match full GA)
-<span class="fc" id="L702">                var parent = model.parent();</span>
-<span class="fc bfc" id="L703" title="All 2 branches covered.">                if (parent != null</span>
-<span class="pc bpc" id="L704" title="1 of 2 branches missed.">                        &amp;&amp; containsBranchQualifier(parent.getVersion(), qualifier)) {</span>
-<span class="nc" id="L705">                    String base = stripQualifier(parent.getVersion(), qualifier);</span>
-<span class="nc" id="L706">                    updated = PomModel.updateParentVersion(</span>
-<span class="nc" id="L707">                            updated, parent.getGroupId(),</span>
-<span class="nc" id="L708">                            parent.getArtifactId(), base);</span>
-<span class="nc" id="L709">                    log.debug(&quot;    parent &quot; + parent.getGroupId() + &quot;:&quot;</span>
-<span class="nc" id="L710">                            + parent.getArtifactId()</span>
-<span class="nc" id="L711">                            + &quot;: &quot; + parent.getVersion() + &quot; → &quot; + base</span>
-<span class="nc" id="L712">                            + &quot; in &quot; + pom.getName());</span>
+<span class="fc" id="L776">                var parent = model.parent();</span>
+<span class="fc bfc" id="L777" title="All 2 branches covered.">                if (parent != null</span>
+<span class="pc bpc" id="L778" title="1 of 2 branches missed.">                        &amp;&amp; containsBranchQualifier(parent.getVersion(), qualifier)) {</span>
+<span class="nc" id="L779">                    String base = stripQualifier(parent.getVersion(), qualifier);</span>
+<span class="nc" id="L780">                    updated = PomModel.updateParentVersion(</span>
+<span class="nc" id="L781">                            updated, parent.getGroupId(),</span>
+<span class="nc" id="L782">                            parent.getArtifactId(), base);</span>
+<span class="nc" id="L783">                    log.debug(&quot;    parent &quot; + parent.getGroupId() + &quot;:&quot;</span>
+<span class="nc" id="L784">                            + parent.getArtifactId()</span>
+<span class="nc" id="L785">                            + &quot;: &quot; + parent.getVersion() + &quot; → &quot; + base</span>
+<span class="nc" id="L786">                            + &quot; in &quot; + pom.getName());</span>
                 }
 
-<span class="fc bfc" id="L715" title="All 2 branches covered.">                if (!updated.equals(content)) {</span>
-<span class="fc" id="L716">                    Files.writeString(pom.toPath(), updated, StandardCharsets.UTF_8);</span>
+<span class="fc bfc" id="L789" title="All 2 branches covered.">                if (!updated.equals(content)) {</span>
+<span class="fc" id="L790">                    Files.writeString(pom.toPath(), updated, StandardCharsets.UTF_8);</span>
                 }
-<span class="nc" id="L718">            } catch (IOException e) {</span>
-<span class="nc" id="L719">                log.warn(&quot;    Could not strip versions in &quot; + pom + &quot;: &quot;</span>
-<span class="nc" id="L720">                        + e.getMessage());</span>
-<span class="fc" id="L721">            }</span>
-<span class="fc" id="L722">        }</span>
-<span class="fc" id="L723">    }</span>
+<span class="nc" id="L792">            } catch (IOException e) {</span>
+<span class="nc" id="L793">                log.warn(&quot;    Could not strip versions in &quot; + pom + &quot;: &quot;</span>
+<span class="nc" id="L794">                        + e.getMessage());</span>
+<span class="fc" id="L795">            }</span>
+<span class="fc" id="L796">        }</span>
+<span class="fc" id="L797">    }</span>
 
     static void setAllVersions(File dir, String oldVersion, String newVersion,
                                  Log log) throws MojoException {
-<span class="fc" id="L727">        File pom = new File(dir, &quot;pom.xml&quot;);</span>
-<span class="fc" id="L728">        ReleaseSupport.setPomVersion(pom, oldVersion, newVersion);</span>
+<span class="fc" id="L801">        File pom = new File(dir, &quot;pom.xml&quot;);</span>
+<span class="fc" id="L802">        ReleaseSupport.setPomVersion(pom, oldVersion, newVersion);</span>
 
-<span class="fc" id="L730">        List&lt;File&gt; allPoms = ReleaseSupport.findPomFiles(dir);</span>
-<span class="fc bfc" id="L731" title="All 2 branches covered.">        for (File subPom : allPoms) {</span>
-<span class="fc bfc" id="L732" title="All 2 branches covered.">            if (subPom.equals(pom)) continue;</span>
+<span class="fc" id="L804">        List&lt;File&gt; allPoms = ReleaseSupport.findPomFiles(dir);</span>
+<span class="fc bfc" id="L805" title="All 2 branches covered.">        for (File subPom : allPoms) {</span>
+<span class="fc bfc" id="L806" title="All 2 branches covered.">            if (subPom.equals(pom)) continue;</span>
             try {
-<span class="fc" id="L734">                String content = Files.readString(subPom.toPath(), StandardCharsets.UTF_8);</span>
-<span class="pc bpc" id="L735" title="1 of 2 branches missed.">                if (content.contains(&quot;&lt;version&gt;&quot; + oldVersion + &quot;&lt;/version&gt;&quot;)) {</span>
-<span class="fc" id="L736">                    String updated = content.replace(</span>
+<span class="fc" id="L808">                String content = Files.readString(subPom.toPath(), StandardCharsets.UTF_8);</span>
+<span class="pc bpc" id="L809" title="1 of 2 branches missed.">                if (content.contains(&quot;&lt;version&gt;&quot; + oldVersion + &quot;&lt;/version&gt;&quot;)) {</span>
+<span class="fc" id="L810">                    String updated = content.replace(</span>
                             &quot;&lt;version&gt;&quot; + oldVersion + &quot;&lt;/version&gt;&quot;,
                             &quot;&lt;version&gt;&quot; + newVersion + &quot;&lt;/version&gt;&quot;);
-<span class="fc" id="L739">                    Files.writeString(subPom.toPath(), updated, StandardCharsets.UTF_8);</span>
+<span class="fc" id="L813">                    Files.writeString(subPom.toPath(), updated, StandardCharsets.UTF_8);</span>
                 }
-<span class="nc" id="L741">            } catch (IOException e) {</span>
-<span class="nc" id="L742">                log.warn(&quot;    Could not update &quot; + subPom + &quot;: &quot; + e.getMessage());</span>
-<span class="fc" id="L743">            }</span>
-<span class="fc" id="L744">        }</span>
-<span class="fc" id="L745">    }</span>
+<span class="nc" id="L815">            } catch (IOException e) {</span>
+<span class="nc" id="L816">                log.warn(&quot;    Could not update &quot; + subPom + &quot;: &quot; + e.getMessage());</span>
+<span class="fc" id="L817">            }</span>
+<span class="fc" id="L818">        }</span>
+<span class="fc" id="L819">    }</span>
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

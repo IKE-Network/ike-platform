@@ -104,6 +104,102 @@ class DotGraphSupportTest {
                 .contains("\"app\" -> \"lib2\"");
     }
 
+    // ── Kroki encoding + report section (#533) ────────────────────
+
+    @Test
+    void krokiEncode_roundTripsThroughDeflateBase64() throws Exception {
+        String dot = "digraph G { a -> b; }\n";
+        String encoded = DotGraphSupport.krokiEncode(dot);
+
+        // URL-safe base64 (no '+' or '/' or '=')
+        assertThat(encoded)
+                .as("Kroki path segments use URL-safe base64 without padding")
+                .doesNotContain("+")
+                .doesNotContain("/")
+                .doesNotContain("=");
+
+        // Decode and inflate must yield the original DOT verbatim.
+        byte[] raw = java.util.Base64.getUrlDecoder().decode(encoded);
+        java.util.zip.Inflater inflater = new java.util.zip.Inflater();
+        inflater.setInput(raw);
+        byte[] out = new byte[1024];
+        int n = inflater.inflate(out);
+        inflater.end();
+        String decoded = new String(out, 0, n, java.nio.charset.StandardCharsets.UTF_8);
+        assertThat(decoded)
+                .as("DOT source must round-trip through deflate + base64")
+                .isEqualTo(dot);
+    }
+
+    @Test
+    void krokiSvgUrl_includesGraphvizPathAndEncodedSource() {
+        String url = DotGraphSupport.krokiSvgUrl(
+                "digraph G {}", "https://kroki.io");
+        assertThat(url)
+                .startsWith("https://kroki.io/graphviz/svg/")
+                .doesNotContain("//graphviz");
+    }
+
+    @Test
+    void krokiSvgUrl_stripsTrailingSlashFromBase() {
+        String withSlash = DotGraphSupport.krokiSvgUrl(
+                "digraph G {}", "https://kroki.example.com/");
+        String withoutSlash = DotGraphSupport.krokiSvgUrl(
+                "digraph G {}", "https://kroki.example.com");
+        assertThat(withSlash).isEqualTo(withoutSlash);
+    }
+
+    @Test
+    void buildDotReportSection_withKroki_emitsImageAndCollapsedSource() {
+        Manifest manifest = ManifestReader.read(new StringReader("""
+                schema-version: "1.0"
+                defaults:
+                  branch: main
+                subprojects:
+                  alpha:
+                    repo: https://example.com/alpha.git
+                    version: "1.0.0"
+                """));
+
+        String section = DotGraphSupport.buildDotReportSection(
+                new WorkspaceGraph(manifest), "https://kroki.io");
+
+        assertThat(section)
+                .as("Kroki image line so GitHub/IDE/markdown viewers render the graph")
+                .contains("![workspace dependency graph](https://kroki.io/graphviz/svg/");
+        assertThat(section)
+                .as("source remains accessible to IDE plugins and offline readers")
+                .contains("<details><summary>DOT source</summary>")
+                .contains("```dot\n")
+                .contains("</details>");
+    }
+
+    @Test
+    void buildDotReportSection_emptyKroki_falsBackToBareDotBlock() {
+        Manifest manifest = ManifestReader.read(new StringReader("""
+                schema-version: "1.0"
+                defaults:
+                  branch: main
+                subprojects:
+                  alpha:
+                    repo: https://example.com/alpha.git
+                    version: "1.0.0"
+                """));
+
+        String empty = DotGraphSupport.buildDotReportSection(
+                new WorkspaceGraph(manifest), "");
+        String nullBase = DotGraphSupport.buildDotReportSection(
+                new WorkspaceGraph(manifest), null);
+
+        for (String s : List.of(empty, nullBase)) {
+            assertThat(s)
+                    .as("air-gapped path keeps the raw DOT block without a Kroki image")
+                    .doesNotContain("kroki.io")
+                    .doesNotContain("![workspace dependency graph]")
+                    .startsWith("```dot\n");
+        }
+    }
+
     // ── buildDotReportBlock (IKE-Network/ike-issues#406) ─────────────
 
     @Test

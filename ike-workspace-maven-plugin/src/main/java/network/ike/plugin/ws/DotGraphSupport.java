@@ -3,9 +3,13 @@ package network.ike.plugin.ws;
 import network.ike.workspace.Subproject;
 import network.ike.workspace.WorkspaceGraph;
 
+import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.zip.Deflater;
 
 /**
  * Graphviz DOT rendering for the workspace dependency graph.
@@ -69,6 +73,87 @@ final class DotGraphSupport {
      */
     static String buildDotReportBlock(WorkspaceGraph graph) {
         return "```dot\n" + dotFromGraph(graph) + "```\n";
+    }
+
+    /**
+     * Build the dependency-graph markdown section for a workspace
+     * report. Renders a Kroki-served SVG image for any markdown
+     * viewer that loads images (GitHub web, VS Code preview, Claude
+     * Code's session viewer) and keeps the DOT source under a
+     * collapsible {@code <details>} block for the IntelliJ Kroki /
+     * Graphviz IDE plugins and for offline source-of-truth. Replaces
+     * the bare {@code ```dot} fence that most markdown renderers
+     * showed as a wall of unformatted source (#533).
+     *
+     * @param graph     the workspace graph
+     * @param krokiBase Kroki server base URL (e.g. {@code https://kroki.io}),
+     *                  trailing slash optional. When {@code null} or blank
+     *                  the rendered image is omitted and only the DOT
+     *                  block remains, matching the pre-#533 shape — useful
+     *                  for fully air-gapped runs.
+     * @return markdown for the graph section, newline-terminated
+     */
+    static String buildDotReportSection(WorkspaceGraph graph, String krokiBase) {
+        String dot = dotFromGraph(graph);
+        StringBuilder out = new StringBuilder();
+        if (krokiBase != null && !krokiBase.isBlank()) {
+            out.append("![workspace dependency graph](")
+                    .append(krokiSvgUrl(dot, krokiBase))
+                    .append(")\n\n");
+            out.append("<details><summary>DOT source</summary>\n\n");
+            out.append("```dot\n").append(dot).append("```\n\n");
+            out.append("</details>\n");
+        } else {
+            out.append("```dot\n").append(dot).append("```\n");
+        }
+        return out.toString();
+    }
+
+    /**
+     * Encode a DOT source string as a Kroki SVG image URL.
+     *
+     * <p>Kroki accepts the diagram source as a zlib-deflated, URL-safe-
+     * base64-encoded path segment, so the URL itself carries the
+     * complete diagram — no client-side state, no server-side
+     * persistence. See <a href="https://docs.kroki.io/kroki/setup/encode-diagram/">
+     * the Kroki encoding docs</a>.
+     *
+     * @param dot       Graphviz DOT source
+     * @param krokiBase Kroki server base URL (trailing slash optional);
+     *                  e.g. {@code https://kroki.io} or an internal
+     *                  self-hosted endpoint
+     * @return full image URL ready to drop into a markdown
+     *         {@code ![alt](...)} link
+     */
+    static String krokiSvgUrl(String dot, String krokiBase) {
+        String base = krokiBase.endsWith("/")
+                ? krokiBase.substring(0, krokiBase.length() - 1)
+                : krokiBase;
+        return base + "/graphviz/svg/" + krokiEncode(dot);
+    }
+
+    /**
+     * Encode a diagram source string the way Kroki expects: zlib
+     * deflate at best compression, then URL-safe base64 without
+     * padding.
+     *
+     * @param source diagram source text
+     * @return encoded path segment for the Kroki URL
+     */
+    static String krokiEncode(String source) {
+        byte[] input = source.getBytes(StandardCharsets.UTF_8);
+        Deflater deflater = new Deflater(Deflater.BEST_COMPRESSION);
+        deflater.setInput(input);
+        deflater.finish();
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        byte[] buf = new byte[1024];
+        while (!deflater.finished()) {
+            int n = deflater.deflate(buf);
+            out.write(buf, 0, n);
+        }
+        deflater.end();
+        return Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(out.toByteArray());
     }
 
     /**

@@ -263,6 +263,33 @@ public class VcsOperations {
     }
 
     /**
+     * Count commits ahead of and behind the current branch's upstream
+     * tracking branch ({@code @{u}}). Returns empty when the branch
+     * has no upstream configured (no {@code branch.<name>.remote}),
+     * which is common in fresh clones before {@code git push -u}.
+     *
+     * @param dir the repository root directory
+     * @return {@code [ahead, behind]} commit counts; empty when no
+     *         upstream tracking branch is configured or git fails
+     */
+    public static java.util.Optional<int[]> aheadBehindUpstream(File dir) {
+        try {
+            // --left-right with HEAD...@{u} returns one line per commit;
+            // --count collapses into "ahead\tbehind".
+            String output = capture(dir, "git", "rev-list",
+                    "--left-right", "--count", "HEAD...@{u}");
+            if (output.isEmpty()) return java.util.Optional.empty();
+            String[] parts = output.split("\\s+");
+            if (parts.length != 2) return java.util.Optional.empty();
+            return java.util.Optional.of(new int[]{
+                    Integer.parseInt(parts[0]),
+                    Integer.parseInt(parts[1])});
+        } catch (MojoException | NumberFormatException e) {
+            return java.util.Optional.empty();
+        }
+    }
+
+    /**
      *
      * @param dir  the repository root directory
      * @param base the starting ref (exclusive)

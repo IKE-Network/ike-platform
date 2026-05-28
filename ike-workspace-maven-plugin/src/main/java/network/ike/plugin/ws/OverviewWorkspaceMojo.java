@@ -1,5 +1,6 @@
 package network.ike.plugin.ws;
 
+import network.ike.plugin.ReleaseSupport;
 import network.ike.workspace.Subproject;
 import network.ike.workspace.Dependency;
 import network.ike.workspace.WorkspaceGraph;
@@ -13,6 +14,7 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -48,6 +50,17 @@ public class OverviewWorkspaceMojo extends AbstractWorkspaceMojo {
     /** Output format: "overview" (default) or "dot" (Graphviz DOT). */
     @Parameter(property = "format", defaultValue = "overview")
     String format;
+
+    /**
+     * Kroki server base URL used to render the dependency graph in
+     * the markdown report (#533). Defaults to {@code https://kroki.io}.
+     * Pass an empty string to disable Kroki rendering and emit only
+     * the raw DOT block (useful for fully air-gapped runs).
+     * Self-hosted Kroki users override with their endpoint.
+     */
+    @Parameter(property = "ws.overview.krokiUrl",
+            defaultValue = "https://kroki.io")
+    String krokiUrl;
 
     @Override
     protected WorkspaceReportSpec runGoal() throws MojoException {
@@ -107,8 +120,8 @@ public class OverviewWorkspaceMojo extends AbstractWorkspaceMojo {
         getLog().info("");
         getLog().info("  Status");
         getLog().info("  ──────────────────────────────────────────────────────");
-        getLog().info(String.format("  %-24s %-24s %-8s %s",
-                "COMPONENT", "BRANCH", "SHA", ""));
+        getLog().info(String.format("  %-24s %-16s %-24s %-8s %s",
+                "COMPONENT", "VERSION", "BRANCH", "SHA", ""));
 
         List<String> modifiedComponents = new ArrayList<>();
         List<String[]> statusRows = new ArrayList<>();
@@ -121,9 +134,9 @@ public class OverviewWorkspaceMojo extends AbstractWorkspaceMojo {
 
             if (!dir.exists()) {
                 notCloned++;
-                getLog().info(String.format("  %-24s %-24s %-8s %s",
-                        name, "—", "—", "not cloned"));
-                statusRows.add(new String[]{name, "—", "—", "not cloned"});
+                getLog().info(String.format("  %-24s %-16s %-24s %-8s %s",
+                        name, "—", "—", "—", "not cloned"));
+                statusRows.add(new String[]{name, "—", "—", "—", "not cloned"});
                 continue;
             }
 
@@ -131,14 +144,53 @@ public class OverviewWorkspaceMojo extends AbstractWorkspaceMojo {
             String branch = gitBranch(dir);
             String sha = gitShortSha(dir);
             String status = gitStatus(dir);
+            // #533: POM version surfaces stale -SNAPSHOTs, missed
+            // version-reset on a feature branch, etc.
+            String version = readPomVersion(dir);
+
+            // #533: also surface ahead/behind against the upstream
+            // tracking branch ({@code @{u}}), so unpushed commits and
+            // unfetched remote work both show up in the Status column
+            // rather than hiding behind a "clean" tree.
+            Optional<int[]> aheadBehind = VcsOperations.aheadBehindUpstream(dir);
 
             String marker;
-            if (status.isEmpty()) {
+            String statusText;
+            boolean clean = status.isEmpty();
+            if (clean) {
                 marker = Ansi.green("✓");
+                statusText = "clean";
             } else {
                 long count = status.lines().count();
                 marker = Ansi.red("✗") + " " + count + " changed";
+                statusText = "uncommitted (" + count + " files)";
                 modifiedComponents.add(name);
+            }
+            if (aheadBehind.isPresent()) {
+                int ahead = aheadBehind.get()[0];
+                int behind = aheadBehind.get()[1];
+                if (ahead > 0 || behind > 0) {
+                    StringBuilder delta = new StringBuilder();
+                    if (ahead > 0) delta.append(ahead).append(" ahead");
+                    if (behind > 0) {
+                        if (delta.length() > 0) delta.append(", ");
+                        delta.append(behind).append(" behind");
+                    }
+                    statusText += "; " + delta + " origin";
+                    // When the tree itself is clean, promote the
+                    // ahead/behind delta to the CLI marker so the
+                    // operator notices unpushed or unfetched work
+                    // without scanning the status column.
+                    if (clean) {
+                        if (ahead > 0 && behind == 0) {
+                            marker = Ansi.yellow("↑") + " " + ahead + " unpushed";
+                        } else if (behind > 0 && ahead == 0) {
+                            marker = Ansi.yellow("↓") + " " + behind + " unfetched";
+                        } else {
+                            marker = Ansi.yellow("⇅") + " " + ahead + "↑/" + behind + "↓";
+                        }
+                    }
+                }
             }
 
             String branchCol = branch;
@@ -146,11 +198,9 @@ public class OverviewWorkspaceMojo extends AbstractWorkspaceMojo {
                 branchCol = branch + Ansi.yellow(" ⚠");
             }
 
-            getLog().info(String.format("  %-24s %-24s %-8s %s",
-                    name, branchCol, sha, marker));
-            statusRows.add(new String[]{name, branch, sha,
-                    status.isEmpty() ? "clean"
-                            : "uncommitted (" + status.lines().count() + " files)"});
+            getLog().info(String.format("  %-24s %-16s %-24s %-8s %s",
+                    name, version, branchCol, sha, marker));
+            statusRows.add(new String[]{name, version, branch, sha, statusText});
         }
 
         getLog().info("");
@@ -296,15 +346,18 @@ public class OverviewWorkspaceMojo extends AbstractWorkspaceMojo {
 
         // GraphViz dependency graph — IKE-DIAGRAMS.md mandates
         // GraphViz for dependency graphs (IKE-Network/ike-issues#406).
+        // #533: Render via Kroki + collapsed DOT source, since most
+        // markdown viewers (GitHub web, VS Code preview, Claude Code's
+        // session viewer) showed the bare ```dot``` block as raw text.
         report.section("Dependency Graph")
                 .table(List.of("#", "Subproject", "Dependencies"), graphRows)
-                .raw(DotGraphSupport.buildDotReportBlock(graph));
+                .raw(DotGraphSupport.buildDotReportSection(graph, krokiUrl));
 
         report.section("Status")
                 .paragraph(cloned + " cloned, " + notCloned + " not cloned, "
                         + modified + " with uncommitted changes.")
-                .table(List.of("Subproject", "Branch", "SHA", "Status"),
-                        statusRows);
+                .table(List.of("Subproject", "Version", "Branch", "SHA",
+                        "Status"), statusRows);
 
         if (!divergenceRows.isEmpty()) {
             report.section("Feature Branch Divergence")
@@ -318,6 +371,27 @@ public class OverviewWorkspaceMojo extends AbstractWorkspaceMojo {
         }
 
         return report.build();
+    }
+
+    /**
+     * Read the {@code <version>} from {@code <dir>/pom.xml}. Returns
+     * {@code "—"} if the POM is missing or unreadable so the overview
+     * never fails on a partially-cloned subproject. The POM is the
+     * source of truth for #533 — the workspace.yaml's version field
+     * can drift if a feature branch was version-bumped but the
+     * manifest didn't get a corresponding update.
+     *
+     * @param dir subproject directory
+     * @return the POM {@code <version>} or {@code "—"} when unavailable
+     */
+    private String readPomVersion(File dir) {
+        File pom = new File(dir, "pom.xml");
+        if (!pom.isFile()) return "—";
+        try {
+            return ReleaseSupport.readPomVersion(pom);
+        } catch (MojoException e) {
+            return "—";
+        }
     }
 
     // ── DOT output ──────────────────────────────────────────────────

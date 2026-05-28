@@ -1,0 +1,158 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>WsCheckpointPublishMojo.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">WsCheckpointPublishMojo.java</span></div><h1>WsCheckpointPublishMojo.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.plugin.ReleaseSupport;
+import network.ike.plugin.ws.preflight.Preflight;
+import network.ike.plugin.ws.preflight.PreflightCondition;
+import network.ike.plugin.ws.preflight.PreflightContext;
+import network.ike.plugin.ws.vcs.VcsOperations;
+import network.ike.workspace.WorkspaceGraph;
+
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+
+import java.io.File;
+import java.util.List;
+
+/**
+ * Execute a workspace checkpoint with auto-alignment.
+ *
+ * &lt;p&gt;This is the {@code -publish} counterpart of {@code ws:checkpoint}
+ * (which defaults to a draft preview). The goal's flow is:
+ * &lt;ol&gt;
+ *   &lt;li&gt;Verify the working trees are clean (user has nothing uncommitted).&lt;/li&gt;
+ *   &lt;li&gt;Run {@code ws:align-publish} to apply inter-subproject version
+ *       alignment.&lt;/li&gt;
+ *   &lt;li&gt;Commit any tracked changes the alignment step produced under a
+ *       goal-owned message so that the subsequent preflight inside the
+ *       superclass sees a clean tree (IKE-Network/ike-issues#537 — the
+ *       preflight must not fail on changes the goal itself produced).&lt;/li&gt;
+ *   &lt;li&gt;Delegate to {@link WsCheckpointDraftMojo} with {@code publish = true}
+ *       to do the actual tagging and manifest write.&lt;/li&gt;
+ * &lt;/ol&gt;
+ *
+ * &lt;p&gt;Usage: {@code mvn ws:checkpoint-publish}
+ *
+ * @see WsCheckpointDraftMojo
+ */
+@Mojo(name = &quot;checkpoint-publish&quot;, projectRequired = false, aggregator = true)
+public class WsCheckpointPublishMojo extends WsCheckpointDraftMojo {
+
+    /** Commit message used for the auto-aligned state, per #537. */
+    static final String ALIGNMENT_COMMIT_MESSAGE =
+            &quot;workspace: pre-checkpoint alignment&quot;;
+
+    /** Creates this goal instance. */
+<span class="fc" id="L45">    public WsCheckpointPublishMojo() {}</span>
+
+    @Override
+    protected WorkspaceReportSpec runGoal() throws MojoException {
+<span class="fc" id="L49">        publish = true;</span>
+
+        // Preflight up front so we know any subsequent dirtiness came
+        // from our own auto-alignment step, not from work the user
+        // forgot to commit. This is the first half of the #537 fix —
+        // it lets us safely auto-commit alignment output without risk
+        // of sweeping user-staged work into a goal-owned commit.
+<span class="fc" id="L56">        requireCleanUserState();</span>
+
+<span class="fc" id="L58">        autoAlign();</span>
+
+        // Second half of #537: alignment can leave the workspace dirty
+        // (modified POMs for actual alignment changes, or a self-healed
+        // .gitignore from WorkspaceReport.write). Without this commit,
+        // the preflight inside super.runGoal() trips on changes we just
+        // produced and the goal fails itself. Commit them under a
+        // goal-owned message so the checkpoint records the aligned state.
+<span class="fc" id="L66">        commitAlignmentSideEffects();</span>
+
+<span class="fc" id="L68">        return super.runGoal();</span>
+    }
+
+    /**
+     * Run {@code ws:align-publish} as a subprocess against the
+     * workspace root. Overridable from tests so the regression
+     * coverage for #537 can simulate alignment side effects without
+     * invoking a nested Maven build.
+     *
+     * @throws MojoException if the subprocess setup fails (subprocess
+     *                       failures are caught and logged as warnings —
+     *                       the checkpoint proceeds regardless)
+     */
+    protected void autoAlign() throws MojoException {
+<span class="fc" id="L82">        File root = workspaceRoot();</span>
+<span class="fc" id="L83">        String mvn = WsReleaseDraftMojo.resolveMvnCommand(root);</span>
+<span class="fc" id="L84">        getLog().info(&quot;Auto-aligning workspace versions...&quot;);</span>
+        try {
+<span class="fc" id="L86">            ReleaseSupport.exec(root, getLog(), mvn,</span>
+<span class="fc" id="L87">                    WsGoal.ALIGN_PUBLISH.qualified(), &quot;-B&quot;);</span>
+<span class="nc" id="L88">        } catch (MojoException e) {</span>
+<span class="nc" id="L89">            getLog().warn(&quot;Auto-alignment completed with warnings: &quot;</span>
+<span class="nc" id="L90">                    + e.getMessage());</span>
+<span class="fc" id="L91">        }</span>
+<span class="fc" id="L92">    }</span>
+
+    /**
+     * Run the working-tree-clean preflight against user state before
+     * we touch the workspace. Same condition the superclass enforces
+     * inside its own {@code runGoal}; running it here ensures that any
+     * dirtiness observed after {@link #autoAlign()} originated from the
+     * goal's own work rather than from work the user forgot to commit.
+     *
+     * @throws MojoException if any working tree has uncommitted changes
+     */
+    private void requireCleanUserState() throws MojoException {
+<span class="fc" id="L104">        WorkspaceGraph graph = loadGraph();</span>
+<span class="fc" id="L105">        File root = workspaceRoot();</span>
+<span class="fc" id="L106">        Preflight.of(</span>
+<span class="fc" id="L107">                List.of(PreflightCondition.WORKING_TREE_CLEAN),</span>
+<span class="fc" id="L108">                PreflightContext.of(root, graph, graph.topologicalSort()))</span>
+<span class="fc" id="L109">                .requirePassed(WsGoal.CHECKPOINT_PUBLISH);</span>
+<span class="fc" id="L110">    }</span>
+
+    /**
+     * Commit any tracked-but-uncommitted changes left behind by
+     * {@link #autoAlign()} under {@link #ALIGNMENT_COMMIT_MESSAGE}.
+     * Iterates the workspace root and each subproject, no-op when the
+     * tree is clean. Per-subproject failures are reported as warnings
+     * so that one bad subproject doesn't abort the checkpoint (the
+     * subsequent preflight will still fail loudly if anything remains
+     * dirty).
+     */
+    private void commitAlignmentSideEffects() {
+<span class="fc" id="L122">        File root = workspaceRoot();</span>
+        WorkspaceGraph graph;
+        try {
+<span class="fc" id="L125">            graph = loadGraph();</span>
+<span class="nc" id="L126">        } catch (MojoException e) {</span>
+<span class="nc" id="L127">            getLog().warn(&quot;Could not load graph for pre-checkpoint commit: &quot;</span>
+<span class="nc" id="L128">                    + e.getMessage());</span>
+<span class="nc" id="L129">            return;</span>
+<span class="fc" id="L130">        }</span>
+
+<span class="fc bfc" id="L132" title="All 2 branches covered.">        if (new File(root, &quot;.git&quot;).exists()) {</span>
+<span class="fc" id="L133">            commitIfDirty(root, &quot;workspace root&quot;);</span>
+        }
+<span class="pc bpc" id="L135" title="1 of 2 branches missed.">        for (String name : graph.topologicalSort()) {</span>
+<span class="nc" id="L136">            File dir = new File(root, name);</span>
+<span class="nc bnc" id="L137" title="All 2 branches missed.">            if (new File(dir, &quot;.git&quot;).exists()) {</span>
+<span class="nc" id="L138">                commitIfDirty(dir, name);</span>
+            }
+<span class="nc" id="L140">        }</span>
+<span class="fc" id="L141">    }</span>
+
+    private void commitIfDirty(File dir, String label) {
+<span class="pc bpc" id="L144" title="1 of 2 branches missed.">        if (VcsOperations.isClean(dir)) {</span>
+<span class="nc" id="L145">            return;</span>
+        }
+        try {
+<span class="fc" id="L148">            VcsOperations.addAll(dir, getLog());</span>
+<span class="fc" id="L149">            VcsOperations.commit(dir, getLog(), ALIGNMENT_COMMIT_MESSAGE);</span>
+<span class="fc" id="L150">            getLog().info(&quot;  Auto-committed pre-checkpoint alignment in &quot;</span>
+                    + label);
+<span class="nc" id="L152">        } catch (MojoException e) {</span>
+<span class="nc" id="L153">            getLog().warn(&quot;Could not auto-commit pre-checkpoint alignment in &quot;</span>
+<span class="nc" id="L154">                    + label + &quot;: &quot; + e.getMessage());</span>
+<span class="fc" id="L155">        }</span>
+<span class="fc" id="L156">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

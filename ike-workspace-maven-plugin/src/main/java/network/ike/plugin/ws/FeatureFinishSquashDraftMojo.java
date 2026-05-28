@@ -68,8 +68,12 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
     boolean keepBranch;
 
     /**
-     * Squash commit message. Required — draft warns that publish will
-     * fail if missing; publish refuses before any mutation (see #160).
+     * Squash commit message. Optional — when omitted, an auto-generated
+     * message is built from the feature-branch commit history of every
+     * eligible subproject (see {@link FeatureFinishSupport#generateFeatureMessage},
+     * matching the merge-variant behaviour and the {@code git merge
+     * --squash} convention). Pass {@code -Dmessage="..."} to override.
+     * Fixes #160 (pre-validation) and #531 (auto-generation).
      */
     @Parameter(property = "message")
     String message;
@@ -87,15 +91,12 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
 
     @Override
     protected WorkspaceReportSpec runGoal() throws MojoException {
-        boolean draft = !publish;
-
         if (!isWorkspaceMode()) {
             if (feature == null || feature.isBlank()) {
                 feature = requireParam(feature, "feature",
                         "Feature to squash-merge (without feature/ prefix)");
             }
             validateFeatureName(feature);
-            validateMessage(draft);
             return executeBareMode("feature/" + feature);
         }
 
@@ -107,33 +108,13 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
                     workspaceRoot(), all, this, getLog());
         }
         validateFeatureName(feature);
-        validateMessage(draft);
+        // No pre-validation of message: per #531 the squash commit
+        // message is now auto-generated from feature-branch commit
+        // history when -Dmessage is missing, matching the merge variant
+        // and git's own `git merge --squash` ergonomics. The #160 NPE
+        // it used to protect is gone — generateFeatureMessage always
+        // returns a non-blank string.
         return executeWorkspaceMode("feature/" + feature);
-    }
-
-    /**
-     * Ensure {@code -Dmessage=...} is supplied before any mutation path
-     * runs. In draft mode this emits a warning (so the plan still
-     * renders); in publish mode it aborts before any VCS operation
-     * touches a subproject. Fixes #160 — null message previously
-     * propagated into {@code git commit -m} and NPE'd mid-operation
-     * on the first subproject, leaving partial state.
-     *
-     * @param draft whether we're in draft (warn) or publish (throw) mode
-     * @throws MojoException in publish mode when message is missing
-     */
-    private void validateMessage(boolean draft) throws MojoException {
-        if (message != null && !message.isBlank()) return;
-        String detail = WsGoal.FEATURE_FINISH_SQUASH_PUBLISH.qualified()
-                + " requires -Dmessage=\"...\" — the squash commit message "
-                + "is not auto-generated.";
-        if (draft) {
-            getLog().warn("");
-            getLog().warn("  ⚠ " + detail);
-            getLog().warn("");
-        } else {
-            throw new MojoException(detail);
-        }
     }
 
     private WorkspaceReportSpec executeWorkspaceMode(String branchName) throws MojoException {
@@ -211,6 +192,18 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
         // main. See ike-issues#284.
         RefreshMainSupport.refreshOrThrow(root, eligible, targetBranch, getLog());
 
+        // #531: auto-generate the squash commit message from per-subproject
+        // feature-branch history when -Dmessage was not supplied. When the
+        // user did supply -Dmessage, generateFeatureMessage prepends it
+        // and appends the per-subproject sections below.
+        String effectiveMessage = FeatureFinishSupport.generateFeatureMessage(
+                root, eligible, branchName, targetBranch, message, getLog());
+        getLog().info("  Commit message:");
+        for (String line : effectiveMessage.split("\n")) {
+            getLog().info("    " + line);
+        }
+        getLog().info("");
+
         // Merge each subproject
         int merged = 0;
         for (String name : eligible) {
@@ -231,7 +224,7 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
             VcsOperations.mergeSquash(dir, getLog(), branchName);
 
             if (VcsOperations.hasStagedChanges(dir)) {
-                VcsOperations.commit(dir, getLog(), message);
+                VcsOperations.commit(dir, getLog(), effectiveMessage);
                 FeatureFinishSupport.verifyAndFixQualifiers(dir, branchName, getLog());
                 if (push) {
                     VcsOperations.pushIfRemoteExists(dir, getLog(), "origin", targetBranch);
@@ -280,12 +273,32 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
                 publish ? WsGoal.FEATURE_FINISH_SQUASH_PUBLISH
                         : WsGoal.FEATURE_FINISH_SQUASH_DRAFT,
                 buildSquashReport(
-                        eligible, branchName, targetBranch, merged, draft, keepBranch));
+                        eligible, branchName, targetBranch, merged, draft,
+                        keepBranch, effectiveMessage,
+                        message == null || message.isBlank()));
     }
 
+    /**
+     * Build the markdown report. When {@code messageAutoGenerated} is
+     * true the report flags the message as generated and shows the
+     * exact override command — covering the {@code -draft} actionable-
+     * remediation principle.
+     *
+     * @param components          subprojects participating in the squash
+     * @param branch              feature branch name
+     * @param target              target branch name
+     * @param merged              count of subprojects squashed (or that would be)
+     * @param isDraft             whether this is a draft preview
+     * @param kept                whether {@code -DkeepBranch=true}
+     * @param effectiveMessage    the message that will be / was used
+     * @param messageAutoGenerated whether the message was auto-built
+     *                            (no user-supplied {@code -Dmessage})
+     */
     private String buildSquashReport(List<String> components, String branch,
                                       String target, int merged,
-                                      boolean isDraft, boolean kept) {
+                                      boolean isDraft, boolean kept,
+                                      String effectiveMessage,
+                                      boolean messageAutoGenerated) {
         GoalReportBuilder report = new GoalReportBuilder();
         report.paragraph("**Branch:** `" + branch + "` → `" + target + "`  \n"
                 + "**Strategy:** squash-merge");
@@ -299,7 +312,69 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
         report.paragraph("**" + merged + " subproject(s)** "
                 + (isDraft ? "would be squash-merged" : "squash-merged")
                 + ". Branch " + (kept ? "kept" : "deleted") + ".");
+
+        report.section("Commit message");
+        report.paragraph(messageAutoGenerated
+                ? "Auto-generated from feature-branch history. Override "
+                        + "with `-Dmessage=\"...\"` if you'd prefer a different "
+                        + "subject."
+                : "Supplied via `-Dmessage`.");
+        report.codeBlock("", effectiveMessage);
+
+        if (isDraft) {
+            report.section("To publish");
+            String publishCmd = "mvn " + WsGoal.FEATURE_FINISH_SQUASH_PUBLISH.qualified()
+                    + " -Dfeature=" + (feature == null ? "<name>" : feature);
+            if (!messageAutoGenerated) {
+                publishCmd += " -Dmessage=\"" + message.replace("\"", "\\\"") + "\"";
+            }
+            if (keepBranch) publishCmd += " -DkeepBranch=true";
+            if (push) publishCmd += " -Dpush=true";
+            report.codeBlock("bash", publishCmd);
+        }
         return report.build();
+    }
+
+    /**
+     * Build the bare-mode squash commit message. With a user-supplied
+     * {@code -Dmessage} we prepend it; otherwise we build a default
+     * from the feature-branch commit subjects (matching {@code git
+     * merge --squash}'s {@code SQUASH_MSG} format). #531.
+     *
+     * @param dir          repository root
+     * @param branchName   feature branch name
+     * @param targetBranch target branch (commits are listed in
+     *                     {@code targetBranch..branchName} range)
+     * @param userMessage  the user-supplied {@code -Dmessage} or null/blank
+     * @param log          Maven logger
+     * @return non-blank commit message ready for {@code git commit -m}
+     */
+    static String buildBareSquashMessage(File dir, String branchName,
+                                          String targetBranch,
+                                          String userMessage,
+                                          org.apache.maven.api.plugin.Log log) {
+        StringBuilder sb = new StringBuilder();
+        if (userMessage != null && !userMessage.isBlank()) {
+            sb.append(userMessage).append("\n\n");
+        }
+        sb.append("Squash ").append(branchName).append(" into ")
+                .append(targetBranch).append("\n");
+        try {
+            List<String> commits = VcsOperations.commitLog(
+                    dir, targetBranch, branchName);
+            if (!commits.isEmpty()) {
+                sb.append("\n* ").append(branchName).append(" commits (")
+                        .append(commits.size()).append("):\n");
+                for (String line : commits) {
+                    String msg = line.contains(" ")
+                            ? line.substring(line.indexOf(' ') + 1) : line;
+                    sb.append("  - ").append(msg).append("\n");
+                }
+            }
+        } catch (MojoException e) {
+            log.debug("Could not collect bare-mode commit log: " + e.getMessage());
+        }
+        return sb.toString().stripTrailing();
     }
 
     private WorkspaceReportSpec executeBareMode(String branchName) throws MojoException {
@@ -325,11 +400,26 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
             throw new MojoException("Uncommitted changes. Commit or stash first.");
         }
 
+        // #531: auto-generate the squash commit message from this repo's
+        // feature-branch commit history when -Dmessage was not supplied.
+        String effectiveMessage = buildBareSquashMessage(
+                dir, branchName, targetBranch, message, getLog());
+        getLog().info("  Commit message:");
+        for (String line : effectiveMessage.split("\n")) {
+            getLog().info("    " + line);
+        }
+        getLog().info("");
+
         if (draft) {
             getLog().info("  [draft] Would squash-merge → " + targetBranch);
             return new WorkspaceReportSpec(WsGoal.FEATURE_FINISH_SQUASH_DRAFT,
                     "Bare repo: would squash-merge `" + branchName + "` → `"
-                            + targetBranch + "`.\n");
+                            + targetBranch + "`.\n\n"
+                            + "**Commit message** "
+                            + (message == null || message.isBlank()
+                                ? "(auto-generated; override with `-Dmessage=\"...\"`)"
+                                : "(supplied via `-Dmessage`)") + ":\n\n"
+                            + "```\n" + effectiveMessage + "\n```\n");
         }
 
         FeatureFinishSupport.stripBranchVersionBare(dir, branchName, getLog());
@@ -338,7 +428,7 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
         VcsOperations.mergeSquash(dir, getLog(), branchName);
 
         if (VcsOperations.hasStagedChanges(dir)) {
-            VcsOperations.commit(dir, getLog(), message);
+            VcsOperations.commit(dir, getLog(), effectiveMessage);
             FeatureFinishSupport.verifyAndFixQualifiers(dir, branchName, getLog());
             if (push) {
                 VcsOperations.pushIfRemoteExists(dir, getLog(), "origin", targetBranch);

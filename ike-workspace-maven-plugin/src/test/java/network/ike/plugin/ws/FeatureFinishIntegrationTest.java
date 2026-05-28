@@ -234,6 +234,70 @@ class FeatureFinishIntegrationTest {
                 .doesNotContain("branch: " + BRANCH_NAME);
     }
 
+    // ── #544: per-subproject squash kind + target HEAD in report ──
+
+    @Test
+    void squash_report_includesTargetHeadShaAndVersionOnlyMarker()
+            throws Exception {
+        // Roll lib-a's feature branch back so it has only the
+        // version-qualifier commit — i.e. nothing the squash would
+        // commit on main. lib-b and app-c keep their feature-work
+        // commits as the helper set them up.
+        Path libA = tempDir.resolve("lib-a");
+        exec(libA, "git", "rm", "feature-work.txt");
+        exec(libA, "git", "commit", "-m", "feature: revert feature work");
+
+        FeatureFinishSquashDraftMojo mojo = TestLog.createMojo(
+                FeatureFinishSquashDraftMojo.class);
+        mojo.manifest = helper.workspaceYaml().toFile();
+        mojo.feature = FEATURE_NAME;
+        mojo.targetBranch = "main";
+        mojo.message = "#544 report shape";
+        mojo.publish = true;
+        mojo.execute();
+
+        String report = readReport("feature-finish-squash-publish");
+
+        // New column heading: target branch HEAD per subproject.
+        assertThat(report)
+                .as("table must carry the resulting target-branch HEAD")
+                .contains("main HEAD");
+
+        // lib-a's row is the version-only no-op (after we removed
+        // its feature-work commit). The status text now exposes this
+        // explicitly rather than collapsing it into the count.
+        assertThat(report)
+                .as("version-only row must be marked, not silently absorbed")
+                .contains("lib-a")
+                .contains("version-only");
+
+        // lib-b and app-c shipped real content, so their row's
+        // target-HEAD SHA differs from main's pre-squash state.
+        // Read the actual SHAs and assert they appear in the report
+        // (shortened to 7 chars).
+        String libBHead = execCapture(tempDir.resolve("lib-b"),
+                "git", "rev-parse", "--short=7", "HEAD").trim();
+        String appCHead = execCapture(tempDir.resolve("app-c"),
+                "git", "rev-parse", "--short=7", "HEAD").trim();
+        assertThat(report)
+                .as("real-content subprojects expose their target SHA")
+                .contains(libBHead)
+                .contains(appCHead);
+    }
+
+    private String readReport(String goalStem) throws Exception {
+        try (var stream = Files.list(tempDir)) {
+            Path reportFile = stream
+                    .filter(p -> p.getFileName().toString().endsWith(".md"))
+                    .filter(p -> p.getFileName().toString().contains(goalStem))
+                    .findFirst()
+                    .orElseThrow(() -> new AssertionError(
+                            "No report file matching '" + goalStem
+                                    + "' in " + tempDir));
+            return Files.readString(reportFile, StandardCharsets.UTF_8);
+        }
+    }
+
     // ── Helpers ──────────────────────────────────────────────────
 
     private void exec(Path workDir, String... command) throws Exception {

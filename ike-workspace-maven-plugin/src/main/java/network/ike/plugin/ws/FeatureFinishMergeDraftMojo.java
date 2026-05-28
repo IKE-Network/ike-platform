@@ -206,6 +206,10 @@ public class FeatureFinishMergeDraftMojo extends AbstractWorkspaceMojo {
         // #532: soft-fail and collect — same behaviour as the squash variant.
         java.util.LinkedHashMap<String, String> undeletedRemote =
                 new java.util.LinkedHashMap<>();
+        // #544: per-subproject target-branch HEAD after each merge so
+        // the report can show the resulting SHA next to the status.
+        java.util.Map<String, String> targetSha =
+                new java.util.LinkedHashMap<>();
         for (String name : eligible) {
             Subproject subproject = graph.manifest().subprojects().get(name);
             File dir = new File(root, name);
@@ -226,6 +230,9 @@ public class FeatureFinishMergeDraftMojo extends AbstractWorkspaceMojo {
             if (push) {
                 VcsOperations.pushIfRemoteExists(dir, getLog(), "origin", targetBranch);
             }
+            try {
+                targetSha.put(name, VcsOperations.headSha(dir));
+            } catch (MojoException ignored) {}
 
             if (!keepBranch) {
                 String remoteFailReason = FeatureFinishSupport.deleteBranch(
@@ -237,6 +244,15 @@ public class FeatureFinishMergeDraftMojo extends AbstractWorkspaceMojo {
 
             VcsOperations.writeVcsState(dir, VcsState.Action.FEATURE_FINISH);
             merged++;
+        }
+
+        // #544 + #535: include already-done subprojects' current target-
+        // branch HEAD next to their reconciliation row.
+        for (String name : alreadyDone) {
+            File dir = new File(root, name);
+            try {
+                targetSha.put(name, VcsOperations.headSha(dir));
+            } catch (MojoException ignored) {}
         }
 
         // #535: yaml reconciliation list includes already-done from
@@ -296,7 +312,7 @@ public class FeatureFinishMergeDraftMojo extends AbstractWorkspaceMojo {
                         : WsGoal.FEATURE_FINISH_MERGE_DRAFT,
                 buildMergeReport(eligible, branchName, targetBranch,
                         merged, draft, keepBranch, undeletedRemote,
-                        alreadyDone));
+                        alreadyDone, targetSha));
     }
 
     /**
@@ -317,22 +333,29 @@ public class FeatureFinishMergeDraftMojo extends AbstractWorkspaceMojo {
                                      String target, int merged,
                                      boolean isDraft, boolean kept,
                                      java.util.Map<String, String> undeletedRemote,
-                                     List<String> alreadyDone) {
+                                     List<String> alreadyDone,
+                                     java.util.Map<String, String> targetSha) {
         GoalReportBuilder report = new GoalReportBuilder();
         report.paragraph("**Branch:** `" + branch + "` → `" + target + "`  \n"
                 + "**Strategy:** no-fast-forward merge");
 
+        // #544: resulting target-branch HEAD column.
         List<String[]> rows = new ArrayList<>();
         for (String name : components) {
-            rows.add(new String[]{name, isDraft ? "would merge" : "merged"});
+            String sha = targetSha.getOrDefault(name, "—");
+            rows.add(new String[]{name, isDraft ? "would merge" : "merged",
+                    "—".equals(sha) ? "—" : "`" + shorten(sha) + "`"});
         }
         for (String name : alreadyDone) {
-            rows.add(new String[]{name, isDraft
+            String sha = targetSha.getOrDefault(name, "—");
+            String status = isDraft
                     ? "would reconcile workspace.yaml only"
                     : "reconciled workspace.yaml only (already on "
-                            + target + " from a prior run)"});
+                            + target + " from a prior run)";
+            rows.add(new String[]{name, status,
+                    "—".equals(sha) ? "—" : "`" + shorten(sha) + "`"});
         }
-        report.table(List.of("Subproject", "Status"), rows);
+        report.table(List.of("Subproject", "Status", target + " HEAD"), rows);
 
         report.paragraph("**" + merged + " subproject(s)** "
                 + (isDraft ? "would be merged" : "merged")
@@ -437,5 +460,10 @@ public class FeatureFinishMergeDraftMojo extends AbstractWorkspaceMojo {
         }
         return new WorkspaceReportSpec(WsGoal.FEATURE_FINISH_MERGE_PUBLISH,
                 body.toString());
+    }
+
+    private static String shorten(String sha) {
+        if (sha == null || sha.length() <= 7) return sha;
+        return sha.substring(0, 7);
     }
 }

@@ -263,6 +263,25 @@ public class VcsOperations {
     }
 
     /**
+     * Read the configured URL for a named git remote, e.g. {@code origin}.
+     * Returns empty when the remote does not exist on this clone.
+     *
+     * @param dir    the repository root directory
+     * @param remote the remote name (typically {@code origin})
+     * @return the URL configured for the remote, empty when absent
+     */
+    public static java.util.Optional<String> remoteUrl(File dir, String remote) {
+        try {
+            String url = capture(dir, "git", "remote", "get-url", remote);
+            return url.isEmpty()
+                    ? java.util.Optional.empty()
+                    : java.util.Optional.of(url);
+        } catch (MojoException e) {
+            return java.util.Optional.empty();
+        }
+    }
+
+    /**
      * Count commits ahead of and behind the current branch's upstream
      * tracking branch ({@code @{u}}). Returns empty when the branch
      * has no upstream configured (no {@code branch.<name>.remote}),

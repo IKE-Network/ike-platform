@@ -142,9 +142,16 @@ public class WsAlignDraftMojo extends AbstractWorkspaceMojo {
             printDriftReport(report);
             content = report.toMarkdown();
         } else {
+            // #543: capture the drift plan BEFORE applying so the
+            // publish report can list per-POM version changes (and
+            // distinguish "no-op, workspace already aligned" from a
+            // 50-file rewrite). detect() is a pure read; apply()
+            // re-runs the same computePlan internally — same numbers,
+            // some duplicated work, but the alternative would be a
+            // bigger refactor of AlignmentReconciler.
+            DriftReport report = reconciler.detect(ctx);
             reconciler.apply(ctx);
-            content = "Inter-subproject version alignment applied across "
-                    + "the workspace.\n";
+            content = report.toAppliedMarkdown();
         }
         getLog().info("");
         return new WorkspaceReportSpec(

@@ -6,6 +6,10 @@ import org.apache.maven.api.plugin.annotations.Mojo;
 import org.apache.maven.api.plugin.annotations.Parameter;
 
 import java.io.File;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -88,11 +92,21 @@ public class WsSyncMojo extends AbstractWorkspaceMojo {
         getLog().info("══════════════════════════════════════════════════════════════");
         getLog().info("");
 
+        String pullPhaseBody = null;
+        String pushPhaseBody = null;
+        boolean pushFailed = false;
+        String pushFailureMessage = null;
+
         if (!pushOnly) {
             PullWorkspaceMojo pull = new PullWorkspaceMojo();
             pull.setLog(getLog());
             pull.manifest = this.manifest;
             pull.execute();
+            // The child mojo wrote its own ws:pull.md report — read it
+            // back so the sync report can inline the per-subproject
+            // detail (#542). Failing to read is non-fatal: the child
+            // report still exists on disk for the user to inspect.
+            pullPhaseBody = readChildReport(WsGoal.PULL);
 
             // Refresh local main from origin/main between pull and push,
             // so a feature-branch sync also keeps main coherent. Skipped
@@ -114,17 +128,117 @@ public class WsSyncMojo extends AbstractWorkspaceMojo {
             push.manifest = this.manifest;
             push.remote = this.remote;
             push.failFast = true;
-            push.execute();
+            try {
+                push.execute();
+            } catch (MojoException e) {
+                // failFast=true means the push half hard-fails on any
+                // subproject error. We still want to emit a sync report
+                // that surfaces what happened on the pull side and the
+                // push failure message, so we capture and rethrow after
+                // writing.
+                pushFailed = true;
+                pushFailureMessage = e.getMessage();
+            }
+            // Try to read the push report even when the push failed —
+            // the child mojo writes its report before any throw.
+            pushPhaseBody = readChildReport(WsGoal.PUSH);
         }
-
-        StringBuilder summary = new StringBuilder();
-        summary.append(pushOnly ? "skipped pull" : "pulled");
-        summary.append(" then ");
-        summary.append(pullOnly ? "skipped push" : "pushed");
-        summary.append(".\n");
 
         PostMutationSync.refresh(workspaceRoot(), getLog());
 
-        return new WorkspaceReportSpec(WsGoal.SYNC, summary.toString());
+        String body = buildSyncReport(pullPhaseBody, pushPhaseBody,
+                pushFailed, pushFailureMessage);
+
+        if (pushFailed) {
+            // Re-throw so the build reflects the failure — the report
+            // body is written by AbstractWorkspaceMojo.execute() only
+            // on success. Emit the sync report manually first so the
+            // user still has the combined audit trail.
+            try {
+                WorkspaceReport.write(workspaceRoot().toPath(),
+                        WsGoal.SYNC.qualified(), body, getLog());
+            } catch (MojoException writeException) {
+                getLog().debug("Could not write sync report on failure: "
+                        + writeException.getMessage());
+            }
+            throw new MojoException(pushFailureMessage);
+        }
+
+        return new WorkspaceReportSpec(WsGoal.SYNC, body);
+    }
+
+    /**
+     * Read a child mojo's just-written report from disk so the sync
+     * report can inline its per-subproject detail. Returns {@code null}
+     * when the file is unreadable so the caller can degrade to a
+     * placeholder rather than throwing.
+     */
+    private String readChildReport(WsGoal childGoal) {
+        try {
+            Path reportFile = WorkspaceReport.reportPath(
+                    workspaceRoot().toPath(), childGoal.qualified());
+            if (!Files.isRegularFile(reportFile)) return null;
+            return Files.readString(reportFile, StandardCharsets.UTF_8);
+        } catch (IOException | MojoException e) {
+            getLog().debug("Could not read child report for "
+                    + childGoal + ": " + e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Compose the sync markdown report from the pull and push phase
+     * bodies. Each phase appears under an {@code H2} header so a
+     * reviewer can tell at a glance whether a subproject's state
+     * change happened on the pull or the push side (#542). Skipped
+     * phases get an explicit "(skipped)" note rather than being
+     * absorbed into a one-line summary.
+     */
+    private String buildSyncReport(String pullBody, String pushBody,
+                                    boolean pushFailed,
+                                    String pushFailureMessage) {
+        StringBuilder out = new StringBuilder();
+
+        if (pushOnly) {
+            out.append("## Pull phase\n\n_skipped (`-DpushOnly`)_\n\n");
+        } else {
+            out.append("## Pull phase\n\n");
+            out.append(stripChildHeader(pullBody,
+                    "_ws:pull.md not available — see the workspace root for the child report._"));
+            out.append("\n\n");
+        }
+
+        if (pullOnly) {
+            out.append("## Push phase\n\n_skipped (`-DpullOnly`)_\n\n");
+        } else {
+            out.append("## Push phase\n\n");
+            if (pushFailed) {
+                out.append("**Push failed** — `")
+                        .append(pushFailureMessage)
+                        .append("`\n\n");
+            }
+            out.append(stripChildHeader(pushBody,
+                    "_ws:push.md not available — see the workspace root for the child report._"));
+            out.append("\n");
+        }
+
+        return out.toString();
+    }
+
+    /**
+     * Strip the goal-name {@code H1} that AbstractWorkspaceMojo's
+     * report header writes, so that the sync report's H1 stays
+     * authoritative and the child's H2 sections (Subprojects, Merged
+     * commits, Failures, etc.) nest cleanly under the phase H2.
+     * Returns the {@code fallback} text when {@code body} is null.
+     */
+    private static String stripChildHeader(String body, String fallback) {
+        if (body == null) return fallback;
+        // The child report starts with `# ws:pull\n_<timestamp>_\n\n`
+        // (or push). Drop the H1 + timestamp blank line so the body
+        // can nest under the sync report's phase header.
+        int firstBlank = body.indexOf("\n\n");
+        if (firstBlank < 0) return body;
+        return body.substring(firstBlank + 2);
     }
 }

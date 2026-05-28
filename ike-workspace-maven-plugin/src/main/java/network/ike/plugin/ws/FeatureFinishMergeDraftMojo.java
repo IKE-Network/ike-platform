@@ -64,6 +64,16 @@ public class FeatureFinishMergeDraftMojo extends AbstractWorkspaceMojo {
     @Parameter(property = "keepBranch", defaultValue = "true")
     boolean keepBranch = true;
 
+    /**
+     * Skip the remote-branch deletion step entirely (still deletes the
+     * local branch unless {@code keepBranch=true}). Useful when branch
+     * protection forbids deletion. Remote-deletion failures are
+     * <em>soft</em> by default — the goal warns and continues. See
+     * IKE-Network/ike-issues#532.
+     */
+    @Parameter(property = "keepRemoteBranch", defaultValue = "false")
+    boolean keepRemoteBranch;
+
     @Parameter(property = "message")
     String message;
 
@@ -186,6 +196,9 @@ public class FeatureFinishMergeDraftMojo extends AbstractWorkspaceMojo {
         getLog().info("");
 
         int merged = 0;
+        // #532: soft-fail and collect — same behaviour as the squash variant.
+        java.util.LinkedHashMap<String, String> undeletedRemote =
+                new java.util.LinkedHashMap<>();
         for (String name : eligible) {
             Subproject subproject = graph.manifest().subprojects().get(name);
             File dir = new File(root, name);
@@ -208,7 +221,11 @@ public class FeatureFinishMergeDraftMojo extends AbstractWorkspaceMojo {
             }
 
             if (!keepBranch) {
-                FeatureFinishSupport.deleteBranch(dir, getLog(), branchName);
+                String remoteFailReason = FeatureFinishSupport.deleteBranch(
+                        dir, getLog(), branchName, keepRemoteBranch);
+                if (remoteFailReason != null) {
+                    undeletedRemote.put(name, remoteFailReason);
+                }
             }
 
             VcsOperations.writeVcsState(dir, VcsState.Action.FEATURE_FINISH);
@@ -233,6 +250,21 @@ public class FeatureFinishMergeDraftMojo extends AbstractWorkspaceMojo {
         getLog().info("");
         getLog().info("  Merged: " + merged + " components (no-ff)");
         getLog().info("  Branch " + (keepBranch ? "kept" : "deleted") + ": " + branchName);
+        if (!undeletedRemote.isEmpty()) {
+            getLog().warn("");
+            getLog().warn("  " + undeletedRemote.size()
+                    + " remote feature branch(es) could not be deleted "
+                    + "(soft-fail per #532):");
+            for (var entry : undeletedRemote.entrySet()) {
+                getLog().warn("    • " + entry.getKey()
+                        + " — " + entry.getValue());
+            }
+            getLog().warn("  To clean up by hand:");
+            for (String subName : undeletedRemote.keySet()) {
+                getLog().warn("    (cd " + subName
+                        + " && git push origin --delete " + branchName + ")");
+            }
+        }
         getLog().info("");
 
         // Structured markdown report
@@ -240,12 +272,27 @@ public class FeatureFinishMergeDraftMojo extends AbstractWorkspaceMojo {
                 publish ? WsGoal.FEATURE_FINISH_MERGE_PUBLISH
                         : WsGoal.FEATURE_FINISH_MERGE_DRAFT,
                 buildMergeReport(eligible, branchName, targetBranch,
-                        merged, draft, keepBranch));
+                        merged, draft, keepBranch, undeletedRemote));
     }
 
+    /**
+     * Build the merge-strategy markdown report. Includes the
+     * remote-deletion soft-fail summary with copy-pasteable manual
+     * cleanup commands (#532).
+     *
+     * @param components       eligible subprojects
+     * @param branch           feature branch name
+     * @param target           target branch name
+     * @param merged           count of subprojects merged (or that would be)
+     * @param isDraft          draft preview?
+     * @param kept             {@code -DkeepBranch=true}?
+     * @param undeletedRemote  subproject → git error for remote branches
+     *                         the soft-fail step could not delete
+     */
     private String buildMergeReport(List<String> components, String branch,
                                      String target, int merged,
-                                     boolean isDraft, boolean kept) {
+                                     boolean isDraft, boolean kept,
+                                     java.util.Map<String, String> undeletedRemote) {
         GoalReportBuilder report = new GoalReportBuilder();
         report.paragraph("**Branch:** `" + branch + "` → `" + target + "`  \n"
                 + "**Strategy:** no-fast-forward merge");
@@ -259,6 +306,28 @@ public class FeatureFinishMergeDraftMojo extends AbstractWorkspaceMojo {
         report.paragraph("**" + merged + " subproject(s)** "
                 + (isDraft ? "would be merged" : "merged")
                 + ". Branch " + (kept ? "kept" : "deleted") + ".");
+
+        if (!undeletedRemote.isEmpty()) {
+            report.section("Remote feature branches not deleted");
+            report.paragraph("The merge succeeded, but origin refused "
+                    + "to delete " + undeletedRemote.size()
+                    + " remote feature branch(es) — typically because "
+                    + "branch protection forbids deletion. The goal "
+                    + "soft-failed and continued; clean these up manually:");
+            for (var entry : undeletedRemote.entrySet()) {
+                report.bullet("**" + entry.getKey() + "** — `"
+                        + entry.getValue() + "`");
+            }
+            StringBuilder cleanup = new StringBuilder();
+            for (String subName : undeletedRemote.keySet()) {
+                cleanup.append("(cd ").append(subName)
+                        .append(" && git push origin --delete ")
+                        .append(branch).append(")\n");
+            }
+            report.codeBlock("bash", cleanup.toString().stripTrailing());
+            report.paragraph("Or, to skip the remote-deletion attempt "
+                    + "next time, pass `-DkeepRemoteBranch=true`.");
+        }
         return report.build();
     }
 
@@ -303,16 +372,33 @@ public class FeatureFinishMergeDraftMojo extends AbstractWorkspaceMojo {
             VcsOperations.pushIfRemoteExists(dir, getLog(), "origin", targetBranch);
         }
 
+        String remoteFailReason = null;
         if (!keepBranch) {
-            FeatureFinishSupport.deleteBranch(dir, getLog(), branchName);
+            remoteFailReason = FeatureFinishSupport.deleteBranch(
+                    dir, getLog(), branchName, keepRemoteBranch);
         }
 
         VcsOperations.writeVcsState(dir, VcsState.Action.FEATURE_FINISH);
 
+        if (remoteFailReason != null) {
+            getLog().warn("  Remote feature branch could not be deleted "
+                    + "(soft-fail per #532): " + remoteFailReason);
+            getLog().warn("  Clean up manually: git push origin --delete "
+                    + branchName);
+        }
         getLog().info("  Done.");
         getLog().info("");
+        StringBuilder body = new StringBuilder();
+        body.append("Bare repo: merged `").append(branchName).append("` → `")
+                .append(targetBranch).append("`.\n");
+        if (remoteFailReason != null) {
+            body.append("\n**Remote feature branch not deleted** — `")
+                    .append(remoteFailReason).append("`.\n\n")
+                    .append("Clean up manually:\n\n```bash\n")
+                    .append("git push origin --delete ").append(branchName)
+                    .append("\n```\n");
+        }
         return new WorkspaceReportSpec(WsGoal.FEATURE_FINISH_MERGE_PUBLISH,
-                "Bare repo: merged `" + branchName + "` → `"
-                        + targetBranch + "`.\n");
+                body.toString());
     }
 }

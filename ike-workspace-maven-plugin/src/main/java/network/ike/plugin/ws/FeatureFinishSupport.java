@@ -267,21 +267,73 @@ class FeatureFinishSupport {
     }
 
     /**
-     * Delete feature branch locally and remotely.
+     * Delete the local branch and, unless {@code keepRemoteBranch} is
+     * set, attempt to delete the matching {@code origin/<branch>}.
+     * Remote-deletion failures are <strong>soft</strong> — the method
+     * logs a warning and returns the failure reason so the caller can
+     * aggregate undeleted branches into the end-of-run report rather
+     * than aborting the whole feature-finish (IKE-Network/ike-issues#532).
+     *
+     * <p>Local deletion still throws on failure — that's a real
+     * problem, not a typical branch-protection rule.
+     *
+     * @param dir              repository root
+     * @param log              Maven logger
+     * @param branchName       branch to delete
+     * @param keepRemoteBranch when {@code true}, skip the remote
+     *                         deletion entirely (e.g. branch protection
+     *                         is known to forbid it)
+     * @return {@code null} on success (or no remote present, or
+     *         {@code keepRemoteBranch=true}); the underlying git error
+     *         message when the remote deletion was attempted and failed
+     * @throws MojoException if the local branch deletion fails
      */
-    static void deleteBranch(File dir, Log log, String branchName)
-            throws MojoException {
+    static String deleteBranch(File dir, Log log, String branchName,
+                                boolean keepRemoteBranch) throws MojoException {
         VcsOperations.deleteBranch(dir, log, branchName);
         log.info("    deleted local branch: " + branchName);
 
+        if (keepRemoteBranch) {
+            log.info("    -DkeepRemoteBranch=true — keeping origin/"
+                    + branchName);
+            return null;
+        }
+
         Optional<String> remoteSha = VcsOperations.remoteSha(dir, "origin", branchName);
-        if (remoteSha.isPresent()) {
-            VcsOperations.deleteRemoteBranch(dir, log, "origin", branchName);
-            log.info("    deleted remote branch: origin/" + branchName);
-        } else {
+        if (remoteSha.isEmpty()) {
             log.info("    remote branch origin/" + branchName
                     + " does not exist (never pushed) — skipping");
+            return null;
         }
+
+        try {
+            VcsOperations.deleteRemoteBranch(dir, log, "origin", branchName);
+            log.info("    deleted remote branch: origin/" + branchName);
+            return null;
+        } catch (MojoException e) {
+            String reason = e.getMessage();
+            log.warn("    ⚠ could not delete remote branch origin/"
+                    + branchName + ": " + reason);
+            return reason;
+        }
+    }
+
+    /**
+     * Convenience overload that calls {@link #deleteBranch(File, Log,
+     * String, boolean)} with {@code keepRemoteBranch=false} and treats
+     * a soft-fail as a no-op. Existing callers (e.g. the workspace-repo
+     * merge step) used to depend on the void-returning behaviour and
+     * just wanted a best-effort delete; preserved here so they keep
+     * working without per-call refactoring.
+     *
+     * @param dir        repository root
+     * @param log        Maven logger
+     * @param branchName branch to delete
+     * @throws MojoException if the local branch deletion fails
+     */
+    static void deleteBranch(File dir, Log log, String branchName)
+            throws MojoException {
+        deleteBranch(dir, log, branchName, false);
     }
 
     /**

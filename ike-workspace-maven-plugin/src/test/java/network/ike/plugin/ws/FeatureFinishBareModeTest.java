@@ -469,6 +469,93 @@ class FeatureFinishBareModeTest {
                 .hasMessageContaining("Not on " + BRANCH_NAME);
     }
 
+    // ── #532: soft-fail on remote-branch deletion ────────────────
+
+    @Test
+    void squash_remoteDeleteRefused_softFailsAndCompletes() throws Exception {
+        // Origin is a bare repo with receive.denyDeletes=true — the
+        // plain-git equivalent of GitHub's `allowsDeletions: false`
+        // branch protection that triggered #532. The feature-finish
+        // must complete (locally deleted, summary surfaces the
+        // remote-delete failure) rather than aborting mid-flight.
+        // Bare origin lives inside tempDir to avoid collision with
+        // other tests that put bare repos in the system temp parent
+        // (junit cleans tempDir per test, not its parent).
+        Path origin = Files.createTempDirectory("origin-deny-").resolve(
+                "origin.git");
+        Files.createDirectories(origin);
+        exec(origin, "git", "init", "--bare", "-b", "main");
+        exec(origin, "git", "config", "receive.denyDeletes", "true");
+        exec(tempDir, "git", "remote", "add", "origin",
+                origin.toAbsolutePath().toString());
+        // Push main from local (we're currently on BRANCH_NAME from setUp).
+        exec(tempDir, "git", "push", "origin", "main:main");
+        exec(tempDir, "git", "push", "origin", BRANCH_NAME);
+
+        FeatureFinishSquashDraftMojo mojo = TestLog.createMojo(
+                FeatureFinishSquashDraftMojo.class);
+        mojo.feature = FEATURE_NAME;
+        mojo.targetBranch = "main";
+        mojo.message = "Soft-fail test";
+        mojo.publish = true;
+
+        mojo.execute(); // must not throw
+
+        assertThat(currentBranch())
+                .as("squash should have landed on main")
+                .isEqualTo("main");
+
+        // Local feature branch is gone.
+        String branches = execCapture(tempDir, "git", "branch");
+        assertThat(branches)
+                .as("local feature branch should be deleted")
+                .doesNotContain(BRANCH_NAME);
+
+        // Remote feature branch still exists because the bare repo refused
+        // the delete — that's the whole point of the soft-fail.
+        String remoteBranches = execCapture(tempDir,
+                "git", "ls-remote", "--heads", "origin", BRANCH_NAME);
+        assertThat(remoteBranches)
+                .as("remote feature branch must still exist (deletion refused)")
+                .contains("refs/heads/" + BRANCH_NAME);
+    }
+
+    @Test
+    void squash_keepRemoteBranchFlag_skipsRemoteDeleteEntirely()
+            throws Exception {
+        // -DkeepRemoteBranch=true means we don't even attempt the
+        // remote delete — useful when the user knows branch protection
+        // forbids it and wants a quiet run. Local delete still happens
+        // (unless -DkeepBranch=true is also passed).
+        Path origin = Files.createTempDirectory("origin-keep-").resolve(
+                "origin.git");
+        Files.createDirectories(origin);
+        exec(origin, "git", "init", "--bare", "-b", "main");
+        exec(tempDir, "git", "remote", "add", "origin",
+                origin.toAbsolutePath().toString());
+        exec(tempDir, "git", "push", "origin", "main:main");
+        exec(tempDir, "git", "push", "origin", BRANCH_NAME);
+
+        FeatureFinishSquashDraftMojo mojo = TestLog.createMojo(
+                FeatureFinishSquashDraftMojo.class);
+        mojo.feature = FEATURE_NAME;
+        mojo.targetBranch = "main";
+        mojo.message = "Keep remote";
+        mojo.publish = true;
+        mojo.keepRemoteBranch = true;
+
+        mojo.execute(); // must not throw
+
+        // Local deleted, remote intentionally preserved.
+        String branches = execCapture(tempDir, "git", "branch");
+        assertThat(branches).doesNotContain(BRANCH_NAME);
+        String remoteBranches = execCapture(tempDir,
+                "git", "ls-remote", "--heads", "origin", BRANCH_NAME);
+        assertThat(remoteBranches)
+                .as("-DkeepRemoteBranch=true must preserve origin's branch")
+                .contains("refs/heads/" + BRANCH_NAME);
+    }
+
     // ── VCS state file tests ─────────────────────────────────────
 
     @Test
@@ -506,12 +593,13 @@ class FeatureFinishBareModeTest {
                 .directory(workDir.toFile())
                 .redirectErrorStream(true)
                 .start();
-        process.getInputStream().readAllBytes();
+        String output = new String(process.getInputStream().readAllBytes(),
+                StandardCharsets.UTF_8);
         int exitCode = process.waitFor();
         if (exitCode != 0) {
             throw new RuntimeException(
                     "Command failed (exit " + exitCode + "): "
-                            + String.join(" ", command));
+                            + String.join(" ", command) + "\n" + output);
         }
     }
 

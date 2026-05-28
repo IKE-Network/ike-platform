@@ -210,11 +210,12 @@ public class WsCommitPublishMojo extends AbstractWorkspaceMojo {
                 VcsOperations.catchUp(dir, getLog());
             }
 
-            if (!stagedOnly && !newFiles.isEmpty()) {
-                VcsOperations.addAll(dir, getLog());
-            } else if (!stagedOnly && modCount > 0
-                    && !VcsOperations.hasStagedChanges(dir)) {
-                // tracked-modified but none staged — still need addAll
+            if (!stagedOnly && !VcsOperations.isClean(dir)) {
+                // Stage everything tracked-modified and untracked-non-ignored
+                // before committing. The earlier split-condition form skipped
+                // addAll when staged-and-unstaged were mixed, silently
+                // dropping the unstaged half from the commit (#536). Calling
+                // addAll on already-staged files is a no-op.
                 VcsOperations.addAll(dir, getLog());
             }
 

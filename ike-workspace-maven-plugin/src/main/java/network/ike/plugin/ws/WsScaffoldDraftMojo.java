@@ -227,27 +227,65 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
     private void runScaffoldInSubproject(File subDir, String goal)
             throws MojoException {
         String mvn = WsReleaseDraftMojo.resolveMvnCommand(subDir);
+        List<String> args = buildScaffoldArgs(mvn, goal,
+                publish, applyFoundation, resolveFoundation);
+        ReleaseSupport.exec(subDir, getLog(), args.toArray(new String[0]));
+    }
+
+    /**
+     * Build the {@code mvn} argv for one per-subproject scaffold
+     * invocation. Extracted as a pure helper so the #440 and #449
+     * regressions can assert the exact flag set without spawning a
+     * Maven subprocess.
+     *
+     * <ul>
+     *   <li>{@code validate} runs before {@code goal} so
+     *       ike-parent's {@code unpack-scaffold-templates} (bound to
+     *       {@code validate}) populates {@code target/scaffold}
+     *       (#449).</li>
+     *   <li>{@code -Dike.scaffold.skip-parent=true} is always set so
+     *       the workspace's {@code ParentVersionReconciler} stays
+     *       authoritative on {@code <parent>} (#418), and the inner
+     *       {@code ike:scaffold-publish} dry-run never compares the
+     *       live POM against the stale {@code foundation:} pin baked
+     *       in the scaffold zip (#440).</li>
+     *   <li>{@code -Dike.scaffold.apply-foundation=true} is forwarded
+     *       only when both {@code publish} and {@code applyFoundation}
+     *       are set; {@code -Dike.scaffold.resolve-foundation=true}
+     *       additionally requires {@code resolveFoundation}.</li>
+     * </ul>
+     *
+     * @param mvn                wrapper or {@code mvn} command resolved
+     *                           for this subproject
+     * @param goal               the ike-prefixed scaffold goal
+     *                           ({@code ike:scaffold-draft} or
+     *                           {@code ike:scaffold-publish})
+     * @param publish            whether the workspace mojo is in
+     *                           publish mode
+     * @param applyFoundation    whether the foundation cascade should
+     *                           be applied (not just previewed)
+     * @param resolveFoundation  whether to forward the foundation-
+     *                           resolution flag
+     * @return mutable {@link List} of argv strings, beginning with
+     *         {@code mvn}
+     */
+    static List<String> buildScaffoldArgs(String mvn, String goal,
+                                           boolean publish,
+                                           boolean applyFoundation,
+                                           boolean resolveFoundation) {
         List<String> args = new ArrayList<>();
         args.add(mvn);
-        // Run the validate phase ahead of the scaffold goal so
-        // ike-parent's unpack-scaffold-templates execution (bound to
-        // validate) populates target/scaffold. Without it the scaffold
-        // goal fails with "scaffoldDir is not a directory" on any
-        // checkout that has not been built yet (#449).
         args.add("validate");
         args.add(goal);
         args.add("-B");
+        args.add("-Dike.scaffold.skip-parent=true");
         if (publish && applyFoundation) {
             args.add("-Dike.scaffold.apply-foundation=true");
-            // The workspace ParentVersionReconciler owns <parent>; the
-            // per-subproject foundation-apply must not overwrite its
-            // cascade — apply the property pins only (#418).
-            args.add("-Dike.scaffold.skip-parent=true");
             if (resolveFoundation) {
                 args.add("-Dike.scaffold.resolve-foundation=true");
             }
         }
-        ReleaseSupport.exec(subDir, getLog(), args.toArray(new String[0]));
+        return args;
     }
 
     /**

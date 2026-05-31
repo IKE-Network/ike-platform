@@ -32,6 +32,14 @@ class VcsOperationsTest {
     void setUp() throws Exception {
         repoDir = tempDir.toFile();
         exec("git", "init", "-b", "main");
+        // Hermetic sandbox: ignore any host git config (a global
+        // core.hooksPath with failing hooks, commit.gpgsign with no usable
+        // key, ...) so the test never depends on the developer's or build
+        // agent's machine (IKE-Network/ike-issues#560).
+        Path noHooks = Files.createDirectories(tempDir.resolve(".nohooks"));
+        exec("git", "config", "core.hooksPath", noHooks.toAbsolutePath().toString());
+        exec("git", "config", "commit.gpgsign", "false");
+        exec("git", "config", "tag.gpgsign", "false");
         exec("git", "config", "user.email", "test@example.com");
         exec("git", "config", "user.name", "Test");
         Files.writeString(tempDir.resolve("file.txt"), "hello", StandardCharsets.UTF_8);
@@ -211,12 +219,16 @@ class VcsOperationsTest {
                 .directory(repoDir)
                 .redirectErrorStream(true)
                 .start();
-        process.getInputStream().readAllBytes();
+        // Capture combined output so a failure is self-diagnosing
+        // (git's stderr would otherwise be lost).
+        String output = new String(process.getInputStream().readAllBytes(),
+                StandardCharsets.UTF_8);
         int exitCode = process.waitFor();
         if (exitCode != 0) {
             throw new RuntimeException(
                     "Command failed (exit " + exitCode + "): "
-                            + String.join(" ", command));
+                            + String.join(" ", command)
+                            + (output.isBlank() ? "" : "\n" + output));
         }
     }
 

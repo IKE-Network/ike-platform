@@ -137,8 +137,7 @@ class TestWorkspaceHelper {
 
         // Initialise git repo with an initial commit on main
         exec(dir, "git", "init", "-b", "main");
-        exec(dir, "git", "config", "user.email", "test@example.com");
-        exec(dir, "git", "config", "user.name", "Test");
+        configureHermetic(dir);
         exec(dir, "git", "add", ".");
         exec(dir, "git", "commit", "-m", "Initial commit");
     }
@@ -186,8 +185,7 @@ class TestWorkspaceHelper {
                 StandardCharsets.UTF_8);
 
         exec(work, "git", "init", "-b", "main");
-        exec(work, "git", "config", "user.email", "test@example.com");
-        exec(work, "git", "config", "user.name", "Test");
+        configureHermetic(work);
         exec(work, "git", "add", ".");
         exec(work, "git", "commit", "-m", "Initial commit");
         exec(work, "git", "remote", "add", "origin",
@@ -235,18 +233,49 @@ class TestWorkspaceHelper {
         Files.writeString(workspaceYaml(), yaml, StandardCharsets.UTF_8);
     }
 
+    /**
+     * Makes a freshly-initialised sandbox repo hermetic: it ignores any
+     * host git config — a global {@code core.hooksPath} with failing hooks
+     * (e.g. an AI commit-message hook), {@code commit.gpgsign} with no
+     * usable key, etc. — so the mojos' real {@code git} invocations during
+     * a test never depend on the developer's or build agent's machine. Same
+     * idiom as {@code CheckpointPublishSelfTripTest} /
+     * {@code WsCommitPublishMojoTest}; see IKE-Network/ike-issues#560.
+     */
+    private void configureHermetic(Path dir) throws Exception {
+        Path noHooks = Files.createDirectories(root.resolve(".nohooks"));
+        exec(dir, "git", "config", "core.hooksPath",
+                noHooks.toAbsolutePath().toString());
+        exec(dir, "git", "config", "commit.gpgsign", "false");
+        exec(dir, "git", "config", "tag.gpgsign", "false");
+        exec(dir, "git", "config", "user.email", "test@example.com");
+        exec(dir, "git", "config", "user.name", "Test");
+        // Ignore local VCS state, mirroring real IKE repos (whose .gitignore
+        // lists .ike/vcs-state) instead of leaning on the developer's global
+        // core.excludesFile — which a hermetic test fork (GIT_CONFIG_GLOBAL
+        // disabled) does not see. Written before the caller's `git add .`,
+        // so it is committed and inherited by any clone of the repo.
+        if (!Files.exists(dir.resolve(".gitignore"))) {
+            Files.writeString(dir.resolve(".gitignore"), ".ike/vcs-state\n",
+                    StandardCharsets.UTF_8);
+        }
+    }
+
     private void exec(Path workDir, String... command) throws Exception {
         Process process = new ProcessBuilder(command)
                 .directory(workDir.toFile())
                 .redirectErrorStream(true)
                 .start();
-        // Consume output to prevent blocking
-        process.getInputStream().readAllBytes();
+        // Capture combined output so a failure is self-diagnosing
+        // (git's stderr would otherwise be lost).
+        String output = new String(process.getInputStream().readAllBytes(),
+                StandardCharsets.UTF_8);
         int exitCode = process.waitFor();
         if (exitCode != 0) {
             throw new RuntimeException(
                     "Command failed (exit " + exitCode + "): "
-                            + String.join(" ", command));
+                            + String.join(" ", command)
+                            + (output.isBlank() ? "" : "\n" + output));
         }
     }
 }

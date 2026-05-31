@@ -1,0 +1,648 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>WorkspaceBootstrap.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws.bootstrap</a> &gt; <span class="el_source">WorkspaceBootstrap.java</span></div><h1>WorkspaceBootstrap.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws.bootstrap;
+
+import network.ike.plugin.ReleaseSupport;
+import network.ike.plugin.ws.Ansi;
+import network.ike.plugin.ws.MavenWrapper;
+import network.ike.plugin.ws.WsGoal;
+import org.apache.maven.api.plugin.Log;
+import org.apache.maven.api.plugin.MojoException;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.LocalDate;
+
+/**
+ * Generates the on-disk scaffold for a brand-new IKE workspace.
+ *
+ * &lt;p&gt;Subsumes the file-generation half of the retired
+ * {@code WsCreateMojo} (folded into {@code ws:scaffold-init} per
+ * IKE-Network/ike-issues#393): given a target directory and a small
+ * parameter bag, writes the standard workspace files
+ * ({@code pom.xml}, {@code workspace.yaml}, {@code .gitignore},
+ * {@code .mvn/maven.config}, {@code .mvn/jvm.config},
+ * {@code README.adoc}) and installs the Maven wrapper via
+ * {@link MavenWrapper#writeMissingFiles}.
+ *
+ * &lt;p&gt;The generated files follow current IKE conventions:
+ * &lt;ul&gt;
+ *   &lt;li&gt;POM uses Maven 4.1.0 model with {@code root=&quot;true&quot;}&lt;/li&gt;
+ *   &lt;li&gt;.gitignore uses whitelist strategy (ignore everything,
+ *       whitelist workspace-owned files)&lt;/li&gt;
+ *   &lt;li&gt;workspace.yaml has schema-version 1.1 with a typed
+ *       {@code workspace-root:} block holding the workspace's GAV
+ *       (ike-issues#183) and an empty {@code subprojects:} list&lt;/li&gt;
+ *   &lt;li&gt;.mvn/maven.config sets {@code -T 1C}&lt;/li&gt;
+ * &lt;/ul&gt;
+ *
+ * &lt;p&gt;This class is a pure scaffold writer — it does not consult
+ * {@code workspace.yaml} (none exists yet), does not iterate
+ * subprojects, and never extends {@code AbstractWorkspaceMojo}.
+ *
+ * @see SubprojectInitializer for the &quot;workspace.yaml already exists&quot;
+ *      half of {@code ws:scaffold-init}
+ */
+public final class WorkspaceBootstrap {
+
+    /** Parameters captured from the user-facing mojo. */
+<span class="fc" id="L49">    public record Params(String name,</span>
+                          String description,
+                          String org,
+                          String group,
+                          String artifactId,
+                          String version,
+                          String mavenVersion,
+                          String defaultBranch,
+                          boolean skipGit,
+                          String parentVersion,
+                          String extensionVersion) {}
+
+    private final Params params;
+    private final Log log;
+
+    /**
+     * Create a workspace bootstrapper bound to a parameter bag and a
+     * logger. Construction is cheap; the actual filesystem writes
+     * happen in {@link #createAt(Path)}.
+     *
+     * @param params the resolved create-time parameters
+     * @param log    the mojo logger
+     */
+<span class="fc" id="L72">    public WorkspaceBootstrap(Params params, Log log) {</span>
+<span class="fc" id="L73">        this.params = params;</span>
+<span class="fc" id="L74">        this.log = log;</span>
+<span class="fc" id="L75">    }</span>
+
+    /**
+     * Write the full workspace scaffold into {@code wsDir} and
+     * optionally initialize git. The directory must not already
+     * contain {@code pom.xml} or {@code workspace.yaml}; the caller
+     * is responsible for that pre-check.
+     *
+     * @param wsDir the workspace directory to populate
+     * @throws MojoException on file or git failures
+     */
+    public void createAt(Path wsDir) throws MojoException {
+        try {
+<span class="nc" id="L88">            Files.createDirectories(wsDir);</span>
+<span class="nc" id="L89">            Files.createDirectories(wsDir.resolve(&quot;.mvn&quot;));</span>
+
+<span class="nc" id="L91">            writeFile(wsDir.resolve(&quot;pom.xml&quot;), generatePom());</span>
+<span class="nc" id="L92">            writeFile(wsDir.resolve(&quot;workspace.yaml&quot;), generateManifest());</span>
+<span class="nc" id="L93">            writeFile(wsDir.resolve(&quot;.gitignore&quot;), generateGitignore());</span>
+<span class="nc" id="L94">            writeFile(wsDir.resolve(&quot;.mvn/maven.config&quot;), &quot;-T 1C\n&quot;);</span>
+<span class="nc" id="L95">            writeFile(wsDir.resolve(&quot;.mvn/extensions.xml&quot;), generateExtensionsXml());</span>
+            // .mvn/jvm.config is parsed as raw JVM args, one token per line,
+            // with NO comment syntax. A `#` at column 0 is passed to the JVM
+            // as a main-class name and fails with ClassNotFoundException: #.
+            // Seed a single standard flag so downstream hand-edits start
+            // from a correct baseline. The flag suppresses sun.misc.Unsafe
+            // deprecation warnings from JRuby/AsciidoctorJ on JDK 24+.
+<span class="nc" id="L102">            writeFile(wsDir.resolve(&quot;.mvn/jvm.config&quot;),</span>
+                    &quot;--sun-misc-unsafe-memory-access=allow\n&quot;);
+<span class="nc" id="L104">            writeFile(wsDir.resolve(&quot;README.adoc&quot;), generateReadme());</span>
+<span class="nc" id="L105">            MavenWrapper.writeMissingFiles(wsDir, params.mavenVersion());</span>
+
+<span class="nc" id="L107">            log.info(Ansi.green(&quot;  ✓ &quot;) + &quot;pom.xml&quot;);</span>
+<span class="nc" id="L108">            log.info(Ansi.green(&quot;  ✓ &quot;) + &quot;workspace.yaml&quot;);</span>
+<span class="nc" id="L109">            log.info(Ansi.green(&quot;  ✓ &quot;) + &quot;.gitignore&quot;);</span>
+<span class="nc" id="L110">            log.info(Ansi.green(&quot;  ✓ &quot;) + &quot;.mvn/maven.config&quot;);</span>
+<span class="nc" id="L111">            log.info(Ansi.green(&quot;  ✓ &quot;) + &quot;.mvn/extensions.xml&quot;);</span>
+<span class="nc" id="L112">            log.info(Ansi.green(&quot;  ✓ &quot;) + &quot;.mvn/jvm.config&quot;);</span>
+<span class="nc" id="L113">            log.info(Ansi.green(&quot;  ✓ &quot;) + &quot;README.adoc&quot;);</span>
+<span class="nc" id="L114">            log.info(Ansi.green(&quot;  ✓ &quot;) + &quot;mvnw (Maven &quot; + params.mavenVersion() + &quot;)&quot;);</span>
+
+<span class="nc" id="L116">        } catch (IOException e) {</span>
+<span class="nc" id="L117">            throw new MojoException(</span>
+<span class="nc" id="L118">                    &quot;Failed to create workspace files: &quot; + e.getMessage(), e);</span>
+<span class="nc" id="L119">        }</span>
+
+<span class="nc bnc" id="L121" title="All 2 branches missed.">        if (!params.skipGit()) {</span>
+            try {
+<span class="nc" id="L123">                initGit(wsDir);</span>
+<span class="nc" id="L124">            } catch (Exception e) {</span>
+<span class="nc" id="L125">                log.warn(&quot;  Git init failed (non-fatal): &quot; + e.getMessage());</span>
+<span class="nc" id="L126">                log.warn(&quot;  Initialize git manually in &quot; + wsDir);</span>
+<span class="nc" id="L127">            }</span>
+        }
+<span class="nc" id="L129">    }</span>
+
+    // ── File generators (pure, testable) ─────────────────────────
+
+    /**
+     * Generate the workspace root POM content. Package-private so
+     * tests can invoke it directly.
+     *
+     * @return the {@code pom.xml} text
+     */
+    String generatePom() {
+        // ike-parent version is the same as ike-platform version (reactor sibling).
+<span class="fc" id="L141">        String parentVersion = params.parentVersion();</span>
+
+<span class="fc" id="L143">        StringBuilder xml = new StringBuilder(2048);</span>
+<span class="fc" id="L144">        xml.append(&quot;&lt;?xml version=\&quot;1.0\&quot; encoding=\&quot;UTF-8\&quot;?&gt;\n&quot;);</span>
+<span class="fc" id="L145">        xml.append(&quot;&lt;!--\n&quot;);</span>
+<span class="fc" id="L146">        xml.append(&quot;  &quot;).append(params.description()).append(&quot;\n&quot;);</span>
+<span class="fc" id="L147">        xml.append(&quot;\n&quot;);</span>
+<span class="fc" id="L148">        xml.append(&quot;  Inherits from ike-parent to get plugin version management for\n&quot;);</span>
+<span class="fc" id="L149">        xml.append(&quot;  ike-maven-plugin and ike-workspace-maven-plugin automatically.\n&quot;);</span>
+<span class="fc" id="L150">        xml.append(&quot;\n&quot;);</span>
+<span class="fc" id="L151">        xml.append(&quot;  Subprojects are declared unconditionally at top level.\n&quot;);</span>
+<span class="fc" id="L152">        xml.append(&quot;  ike-workspace-extension (registered in .mvn/extensions.xml)\n&quot;);</span>
+<span class="fc" id="L153">        xml.append(&quot;  prunes entries whose directory is missing from disk before\n&quot;);</span>
+<span class="fc" id="L154">        xml.append(&quot;  Maven's model validator gets to them — so a fresh clone\n&quot;);</span>
+<span class="fc" id="L155">        xml.append(&quot;  bootstraps via &quot;).append(WsGoal.SCAFFOLD_INIT.qualified()).append(&quot; without manual edits.\n&quot;);</span>
+<span class="fc" id="L156">        xml.append(&quot;  See IKE-Network/ike-issues#460.\n&quot;);</span>
+<span class="fc" id="L157">        xml.append(&quot;\n&quot;);</span>
+<span class="fc" id="L158">        xml.append(&quot;  Usage:\n&quot;);</span>
+<span class="fc" id="L159">        xml.append(&quot;    mvn clean install                        # All cloned repos\n&quot;);</span>
+<span class="fc" id="L160">        xml.append(&quot;    mvn &quot;).append(WsGoal.SCAFFOLD_INIT.qualified())</span>
+<span class="fc" id="L161">                .append(&quot;                     # Clone all repos\n&quot;);</span>
+<span class="fc" id="L162">        xml.append(&quot;    mvn &quot;).append(WsGoal.OVERVIEW.qualified())</span>
+<span class="fc" id="L163">                .append(&quot;                          # Workspace overview\n&quot;);</span>
+<span class="fc" id="L164">        xml.append(&quot;--&gt;\n&quot;);</span>
+<span class="fc" id="L165">        xml.append(&quot;&lt;project xmlns=\&quot;http://maven.apache.org/POM/4.1.0\&quot;\n&quot;);</span>
+<span class="fc" id="L166">        xml.append(&quot;         xmlns:xsi=\&quot;http://www.w3.org/2001/XMLSchema-instance\&quot;\n&quot;);</span>
+<span class="fc" id="L167">        xml.append(&quot;         xsi:schemaLocation=\&quot;http://maven.apache.org/POM/4.1.0\n&quot;);</span>
+<span class="fc" id="L168">        xml.append(&quot;                             https://maven.apache.org/xsd/maven-4.1.0.xsd\&quot;\n&quot;);</span>
+<span class="fc" id="L169">        xml.append(&quot;         root=\&quot;true\&quot;&gt;\n&quot;);</span>
+<span class="fc" id="L170">        xml.append(&quot;    &lt;modelVersion&gt;4.1.0&lt;/modelVersion&gt;\n\n&quot;);</span>
+<span class="fc" id="L171">        xml.append(&quot;    &lt;parent&gt;\n&quot;);</span>
+<span class="fc" id="L172">        xml.append(&quot;        &lt;groupId&gt;network.ike.platform&lt;/groupId&gt;\n&quot;);</span>
+<span class="fc" id="L173">        xml.append(&quot;        &lt;artifactId&gt;ike-parent&lt;/artifactId&gt;\n&quot;);</span>
+<span class="fc" id="L174">        xml.append(&quot;        &lt;version&gt;&quot;).append(parentVersion).append(&quot;&lt;/version&gt;\n&quot;);</span>
+<span class="fc" id="L175">        xml.append(&quot;        &lt;relativePath/&gt;\n&quot;);</span>
+<span class="fc" id="L176">        xml.append(&quot;    &lt;/parent&gt;\n\n&quot;);</span>
+<span class="fc" id="L177">        xml.append(&quot;    &lt;groupId&gt;&quot;).append(params.group()).append(&quot;&lt;/groupId&gt;\n&quot;);</span>
+<span class="fc" id="L178">        xml.append(&quot;    &lt;artifactId&gt;&quot;).append(params.artifactId()).append(&quot;&lt;/artifactId&gt;\n&quot;);</span>
+<span class="fc" id="L179">        xml.append(&quot;    &lt;version&gt;&quot;).append(params.version()).append(&quot;&lt;/version&gt;\n&quot;);</span>
+<span class="fc" id="L180">        xml.append(&quot;    &lt;packaging&gt;pom&lt;/packaging&gt;\n\n&quot;);</span>
+<span class="fc" id="L181">        xml.append(&quot;    &lt;name&gt;&quot;).append(params.description()).append(&quot;&lt;/name&gt;\n\n&quot;);</span>
+<span class="fc" id="L182">        xml.append(&quot;    &lt;build&gt;\n&quot;);</span>
+<span class="fc" id="L183">        xml.append(&quot;        &lt;plugins&gt;\n&quot;);</span>
+<span class="fc" id="L184">        xml.append(&quot;            &lt;plugin&gt;\n&quot;);</span>
+<span class="fc" id="L185">        xml.append(&quot;                &lt;groupId&gt;network.ike.tooling&lt;/groupId&gt;\n&quot;);</span>
+<span class="fc" id="L186">        xml.append(&quot;                &lt;artifactId&gt;ike-maven-plugin&lt;/artifactId&gt;\n&quot;);</span>
+<span class="fc" id="L187">        xml.append(&quot;                &lt;!-- version from ike-parent pluginManagement --&gt;\n&quot;);</span>
+<span class="fc" id="L188">        xml.append(&quot;            &lt;/plugin&gt;\n&quot;);</span>
+<span class="fc" id="L189">        xml.append(&quot;            &lt;plugin&gt;\n&quot;);</span>
+<span class="fc" id="L190">        xml.append(&quot;                &lt;groupId&gt;network.ike.platform&lt;/groupId&gt;\n&quot;);</span>
+<span class="fc" id="L191">        xml.append(&quot;                &lt;artifactId&gt;ike-workspace-maven-plugin&lt;/artifactId&gt;\n&quot;);</span>
+<span class="fc" id="L192">        xml.append(&quot;                &lt;!-- version from ike-parent pluginManagement --&gt;\n&quot;);</span>
+<span class="fc" id="L193">        xml.append(&quot;            &lt;/plugin&gt;\n&quot;);</span>
+<span class="fc" id="L194">        xml.append(&quot;        &lt;/plugins&gt;\n&quot;);</span>
+<span class="fc" id="L195">        xml.append(&quot;    &lt;/build&gt;\n\n&quot;);</span>
+<span class="fc" id="L196">        xml.append(&quot;    &lt;!-- Subprojects are added by &quot;).append(WsGoal.ADD.qualified())</span>
+<span class="fc" id="L197">                .append(&quot; --&gt;\n&quot;);</span>
+<span class="fc" id="L198">        xml.append(&quot;    &lt;subprojects&gt;\n&quot;);</span>
+<span class="fc" id="L199">        xml.append(&quot;    &lt;/subprojects&gt;\n\n&quot;);</span>
+<span class="fc" id="L200">        xml.append(&quot;&lt;/project&gt;\n&quot;);</span>
+<span class="fc" id="L201">        return xml.toString();</span>
+    }
+
+    // ── .mvn/extensions.xml ─────────────────────────────────────
+
+    /**
+     * Sentinel marking the start of the managed extension block in
+     * {@code .mvn/extensions.xml}. The block between this marker and
+     * {@link #EXTENSIONS_MANAGED_END} is regenerated by
+     * {@code ws:scaffold-init} and {@code ws:scaffold-publish}
+     * (IKE-Network/ike-issues#460) so the ike-workspace-extension
+     * version stays in lockstep with the {@code ike-parent} property.
+     */
+    public static final String EXTENSIONS_MANAGED_BEGIN =
+            &quot;    &lt;!-- ── managed by ws:scaffold-publish (ike-issues#460) ── --&gt;&quot;;
+
+    /** Sentinel marking the end of the managed extension block. */
+    public static final String EXTENSIONS_MANAGED_END =
+            &quot;    &lt;!-- ── /managed ── --&gt;&quot;;
+
+    /**
+     * Generate the workspace {@code .mvn/extensions.xml}. Carries the
+     * {@code wagon-ssh-external} declaration that ike workspaces have
+     * shipped since #338, plus the {@code ike-workspace-extension}
+     * entry that does the {@code &lt;subprojects&gt;} pruning (#460).
+     *
+     * &lt;p&gt;The {@code ike-workspace-extension} entry is wrapped in
+     * sentinel markers ({@link #EXTENSIONS_MANAGED_BEGIN} /
+     * {@link #EXTENSIONS_MANAGED_END}) so subsequent
+     * {@code ws:scaffold-publish} runs can refresh the version
+     * literal in place. Maven 4 does not interpolate POM properties
+     * inside {@code .mvn/extensions.xml} at extension-load time —
+     * the version must be a literal — so the literal is sourced
+     * from the {@code ike-workspace-extension.version} property
+     * declared in {@code ike-parent}.
+     *
+     * @return the {@code .mvn/extensions.xml} text
+     */
+    String generateExtensionsXml() {
+<span class="fc" id="L240">        StringBuilder xml = new StringBuilder(1024);</span>
+<span class="fc" id="L241">        xml.append(&quot;&lt;?xml version=\&quot;1.0\&quot; encoding=\&quot;UTF-8\&quot;?&gt;\n&quot;);</span>
+<span class="fc" id="L242">        xml.append(&quot;&lt;!--\n&quot;);</span>
+<span class="fc" id="L243">        xml.append(&quot;  IKE-Network — .mvn/extensions.xml\n&quot;);</span>
+<span class="fc" id="L244">        xml.append(&quot;\n&quot;);</span>
+<span class="fc" id="L245">        xml.append(&quot;  Maven build extensions loaded at Maven startup, before any\n&quot;);</span>
+<span class="fc" id="L246">        xml.append(&quot;  goal can run. The block between the managed markers below\n&quot;);</span>
+<span class="fc" id="L247">        xml.append(&quot;  is refreshed by &quot;).append(WsGoal.SCAFFOLD_PUBLISH.qualified())</span>
+<span class="fc" id="L248">                .append(&quot;.\n&quot;);</span>
+<span class="fc" id="L249">        xml.append(&quot;--&gt;\n&quot;);</span>
+<span class="fc" id="L250">        xml.append(&quot;&lt;extensions xmlns=\&quot;http://maven.apache.org/EXTENSIONS/1.2.0\&quot;\n&quot;);</span>
+<span class="fc" id="L251">        xml.append(&quot;            xmlns:xsi=\&quot;http://www.w3.org/2001/XMLSchema-instance\&quot;\n&quot;);</span>
+<span class="fc" id="L252">        xml.append(&quot;            xsi:schemaLocation=\&quot;http://maven.apache.org/EXTENSIONS/1.2.0\n&quot;);</span>
+<span class="fc" id="L253">        xml.append(&quot;                                https://maven.apache.org/xsd/core-extensions-1.2.0.xsd\&quot;&gt;\n&quot;);</span>
+<span class="fc" id="L254">        xml.append(&quot;\n&quot;);</span>
+<span class="fc" id="L255">        xml.append(&quot;    &lt;!-- scpexe:// transport for site:deploy to the internal\n&quot;);</span>
+<span class="fc" id="L256">        xml.append(&quot;         mirror. Required by ike-parent's site flow (#338). --&gt;\n&quot;);</span>
+<span class="fc" id="L257">        xml.append(&quot;    &lt;extension&gt;\n&quot;);</span>
+<span class="fc" id="L258">        xml.append(&quot;        &lt;groupId&gt;org.apache.maven.wagon&lt;/groupId&gt;\n&quot;);</span>
+<span class="fc" id="L259">        xml.append(&quot;        &lt;artifactId&gt;wagon-ssh-external&lt;/artifactId&gt;\n&quot;);</span>
+<span class="fc" id="L260">        xml.append(&quot;        &lt;version&gt;3.5.3&lt;/version&gt;\n&quot;);</span>
+<span class="fc" id="L261">        xml.append(&quot;    &lt;/extension&gt;\n&quot;);</span>
+<span class="fc" id="L262">        xml.append(&quot;\n&quot;);</span>
+<span class="fc" id="L263">        xml.append(EXTENSIONS_MANAGED_BEGIN).append(&quot;\n&quot;);</span>
+<span class="fc" id="L264">        xml.append(&quot;    &lt;extension&gt;\n&quot;);</span>
+<span class="fc" id="L265">        xml.append(&quot;        &lt;groupId&gt;network.ike.tooling&lt;/groupId&gt;\n&quot;);</span>
+<span class="fc" id="L266">        xml.append(&quot;        &lt;artifactId&gt;ike-workspace-extension&lt;/artifactId&gt;\n&quot;);</span>
+<span class="fc" id="L267">        xml.append(&quot;        &lt;version&gt;&quot;).append(params.extensionVersion()).append(&quot;&lt;/version&gt;\n&quot;);</span>
+<span class="fc" id="L268">        xml.append(&quot;    &lt;/extension&gt;\n&quot;);</span>
+<span class="fc" id="L269">        xml.append(EXTENSIONS_MANAGED_END).append(&quot;\n&quot;);</span>
+<span class="fc" id="L270">        xml.append(&quot;\n&quot;);</span>
+<span class="fc" id="L271">        xml.append(&quot;&lt;/extensions&gt;\n&quot;);</span>
+<span class="fc" id="L272">        return xml.toString();</span>
+    }
+
+    /**
+     * Refresh the managed ike-workspace-extension block in an
+     * existing {@code .mvn/extensions.xml}. Replaces the
+     * sentinel-bounded block with a freshly-generated one carrying
+     * the current {@code extensionVersion}. When the file predates
+     * the sentinel convention (or lacks an extension entry
+     * entirely), one-time migrates by appending the managed block
+     * before the closing {@code &lt;/extensions&gt;} tag.
+     *
+     * &lt;p&gt;Idempotent. A no-op write is suppressed.
+     *
+     * @param extensionsXmlPath path to the {@code .mvn/extensions.xml}
+     *                          to refresh
+     * @param extensionVersion  the literal version to write
+     * @return {@code true} if the file was rewritten, {@code false}
+     *         when the existing content already matches
+     * @throws IOException on read/write failure
+     */
+    public static boolean refreshExtensionsManagedBlock(Path extensionsXmlPath,
+                                                         String extensionVersion)
+            throws IOException {
+<span class="fc" id="L296">        String existing = Files.readString(extensionsXmlPath, StandardCharsets.UTF_8);</span>
+<span class="fc" id="L297">        String freshBlock = EXTENSIONS_MANAGED_BEGIN + &quot;\n&quot;</span>
+                + &quot;    &lt;extension&gt;\n&quot;
+                + &quot;        &lt;groupId&gt;network.ike.tooling&lt;/groupId&gt;\n&quot;
+                + &quot;        &lt;artifactId&gt;ike-workspace-extension&lt;/artifactId&gt;\n&quot;
+                + &quot;        &lt;version&gt;&quot; + extensionVersion + &quot;&lt;/version&gt;\n&quot;
+                + &quot;    &lt;/extension&gt;\n&quot;
+                + EXTENSIONS_MANAGED_END + &quot;\n&quot;;
+
+<span class="fc" id="L305">        int begin = existing.indexOf(EXTENSIONS_MANAGED_BEGIN);</span>
+<span class="fc" id="L306">        int end = existing.indexOf(EXTENSIONS_MANAGED_END);</span>
+        String rebuilt;
+<span class="pc bpc" id="L308" title="1 of 4 branches missed.">        if (begin &gt;= 0 &amp;&amp; end &gt; begin) {</span>
+<span class="fc" id="L309">            int after = end + EXTENSIONS_MANAGED_END.length();</span>
+<span class="pc bpc" id="L310" title="2 of 4 branches missed.">            if (after &lt; existing.length() &amp;&amp; existing.charAt(after) == '\n') after++;</span>
+<span class="fc" id="L311">            rebuilt = existing.substring(0, begin) + freshBlock + existing.substring(after);</span>
+<span class="fc" id="L312">        } else {</span>
+            // Migrate: strip any pre-existing standalone
+            // ike-workspace-extension &lt;extension&gt; block (operators may
+            // have added the entry by hand before this goal existed),
+            // then insert the managed block immediately before
+            // &lt;/extensions&gt;. Maven 4 refuses duplicate &lt;extension&gt;
+            // entries by groupId:artifactId, so dedup is essential.
+<span class="fc" id="L319">            String stripped = stripExistingExtensionEntry(existing,</span>
+                    &quot;network.ike.tooling&quot;, &quot;ike-workspace-extension&quot;);
+<span class="fc" id="L321">            int close = stripped.lastIndexOf(&quot;&lt;/extensions&gt;&quot;);</span>
+<span class="pc bpc" id="L322" title="1 of 2 branches missed.">            if (close &lt; 0) {</span>
+<span class="nc" id="L323">                throw new IOException(&quot;Cannot locate &lt;/extensions&gt; in &quot;</span>
+                        + extensionsXmlPath);
+            }
+<span class="fc" id="L326">            rebuilt = stripped.substring(0, close)</span>
+                    + &quot;\n&quot; + freshBlock + &quot;\n&quot;
+<span class="fc" id="L328">                    + stripped.substring(close);</span>
+        }
+
+<span class="fc bfc" id="L331" title="All 2 branches covered.">        if (rebuilt.equals(existing)) return false;</span>
+<span class="fc" id="L332">        Files.writeString(extensionsXmlPath, rebuilt, StandardCharsets.UTF_8);</span>
+<span class="fc" id="L333">        return true;</span>
+    }
+
+    /**
+     * Remove every {@code &lt;extension&gt;...&lt;/extension&gt;} block in
+     * {@code xml} whose {@code &lt;groupId&gt;} and {@code &lt;artifactId&gt;}
+     * children equal the supplied values. Used by the
+     * managed-block migration path to drop hand-added entries before
+     * inserting the sentinel-wrapped replacement.
+     *
+     * @param xml         the original XML content
+     * @param groupId     the groupId to match
+     * @param artifactId  the artifactId to match
+     * @return the content with matching extension blocks removed
+     */
+    private static String stripExistingExtensionEntry(String xml,
+                                                       String groupId,
+                                                       String artifactId) {
+        // Match &lt;extension&gt;...&lt;/extension&gt; non-greedily, then test the
+        // contents for the GA pair. A regex pass is sufficient here:
+        // extension entries are always written as self-contained blocks,
+        // never interleaved.
+<span class="fc" id="L355">        java.util.regex.Pattern p = java.util.regex.Pattern.compile(</span>
+                &quot;(?s)[ \\t]*&lt;extension&gt;.*?&lt;/extension&gt;\\s*&quot;);
+<span class="fc" id="L357">        java.util.regex.Matcher m = p.matcher(xml);</span>
+<span class="fc" id="L358">        StringBuilder out = new StringBuilder(xml.length());</span>
+<span class="fc" id="L359">        int last = 0;</span>
+<span class="fc bfc" id="L360" title="All 2 branches covered.">        while (m.find()) {</span>
+<span class="fc" id="L361">            String block = m.group();</span>
+<span class="fc bfc" id="L362" title="All 2 branches covered.">            boolean matches = block.contains(&quot;&lt;groupId&gt;&quot; + groupId + &quot;&lt;/groupId&gt;&quot;)</span>
+<span class="pc bpc" id="L363" title="1 of 2 branches missed.">                    &amp;&amp; block.contains(&quot;&lt;artifactId&gt;&quot; + artifactId + &quot;&lt;/artifactId&gt;&quot;);</span>
+<span class="fc" id="L364">            out.append(xml, last, m.start());</span>
+<span class="fc bfc" id="L365" title="All 2 branches covered.">            if (!matches) {</span>
+<span class="fc" id="L366">                out.append(block);</span>
+            }
+<span class="fc" id="L368">            last = m.end();</span>
+<span class="fc" id="L369">        }</span>
+<span class="fc" id="L370">        out.append(xml, last, xml.length());</span>
+<span class="fc" id="L371">        return out.toString();</span>
+    }
+
+    /**
+     * Sentinel marking the start of the managed comment header in
+     * {@code workspace.yaml}. The block between this marker and
+     * {@link #MANAGED_END} is regenerated by {@code ws:scaffold-init}
+     * on every run (IKE-Network/ike-issues#458) so the bootstrap
+     * instructions stay in lockstep with current goal names.
+     */
+    public static final String MANAGED_BEGIN =
+            &quot;# ── managed: ws:scaffold-init regenerates this block ──&quot;;
+
+    /** Sentinel marking the end of the managed comment header. */
+    public static final String MANAGED_END = &quot;# ── /managed ──&quot;;
+
+    /**
+     * Build the managed comment header that leads {@code workspace.yaml}.
+     * Wrapped in {@link #MANAGED_BEGIN} / {@link #MANAGED_END} sentinels
+     * so {@link #refreshManagedHeader} can replace it in place on every
+     * {@code ws:scaffold-init} run (ike-issues#458). Hardcoded goal-name
+     * strings are forbidden — they are pulled from {@link WsGoal} so a
+     * goal rename propagates.
+     *
+     * @param name        the workspace name
+     * @param description the workspace description; falls back to
+     *                    {@code name} when blank
+     * @param org         the GitHub org for the clone URL; rendered as
+     *                    {@code &lt;org&gt;} when {@code null} or blank
+     * @return the sentinel-bounded header, ending in a blank line
+     */
+    public static String managedHeader(String name, String description, String org) {
+<span class="pc bpc" id="L403" title="2 of 4 branches missed.">        String desc = (description == null || description.isBlank()) ? name : description;</span>
+<span class="fc bfc" id="L404" title="All 4 branches covered.">        String orgName = (org == null || org.isBlank()) ? &quot;&lt;org&gt;&quot; : org;</span>
+
+<span class="fc" id="L406">        StringBuilder yaml = new StringBuilder(512);</span>
+<span class="fc" id="L407">        yaml.append(MANAGED_BEGIN).append(&quot;\n&quot;);</span>
+<span class="fc" id="L408">        yaml.append(&quot;# workspace.yaml — &quot;).append(name).append(&quot;\n&quot;);</span>
+<span class="fc" id="L409">        yaml.append(&quot;# &quot;).append(&quot;═&quot;.repeat(name.length() + 22)).append(&quot;\n&quot;);</span>
+<span class="fc" id="L410">        yaml.append(&quot;#\n&quot;);</span>
+<span class="fc" id="L411">        yaml.append(&quot;# &quot;).append(desc).append(&quot;\n&quot;);</span>
+<span class="fc" id="L412">        yaml.append(&quot;#\n&quot;);</span>
+<span class="fc" id="L413">        yaml.append(&quot;# Bootstrap:\n&quot;);</span>
+<span class="fc" id="L414">        yaml.append(&quot;#   git clone https://github.com/&quot;).append(orgName).append(&quot;/&quot;).append(name).append(&quot;.git\n&quot;);</span>
+<span class="fc" id="L415">        yaml.append(&quot;#   cd &quot;).append(name).append(&quot;\n&quot;);</span>
+<span class="fc" id="L416">        yaml.append(&quot;#   mvn &quot;).append(WsGoal.SCAFFOLD_INIT.qualified()).append(&quot;\n&quot;);</span>
+<span class="fc" id="L417">        yaml.append(&quot;#   mvn clean install\n&quot;);</span>
+<span class="fc" id="L418">        yaml.append(MANAGED_END).append(&quot;\n\n&quot;);</span>
+<span class="fc" id="L419">        return yaml.toString();</span>
+    }
+
+    /**
+     * Refresh the managed comment header in an existing
+     * {@code workspace.yaml}. Replaces the block between
+     * {@link #MANAGED_BEGIN} and {@link #MANAGED_END} with freshly-
+     * generated text. When the file predates the sentinel convention,
+     * one-time migrates by stripping the legacy leading {@code #}-prefix
+     * comment block (consecutive comment-or-blank lines from the start
+     * of file, terminated by the first non-comment non-blank line) and
+     * prepending the new sentinel-bounded block.
+     *
+     * &lt;p&gt;Idempotent. A no-op write is suppressed.
+     *
+     * @param yamlPath     path to the {@code workspace.yaml} to refresh
+     * @param name         the workspace name (typically the workspace
+     *                     directory name)
+     * @param description  the workspace description; falls back to
+     *                     {@code name} when blank
+     * @param org          the GitHub org; {@code null} renders as
+     *                     {@code &lt;org&gt;} placeholder
+     * @return {@code true} if the file was rewritten, {@code false} when
+     *         the existing header already matches
+     * @throws IOException on read/write failure
+     */
+    public static boolean refreshManagedHeader(Path yamlPath, String name,
+                                                String description, String org)
+            throws IOException {
+<span class="fc" id="L448">        String existing = Files.readString(yamlPath, StandardCharsets.UTF_8);</span>
+<span class="fc" id="L449">        String fresh = managedHeader(name, description, org);</span>
+
+<span class="fc" id="L451">        int begin = existing.indexOf(MANAGED_BEGIN);</span>
+<span class="fc" id="L452">        int end = existing.indexOf(MANAGED_END);</span>
+        String rebuilt;
+<span class="pc bpc" id="L454" title="1 of 4 branches missed.">        if (begin &gt;= 0 &amp;&amp; end &gt; begin) {</span>
+            // Sentinel-bounded — replace the block (including trailing
+            // newline after MANAGED_END and one optional blank line).
+<span class="fc" id="L457">            int after = end + MANAGED_END.length();</span>
+<span class="pc bpc" id="L458" title="2 of 4 branches missed.">            if (after &lt; existing.length() &amp;&amp; existing.charAt(after) == '\n') after++;</span>
+<span class="pc bpc" id="L459" title="2 of 4 branches missed.">            if (after &lt; existing.length() &amp;&amp; existing.charAt(after) == '\n') after++;</span>
+<span class="fc" id="L460">            rebuilt = existing.substring(0, begin) + fresh + existing.substring(after);</span>
+<span class="fc" id="L461">        } else {</span>
+            // Legacy file with no sentinels — strip the leading comment
+            // block (consecutive #/blank lines from start of file).
+<span class="fc" id="L464">            int i = 0;</span>
+<span class="pc bpc" id="L465" title="1 of 2 branches missed.">            while (i &lt; existing.length()) {</span>
+<span class="fc" id="L466">                int eol = existing.indexOf('\n', i);</span>
+<span class="pc bpc" id="L467" title="1 of 2 branches missed.">                if (eol &lt; 0) eol = existing.length();</span>
+<span class="fc" id="L468">                String line = existing.substring(i, eol);</span>
+<span class="fc bfc" id="L469" title="All 4 branches covered.">                if (!line.isBlank() &amp;&amp; !line.startsWith(&quot;#&quot;)) break;</span>
+<span class="pc bpc" id="L470" title="1 of 2 branches missed.">                i = eol + (eol &lt; existing.length() ? 1 : 0);</span>
+<span class="fc" id="L471">            }</span>
+<span class="fc" id="L472">            rebuilt = fresh + existing.substring(i);</span>
+        }
+
+<span class="fc bfc" id="L475" title="All 2 branches covered.">        if (rebuilt.equals(existing)) return false;</span>
+<span class="fc" id="L476">        Files.writeString(yamlPath, rebuilt, StandardCharsets.UTF_8);</span>
+<span class="fc" id="L477">        return true;</span>
+    }
+
+    /**
+     * Generate the {@code workspace.yaml} manifest content. Package-private
+     * for tests.
+     *
+     * @return the YAML text
+     */
+    String generateManifest() {
+<span class="fc" id="L487">        String today = LocalDate.now().toString();</span>
+
+<span class="fc" id="L489">        StringBuilder yaml = new StringBuilder(1024);</span>
+<span class="fc" id="L490">        yaml.append(managedHeader(params.name(), params.description(), params.org()));</span>
+<span class="fc" id="L491">        yaml.append(&quot;schema-version: \&quot;1.1\&quot;\n&quot;);</span>
+<span class="fc" id="L492">        yaml.append(&quot;generated: &quot;).append(today).append(&quot;\n\n&quot;);</span>
+        // Workspace root coordinates (#183) — real GAV for ws:release-publish,
+        // ws:align-publish, and site deploy to address. Single-segment monotonic
+        // version (not semver — per feedback_no_semver_assumption).
+<span class="fc" id="L496">        yaml.append(&quot;workspace-root:\n&quot;);</span>
+<span class="fc" id="L497">        yaml.append(&quot;  groupId: &quot;).append(params.group()).append(&quot;\n&quot;);</span>
+<span class="fc" id="L498">        yaml.append(&quot;  artifactId: &quot;).append(params.artifactId()).append(&quot;\n&quot;);</span>
+<span class="fc" id="L499">        yaml.append(&quot;  version: &quot;).append(params.version()).append(&quot;\n\n&quot;);</span>
+<span class="fc" id="L500">        yaml.append(&quot;defaults:\n&quot;);</span>
+<span class="fc" id="L501">        yaml.append(&quot;  branch: &quot;).append(params.defaultBranch()).append(&quot;\n&quot;);</span>
+<span class="fc" id="L502">        yaml.append(&quot;  maven-version: \&quot;&quot;).append(params.mavenVersion()).append(&quot;\&quot;\n\n&quot;);</span>
+<span class="fc" id="L503">        yaml.append(&quot;subprojects:\n&quot;);</span>
+<span class="fc" id="L504">        yaml.append(&quot;  # Add subprojects with: mvn &quot; + WsGoal.ADD.qualified()</span>
+                + &quot; -Drepo=&lt;git-url&gt;\n\n&quot;);
+<span class="fc" id="L506">        yaml.append(&quot;# Optional: IntelliJ project settings shared across collaborators.\n&quot;);</span>
+<span class="fc" id="L507">        yaml.append(&quot;# Uncomment and set to have `&quot; + WsGoal.SCAFFOLD_PUBLISH.qualified()</span>
+                + &quot;` enforce these values in\n&quot;);
+<span class="fc" id="L509">        yaml.append(&quot;# .idea/misc.xml on every run. Useful when the project uses\n&quot;);</span>
+<span class="fc" id="L510">        yaml.append(&quot;# --enable-preview (set language-level to JDK_NN_PREVIEW).\n&quot;);</span>
+<span class="fc" id="L511">        yaml.append(&quot;# ide:\n&quot;);</span>
+<span class="fc" id="L512">        yaml.append(&quot;#   language-level: JDK_25_PREVIEW\n&quot;);</span>
+<span class="fc" id="L513">        yaml.append(&quot;#   jdk-name: \&quot;25\&quot;\n&quot;);</span>
+<span class="fc" id="L514">        return yaml.toString();</span>
+    }
+
+    /**
+     * Generate the workspace {@code .gitignore} using the whitelist
+     * strategy: ignore everything by default, then allowlist only
+     * workspace-owned files. Subproject repos are independent git
+     * repos cloned by {@code ws:scaffold-init}, so they must stay
+     * ignored at the workspace level.
+     *
+     * &lt;p&gt;The generated file includes a curated {@code .idea/} slice so
+     * that fresh checkouts land at the correct IntelliJ project
+     * settings (JDK, language level including preview mode, encoding,
+     * Maven repositories) without per-collaborator manual setup.
+     * {@code compiler.xml} and {@code vcs.xml} are intentionally not
+     * allowlisted — they regenerate on every Maven reload or per
+     * workspace membership and would cause constant diff churn.
+     * User-specific state ({@code workspace.xml}, {@code shelf/},
+     * {@code httpRequests/}) is excluded by IntelliJ's own
+     * {@code .idea/.gitignore}.
+     *
+     * @return the {@code .gitignore} content
+     */
+    String generateGitignore() {
+<span class="nc" id="L538">        StringBuilder gi = new StringBuilder(768);</span>
+<span class="nc" id="L539">        gi.append(&quot;# &quot;).append(params.name()).append(&quot; .gitignore\n&quot;);</span>
+<span class="nc" id="L540">        gi.append(&quot;# &quot;).append(&quot;═&quot;.repeat(params.name().length() + 11)).append(&quot;\n&quot;);</span>
+<span class="nc" id="L541">        gi.append(&quot;#\n&quot;);</span>
+<span class="nc" id="L542">        gi.append(&quot;# Ignore everything, whitelist only workspace-owned files.\n&quot;);</span>
+<span class="nc" id="L543">        gi.append(&quot;# Subproject repos are independent git repos cloned by &quot;</span>
+<span class="nc" id="L544">                + WsGoal.SCAFFOLD_INIT.qualified() + &quot;.\n\n&quot;);</span>
+<span class="nc" id="L545">        gi.append(&quot;# ── Ignore everything by default ─────────────────────────────────\n&quot;);</span>
+<span class="nc" id="L546">        gi.append(&quot;*\n\n&quot;);</span>
+<span class="nc" id="L547">        gi.append(&quot;# ── Whitelist workspace-level files ──────────────────────────────\n&quot;);</span>
+<span class="nc" id="L548">        gi.append(&quot;!.gitignore\n&quot;);</span>
+<span class="nc" id="L549">        gi.append(&quot;!pom.xml\n&quot;);</span>
+<span class="nc" id="L550">        gi.append(&quot;!workspace.yaml\n&quot;);</span>
+<span class="nc" id="L551">        gi.append(&quot;!README.adoc\n&quot;);</span>
+<span class="nc" id="L552">        gi.append(&quot;!GOALS.md\n&quot;);</span>
+<span class="nc" id="L553">        gi.append(&quot;!WS-REFERENCE.md\n&quot;);</span>
+<span class="nc" id="L554">        gi.append(&quot;!mvnw\n&quot;);</span>
+<span class="nc" id="L555">        gi.append(&quot;!mvnw.cmd\n\n&quot;);</span>
+<span class="nc" id="L556">        gi.append(&quot;# ── Whitelist workspace-owned directories ────────────────────────\n&quot;);</span>
+<span class="nc" id="L557">        gi.append(&quot;!.mvn/\n&quot;);</span>
+<span class="nc" id="L558">        gi.append(&quot;!.mvn/**\n&quot;);</span>
+<span class="nc" id="L559">        gi.append(&quot;!checkpoints/\n&quot;);</span>
+<span class="nc" id="L560">        gi.append(&quot;!checkpoints/**\n&quot;);</span>
+<span class="nc" id="L561">        gi.append(&quot;!.run/\n&quot;);</span>
+<span class="nc" id="L562">        gi.append(&quot;!.run/**\n\n&quot;);</span>
+<span class="nc" id="L563">        gi.append(&quot;# ── IntelliJ project config (curated slice) ──────────────────────\n&quot;);</span>
+<span class="nc" id="L564">        gi.append(&quot;# Small, stable project-wide settings shared across collaborators.\n&quot;);</span>
+<span class="nc" id="L565">        gi.append(&quot;# compiler.xml and vcs.xml are excluded — they regenerate per\n&quot;);</span>
+<span class="nc" id="L566">        gi.append(&quot;# Maven reload or per workspace membership.\n&quot;);</span>
+<span class="nc" id="L567">        gi.append(&quot;!.idea/\n&quot;);</span>
+<span class="nc" id="L568">        gi.append(&quot;!.idea/.gitignore\n&quot;);</span>
+<span class="nc" id="L569">        gi.append(&quot;!.idea/misc.xml\n&quot;);</span>
+<span class="nc" id="L570">        gi.append(&quot;!.idea/kotlinc.xml\n&quot;);</span>
+<span class="nc" id="L571">        gi.append(&quot;!.idea/encodings.xml\n&quot;);</span>
+<span class="nc" id="L572">        gi.append(&quot;!.idea/jarRepositories.xml\n&quot;);</span>
+<span class="nc" id="L573">        return gi.toString();</span>
+    }
+
+    /**
+     * Generate the boilerplate {@code README.adoc}.
+     *
+     * @return the AsciiDoc content
+     */
+    String generateReadme() {
+<span class="nc bnc" id="L582" title="All 2 branches missed.">        String orgName = params.org() != null ? params.org() : &quot;&lt;org&gt;&quot;;</span>
+
+<span class="nc" id="L584">        StringBuilder adoc = new StringBuilder(1024);</span>
+<span class="nc" id="L585">        adoc.append(&quot;= &quot;).append(params.description()).append(&quot;\n&quot;);</span>
+<span class="nc" id="L586">        adoc.append(&quot;:toc:\n&quot;);</span>
+<span class="nc" id="L587">        adoc.append(&quot;:toc-placement!:\n\n&quot;);</span>
+<span class="nc" id="L588">        adoc.append(params.description()).append(&quot;\n\n&quot;);</span>
+<span class="nc" id="L589">        adoc.append(&quot;toc::[]\n\n&quot;);</span>
+<span class="nc" id="L590">        adoc.append(&quot;== Bootstrap\n\n&quot;);</span>
+<span class="nc" id="L591">        adoc.append(&quot;[source,bash]\n&quot;);</span>
+<span class="nc" id="L592">        adoc.append(&quot;----\n&quot;);</span>
+<span class="nc" id="L593">        adoc.append(&quot;git clone https://github.com/&quot;).append(orgName).append(&quot;/&quot;).append(params.name()).append(&quot;.git\n&quot;);</span>
+<span class="nc" id="L594">        adoc.append(&quot;cd &quot;).append(params.name()).append(&quot;\n&quot;);</span>
+<span class="nc" id="L595">        adoc.append(&quot;mvn &quot; + WsGoal.SCAFFOLD_INIT.qualified() + &quot;   # &lt;1&gt;\n&quot;);</span>
+<span class="nc" id="L596">        adoc.append(&quot;mvn clean install      # &lt;2&gt;\n&quot;);</span>
+<span class="nc" id="L597">        adoc.append(&quot;----\n&quot;);</span>
+<span class="nc" id="L598">        adoc.append(&quot;&lt;1&gt; Clones all subproject repos in dependency order; installs Maven\n&quot;);</span>
+<span class="nc" id="L599">        adoc.append(&quot;    wrapper and JVM config per subproject.\n&quot;);</span>
+<span class="nc" id="L600">        adoc.append(&quot;&lt;2&gt; Builds the full stack.\n\n&quot;);</span>
+<span class="nc" id="L601">        adoc.append(&quot;== Workspace Commands\n\n&quot;);</span>
+<span class="nc" id="L602">        adoc.append(&quot;All `ws:` goals appear in the IntelliJ Maven tool window\n&quot;);</span>
+<span class="nc" id="L603">        adoc.append(&quot;(under _Plugins &gt; ws_). Double-click any goal to run it.\n\n&quot;);</span>
+<span class="nc" id="L604">        adoc.append(&quot;[source,bash]\n&quot;);</span>
+<span class="nc" id="L605">        adoc.append(&quot;----\n&quot;);</span>
+<span class="nc" id="L606">        adoc.append(&quot;mvn &quot; + WsGoal.OVERVIEW.qualified()</span>
+                + &quot;          # Workspace overview\n&quot;);
+<span class="nc" id="L608">        adoc.append(&quot;mvn &quot; + WsGoal.ADD.qualified()</span>
+                + &quot; -Drepo=      # Add a subproject repo\n&quot;);
+<span class="nc" id="L610">        adoc.append(&quot;mvn &quot; + WsGoal.SCAFFOLD_DRAFT.qualified()</span>
+                + &quot;          # Preview scaffold and reconciliation drift\n&quot;);
+<span class="nc" id="L612">        adoc.append(&quot;----\n&quot;);</span>
+<span class="nc" id="L613">        return adoc.toString();</span>
+    }
+
+    // ── Git init ────────────────────────────────────────────────
+
+    private void initGit(Path wsDir) throws MojoException {
+<span class="nc" id="L619">        ReleaseSupport.exec(wsDir.toFile(), log, &quot;git&quot;, &quot;init&quot;);</span>
+<span class="nc" id="L620">        log.info(Ansi.green(&quot;  ✓ &quot;) + &quot;git init&quot;);</span>
+
+<span class="nc bnc" id="L622" title="All 4 branches missed.">        if (params.org() != null &amp;&amp; !params.org().isBlank()) {</span>
+<span class="nc" id="L623">            String remoteUrl = &quot;https://github.com/&quot; + params.org() + &quot;/&quot;</span>
+<span class="nc" id="L624">                    + params.name() + &quot;.git&quot;;</span>
+<span class="nc" id="L625">            ReleaseSupport.exec(wsDir.toFile(), log,</span>
+                    &quot;git&quot;, &quot;remote&quot;, &quot;add&quot;, &quot;origin&quot;, remoteUrl);
+<span class="nc" id="L627">            log.info(Ansi.green(&quot;  ✓ &quot;) + &quot;remote: &quot; + remoteUrl);</span>
+        }
+
+        // Auto-commit scaffold so ws:add and ws:feature-start have a
+        // baseline commit to work from.
+        try {
+<span class="nc" id="L633">            ReleaseSupport.exec(wsDir.toFile(), log,</span>
+                    &quot;git&quot;, &quot;add&quot;, &quot;.&quot;);
+<span class="nc" id="L635">            ReleaseSupport.exec(wsDir.toFile(), log,</span>
+                    &quot;git&quot;, &quot;commit&quot;, &quot;-m&quot;, &quot;workspace: initial scaffold&quot;);
+<span class="nc" id="L637">            log.info(Ansi.green(&quot;  ✓ &quot;) + &quot;initial commit&quot;);</span>
+<span class="nc" id="L638">        } catch (MojoException e) {</span>
+<span class="nc" id="L639">            log.warn(&quot;  Auto-commit failed (set git user.email/user.name): &quot;</span>
+<span class="nc" id="L640">                    + e.getMessage());</span>
+<span class="nc" id="L641">        }</span>
+<span class="nc" id="L642">    }</span>
+
+    private static void writeFile(Path path, String content) throws IOException {
+<span class="nc" id="L645">        Files.writeString(path, content, StandardCharsets.UTF_8);</span>
+<span class="nc" id="L646">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

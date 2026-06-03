@@ -190,8 +190,13 @@ public class FeatureFinishMergeDraftMojo extends AbstractWorkspaceMojo {
 
         // Refresh local main from origin/main before merging the feature
         // branch in. Avoids shipping the feature on top of stale main.
+        // In draft, preview read-only — never mutate local main (#570).
         // See ike-issues#284.
-        RefreshMainSupport.refreshOrThrow(root, eligible, targetBranch, getLog());
+        if (publish) {
+            RefreshMainSupport.refreshOrThrow(root, eligible, targetBranch, getLog());
+        } else {
+            RefreshMainSupport.previewRefresh(root, eligible, targetBranch, getLog());
+        }
 
         // Auto-generate commit message from per-subproject history
         String generatedMessage = FeatureFinishSupport.generateFeatureMessage(

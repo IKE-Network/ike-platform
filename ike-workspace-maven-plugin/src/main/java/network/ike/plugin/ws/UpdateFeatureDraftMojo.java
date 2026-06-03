@@ -164,8 +164,13 @@ public class UpdateFeatureDraftMojo extends AbstractWorkspaceMojo {
         }
 
         // Refresh local main from origin/main across eligible components
-        // before any feature-side comparison or merge. See ike-issues#284.
-        RefreshMainSupport.refreshOrThrow(root, eligible, targetBranch, getLog());
+        // before any feature-side comparison or merge. In draft, preview
+        // read-only — never mutate local main (#570). See ike-issues#284.
+        if (publish) {
+            RefreshMainSupport.refreshOrThrow(root, eligible, targetBranch, getLog());
+        } else {
+            RefreshMainSupport.previewRefresh(root, eligible, targetBranch, getLog());
+        }
 
         // Show how far behind each subproject is + collect report data
         List<String[]> reportRows = new ArrayList<>();

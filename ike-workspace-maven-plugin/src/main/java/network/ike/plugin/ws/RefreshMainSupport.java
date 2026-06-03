@@ -118,11 +118,15 @@ final class RefreshMainSupport {
      * @param mainBranch    the conceptual main branch (e.g. {@code "main"})
      * @param remote        remote name (e.g. {@code "origin"})
      * @param log           Maven logger
-     * @return outcome describing what was done
+     * @param preview       when {@code true}, classify only — the fetch
+     *                      is read-only (remote-tracking refs) and no
+     *                      local-main mutation is performed (#570)
+     * @return outcome describing what was (or, in preview, would be) done
      * @throws MojoException if a git operation fails for an unexpected reason
      */
     static Outcome refresh(File subprojectDir, String component,
-                           String mainBranch, String remote, Log log)
+                           String mainBranch, String remote, Log log,
+                           boolean preview)
             throws MojoException {
         File gitDir = new File(subprojectDir, ".git");
         if (!gitDir.exists()) {
@@ -132,13 +136,17 @@ final class RefreshMainSupport {
             return new Skipped(component, "no '" + remote + "' remote");
         }
 
+        // Read-only: updates remote-tracking refs only — never local
+        // main or the working tree. Safe in preview mode.
         VcsOperations.fetch(subprojectDir, log);
 
         String remoteRef = remote + "/" + mainBranch;
 
         // Fresh-clone case: local main does not exist yet.
         if (!VcsOperations.localBranchExists(subprojectDir, mainBranch)) {
-            VcsOperations.fetchRef(subprojectDir, log, remote, mainBranch);
+            if (!preview) {
+                VcsOperations.fetchRef(subprojectDir, log, remote, mainBranch);
+            }
             return new CreatedFromRemote(component);
         }
 
@@ -153,7 +161,9 @@ final class RefreshMainSupport {
         if (localIsAncestor) {
             int behind = VcsOperations.commitLog(
                     subprojectDir, mainBranch, remoteRef).size();
-            fastForwardLocalMain(subprojectDir, log, mainBranch, remote, remoteRef);
+            if (!preview) {
+                fastForwardLocalMain(subprojectDir, log, mainBranch, remote, remoteRef);
+            }
             return new FastForwarded(component, behind);
         }
         if (remoteIsAncestor) {
@@ -173,7 +183,9 @@ final class RefreshMainSupport {
                 subprojectDir, remoteRef, mainBranch).size();
         int remoteCommits = VcsOperations.commitLog(
                 subprojectDir, mainBranch, remoteRef).size();
-        autoResolveDiverged(subprojectDir, log, mainBranch, remoteRef);
+        if (!preview) {
+            autoResolveDiverged(subprojectDir, log, mainBranch, remoteRef);
+        }
         return new AutoResolved(component, localCommits, remoteCommits);
     }
 
@@ -189,6 +201,8 @@ final class RefreshMainSupport {
      * @param mainBranch    the conceptual main branch (e.g. {@code "main"})
      * @param remote        remote name (e.g. {@code "origin"})
      * @param log           Maven logger
+     * @param preview       when {@code true}, classify only (read-only) —
+     *                      see {@link #refresh}
      * @return outcomes in the same order as {@code components}
      * @throws MojoException if a git operation fails for an unexpected reason
      */
@@ -196,11 +210,12 @@ final class RefreshMainSupport {
                                     List<String> components,
                                     String mainBranch,
                                     String remote,
-                                    Log log) throws MojoException {
+                                    Log log,
+                                    boolean preview) throws MojoException {
         List<Outcome> results = new ArrayList<>(components.size());
         for (String name : components) {
             File dir = new File(workspaceRoot, name);
-            results.add(refresh(dir, name, mainBranch, remote, log));
+            results.add(refresh(dir, name, mainBranch, remote, log, preview));
         }
         return results;
     }
@@ -238,7 +253,7 @@ final class RefreshMainSupport {
         log.info("  " + Ansi.cyan("→ ") + "Refreshing local " + mainBranch
                 + " from " + DEFAULT_REMOTE + "/" + mainBranch + "...");
         List<Outcome> outcomes = refreshAll(workspaceRoot, components,
-                mainBranch, DEFAULT_REMOTE, log);
+                mainBranch, DEFAULT_REMOTE, log, false);
         for (Outcome o : outcomes) {
             log.info("    " + describe(o));
         }
@@ -266,28 +281,100 @@ final class RefreshMainSupport {
     }
 
     /**
-     * Format a one-line user-facing summary of an outcome for log output.
+     * Read-only counterpart to {@link #refreshOrThrow}: fetch each
+     * subproject (updating remote-tracking refs only) and report how
+     * local {@code mainBranch} relates to {@code origin/mainBranch} —
+     * "up to date", "N behind, would fast-forward", "diverged, would
+     * create a merge commit", etc. — <em>without</em> mutating local main
+     * or the working tree. Use from {@code *-draft} goals so a preview
+     * never changes git state (#570).
+     *
+     * <p>Conflict outcomes are warned, not thrown: a draft reports the
+     * full picture and leaves the hard stop to the matching
+     * {@code *-publish} run.
+     *
+     * @param workspaceRoot workspace root directory
+     * @param components    subproject names to inspect, in order
+     * @param mainBranch    the conceptual main branch (e.g. {@code "main"})
+     * @param log           Maven logger
+     * @return outcomes in the same order as {@code components}
+     * @throws MojoException if a git operation fails for an unexpected reason
+     */
+    static List<Outcome> previewRefresh(File workspaceRoot,
+                                        List<String> components,
+                                        String mainBranch,
+                                        Log log) throws MojoException {
+        log.info("  " + Ansi.cyan("→ ") + "Checking local " + mainBranch
+                + " vs " + DEFAULT_REMOTE + "/" + mainBranch
+                + " (read-only — no changes)...");
+        List<Outcome> outcomes = refreshAll(workspaceRoot, components,
+                mainBranch, DEFAULT_REMOTE, log, true);
+        for (Outcome o : outcomes) {
+            log.info("    " + describe(o, true));
+        }
+        List<Conflicts> conflicts = conflictsIn(outcomes);
+        if (!conflicts.isEmpty()) {
+            log.warn("  " + Ansi.yellow("⚠ ") + "local " + mainBranch
+                    + " has diverged from " + DEFAULT_REMOTE + "/" + mainBranch
+                    + " in " + conflicts.size() + " subproject(s); the publish run "
+                    + "would need a manual merge there first.");
+        }
+        log.info("");
+        return outcomes;
+    }
+
+    /**
+     * Format a one-line user-facing summary of an outcome for log output
+     * (past tense, for a {@code *-publish} refresh that already ran).
      */
     static String describe(Outcome outcome) {
+        return describe(outcome, false);
+    }
+
+    /**
+     * Format a one-line summary of an outcome. When {@code preview} is
+     * {@code true}, render in the future tense ("would …"), since a
+     * preview performs no local-main mutation (#570).
+     *
+     * @param outcome the outcome to describe
+     * @param preview render future tense ("would …") rather than past
+     * @return a one-line, user-facing summary
+     */
+    static String describe(Outcome outcome, boolean preview) {
         return switch (outcome) {
             case Skipped(var c, var r) ->
                     c + " — skipped (" + r + ")";
             case UpToDate(var c) ->
                     c + " — main up to date";
             case FastForwarded(var c, var n) ->
-                    c + " — main fast-forwarded (" + n + " commit"
-                            + (n == 1 ? "" : "s") + ")";
+                    preview
+                        ? c + " — main is " + n + " behind " + DEFAULT_REMOTE
+                                + "/main; would fast-forward"
+                        : c + " — main fast-forwarded (" + n + " commit"
+                                + (n == 1 ? "" : "s") + ")";
             case CreatedFromRemote(var c) ->
-                    c + " — main created from origin/main";
+                    preview
+                        ? c + " — no local main; would create from "
+                                + DEFAULT_REMOTE + "/main"
+                        : c + " — main created from origin/main";
             case AheadOnly(var c, var n) ->
                     c + " — local main has " + n + " unpushed commit"
-                            + (n == 1 ? "" : "s") + "; left as-is";
+                            + (n == 1 ? "" : "s")
+                            + (preview ? "; would leave as-is" : "; left as-is");
             case AutoResolved(var c, var local, var remote) ->
-                    c + " — auto-resolved divergent main (kept " + local
-                            + " local, merged " + remote + " from origin)";
+                    preview
+                        ? c + " — main and " + DEFAULT_REMOTE + "/main have "
+                                + "diverged; would create a merge commit (keep "
+                                + local + " local, merge " + remote + " from origin)"
+                        : c + " — auto-resolved divergent main (kept " + local
+                                + " local, merged " + remote + " from origin)";
             case Conflicts(var c, var files) ->
-                    c + " — divergent main, " + files.size() + " file conflict"
-                            + (files.size() == 1 ? "" : "s");
+                    preview
+                        ? c + " — divergent main; would conflict in "
+                                + files.size() + " file"
+                                + (files.size() == 1 ? "" : "s")
+                        : c + " — divergent main, " + files.size() + " file conflict"
+                                + (files.size() == 1 ? "" : "s");
         };
     }
 

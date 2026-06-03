@@ -211,8 +211,13 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
 
         // Refresh local main from origin/main before squash-merging the
         // feature branch in. Avoids shipping the feature on top of stale
-        // main. See ike-issues#284.
-        RefreshMainSupport.refreshOrThrow(root, eligible, targetBranch, getLog());
+        // main. In draft, preview read-only — never mutate local main
+        // (#570). See ike-issues#284.
+        if (publish) {
+            RefreshMainSupport.refreshOrThrow(root, eligible, targetBranch, getLog());
+        } else {
+            RefreshMainSupport.previewRefresh(root, eligible, targetBranch, getLog());
+        }
 
         // #531: auto-generate the squash commit message from per-subproject
         // feature-branch history when -Dmessage was not supplied. When the

@@ -508,9 +508,13 @@ public final class WorkspaceBootstrap {
                 + "` enforce these values in\n");
         yaml.append("# .idea/misc.xml on every run. Useful when the project uses\n");
         yaml.append("# --enable-preview (set language-level to JDK_NN_PREVIEW).\n");
+        yaml.append("# track-misc-xml commits .idea/misc.xml to git; leave it false\n");
+        yaml.append("# (the default) when developers toggle Maven profiles locally,\n");
+        yaml.append("# since those toggles live in misc.xml (ike-issues#571).\n");
         yaml.append("# ide:\n");
         yaml.append("#   language-level: JDK_25_PREVIEW\n");
         yaml.append("#   jdk-name: \"25\"\n");
+        yaml.append("#   track-misc-xml: false\n");
         return yaml.toString();
     }
 
@@ -528,9 +532,12 @@ public final class WorkspaceBootstrap {
      * {@code compiler.xml} and {@code vcs.xml} are intentionally not
      * allowlisted — they regenerate on every Maven reload or per
      * workspace membership and would cause constant diff churn.
-     * User-specific state ({@code workspace.xml}, {@code shelf/},
-     * {@code httpRequests/}) is excluded by IntelliJ's own
-     * {@code .idea/.gitignore}.
+     * {@code misc.xml} is also excluded by default — it co-mingles
+     * per-machine Maven profile selection; opt in to tracking it with
+     * {@code ide.track-misc-xml: true} in {@code workspace.yaml}
+     * (IKE-Network/ike-issues#571). User-specific state
+     * ({@code workspace.xml}, {@code shelf/}, {@code httpRequests/}) is
+     * excluded by IntelliJ's own {@code .idea/.gitignore}.
      *
      * @return the {@code .gitignore} content
      */
@@ -563,10 +570,11 @@ public final class WorkspaceBootstrap {
         gi.append("# ── IntelliJ project config (curated slice) ──────────────────────\n");
         gi.append("# Small, stable project-wide settings shared across collaborators.\n");
         gi.append("# compiler.xml and vcs.xml are excluded — they regenerate per\n");
-        gi.append("# Maven reload or per workspace membership.\n");
+        gi.append("# Maven reload or per workspace membership. misc.xml is excluded\n");
+        gi.append("# by default (per-machine Maven profile selection); opt in with\n");
+        gi.append("# `ide.track-misc-xml: true` in workspace.yaml (ike-issues#571).\n");
         gi.append("!.idea/\n");
         gi.append("!.idea/.gitignore\n");
-        gi.append("!.idea/misc.xml\n");
         gi.append("!.idea/kotlinc.xml\n");
         gi.append("!.idea/encodings.xml\n");
         gi.append("!.idea/jarRepositories.xml\n");

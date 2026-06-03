@@ -134,7 +134,7 @@ public class ScaffoldConventionReconciler implements Reconciler {
         Log log = ctx.log();
 
         upgradeGlobalGitignore(run, publish, log);
-        upgradeWorkspaceGitignore(root, run, publish, log);
+        upgradeWorkspaceGitignore(ctx, root, run, publish, log);
         upgradeStignoreShared(root, run, publish, log);
         upgradePomRoot(root, run, publish, log);
         upgradeMavenConfig(root, run, publish, log);
@@ -204,8 +204,10 @@ public class ScaffoldConventionReconciler implements Reconciler {
                     "# ── IntelliJ project config (curated slice) ──────────────────────\n"
                             + "# Small, stable project-wide settings shared across collaborators.\n"
                             + "# compiler.xml and vcs.xml are excluded — they regenerate per\n"
-                            + "# Maven reload or per workspace membership.",
-                    "!.idea/", "!.idea/.gitignore", "!.idea/misc.xml",
+                            + "# Maven reload or per workspace membership. misc.xml is excluded\n"
+                            + "# by default (per-machine Maven profile selection); opt in with\n"
+                            + "# `ide.track-misc-xml: true` in workspace.yaml (ike-issues#571).",
+                    "!.idea/", "!.idea/.gitignore",
                     "!.idea/kotlinc.xml", "!.idea/encodings.xml",
                     "!.idea/jarRepositories.xml"
             )
@@ -261,8 +263,9 @@ public class ScaffoldConventionReconciler implements Reconciler {
         return additions.toString();
     }
 
-    private static void upgradeWorkspaceGitignore(Path root, Run run,
-                                                   boolean publish, Log log) {
+    private static void upgradeWorkspaceGitignore(WorkspaceContext ctx, Path root,
+                                                   Run run, boolean publish,
+                                                   Log log) {
         Path gitignore = root.resolve(".gitignore");
         try {
             if (!Files.exists(gitignore)) {
@@ -270,24 +273,105 @@ public class ScaffoldConventionReconciler implements Reconciler {
             }
 
             String content = Files.readString(gitignore, StandardCharsets.UTF_8);
-            String additions = computeGitignoreAdditions(content);
 
-            if (additions.isEmpty()) {
+            // Additive base sections (never removes user-authored lines).
+            String additions = computeGitignoreAdditions(content);
+            String withBase = additions.isEmpty()
+                    ? content
+                    : content + (content.endsWith("\n") ? "" : "\n") + additions;
+
+            // misc.xml tracking is opt-in via `ide.track-misc-xml`
+            // (ike-issues#571): it co-mingles per-machine Maven profile
+            // selection, so by default it stays ignored. Keep the
+            // `!.idea/misc.xml` whitelist line in sync with the setting,
+            // self-healing a rogue line left by older plugin versions.
+            boolean track = tracksMiscXml(ctx, log);
+            String updated = reconcileMiscXmlWhitelist(withBase, track);
+
+            if (updated.equals(content)) {
                 return;
             }
 
-            run.drift.add("workspace-gitignore: add missing whitelist entries");
+            if (!additions.isEmpty()) {
+                run.drift.add("workspace-gitignore: add missing whitelist entries");
+            }
+            if (!updated.equals(withBase)) {
+                run.drift.add(track
+                        ? "workspace-gitignore: whitelist .idea/misc.xml"
+                                + " (ide.track-misc-xml)"
+                        : "workspace-gitignore: stop tracking .idea/misc.xml"
+                                + " (per-machine; opt in via ide.track-misc-xml)");
+            }
 
             if (publish) {
-                Files.writeString(gitignore,
-                        content + (content.endsWith("\n") ? "" : "\n")
-                                + additions,
-                        StandardCharsets.UTF_8);
+                Files.writeString(gitignore, updated, StandardCharsets.UTF_8);
                 run.applied++;
             }
         } catch (IOException e) {
             log.warn("  Could not update .gitignore: " + e.getMessage());
         }
+    }
+
+    /**
+     * Read {@code ide.track-misc-xml} from {@code workspace.yaml},
+     * defaulting to {@code false} (ignore misc.xml) when the manifest
+     * is absent or unreadable.
+     *
+     * @param ctx the workspace context (provides the manifest path)
+     * @param log the plugin log for debug diagnostics
+     * @return whether the workspace opts in to tracking misc.xml
+     */
+    private static boolean tracksMiscXml(WorkspaceContext ctx, Log log) {
+        try {
+            return ManifestReader.read(ctx.manifestPath()).ide().trackMiscXml();
+        } catch (ManifestException e) {
+            log.debug("Could not read workspace.yaml for ide.track-misc-xml: "
+                    + e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Keep the {@code !.idea/misc.xml} whitelist line in sync with the
+     * workspace's opt-in choice. When {@code track} is {@code true} the
+     * line is ensured present (appended if missing); otherwise every
+     * occurrence is removed so misc.xml falls back under the catch-all
+     * ignore. misc.xml co-mingles per-machine Maven profile selection,
+     * so tracking is opt-in (IKE-Network/ike-issues#571).
+     * Visible for tests.
+     *
+     * @param content the current {@code .gitignore} content
+     * @param track   whether the workspace opts in to tracking misc.xml
+     * @return the reconciled content
+     */
+    public static String reconcileMiscXmlWhitelist(String content, boolean track) {
+        String entry = "!.idea/misc.xml";
+        String[] lines = content.split("\n", -1);
+        boolean present = false;
+        for (String line : lines) {
+            if (line.trim().equals(entry)) {
+                present = true;
+                break;
+            }
+        }
+        if (track) {
+            if (present) {
+                return content;
+            }
+            return content
+                    + (content.isEmpty() || content.endsWith("\n") ? "" : "\n")
+                    + entry + "\n";
+        }
+        if (!present) {
+            return content;
+        }
+        List<String> kept = new ArrayList<>(lines.length);
+        for (String line : lines) {
+            if (!line.trim().equals(entry)) {
+                kept.add(line);
+            }
+        }
+        return String.join("\n", kept);
     }
 
     // ── 3. stignore-shared (?d) flags ──────────────────────────────

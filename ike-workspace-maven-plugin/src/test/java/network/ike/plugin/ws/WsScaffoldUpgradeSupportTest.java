@@ -32,8 +32,8 @@ class WsScaffoldUpgradeSupportTest {
                 .contains("!pom.xml\n")
                 .contains("!.mvn/\n")
                 .contains("!.idea/\n")
-                .contains("!.idea/misc.xml\n")
-                .contains("!.idea/jarRepositories.xml\n");
+                .contains("!.idea/jarRepositories.xml\n")
+                .doesNotContain("!.idea/misc.xml");
     }
 
     @Test
@@ -78,7 +78,8 @@ class WsScaffoldUpgradeSupportTest {
         assertThat(additions)
                 .contains("# ── IntelliJ project config (curated slice)")
                 .contains("!.idea/\n")
-                .contains("!.idea/misc.xml\n")
+                .contains("!.idea/jarRepositories.xml\n")
+                .doesNotContain("!.idea/misc.xml")
                 .doesNotContain("# ── Whitelist workspace-level files")
                 .doesNotContain("# ── Whitelist workspace-owned directories");
     }
@@ -249,7 +250,7 @@ class WsScaffoldUpgradeSupportTest {
 
     @Test
     void ideSettings_updatesLanguageLevelWhenDifferent() {
-        IdeSettings ide = new IdeSettings("JDK_25_PREVIEW", null);
+        IdeSettings ide = new IdeSettings("JDK_25_PREVIEW", null, false);
         String updated = ScaffoldConventionReconciler.applyIdeSettings(MISC_XML_JDK_25, ide);
         assertThat(updated).contains("languageLevel=\"JDK_25_PREVIEW\"");
         assertThat(updated).doesNotContain("languageLevel=\"JDK_25\"");
@@ -259,14 +260,14 @@ class WsScaffoldUpgradeSupportTest {
 
     @Test
     void ideSettings_idempotentWhenLanguageLevelMatches() {
-        IdeSettings ide = new IdeSettings("JDK_25", null);
+        IdeSettings ide = new IdeSettings("JDK_25", null, false);
         String updated = ScaffoldConventionReconciler.applyIdeSettings(MISC_XML_JDK_25, ide);
         assertThat(updated).isEqualTo(MISC_XML_JDK_25);
     }
 
     @Test
     void ideSettings_updatesJdkNameWhenProvided() {
-        IdeSettings ide = new IdeSettings(null, "corretto-25");
+        IdeSettings ide = new IdeSettings(null, "corretto-25", false);
         String updated = ScaffoldConventionReconciler.applyIdeSettings(MISC_XML_JDK_25, ide);
         assertThat(updated).contains("project-jdk-name=\"corretto-25\"");
         assertThat(updated).doesNotContain("project-jdk-name=\"25\" ");
@@ -276,7 +277,7 @@ class WsScaffoldUpgradeSupportTest {
 
     @Test
     void ideSettings_updatesBothWhenBothProvided() {
-        IdeSettings ide = new IdeSettings("JDK_21", "temurin-21");
+        IdeSettings ide = new IdeSettings("JDK_21", "temurin-21", false);
         String updated = ScaffoldConventionReconciler.applyIdeSettings(MISC_XML_JDK_25, ide);
         assertThat(updated).contains("languageLevel=\"JDK_21\"");
         assertThat(updated).contains("project-jdk-name=\"temurin-21\"");
@@ -297,7 +298,81 @@ class WsScaffoldUpgradeSupportTest {
                 </project>
                 """;
         String updated = ScaffoldConventionReconciler.applyIdeSettings(
-                other, new IdeSettings("JDK_25_PREVIEW", null));
+                other, new IdeSettings("JDK_25_PREVIEW", null, false));
         assertThat(updated).isEqualTo(other);
+    }
+
+    // ── reconcileMiscXmlWhitelist (#571) ──────────────────────────────
+
+    @Test
+    void miscXml_stripsLineWhenNotTracking() {
+        // The "rogue line" scenario: misc.xml whitelisted at EOF, after
+        // the goal-report ignore lines. Not tracking → it must be removed.
+        String existing = """
+                *
+                !.idea/
+                !.idea/.gitignore
+
+                # ike goal reports
+                ike-report.md
+                !.idea/misc.xml
+                """;
+        String updated = ScaffoldConventionReconciler
+                .reconcileMiscXmlWhitelist(existing, false);
+        assertThat(updated)
+                .doesNotContain("!.idea/misc.xml")
+                .contains("ike-report.md\n")
+                .contains("!.idea/.gitignore\n");
+    }
+
+    @Test
+    void miscXml_noOpWhenAbsentAndNotTracking() {
+        String existing = """
+                *
+                !.idea/
+                !.idea/.gitignore
+                """;
+        assertThat(ScaffoldConventionReconciler
+                .reconcileMiscXmlWhitelist(existing, false)).isEqualTo(existing);
+    }
+
+    @Test
+    void miscXml_addsLineWhenTrackingAndAbsent() {
+        String existing = """
+                *
+                !.idea/
+                !.idea/.gitignore
+                """;
+        String updated = ScaffoldConventionReconciler
+                .reconcileMiscXmlWhitelist(existing, true);
+        assertThat(updated)
+                .contains("!.idea/.gitignore\n")
+                .contains("!.idea/misc.xml\n");
+    }
+
+    @Test
+    void miscXml_noOpWhenPresentAndTracking() {
+        String existing = """
+                *
+                !.idea/
+                !.idea/misc.xml
+                """;
+        assertThat(ScaffoldConventionReconciler
+                .reconcileMiscXmlWhitelist(existing, true)).isEqualTo(existing);
+    }
+
+    @Test
+    void miscXml_strippingIsIdempotent() {
+        String existing = """
+                *
+                !.idea/
+                !.idea/misc.xml
+                """;
+        String once = ScaffoldConventionReconciler
+                .reconcileMiscXmlWhitelist(existing, false);
+        String twice = ScaffoldConventionReconciler
+                .reconcileMiscXmlWhitelist(once, false);
+        assertThat(twice).isEqualTo(once);
+        assertThat(once).doesNotContain("!.idea/misc.xml");
     }
 }

@@ -198,22 +198,18 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
                 }
             }
 
-            // Detect parent POM — match against workspace subprojects
+            // Detect parent POM — record parent: only when the POM's
+            // <parent> matches a workspace subproject by full GA (groupId
+            // AND artifactId). An external parent that merely shares a
+            // groupId with a sibling (e.g. network.ike.platform:ike-parent
+            // alongside a network.ike.platform:* sibling) must not be
+            // recorded as that sibling — ike-issues#565.
             PomParentSupport.ParentInfo parentInfo = null;
             try {
                 parentInfo = PomParentSupport.readParent(
                         subprojectDir.resolve("pom.xml"));
-                if (parentInfo != null) {
-                    Manifest existing = ManifestReader.read(manifestPath);
-                    for (Map.Entry<String, Subproject> candidate :
-                            existing.subprojects().entrySet()) {
-                        if (candidate.getValue().groupId() != null
-                                && candidate.getValue().groupId().equals(parentInfo.groupId())) {
-                            detectedParent = candidate.getKey();
-                            break;
-                        }
-                    }
-                }
+                detectedParent = detectWorkspaceParent(
+                        wsDir, manifestPath, parentInfo);
             } catch (Exception e) {
                 // Non-fatal — parent detection is best-effort
             }
@@ -771,6 +767,53 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
         }
 
         return matched.isEmpty() ? null : matched;
+    }
+
+    /**
+     * Determine whether a new subproject's declared Maven {@code <parent>}
+     * is itself a workspace subproject, returning that subproject's name
+     * (its {@code workspace.yaml} key) for the {@code parent:} field.
+     *
+     * <p>Matching requires the parent's <strong>groupId AND
+     * artifactId</strong> to match a workspace subproject's published
+     * artifact set. groupId alone is insufficient: an external parent
+     * such as {@code network.ike.platform:ike-parent} that merely shares
+     * a groupId with a sibling subproject must be treated as having no
+     * workspace parent, so no bogus {@code parent:} is recorded
+     * (ike-issues#565). This mirrors the artifact-level matching used by
+     * {@link #deriveDependencies} and the GA-matching rule the
+     * {@code ws:align} reconcilers apply (issue #241).
+     *
+     * @param wsDir        the workspace root directory
+     * @param manifestPath path to {@code workspace.yaml}
+     * @param parentInfo   the new subproject's declared parent, or null
+     *                     when the POM has no {@code <parent>} block
+     * @return the workspace subproject name whose published artifact set
+     *         contains the parent's {@code groupId:artifactId}, or null
+     *         when the parent is external / not a workspace member
+     * @throws IOException       if a candidate subproject's POM cannot be read
+     * @throws ManifestException if the manifest cannot be parsed
+     */
+    static String detectWorkspaceParent(Path wsDir, Path manifestPath,
+                                        PomParentSupport.ParentInfo parentInfo)
+            throws IOException, ManifestException {
+        if (parentInfo == null
+                || parentInfo.groupId() == null
+                || parentInfo.artifactId() == null) {
+            return null;
+        }
+        Manifest manifest = ManifestReader.read(manifestPath);
+        for (String candidate : manifest.subprojects().keySet()) {
+            Path candidateDir = wsDir.resolve(candidate);
+            if (!Files.exists(candidateDir.resolve("pom.xml"))) continue;
+            Set<PublishedArtifactSet.Artifact> published =
+                    PublishedArtifactSet.scan(candidateDir);
+            if (PublishedArtifactSet.matches(published,
+                    parentInfo.groupId(), parentInfo.artifactId())) {
+                return candidate;
+            }
+        }
+        return null;
     }
 
     /**

@@ -110,6 +110,60 @@ class WsAddDependencyDerivationTest {
         assertThat(derivedDeps).isEqualTo("parent-pom");
     }
 
+    // ── ike-issues#565: parent: detection requires full GA ──────────
+    // detectWorkspaceParent must match a POM's <parent> to a workspace
+    // subproject by groupId AND artifactId, never groupId alone.
+
+    @Test
+    void parentDetection_ignores_external_parent_sharing_groupId() throws Exception {
+        // A workspace sibling shares the groupId of the external parent.
+        createSubprojectDir("ike-commonmark-attributes",
+                "network.ike.platform", null, null);
+        addToManifest("ike-commonmark-attributes", "network.ike.platform");
+
+        // The new subproject's real parent is the EXTERNAL
+        // network.ike.platform:ike-parent — not a workspace member; it
+        // only shares the groupId with ike-commonmark-attributes.
+        var externalParent = new PomParentSupport.ParentInfo(
+                "network.ike.platform", "ike-parent", "98");
+
+        String detected = WsAddMojo.detectWorkspaceParent(
+                tempDir, tempDir.resolve("workspace.yaml"), externalParent);
+
+        // groupId alone must NOT match the same-groupId sibling.
+        assertThat(detected).isNull();
+    }
+
+    @Test
+    void parentDetection_disambiguates_siblings_by_artifactId() throws Exception {
+        // Two members share groupId network.ike.platform; the parent's
+        // artifactId must select the correct one.
+        createSubprojectDir("ike-commonmark-attributes",
+                "network.ike.platform", null, null);
+        addToManifest("ike-commonmark-attributes", "network.ike.platform");
+        createSubprojectDir("ike-parent", "network.ike.platform", null, null);
+        addToManifest("ike-parent", "network.ike.platform");
+
+        var parent = new PomParentSupport.ParentInfo(
+                "network.ike.platform", "ike-parent", "98");
+
+        String detected = WsAddMojo.detectWorkspaceParent(
+                tempDir, tempDir.resolve("workspace.yaml"), parent);
+
+        assertThat(detected).isEqualTo("ike-parent");
+    }
+
+    @Test
+    void parentDetection_returns_null_for_no_parent() throws Exception {
+        createSubprojectDir("lib-a", "com.example.lib", null, null);
+        addToManifest("lib-a", "com.example.lib");
+
+        String detected = WsAddMojo.detectWorkspaceParent(
+                tempDir, tempDir.resolve("workspace.yaml"), null);
+
+        assertThat(detected).isNull();
+    }
+
     @Test
     void forward_derivation_skips_self_with_shared_groupId() throws Exception {
         // Two subprojects share groupId com.example.shared

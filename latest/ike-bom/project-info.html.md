@@ -1,6 +1,6 @@
 ---
-date_published: 2026-05-30
-date_modified: 2026-05-30
+date_published: 2026-06-02
+date_modified: 2026-06-02
 canonical_url: https://ike.network/ike-platform/ike-bom/project-info.html
 ---
 

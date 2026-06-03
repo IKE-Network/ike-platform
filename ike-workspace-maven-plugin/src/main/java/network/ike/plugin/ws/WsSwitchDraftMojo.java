@@ -188,6 +188,9 @@ public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
         int skipped = 0;
         int stashed = 0;
         int applied = 0;
+        // Draft-mode preview tallies (publish uses the live counters above).
+        List<String> wouldStash = new ArrayList<>();
+        List<String> wouldRestore = new ArrayList<>();
 
         for (String name : sorted) {
             File dir = new File(root, name);
@@ -216,8 +219,20 @@ public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
             }
 
             if (draft) {
+                // Mirror the publish branch's decisions without executing,
+                // so the report previews exactly what would be stashed and
+                // restored (post-skip, per subproject).
+                boolean willStash = !noStash && !VcsOperations.isClean(dir);
+                boolean willRestore = !noStash
+                        && draftHasTargetStash(dir, slug, branch);
+                if (willStash) wouldStash.add(name);
+                if (willRestore) wouldRestore.add(name);
+                String note = willStash && willRestore ? " (would stash + restore)"
+                        : willStash ? " (would stash)"
+                        : willRestore ? " (would restore)"
+                        : "";
                 getLog().info("  [draft] " + name + " — would switch "
-                        + compBranch + " → " + branch);
+                        + compBranch + " → " + branch + note);
                 switched++;
                 continue;
             }
@@ -247,27 +262,75 @@ public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
             switchWorkspaceRepo(branch);
         }
 
+        // ── Console summary ──────────────────────────────────────
         getLog().info("");
-        var summaryParts = new StringBuilder();
-        summaryParts.append("Switched: ").append(switched)
-                .append(" | Skipped: ").append(skipped);
-        if (stashed > 0) summaryParts.append(" | Stashed: ").append(stashed);
-        if (applied > 0) summaryParts.append(" | Applied: ").append(applied);
-        getLog().info("  " + summaryParts);
+        if (draft) {
+            StringBuilder s = new StringBuilder();
+            s.append(switched).append(" to switch, ")
+                    .append(skipped).append(" to skip");
+            if (!noStash) {
+                s.append(" | would stash: ").append(wouldStash.size())
+                        .append(" | would restore: ").append(wouldRestore.size());
+            }
+            getLog().info("  " + s);
+        } else {
+            var summaryParts = new StringBuilder();
+            summaryParts.append("Switched: ").append(switched)
+                    .append(" | Skipped: ").append(skipped);
+            if (stashed > 0) summaryParts.append(" | Stashed: ").append(stashed);
+            if (applied > 0) summaryParts.append(" | Applied: ").append(applied);
+            getLog().info("  " + summaryParts);
+        }
         getLog().info("");
 
-        // Write report
-        StringBuilder counts = new StringBuilder();
-        counts.append("**").append(switched).append("** switched, **")
-              .append(skipped).append("** skipped");
-        if (stashed > 0) counts.append(", **").append(stashed).append("** stashed");
-        if (applied > 0) counts.append(", **").append(applied).append("** applied");
-        counts.append(".");
-
+        // ── Report ───────────────────────────────────────────────
         GoalReportBuilder report = new GoalReportBuilder();
-        report.paragraph("**From:** `" + currentBranch
-                        + "` **To:** `" + branch + "`")
-                .paragraph(counts.toString());
+        report.paragraph("**From:** `" + currentBranch + "` **To:** `" + branch
+                + "`" + (draft ? "  _(draft — no changes made)_" : ""));
+
+        if (draft) {
+            report.paragraph("**" + switched + "** to switch, **"
+                    + skipped + "** to skip.");
+            if (noStash) {
+                report.paragraph("Auto-stash disabled (`-DnoStash=true`) — "
+                        + "uncommitted work will fail the switch.");
+            } else {
+                report.section("Stash plan");
+                if (wouldStash.isEmpty()) {
+                    report.paragraph("Working trees clean — nothing to stash.");
+                } else {
+                    report.paragraph("**" + wouldStash.size()
+                            + "** subproject(s) with uncommitted work would be "
+                            + "stashed to `" + stashRef(slug, currentBranch)
+                            + "` on `" + STASH_REMOTE + "`:");
+                    for (String n : wouldStash) report.bullet("`" + n + "`");
+                    report.paragraph("Restored automatically when you return to `"
+                            + currentBranch + "`. Inspect: `git ls-remote "
+                            + STASH_REMOTE + " 'refs/ws-stash/*'`");
+                }
+                if (wouldRestore.isEmpty()) {
+                    report.paragraph("No parked stash on `" + branch
+                            + "` — nothing to restore.");
+                } else {
+                    report.paragraph("**" + wouldRestore.size()
+                            + "** subproject(s) have a parked stash on `" + branch
+                            + "` that would be restored from `"
+                            + stashRef(slug, branch) + "`:");
+                    for (String n : wouldRestore) report.bullet("`" + n + "`");
+                }
+            }
+        } else {
+            StringBuilder counts = new StringBuilder();
+            counts.append("**").append(switched).append("** switched, **")
+                  .append(skipped).append("** skipped");
+            if (stashed > 0) counts.append(", **").append(stashed)
+                    .append("** stashed");
+            if (applied > 0) counts.append(", **").append(applied)
+                    .append("** applied");
+            counts.append(".");
+            report.paragraph(counts.toString());
+        }
+
         return new WorkspaceReportSpec(
                 publish ? WsGoal.SWITCH_PUBLISH : WsGoal.SWITCH_DRAFT,
                 report.build());
@@ -342,6 +405,30 @@ public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
         VcsOperations.deleteRemoteRef(dir, getLog(), STASH_REMOTE, ref);
         getLog().info("    " + Ansi.green("↡ ") + "stash applied from " + ref);
         return true;
+    }
+
+    /**
+     * Probe whether a parked stash exists on the target branch for this
+     * user, for draft-mode preview only. An unreachable origin is treated
+     * as "no stash" — {@link #runAutoStashPreflight} already warns about
+     * unreachable remotes, so draft stays read-only and never fails on a
+     * network blip.
+     *
+     * @param dir          the subproject directory
+     * @param slug         user slug
+     * @param targetBranch the branch we would switch to
+     * @return {@code true} if a stash ref is present on the remote,
+     *         {@code false} if absent or the remote is unreachable
+     */
+    private boolean draftHasTargetStash(File dir, String slug,
+                                        String targetBranch) {
+        if (slug == null) return false;
+        try {
+            return VcsOperations.remoteRefExists(dir, STASH_REMOTE,
+                    stashRef(slug, targetBranch));
+        } catch (MojoException e) {
+            return false;
+        }
     }
 
     /**

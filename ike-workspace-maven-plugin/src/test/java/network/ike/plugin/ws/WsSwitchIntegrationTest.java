@@ -102,6 +102,37 @@ class WsSwitchIntegrationTest {
     }
 
     @Test
+    void switch_draftMode_previewsStashPlan() throws Exception {
+        // Uncommitted work in one subproject; draft-switch to another branch.
+        Files.writeString(tempDir.resolve("lib-b").resolve("dirty.txt"),
+                "uncommitted", StandardCharsets.UTF_8);
+
+        WsSwitchDraftMojo mojo = TestLog.createMojo(WsSwitchDraftMojo.class);
+        mojo.manifest = helper.workspaceYaml().toFile();
+        mojo.branch = "feature/alpha";
+        mojo.publish = false; // draft
+
+        WorkspaceReportSpec spec = mojo.runGoal();
+
+        // The draft report previews the stash plan instead of going silent,
+        // and uses the future tense rather than "switched" (#568).
+        assertThat(spec.content())
+                .contains("to switch")
+                .contains("Stash plan")
+                .contains("would be")
+                .contains("lib-b")
+                .doesNotContain("switched");
+
+        // Draft is preview-only: the dirty file and branches are untouched.
+        assertThat(tempDir.resolve("lib-b").resolve("dirty.txt")).exists();
+        for (String name : new String[]{"lib-a", "lib-b", "app-c"}) {
+            String branch = execCapture(tempDir.resolve(name),
+                    "git", "rev-parse", "--abbrev-ref", "HEAD");
+            assertThat(branch).isEqualTo("feature/beta");
+        }
+    }
+
+    @Test
     void switch_dirtyWorktree_withNoStash_fails() throws Exception {
         // With the #153 auto-stash feature, the default behavior is to
         // stash uncommitted work rather than fail. The -DnoStash=true

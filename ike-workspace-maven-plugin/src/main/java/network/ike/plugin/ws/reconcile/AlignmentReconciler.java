@@ -2,6 +2,7 @@ package network.ike.plugin.ws.reconcile;
 
 import network.ike.plugin.ReleaseSupport;
 import network.ike.plugin.ws.PomModel;
+import network.ike.plugin.ws.SubprojectResolver;
 import network.ike.plugin.ws.WsGoal;
 import network.ike.workspace.Dependency;
 import network.ike.workspace.PublishedArtifactSet;
@@ -21,6 +22,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -218,7 +220,52 @@ public class AlignmentReconciler implements Reconciler {
         }
 
         // Parent alignment: a subproject whose manifest declares
-        // parent: <other-subproject> tracks that subproject's version.
+        // parent: <other-subproject> tracks that subproject's version —
+        // but ONLY when the POM's actual <parent> coordinate is in fact
+        // produced by that subproject. A stale or mis-derived parent:
+        // edge (e.g. an external parent recorded as a same-groupId
+        // sibling, ike-issues#565) must never drive a version rewrite:
+        // sourcing the version by manifest name alone, without checking
+        // the POM's real <parent> groupId:artifactId, would rewrite an
+        // unrelated parent to the wrong version and break the build
+        // (#566). Validate every edge through the shared resolver and
+        // skip + warn on any mismatch.
+        SubprojectResolver parentResolver = null;
+        try {
+            parentResolver = SubprojectResolver.scan(
+                    root.toPath(), graph.manifest());
+        } catch (IOException e) {
+            log.warn("  Parent alignment skipped: could not scan published "
+                    + "artifacts — " + e.getMessage());
+        }
+        if (parentResolver != null) {
+            collectParentChanges(graph, root, parentResolver, changes, log);
+        }
+
+        return new Plan(changes);
+    }
+
+    /**
+     * Collect parent-version alignment changes for subprojects whose
+     * manifest declares {@code parent: <other-subproject>}.
+     *
+     * <p>The manifest {@code parent:} edge is honoured only when the
+     * named subproject actually publishes the POM's real {@code <parent>}
+     * {@code groupId:artifactId} (full-GA match via {@code resolver}). On
+     * any mismatch — an external parent, or a different subproject that
+     * merely shares a groupId — the edge is stale or mis-derived
+     * (ike-issues#565); the change is skipped with a warning rather than
+     * rewriting an unrelated parent to the wrong version (#566).
+     *
+     * @param graph    workspace graph
+     * @param root     workspace root directory
+     * @param resolver full-GA coordinate → subproject resolver
+     * @param changes  accumulator for discovered alignment changes
+     * @param log      reconciler log
+     */
+    private static void collectParentChanges(WorkspaceGraph graph, File root,
+                                             SubprojectResolver resolver,
+                                             List<AlignChange> changes, Log log) {
         for (Map.Entry<String, Subproject> entry
                 : graph.manifest().subprojects().entrySet()) {
             String name = entry.getKey();
@@ -242,6 +289,25 @@ public class AlignmentReconciler implements Reconciler {
                 Parent parentInfo = pom.parent();
                 if (parentInfo == null) continue;
 
+                // Full-GA guard (#566): the manifest parent: edge must
+                // name the subproject that actually publishes the POM's
+                // real <parent>. Otherwise the edge is stale/mis-derived
+                // (external parent, or a different subproject) — skip the
+                // rewrite rather than corrupt the <parent> version.
+                Optional<String> producer = resolver.subprojectForCoordinate(
+                        parentInfo.getGroupId(), parentInfo.getArtifactId());
+                if (producer.isEmpty()
+                        || !producer.get().equals(parentSubprojectName)) {
+                    log.warn("  " + name + ": manifest parent: '"
+                            + parentSubprojectName + "' does not match the POM's"
+                            + " <parent> " + parentInfo.getGroupId() + ":"
+                            + parentInfo.getArtifactId()
+                            + producer.map(p -> " (produced by " + p + ")")
+                                    .orElse(" (external)")
+                            + " — skipping parent alignment (ike-issues#566)");
+                    continue;
+                }
+
                 String expectedVersion = parentSubproject.version();
                 String currentVersion = parentInfo.getVersion();
                 if (currentVersion == null
@@ -257,8 +323,6 @@ public class AlignmentReconciler implements Reconciler {
                         + e.getMessage());
             }
         }
-
-        return new Plan(changes);
     }
 
     // ── Plan application (mutates POMs) ─────────────────────────────

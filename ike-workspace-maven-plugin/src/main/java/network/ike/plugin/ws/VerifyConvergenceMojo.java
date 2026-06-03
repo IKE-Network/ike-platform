@@ -256,6 +256,7 @@ public class VerifyConvergenceMojo extends AbstractWorkspaceMojo {
 
         String rootVersion = rootParent.version();
         String parentAid = rootParent.artifactId();
+        String parentGid = rootParent.groupId();
         List<String> skewed = new ArrayList<>();
 
         getLog().info("");
@@ -272,7 +273,11 @@ public class VerifyConvergenceMojo extends AbstractWorkspaceMojo {
                 PomParentSupport.ParentInfo compParent =
                         PomParentSupport.readParent(compPom);
                 if (compParent == null) continue;
-                if (!parentAid.equals(compParent.artifactId())) continue;
+                // Full GA: a subproject shares the workspace parent only
+                // when both groupId and artifactId match — never
+                // artifactId alone (#566; consistent with #241/#324).
+                if (!parentAid.equals(compParent.artifactId())
+                        || !parentGid.equals(compParent.groupId())) continue;
 
                 if (!rootVersion.equals(compParent.version())) {
                     skewed.add(name + " (" + compParent.version() + ")");

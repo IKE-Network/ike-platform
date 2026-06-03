@@ -27,6 +27,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -729,44 +730,62 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
         }
 
         Manifest manifest = ManifestReader.read(manifestPath);
+        SubprojectResolver resolver = SubprojectResolver.scan(wsDir, manifest);
 
-        List<DerivedDep> matched = new ArrayList<>();
-        for (Map.Entry<String, Subproject> entry : manifest.subprojects().entrySet()) {
-            String existingName = entry.getKey();
-            Subproject existingSub = entry.getValue();
-
-            // Never depend on yourself
-            if (existingName.equals(subprojectName)) continue;
-
-            Path existingDir = wsDir.resolve(existingName);
-            if (!Files.exists(existingDir.resolve("pom.xml"))) continue;
-
-            // Build the published artifact set for the existing subproject
-            Set<PublishedArtifactSet.Artifact> published =
-                    PublishedArtifactSet.scan(existingDir);
-
-            // Check if any referenced artifact is published by this subproject
-            for (PublishedArtifactSet.Artifact artifact : published) {
-                String key = artifact.groupId() + ":" + artifact.artifactId();
-                if (referencedArtifacts.contains(key)) {
-                    // Try to find a property whose value matches the upstream version
-                    String versionProperty = null;
-                    String upstreamVersion = existingSub.version();
-                    if (upstreamVersion != null && !newSubProperties.isEmpty()) {
-                        for (Map.Entry<String, String> prop : newSubProperties.entrySet()) {
-                            if (upstreamVersion.equals(prop.getValue())) {
-                                versionProperty = prop.getKey();
-                                break;
-                            }
-                        }
-                    }
-                    matched.add(new DerivedDep(existingName, versionProperty));
-                    break;
-                }
+        // Map each referenced coordinate to the subproject that PRODUCES
+        // it (full groupId+artifactId; external coordinates resolve to
+        // empty and are skipped). Dedupe by producer, then emit in
+        // manifest order to keep derived-dependency ordering stable.
+        Map<String, String> versionPropertyByProducer = new LinkedHashMap<>();
+        for (String coord : referencedArtifacts) {
+            int colon = coord.indexOf(':');
+            if (colon < 0) continue;
+            Optional<String> producer = resolver.subprojectForCoordinate(
+                    coord.substring(0, colon), coord.substring(colon + 1));
+            if (producer.isEmpty()) continue;                   // external
+            String producerName = producer.get();
+            if (producerName.equals(subprojectName)) continue;  // never self
+            if (!versionPropertyByProducer.containsKey(producerName)) {
+                versionPropertyByProducer.put(producerName,
+                        detectVersionProperty(
+                                manifest.subprojects().get(producerName),
+                                newSubProperties));
             }
         }
 
+        List<DerivedDep> matched = new ArrayList<>();
+        for (String name : manifest.subprojects().keySet()) {
+            if (versionPropertyByProducer.containsKey(name)) {
+                matched.add(new DerivedDep(
+                        name, versionPropertyByProducer.get(name)));
+            }
+        }
         return matched.isEmpty() ? null : matched;
+    }
+
+    /**
+     * Find a property declared in the newly added subproject whose value
+     * equals the producer subproject's version — the
+     * {@code version-property} hint recorded on a derived
+     * {@code depends-on} edge so {@code ws:align} can track the upstream
+     * version through a {@code ${...}} property. Returns null when the
+     * producer has no known version or no matching property exists.
+     *
+     * @param producer        the upstream (depended-on) subproject, or null
+     * @param newSubProperties the new subproject's {@code <properties>}
+     * @return the matching property name, or null
+     */
+    private static String detectVersionProperty(Subproject producer,
+                                                Map<String, String> newSubProperties) {
+        if (producer == null) return null;
+        String upstreamVersion = producer.version();
+        if (upstreamVersion == null || newSubProperties.isEmpty()) return null;
+        for (Map.Entry<String, String> prop : newSubProperties.entrySet()) {
+            if (upstreamVersion.equals(prop.getValue())) {
+                return prop.getKey();
+            }
+        }
+        return null;
     }
 
     /**
@@ -797,23 +816,14 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
     static String detectWorkspaceParent(Path wsDir, Path manifestPath,
                                         PomParentSupport.ParentInfo parentInfo)
             throws IOException, ManifestException {
-        if (parentInfo == null
-                || parentInfo.groupId() == null
-                || parentInfo.artifactId() == null) {
+        if (parentInfo == null) {
             return null;
         }
         Manifest manifest = ManifestReader.read(manifestPath);
-        for (String candidate : manifest.subprojects().keySet()) {
-            Path candidateDir = wsDir.resolve(candidate);
-            if (!Files.exists(candidateDir.resolve("pom.xml"))) continue;
-            Set<PublishedArtifactSet.Artifact> published =
-                    PublishedArtifactSet.scan(candidateDir);
-            if (PublishedArtifactSet.matches(published,
-                    parentInfo.groupId(), parentInfo.artifactId())) {
-                return candidate;
-            }
-        }
-        return null;
+        return SubprojectResolver.scan(wsDir, manifest)
+                .subprojectForCoordinate(
+                        parentInfo.groupId(), parentInfo.artifactId())
+                .orElse(null);
     }
 
     /**
@@ -826,19 +836,12 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
     private int backfillDependencies(Path wsDir, Path manifestPath,
                                      String newSubproject, Path newSubprojectDir)
             throws IOException {
-        // Build the published artifact set for the new subproject
-        Set<PublishedArtifactSet.Artifact> newPublished =
-                PublishedArtifactSet.scan(newSubprojectDir);
-        if (newPublished.isEmpty()) return 0;
-
-        // Build a lookup set of "groupId:artifactId" strings
-        Set<String> newArtifactKeys = new LinkedHashSet<>();
-        for (PublishedArtifactSet.Artifact a : newPublished) {
-            newArtifactKeys.add(a.groupId() + ":" + a.artifactId());
-        }
-
         String yaml = Files.readString(manifestPath, StandardCharsets.UTF_8);
         Manifest manifest = ManifestReader.read(manifestPath);
+        // The new subproject is already registered by the time backfill
+        // runs, so the shared resolver maps its published coordinates
+        // back to it (full GA — no false positives from shared groupIds).
+        SubprojectResolver resolver = SubprojectResolver.scan(wsDir, manifest);
         int updated = 0;
 
         for (Map.Entry<String, Subproject> entry : manifest.subprojects().entrySet()) {
@@ -856,14 +859,12 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
             }
 
             // Check if this existing subproject references any artifact
-            // published by the new subproject
+            // produced by the new subproject (full GA via the resolver).
             Path existingPom = wsDir.resolve(existingName).resolve("pom.xml");
             if (!Files.exists(existingPom)) continue;
 
-            Set<String> referenced = extractReferencedArtifacts(existingPom);
-            boolean dependsOnNew = referenced.stream()
-                    .anyMatch(newArtifactKeys::contains);
-
+            boolean dependsOnNew = extractReferencedArtifacts(existingPom).stream()
+                    .anyMatch(coord -> resolvesTo(resolver, coord, newSubproject));
             if (!dependsOnNew) continue;
 
             yaml = addDependencyEdge(yaml, existingName, newSubproject, null);
@@ -876,6 +877,19 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
         }
 
         return updated;
+    }
+
+    /**
+     * Whether a {@code "groupId:artifactId"} coordinate resolves (full
+     * GA) to the named subproject via the shared resolver.
+     */
+    private static boolean resolvesTo(SubprojectResolver resolver,
+                                      String coord, String subprojectName) {
+        int colon = coord.indexOf(':');
+        if (colon < 0) return false;
+        return resolver.subprojectForCoordinate(
+                coord.substring(0, colon), coord.substring(colon + 1))
+                .map(subprojectName::equals).orElse(false);
     }
 
     /**

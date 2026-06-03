@@ -184,6 +184,29 @@ class WsAddDependencyDerivationTest {
     }
 
     @Test
+    void forward_derivation_disambiguates_shared_groupId_siblings()
+            throws Exception {
+        // Two registered siblings share groupId dev.ikm.komet — the
+        // komet vs komet-bom collision (#566). A dependency on one must
+        // derive ONLY that producing sibling, never the other.
+        createSubprojectDir("komet", "dev.ikm.komet", null, null);
+        addToManifest("komet", "dev.ikm.komet");
+        createSubprojectDir("komet-bom", "dev.ikm.komet", null, null);
+        addToManifest("komet-bom", "dev.ikm.komet");
+
+        // Consumer depends on dev.ikm.komet:komet (komet's own artifact),
+        // not on dev.ikm.komet:komet-bom.
+        createSubprojectDir("consumer", "dev.ikm.app",
+                "dev.ikm.komet", "komet");
+
+        String derivedDeps = invokeDeriveForward(
+                tempDir, tempDir.resolve("workspace.yaml"),
+                tempDir.resolve("consumer"), "consumer");
+
+        assertThat(derivedDeps).isEqualTo("komet");
+    }
+
+    @Test
     void backward_resolution_updates_existing_subproject() throws Exception {
         // Add lib-b first (depends on com.example.lib, but lib-a isn't registered yet)
         createSubprojectDir("lib-b", "com.example.app", "com.example.lib", "lib-a");

@@ -388,6 +388,30 @@ public class FeatureFinishMergeDraftMojo extends AbstractWorkspaceMojo {
             report.paragraph("Or, to skip the remote-deletion attempt "
                     + "next time, pass `-DkeepRemoteBranch=true`.");
         }
+
+        if (isDraft) {
+            report.section("What publish will do");
+            report.bullet("Strip the feature version qualifier across the "
+                    + merged + " eligible subproject(s) (a `merge-prep` commit).");
+            report.bullet("No-fast-forward merge `" + branch + "` → `"
+                    + target + "` in each subproject.");
+            report.bullet(kept
+                    ? "Keep the feature branch `" + branch + "`."
+                    : "Delete the feature branch `" + branch + "` (local"
+                            + (keepRemoteBranch ? "" : " + remote") + ").");
+
+            report.section("To publish");
+            String publishCmd = "mvn "
+                    + WsGoal.FEATURE_FINISH_MERGE_PUBLISH.qualified()
+                    + " -Dfeature=" + (feature == null ? "<name>" : feature);
+            if (message != null && !message.isBlank()) {
+                publishCmd += " -Dmessage=\"" + message.replace("\"", "\\\"") + "\"";
+            }
+            if (!keepBranch) publishCmd += " -DkeepBranch=false";
+            if (keepRemoteBranch) publishCmd += " -DkeepRemoteBranch=true";
+            if (push) publishCmd += " -Dpush=true";
+            report.codeBlock("bash", publishCmd);
+        }
         return report.build();
     }
 

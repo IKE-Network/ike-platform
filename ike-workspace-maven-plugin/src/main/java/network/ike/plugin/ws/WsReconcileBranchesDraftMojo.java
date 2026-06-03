@@ -1,6 +1,7 @@
 package network.ike.plugin.ws;
 
 import network.ike.plugin.ReleaseSupport;
+import network.ike.plugin.support.GoalReportBuilder;
 import network.ike.workspace.ManifestWriter;
 import network.ike.workspace.Subproject;
 import network.ike.workspace.WorkspaceGraph;
@@ -11,7 +12,9 @@ import org.apache.maven.api.plugin.annotations.Parameter;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -133,39 +136,67 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
         }
         getLog().info("");
 
-        int totalChanges = alignBranches(graph, root, manifestPath, draft);
+        BranchChanges result = alignBranches(graph, root, manifestPath, draft);
+        int totalChanges = result.changes().size();
 
         getLog().info("");
-        String summary;
-        if (totalChanges == 0) {
+        GoalReportBuilder report = new GoalReportBuilder();
+        report.paragraph("**Mode:** " + describeFromMode()
+                + (draft ? "  _(draft — no changes made)_" : ""));
+
+        if (totalChanges == 0 && result.skipped().isEmpty()) {
             getLog().info("  Nothing to reconcile  ✓");
-            summary = "Nothing to reconcile — branches already coherent.\n";
-        } else if (draft) {
-            getLog().info("  " + totalChanges + " change(s) would be applied");
-            getLog().info("  Use " + WsGoal.RECONCILE_BRANCHES_PUBLISH.qualified()
-                    + " to apply.");
-            summary = totalChanges + " branch change(s) would be applied "
-                    + "(" + describeFromMode() + ").\n";
+            report.paragraph("Nothing to reconcile — branches already coherent.");
         } else {
-            getLog().info("  Applied " + totalChanges + " change(s)");
-            summary = "Applied " + totalChanges + " branch change(s) "
-                    + "(" + describeFromMode() + ").\n";
+            report.paragraph("**" + totalChanges + "** branch change(s) "
+                    + (draft ? "would be applied" : "applied") + ".");
+
+            if (!result.changes().isEmpty()) {
+                report.section(draft ? "Would change" : "Changed");
+                for (String c : result.changes()) report.bullet(c);
+            }
+            if (!result.skipped().isEmpty()) {
+                report.section("Skipped (uncommitted)");
+                for (String s : result.skipped()) report.bullet(s);
+            }
+
+            if (draft) {
+                getLog().info("  " + totalChanges + " change(s) would be applied");
+                getLog().info("  Use "
+                        + WsGoal.RECONCILE_BRANCHES_PUBLISH.qualified() + " to apply.");
+                String cmd = "mvn " + WsGoal.RECONCILE_BRANCHES_PUBLISH.qualified();
+                if (!"repos".equals(from)) cmd += " -Dfrom=" + from;
+                if (!result.skipped().isEmpty()) cmd += " -Dforce=true";
+                report.paragraph("Apply with `" + cmd + "`.");
+            } else {
+                getLog().info("  Applied " + totalChanges + " change(s)");
+            }
         }
         getLog().info("");
         return new WorkspaceReportSpec(
                 publish ? WsGoal.RECONCILE_BRANCHES_PUBLISH
                         : WsGoal.RECONCILE_BRANCHES_DRAFT,
-                summary);
+                report.build());
     }
+
+    /**
+     * Per-branch reconcile outcome carried into the report: one
+     * human-readable line per branch that differs, plus any subprojects
+     * skipped for uncommitted changes (no {@code -Dforce}).
+     *
+     * @param changes one line per branch change (markdown)
+     * @param skipped one line per subproject skipped (uncommitted)
+     */
+    private record BranchChanges(List<String> changes, List<String> skipped) {}
 
     /**
      * Dispatch on {@code -Dfrom=...} to the right branch-reconcile
      * direction.
      *
-     * @return the number of branch changes applied, or that would be
-     *         applied in draft mode
+     * @return the per-branch changes applied, or that would be applied
+     *         in draft mode, plus any skipped subprojects
      */
-    private int alignBranches(WorkspaceGraph graph, File root,
+    private BranchChanges alignBranches(WorkspaceGraph graph, File root,
                               Path manifestPath, boolean draft)
             throws MojoException {
         return switch (from) {
@@ -194,10 +225,11 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
      * {@code workspace.yaml} so the declared branch fields match
      * reality.
      */
-    private int alignBranchesFromRepos(WorkspaceGraph graph, File root,
+    private BranchChanges alignBranchesFromRepos(WorkspaceGraph graph, File root,
                                        Path manifestPath, boolean draft)
             throws MojoException {
         Map<String, String> updates = new LinkedHashMap<>();
+        List<String> changes = new ArrayList<>();
 
         for (Map.Entry<String, Subproject> entry
                 : graph.manifest().subprojects().entrySet()) {
@@ -211,13 +243,15 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
             if (actual.equals(declared)) continue;
 
             updates.put(name, actual);
+            changes.add("`" + name + "` (yaml): `" + declared
+                    + "` → `" + actual + "`");
             getLog().info("  branch: " + name + ": " + declared
                     + " → " + actual + (draft ? " (draft)" : ""));
         }
 
         if (updates.isEmpty()) {
             getLog().info("  Branches: yaml already matches repos  ✓");
-            return 0;
+            return new BranchChanges(List.of(), List.of());
         }
 
         if (!draft) {
@@ -239,7 +273,7 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
             }
         }
 
-        return updates.size();
+        return new BranchChanges(changes, List.of());
     }
 
     /**
@@ -268,12 +302,13 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
      * case is the {@code ws:add}'s territory; this mode does not push
      * new branches to subproject origins.
      *
-     * @return the number of changes applied (or that would be in draft mode)
+     * @return the per-branch changes (applied, or that would be in draft
+     *         mode) plus any skipped subprojects
      * @throws MojoException if the workspace dir is not a git repo, or
      *                       any individual checkout fails
      */
-    private int alignBranchesFromWorkspaceHead(WorkspaceGraph graph, File root,
-                                                Path manifestPath,
+    private BranchChanges alignBranchesFromWorkspaceHead(WorkspaceGraph graph,
+                                                File root, Path manifestPath,
                                                 boolean draft) {
         File wsRoot = manifestPath.getParent().toFile();
         if (!new File(wsRoot, ".git").exists()) {
@@ -293,6 +328,8 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
         getLog().info("  Workspace HEAD: " + wsBranch);
 
         Map<String, String> yamlUpdates = new LinkedHashMap<>();
+        List<String> changes = new ArrayList<>();
+        List<String> skipped = new ArrayList<>();
         int checkoutsPlanned = 0;
         int checkoutsApplied = 0;
         int skippedDirty = 0;
@@ -307,6 +344,9 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
             String declared = subproject.branch();
             if (declared == null || !declared.equals(wsBranch)) {
                 yamlUpdates.put(name, wsBranch);
+                changes.add("`" + name + "` (yaml): `"
+                        + (declared == null ? "(unset)" : declared)
+                        + "` → `" + wsBranch + "`");
                 getLog().info("  branch: " + name + " (yaml): "
                         + (declared == null ? "(unset)" : declared)
                         + " → " + wsBranch + (draft ? " (draft)" : ""));
@@ -321,11 +361,14 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
             if (!status.isEmpty() && !force) {
                 getLog().warn("  ⚠ " + name + ": uncommitted changes — skipping"
                         + " checkout (pass -Dforce=true to override)");
+                skipped.add("`" + name + "` — uncommitted (use -Dforce=true)");
                 skippedDirty++;
                 continue;
             }
 
             checkoutsPlanned++;
+            changes.add("`" + name + "` (repo): `" + actual
+                    + "` → `" + wsBranch + "`");
             getLog().info("  branch: " + name + " (repo): " + actual
                     + " → " + wsBranch + (draft ? " (draft)" : ""));
 
@@ -347,7 +390,7 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
 
         if (yamlUpdates.isEmpty() && checkoutsPlanned == 0 && skippedDirty == 0) {
             getLog().info("  Branches: workspace, manifest, and repos all agree  ✓");
-            return 0;
+            return new BranchChanges(List.of(), List.of());
         }
 
         if (!draft && !yamlUpdates.isEmpty()) {
@@ -372,12 +415,12 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
                     + (skippedDirty > 0
                             ? " (" + skippedDirty + " skipped — uncommitted)"
                             : ""));
-            return yamlUpdates.size() + checkoutsPlanned;
+            return new BranchChanges(changes, skipped);
         }
         getLog().info("  Branches: " + yamlUpdates.size()
                 + " yaml update(s), " + checkoutsApplied + " checkout(s), "
                 + skippedDirty + " skipped (uncommitted)");
-        return yamlUpdates.size() + checkoutsApplied;
+        return new BranchChanges(changes, skipped);
     }
 
     /**
@@ -415,11 +458,13 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
      * differs. Subprojects with uncommitted changes are skipped unless
      * {@code -Dforce=true}.
      */
-    private int alignBranchesFromManifest(WorkspaceGraph graph, File root,
-                                          boolean draft) {
+    private BranchChanges alignBranchesFromManifest(WorkspaceGraph graph,
+                                          File root, boolean draft) {
         int switched = 0;
         int skippedDirty = 0;
         int planned = 0;
+        List<String> changes = new ArrayList<>();
+        List<String> skipped = new ArrayList<>();
 
         for (Map.Entry<String, Subproject> entry
                 : graph.manifest().subprojects().entrySet()) {
@@ -437,11 +482,14 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
             if (!status.isEmpty() && !force) {
                 getLog().warn("  ⚠ " + name + ": uncommitted changes — skipping"
                         + " (pass -Dforce=true to override)");
+                skipped.add("`" + name + "` — uncommitted (use -Dforce=true)");
                 skippedDirty++;
                 continue;
             }
 
             planned++;
+            changes.add("`" + name + "` (checkout): `" + actual
+                    + "` → `" + declared + "`");
             getLog().info("  branch: " + name + ": " + actual
                     + " → " + declared + (draft ? " (draft)" : ""));
 
@@ -462,6 +510,6 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
                     + ", skipped " + skippedDirty + " (uncommitted)");
         }
 
-        return draft ? planned : switched;
+        return new BranchChanges(changes, skipped);
     }
 }

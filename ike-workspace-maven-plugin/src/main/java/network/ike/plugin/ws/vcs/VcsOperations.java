@@ -210,6 +210,27 @@ public class VcsOperations {
     }
 
     /**
+     * List files changed on {@code head} relative to its merge-base with
+     * {@code base} ({@code git diff --name-only base...head}). Read-only —
+     * touches neither the index nor the working tree.
+     *
+     * @param dir  the repository root directory
+     * @param base the base ref (e.g., {@code "main"})
+     * @param head the head ref (e.g., a feature branch)
+     * @return changed file paths; empty if none or on error
+     */
+    public static List<String> changedFiles(File dir, String base, String head) {
+        try {
+            String output = capture(dir, "git", "diff", "--name-only",
+                    base + "..." + head);
+            if (output.isEmpty()) return List.of();
+            return List.of(output.split("\n"));
+        } catch (MojoException e) {
+            return List.of();
+        }
+    }
+
+    /**
      * Predict merge conflicts without touching the index or working tree.
      *
      * <p>Uses {@code git merge-tree --write-tree} (git 2.38+) to perform

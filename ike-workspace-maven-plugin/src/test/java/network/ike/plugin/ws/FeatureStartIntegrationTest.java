@@ -61,6 +61,23 @@ class FeatureStartIntegrationTest {
     }
 
     @Test
+    void featureStart_draft_reportUsesFutureTense() throws Exception {
+        FeatureStartDraftMojo mojo = TestLog.createMojo(FeatureStartDraftMojo.class);
+        mojo.manifest = helper.workspaceYaml().toFile();
+        mojo.feature = "tense-check";
+        mojo.publish = false; // draft
+
+        WorkspaceReportSpec spec = mojo.runGoal();
+
+        // Draft describes the action in the future tense, never as done
+        // (#569): both the count paragraph and the per-row status read
+        // "would …", not "branched"/"created".
+        assertThat(spec.content())
+                .contains("would be branched")
+                .contains("would create");
+    }
+
+    @Test
     void featureStart_createsBranchesAndQualifiesVersion() throws Exception {
         FeatureStartDraftMojo mojo = TestLog.createMojo(FeatureStartDraftMojo.class);
         mojo.manifest = helper.workspaceYaml().toFile();

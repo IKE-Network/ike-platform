@@ -301,7 +301,7 @@ public class FeatureStartDraftMojo extends AbstractWorkspaceMojo {
         }
 
         getLog().info("");
-        getLog().info("  Created: " + created.size()
+        getLog().info("  " + (draft ? "To create: " : "Created: ") + created.size()
                 + " | Already on branch: " + skippedAlreadyOnBranch.size()
                 + " | Not cloned: " + skippedNotCloned.size());
         getLog().info("");
@@ -326,6 +326,11 @@ public class FeatureStartDraftMojo extends AbstractWorkspaceMojo {
         report.table(
                 List.of("Subproject", "Branch", "Snapshot Version", "Status"),
                 rows);
+
+        boolean draft = !publish;
+        report.paragraph("**" + branchRows.size() + "** subproject(s) "
+                + (draft ? "would be branched" : "branched") + " onto `"
+                + branchName + "`.");
 
         if (!cascadeGaps.isEmpty()) {
             List<String[]> gapRows = new ArrayList<>();

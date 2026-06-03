@@ -244,8 +244,21 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
             File dir = new File(root, name);
 
             if (draft) {
-                getLog().info("  [draft] " + name + " — would squash-merge → " + targetBranch);
-                squashKind.put(name, SquashKind.CONTENT_SQUASHED);
+                // Predict the version-only no-op (read-only): a feature
+                // branch that changes only pom.xml carries just the
+                // version bump, which publish strips before merging —
+                // leaving nothing to commit. The publish path remains
+                // authoritative. Empty diff → also a no-op.
+                List<String> changed = VcsOperations.changedFiles(
+                        dir, targetBranch, branchName);
+                boolean versionOnly = changed.stream().allMatch(
+                        p -> p.equals("pom.xml") || p.endsWith("/pom.xml"));
+                squashKind.put(name, versionOnly
+                        ? SquashKind.VERSION_ONLY_NOOP
+                        : SquashKind.CONTENT_SQUASHED);
+                getLog().info("  [draft] " + name + " — would squash-merge → "
+                        + targetBranch
+                        + (versionOnly ? " (version-only — no commit expected)" : ""));
                 merged++;
                 continue;
             }
@@ -430,7 +443,9 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
             SquashKind kind = squashKind.get(name);
             String status;
             if (isDraft) {
-                status = "would squash";
+                status = kind == SquashKind.VERSION_ONLY_NOOP
+                        ? "would squash (version-only — no commit expected)"
+                        : "would squash";
             } else if (kind == SquashKind.VERSION_ONLY_NOOP) {
                 status = "squashed (version-only — no commit)";
             } else {

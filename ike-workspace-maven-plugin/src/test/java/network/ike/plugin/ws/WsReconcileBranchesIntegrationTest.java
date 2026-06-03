@@ -126,6 +126,30 @@ class WsReconcileBranchesIntegrationTest {
         assertThat(log).contains("workspace: align branch fields from repos");
     }
 
+    @Test
+    void fromRepos_draft_reportListsIdentitiesAndPublishCommand()
+            throws Exception {
+        // Switch lib-a to a feature branch so there is a change to report.
+        exec(tempDir.resolve("lib-a"), "git", "checkout", "-b", "feature/test");
+
+        WsReconcileBranchesDraftMojo mojo = TestLog.createMojo(
+                WsReconcileBranchesDraftMojo.class);
+        mojo.manifest = helper.workspaceYaml().toFile();
+        mojo.scope = "branches";
+        mojo.from = "repos";
+        mojo.publish = false; // draft
+
+        WorkspaceReportSpec spec = mojo.runGoal();
+
+        // The report body now carries the per-branch identity and a
+        // copy-pasteable publish command, not just a bare count (#569).
+        assertThat(spec.content())
+                .contains("lib-a")
+                .contains("feature/test")
+                .contains("would be applied")
+                .contains("mvn " + WsGoal.RECONCILE_BRANCHES_PUBLISH.qualified());
+    }
+
     // ── from=manifest (manifest → repos) ─────────────────────────────
 
     @Test

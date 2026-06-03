@@ -285,6 +285,68 @@ class FeatureFinishIntegrationTest {
                 .contains(appCHead);
     }
 
+    // ── #569: draft report quality (preview effects + remediation) ──
+
+    @Test
+    void merge_draft_previewsEffectsAndPublishCommand() throws Exception {
+        FeatureFinishMergeDraftMojo mojo = TestLog.createMojo(
+                FeatureFinishMergeDraftMojo.class);
+        mojo.manifest = helper.workspaceYaml().toFile();
+        mojo.feature = FEATURE_NAME;
+        mojo.targetBranch = "main";
+        mojo.publish = false; // draft
+
+        mojo.execute();
+
+        // Preview-only: every subproject stays on the feature branch.
+        for (String name : new String[]{"lib-a", "lib-b", "app-c"}) {
+            assertThat(execCapture(tempDir.resolve(name),
+                    "git", "rev-parse", "--abbrev-ref", "HEAD"))
+                    .isEqualTo(BRANCH_NAME);
+        }
+
+        // The draft report now previews the consequential effects and
+        // emits a copy-pasteable publish command (#569), reaching parity
+        // with the squash variant.
+        String report = readReport("feature-finish-merge-draft");
+        assertThat(report)
+                .contains("would merge")
+                .contains("What publish will do")
+                .contains("To publish")
+                .contains("mvn " + WsGoal.FEATURE_FINISH_MERGE_PUBLISH.qualified());
+    }
+
+    @Test
+    void squash_draft_predictsVersionOnlyNoop() throws Exception {
+        // Revert lib-a's feature work so its branch carries only the
+        // version-qualifier commit — a version-only branch the squash
+        // would not commit on main.
+        Path libA = tempDir.resolve("lib-a");
+        exec(libA, "git", "rm", "feature-work.txt");
+        exec(libA, "git", "commit", "-m", "feature: revert feature work");
+
+        FeatureFinishSquashDraftMojo mojo = TestLog.createMojo(
+                FeatureFinishSquashDraftMojo.class);
+        mojo.manifest = helper.workspaceYaml().toFile();
+        mojo.feature = FEATURE_NAME;
+        mojo.targetBranch = "main";
+        mojo.message = "draft prediction";
+        mojo.publish = false; // draft
+
+        mojo.execute();
+
+        // Draft predicts lib-a as version-only while lib-b / app-c are
+        // real content squashes — no longer a blanket "would squash".
+        String report = readReport("feature-finish-squash-draft");
+        assertThat(report)
+                .contains("version-only — no commit expected")
+                .contains("would squash");
+
+        // Preview-only: lib-a stays on the feature branch.
+        assertThat(execCapture(libA, "git", "rev-parse", "--abbrev-ref", "HEAD"))
+                .isEqualTo(BRANCH_NAME);
+    }
+
     private String readReport(String goalStem) throws Exception {
         try (var stream = Files.list(tempDir)) {
             Path reportFile = stream

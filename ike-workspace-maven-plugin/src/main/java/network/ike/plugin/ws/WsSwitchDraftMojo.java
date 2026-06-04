@@ -1,12 +1,14 @@
 package network.ike.plugin.ws;
 
-import network.ike.workspace.ManifestWriter;
+import network.ike.workspace.Manifest;
+import network.ike.workspace.ManifestReader;
 import network.ike.workspace.WorkspaceGraph;
 import network.ike.plugin.ws.preflight.Preflight;
 import network.ike.plugin.ws.preflight.PreflightCondition;
 import network.ike.plugin.ws.preflight.PreflightContext;
 import network.ike.plugin.ws.preflight.PreflightResult;
 import network.ike.plugin.support.GoalReportBuilder;
+import network.ike.plugin.ws.bootstrap.SubprojectInitializer;
 import network.ike.plugin.ws.vcs.VcsOperations;
 import network.ike.plugin.ws.vcs.VcsState;
 import org.apache.maven.api.plugin.MojoException;
@@ -15,9 +17,12 @@ import org.apache.maven.api.plugin.annotations.Parameter;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.StringReader;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
+import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -188,9 +193,17 @@ public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
         int skipped = 0;
         int stashed = 0;
         int applied = 0;
+        int parked = 0;
+        int restored = 0;
         // Draft-mode preview tallies (publish uses the live counters above).
         List<String> wouldStash = new ArrayList<>();
         List<String> wouldRestore = new ArrayList<>();
+        List<String> wouldPark = new ArrayList<>();
+
+        // Subprojects declared on the target branch (#573). A current
+        // subproject absent here is parked rather than force-switched; null
+        // means membership is indeterminate (treat all as members).
+        Set<String> targetMembers = targetBranchMembers(root, branch);
 
         for (String name : sorted) {
             File dir = new File(root, name);
@@ -200,6 +213,32 @@ public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
             }
 
             String compBranch = gitBranch(dir);
+
+            // ── Park: <name> is not a member of the target branch (#573) ─
+            // Set it aside (origin is the park) rather than force-switch it
+            // onto a branch whose workspace.yaml doesn't declare it.
+            boolean targetMember = targetMembers == null
+                    || targetMembers.contains(name);
+            if (!targetMember) {
+                if (draft) {
+                    boolean willStash = !noStash && !VcsOperations.isClean(dir);
+                    if (willStash) wouldStash.add(name);
+                    wouldPark.add(name);
+                    getLog().info("  [draft] " + name + " — would PARK (not a "
+                            + "member of " + branch + ")"
+                            + (willStash ? " (stash first)" : ""));
+                    parked++;
+                    continue;
+                }
+                if (!noStash && !VcsOperations.isClean(dir)) {
+                    stashLeave(dir, slug, compBranch);
+                    stashed++;
+                }
+                parkSubproject(dir, name, compBranch);
+                parked++;
+                continue;
+            }
+
             if (compBranch.equals(branch)) {
                 getLog().info("  " + Ansi.green("✓ ") + name + " — already on " + branch);
                 switched++;
@@ -256,10 +295,14 @@ public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
             }
         }
 
-        // ── Update workspace.yaml ────────────────────────────────
-        if (!draft && switched > 0) {
-            updateWorkspaceYaml(sorted, branch);
+        // ── Switch the workspace root, then restore target-only members ──
+        // The target branch's committed workspace.yaml is authoritative
+        // (#573): switch the root to it (no source-side pre-edit, so the
+        // checkout doesn't conflict on a branch-divergent workspace), then
+        // clone any declared-but-missing member that was previously parked.
+        if (!draft && (switched > 0 || parked > 0)) {
             switchWorkspaceRepo(branch);
+            restored = restoreMembers(root, slug);
         }
 
         // ── Console summary ──────────────────────────────────────
@@ -268,6 +311,9 @@ public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
             StringBuilder s = new StringBuilder();
             s.append(switched).append(" to switch, ")
                     .append(skipped).append(" to skip");
+            if (!wouldPark.isEmpty()) {
+                s.append(", ").append(wouldPark.size()).append(" to park");
+            }
             if (!noStash) {
                 s.append(" | would stash: ").append(wouldStash.size())
                         .append(" | would restore: ").append(wouldRestore.size());
@@ -277,6 +323,8 @@ public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
             var summaryParts = new StringBuilder();
             summaryParts.append("Switched: ").append(switched)
                     .append(" | Skipped: ").append(skipped);
+            if (parked > 0) summaryParts.append(" | Parked: ").append(parked);
+            if (restored > 0) summaryParts.append(" | Restored: ").append(restored);
             if (stashed > 0) summaryParts.append(" | Stashed: ").append(stashed);
             if (applied > 0) summaryParts.append(" | Applied: ").append(applied);
             getLog().info("  " + summaryParts);
@@ -291,6 +339,14 @@ public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
         if (draft) {
             report.paragraph("**" + switched + "** to switch, **"
                     + skipped + "** to skip.");
+            if (!wouldPark.isEmpty()) {
+                report.section("Park plan");
+                report.paragraph("**" + wouldPark.size() + "** subproject(s) "
+                        + "not declared on `" + branch + "` would be parked "
+                        + "(branch pushed to " + STASH_REMOTE + ", clone "
+                        + "removed) and restored on switch-back:");
+                for (String n : wouldPark) report.bullet("`" + n + "`");
+            }
             if (noStash) {
                 report.paragraph("Auto-stash disabled (`-DnoStash=true`) — "
                         + "uncommitted work will fail the switch.");
@@ -334,6 +390,137 @@ public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
         return new WorkspaceReportSpec(
                 publish ? WsGoal.SWITCH_PUBLISH : WsGoal.SWITCH_DRAFT,
                 report.build());
+    }
+
+    // ── #573 park / restore: branch-scoped membership ────────────────
+
+    /**
+     * Read the subprojects declared on the target branch's committed
+     * {@code workspace.yaml} (via {@code git show <branch>:workspace.yaml}) —
+     * the authoritative membership for that branch (#573). A subproject
+     * present on the current branch but absent here is parked rather than
+     * force-switched. Returns {@code null} when membership can't be
+     * determined (root is not a git repo, or the branch has no committed
+     * {@code workspace.yaml}); callers then treat every current subproject
+     * as a member, preserving pre-#573 behavior.
+     *
+     * @param root   the workspace root
+     * @param branch the target branch
+     * @return declared subproject names on the target branch, or {@code null}
+     */
+    private Set<String> targetBranchMembers(File root, String branch) {
+        try {
+            Process proc = new ProcessBuilder(
+                    "git", "show", branch + ":workspace.yaml")
+                    .directory(root)
+                    .start();
+            byte[] out = proc.getInputStream().readAllBytes();
+            if (proc.waitFor() != 0) {
+                return null;
+            }
+            Manifest m = ManifestReader.read(
+                    new StringReader(new String(out, StandardCharsets.UTF_8)));
+            return new LinkedHashSet<>(m.subprojects().keySet());
+        } catch (Exception e) {
+            getLog().debug("Could not read " + branch + ":workspace.yaml — "
+                    + "treating all subprojects as members: " + e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Park a subproject that is not a member of the target branch (#573):
+     * push its branch to {@value #STASH_REMOTE} so no work is lost, then
+     * remove the local clone. Aborts in place (no deletion) if the push
+     * fails — the working tree is never reduced below what is on origin.
+     *
+     * @param dir        the subproject directory
+     * @param name       the subproject name
+     * @param compBranch the branch the subproject is currently on
+     * @throws MojoException if the branch cannot be pushed (park aborts)
+     */
+    private void parkSubproject(File dir, String name, String compBranch)
+            throws MojoException {
+        try {
+            VcsOperations.push(dir, getLog(), STASH_REMOTE, compBranch);
+        } catch (MojoException e) {
+            throw new MojoException("Park aborted for '" + name + "': could not "
+                    + "push '" + compBranch + "' to " + STASH_REMOTE
+                    + " — refusing to remove a clone whose work is not on "
+                    + "origin. " + e.getMessage(), e);
+        }
+        getLog().info("  " + Ansi.cyan("⇲ ") + name + " — parked ("
+                + compBranch + " → " + STASH_REMOTE + ", clone removed)");
+        deleteDirectory(dir.toPath());
+    }
+
+    /**
+     * After the workspace root is on the target branch, materialize any
+     * declared-but-missing member (a previously parked subproject) by
+     * reusing the {@code scaffold-init} clone path, then re-apply its
+     * parked stash (#573).
+     *
+     * @param root the workspace root
+     * @param slug the user stash slug, or {@code null} under {@code -DnoStash}
+     * @return the number of subprojects restored
+     * @throws MojoException if cloning fails
+     */
+    private int restoreMembers(File root, String slug) throws MojoException {
+        WorkspaceGraph graph = loadGraph();
+        List<String> missing = new ArrayList<>();
+        for (String name : graph.manifest().subprojects().keySet()) {
+            if (!new File(new File(root, name), ".git").exists()) {
+                missing.add(name);
+            }
+        }
+        if (missing.isEmpty()) {
+            return 0;
+        }
+        new SubprojectInitializer(graph, root, root.getName(), getLog()).run();
+        int restored = 0;
+        for (String name : missing) {
+            File dir = new File(root, name);
+            if (!new File(dir, ".git").exists()) {
+                continue;   // clone failed — surfaced by the initializer
+            }
+            if (slug != null) {
+                String memberBranch =
+                        graph.manifest().subprojects().get(name).branch();
+                if (memberBranch != null && !memberBranch.isBlank()) {
+                    try {
+                        stashArrive(dir, slug, memberBranch);
+                    } catch (MojoException e) {
+                        getLog().warn("    could not restore stash for " + name
+                                + ": " + e.getMessage());
+                    }
+                }
+            }
+            getLog().info("  " + Ansi.green("⇱ ") + name + " — restored");
+            restored++;
+        }
+        return restored;
+    }
+
+    /**
+     * Recursively delete a directory tree (removes a parked clone).
+     *
+     * @param dir the directory to delete
+     * @throws MojoException if deletion fails
+     */
+    private static void deleteDirectory(Path dir) throws MojoException {
+        try (var paths = Files.walk(dir)) {
+            paths.sorted(Comparator.reverseOrder())
+                    .forEach(p -> {
+                        try {
+                            Files.delete(p);
+                        } catch (IOException e) {
+                            throw new RuntimeException(e);
+                        }
+                    });
+        } catch (IOException | RuntimeException e) {
+            throw new MojoException(
+                    "Failed to delete " + dir + ": " + e.getMessage(), e);
+        }
     }
 
     /**
@@ -583,24 +770,6 @@ public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
             }
             throw new MojoException(
                     "Unknown branch: " + typed + ". Available: " + branchSubprojects.keySet());
-        }
-    }
-
-    /**
-     * Update workspace.yaml branch fields and commit the change.
-     */
-    private void updateWorkspaceYaml(List<String> subprojects, String targetBranch)
-            throws MojoException {
-        try {
-            Path manifestPath = resolveManifest();
-            Map<String, String> updates = new LinkedHashMap<>();
-            for (String name : subprojects) {
-                updates.put(name, targetBranch);
-            }
-            ManifestWriter.updateBranches(manifestPath, updates);
-            getLog().info("  Updated workspace.yaml branches → " + targetBranch);
-        } catch (IOException e) {
-            getLog().warn("  Could not update workspace.yaml: " + e.getMessage());
         }
     }
 

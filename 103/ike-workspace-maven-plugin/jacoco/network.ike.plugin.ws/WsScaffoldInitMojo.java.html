@@ -1,0 +1,436 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>WsScaffoldInitMojo.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">WsScaffoldInitMojo.java</span></div><h1>WsScaffoldInitMojo.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.plugin.ReleaseSupport;
+import network.ike.plugin.ws.bootstrap.SubprojectInitializer;
+import network.ike.plugin.ws.bootstrap.WorkspaceBootstrap;
+import network.ike.workspace.Manifest;
+import network.ike.workspace.ManifestException;
+import network.ike.workspace.ManifestReader;
+import network.ike.workspace.MavenVersion;
+import network.ike.workspace.SubprojectName;
+import network.ike.workspace.WorkspaceGraph;
+
+import network.ike.plugin.support.ConsoleIkePrompter;
+import network.ike.plugin.support.IkePrompter;
+import org.apache.maven.api.Session;
+import org.apache.maven.api.di.Inject;
+import org.apache.maven.api.plugin.Log;
+import org.apache.maven.api.plugin.Mojo;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Parameter;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+
+/**
+ * Bootstrap a workspace: create it from scratch when there is no
+ * {@code workspace.yaml}, otherwise clone any declared-but-missing
+ * subprojects.
+ *
+ * &lt;p&gt;This goal subsumes the retired {@code ws:create} and
+ * {@code ws:init} goals (IKE-Network/ike-issues#393) into a single
+ * idempotent entry point that &quot;does the right thing&quot; regardless of
+ * the current state of the directory:
+ *
+ * &lt;ul&gt;
+ *   &lt;li&gt;&lt;b&gt;No {@code workspace.yaml} in CWD&lt;/b&gt; — bootstrap mode. Generates
+ *       {@code pom.xml}, {@code workspace.yaml}, {@code .gitignore},
+ *       {@code .mvn/maven.config}, {@code .mvn/jvm.config},
+ *       {@code README.adoc}, and installs the Maven wrapper. Optionally
+ *       initializes git. Required: {@code -Dgroup=&lt;groupId&gt;}.&lt;/li&gt;
+ *   &lt;li&gt;&lt;b&gt;{@code workspace.yaml} present&lt;/b&gt; — init mode. Walks every
+ *       declared subproject and ensures it is cloned (or initialized in
+ *       place from a Syncthing-synced working tree, or fetched + rebased
+ *       if already a healthy clone). Generates workspace-level docs
+ *       ({@code GOALS.md}, {@code WS-REFERENCE.md},
+ *       {@code CLAUDE.md}).&lt;/li&gt;
+ *   &lt;li&gt;&lt;b&gt;Both states satisfied&lt;/b&gt; — every declared subproject already
+ *       a clean clone, every wrapper at the right version — the goal
+ *       no-ops with a single &quot;all good&quot; line.&lt;/li&gt;
+ * &lt;/ul&gt;
+ *
+ * &lt;p&gt;Unlike most {@code ws:*} goals this mojo {@code implements Mojo}
+ * directly rather than extending {@link AbstractWorkspaceMojo}, because
+ * the bootstrap branch must run &lt;em&gt;before&lt;/em&gt; a manifest exists. The
+ * init branch reads {@code workspace.yaml} inline.
+ *
+ * &lt;pre&gt;{@code
+ * # Bootstrap a new workspace:
+ * mkdir my-ws &amp;&amp; cd my-ws
+ * mvn ws:scaffold-init -Dname=my-ws -Dgroup=org.example
+ *
+ * # Inside an existing workspace, clone any missing subprojects:
+ * mvn ws:scaffold-init
+ * }&lt;/pre&gt;
+ *
+ * @see WorkspaceBootstrap for the create-from-scratch helper
+ * @see SubprojectInitializer for the clone-missing-subprojects helper
+ */
+@org.apache.maven.api.plugin.annotations.Mojo(
+        name = &quot;scaffold-init&quot;,
+        projectRequired = false,
+        aggregator = true)
+public class WsScaffoldInitMojo implements Mojo {
+
+    /** Maven logger, injected by the Maven 4 DI container. */
+    @Inject
+    private Log log;
+
+    /** Maven session — consulted for interactive mode (#385). */
+    @Inject
+    private Session session;
+
+    /** Interactive prompter, lazily built (IKE-Network/ike-issues#385). */
+    private IkePrompter prompter;
+
+    /**
+     * Workspace name. Used as the directory name (bootstrap mode), Maven
+     * artifactId, and in generated documentation. Prompted if omitted
+     * in bootstrap mode. Ignored in init mode.
+     */
+    @Parameter(property = &quot;name&quot;)
+    String name;
+
+    /**
+     * Short description of the workspace purpose. Defaults to the
+     * workspace name, which is also used as the Maven POM {@code &lt;name&gt;}
+     * element (shown in Maven build output). Bootstrap mode only.
+     */
+    @Parameter(property = &quot;description&quot;)
+    String description;
+
+    /**
+     * GitHub organization or user for the remote URL. If set, the
+     * remote is configured as
+     * {@code https://github.com/&lt;org&gt;/&lt;name&gt;.git}. Bootstrap mode only.
+     */
+    @Parameter(property = &quot;org&quot;)
+    String org;
+
+    /**
+     * Maven groupId for the workspace root POM. Required in bootstrap
+     * mode (no default — placeholder GAVs are not supported, see
+     * ike-issues#183). Persisted to {@code workspace-root.groupId} in
+     * workspace.yaml.
+     *
+     * &lt;p&gt;Convention: {@code network.ike.workspace} for IKE-managed
+     * workspaces; downstream consumers pick a groupId that fits their
+     * organization namespace.
+     */
+    @Parameter(property = &quot;group&quot;)
+    String group;
+
+    /**
+     * Initial workspace root version. Single-segment monotonic (per
+     * {@code feedback_no_semver_assumption}); defaults to
+     * {@code 1-SNAPSHOT}. The version increments after each release of
+     * the workspace root, NOT per software-meaningful change. Bootstrap
+     * mode only.
+     */
+    @Parameter(property = &quot;version&quot;, defaultValue = &quot;1-SNAPSHOT&quot;)
+    String version;
+
+    /**
+     * Maven artifactId for the workspace root POM. Defaults to
+     * {@link #name} when omitted (ike-issues#183). Bootstrap mode only.
+     */
+    @Parameter(property = &quot;artifactId&quot;)
+    String artifactId;
+
+    /**
+     * Default Maven version for subprojects. Written to
+     * {@code defaults.maven-version} in workspace.yaml. Bootstrap mode
+     * only.
+     */
+    @Parameter(property = &quot;mavenVersion&quot;, defaultValue = &quot;4.0.0-rc-5&quot;)
+    String mavenVersion;
+
+    /**
+     * Default branch for subprojects. Written to
+     * {@code defaults.branch} in workspace.yaml. Bootstrap mode only.
+     */
+    @Parameter(property = &quot;branch&quot;, defaultValue = &quot;main&quot;)
+    String defaultBranch;
+
+    /**
+     * Skip git init and remote setup in bootstrap mode.
+     */
+    @Parameter(property = &quot;skipGit&quot;, defaultValue = &quot;false&quot;)
+    boolean skipGit;
+
+    /**
+     * Path to workspace.yaml override (init mode only — bypasses the
+     * upward-from-CWD search).
+     */
+    @Parameter(property = &quot;workspace.manifest&quot;)
+    File manifest;
+
+    /** Creates this goal instance. */
+<span class="fc" id="L171">    public WsScaffoldInitMojo() {}</span>
+
+    @Override
+    public void execute() throws MojoException {
+<span class="fc" id="L175">        Path here = Path.of(System.getProperty(&quot;user.dir&quot;));</span>
+<span class="pc bpc" id="L176" title="1 of 4 branches missed.">        Path manifestPath = (manifest != null &amp;&amp; manifest.exists())</span>
+<span class="fc" id="L177">                ? manifest.toPath()</span>
+<span class="fc" id="L178">                : here.resolve(&quot;workspace.yaml&quot;);</span>
+
+<span class="fc bfc" id="L180" title="All 2 branches covered.">        if (!Files.exists(manifestPath)) {</span>
+            // No workspace.yaml here — bootstrap a new workspace.
+<span class="nc" id="L182">            createWorkspace(here);</span>
+        } else {
+            // workspace.yaml exists — clone declared-but-missing subprojects
+            // (and refresh wrappers / docs / CLAUDE.md).
+<span class="fc" id="L186">            initSubprojects(manifestPath);</span>
+        }
+<span class="fc" id="L188">    }</span>
+
+    // ── Bootstrap branch (was ws:create) ────────────────────────
+
+    private void createWorkspace(Path here) throws MojoException {
+<span class="pc bpc" id="L193" title="2 of 4 branches missed.">        if (name == null || name.isBlank()) {</span>
+<span class="nc" id="L194">            name = promptParam(&quot;name&quot;, &quot;Workspace name&quot;);</span>
+        }
+
+        // -Dgroup is required for real coordinates (ike-issues#183).
+        // The placeholder local.aggregate:&lt;name&gt;:1.0.0-SNAPSHOT path
+        // is gone — no known workspace still uses it.
+<span class="pc bpc" id="L200" title="3 of 4 branches missed.">        if (group == null || group.isBlank()) {</span>
+<span class="fc" id="L201">            throw new MojoException(</span>
+<span class="fc" id="L202">                    WsGoal.SCAFFOLD_INIT.qualified()</span>
+                            + &quot; in bootstrap mode requires -Dgroup=&lt;groupId&gt; &quot;
+                            + &quot;(e.g. network.ike.workspace). The workspace root &quot;
+                            + &quot;needs real Maven coordinates so &quot;
+<span class="fc" id="L206">                            + WsGoal.RELEASE_PUBLISH.qualified() + &quot;, &quot;</span>
+<span class="fc" id="L207">                            + WsGoal.ALIGN_PUBLISH.qualified()</span>
+                            + &quot;, and site deploy can address it. &quot;
+                            + &quot;See ike-issues#183.&quot;);
+        }
+
+<span class="nc bnc" id="L212" title="All 4 branches missed.">        if (artifactId == null || artifactId.isBlank()) {</span>
+<span class="nc" id="L213">            artifactId = name;</span>
+        }
+
+        // Validate name + artifactId via SubprojectName and version
+        // via MavenVersion (#295) — single typed boundary for the
+        // string parameters that flow into the generated POM. The
+        // mojo doesn't extend AbstractWorkspaceMojo, so the helpers
+        // can't be reused; inline the IAE → MojoException conversion.
+        try {
+<span class="nc" id="L222">            SubprojectName.of(name);</span>
+<span class="nc" id="L223">            SubprojectName.of(artifactId);</span>
+<span class="nc" id="L224">            MavenVersion.of(version);</span>
+<span class="nc" id="L225">        } catch (IllegalArgumentException e) {</span>
+<span class="nc" id="L226">            throw new MojoException(e.getMessage());</span>
+<span class="nc" id="L227">        }</span>
+
+<span class="nc bnc" id="L229" title="All 4 branches missed.">        if (description == null || description.isBlank()) {</span>
+<span class="nc" id="L230">            description = name;</span>
+        }
+
+<span class="nc" id="L233">        Path wsDir = here.resolve(name);</span>
+
+        // Fail if workspace files already exist (prevent silent overwrite)
+<span class="nc bnc" id="L236" title="All 2 branches missed.">        if (Files.exists(wsDir.resolve(&quot;pom.xml&quot;))</span>
+<span class="nc bnc" id="L237" title="All 2 branches missed.">                || Files.exists(wsDir.resolve(&quot;workspace.yaml&quot;))) {</span>
+<span class="nc" id="L238">            throw new MojoException(</span>
+                    &quot;Workspace already exists at &quot; + wsDir
+                    + &quot; (pom.xml or workspace.yaml found). &quot;
+                    + &quot;Remove the directory first or choose a different name.&quot;);
+        }
+
+<span class="nc" id="L244">        log.info(&quot;&quot;);</span>
+<span class="nc" id="L245">        log.info(name + &quot; — Scaffold-Init (bootstrap)&quot;);</span>
+<span class="nc" id="L246">        log.info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+<span class="nc" id="L247">        log.info(&quot;  Name:      &quot; + name);</span>
+<span class="nc" id="L248">        log.info(&quot;  GAV:       &quot; + group + &quot;:&quot; + artifactId + &quot;:&quot; + version);</span>
+<span class="nc" id="L249">        log.info(&quot;  Directory: &quot; + wsDir);</span>
+<span class="nc bnc" id="L250" title="All 4 branches missed.">        if (org != null &amp;&amp; !org.isBlank()) {</span>
+<span class="nc" id="L251">            log.info(&quot;  Remote:    https://github.com/&quot; + org + &quot;/&quot; + name + &quot;.git&quot;);</span>
+        }
+<span class="nc" id="L253">        log.info(&quot;&quot;);</span>
+
+<span class="nc" id="L255">        WorkspaceBootstrap.Params params = new WorkspaceBootstrap.Params(</span>
+                name, description, org, group, artifactId, version,
+                mavenVersion, defaultBranch, skipGit,
+<span class="nc" id="L258">                loadBuildProperty(&quot;ike-platform.version&quot;),</span>
+<span class="nc" id="L259">                loadBuildProperty(&quot;ike-workspace-extension.version&quot;));</span>
+<span class="nc" id="L260">        WorkspaceBootstrap bootstrap = new WorkspaceBootstrap(params, log);</span>
+<span class="nc" id="L261">        bootstrap.createAt(wsDir);</span>
+
+<span class="nc" id="L263">        log.info(&quot;&quot;);</span>
+<span class="nc" id="L264">        log.info(Ansi.green(&quot;  ✓ &quot;) + &quot;Workspace created: &quot; + wsDir);</span>
+<span class="nc" id="L265">        log.info(&quot;&quot;);</span>
+<span class="nc" id="L266">        log.info(Ansi.yellow(&quot;  ⚠  You must change into the workspace directory before running ws: goals:&quot;));</span>
+<span class="nc" id="L267">        log.info(&quot;&quot;);</span>
+<span class="nc" id="L268">        log.info(&quot;    &quot; + Ansi.cyan(&quot;cd &quot; + name));</span>
+<span class="nc" id="L269">        log.info(&quot;    mvn &quot; + WsGoal.ADD.qualified()</span>
+                + &quot; -Drepo=&lt;git-url&gt;    # add components&quot;);
+<span class="nc" id="L271">        log.info(&quot;    mvn &quot; + WsGoal.SCAFFOLD_INIT.qualified()</span>
+                + &quot;           # clone components&quot;);
+<span class="nc" id="L273">        log.info(&quot;&quot;);</span>
+
+<span class="nc" id="L275">        WorkspaceReport.write(wsDir, WsGoal.SCAFFOLD_INIT.qualified(),</span>
+                &quot;Created workspace **&quot; + name + &quot;**\n\nDirectory: `&quot; + wsDir + &quot;`\n&quot;,
+                log);
+<span class="nc" id="L278">    }</span>
+
+    // ── Init branch (was ws:init) ───────────────────────────────
+
+    private void initSubprojects(Path manifestPath) throws MojoException {
+<span class="fc" id="L283">        log.debug(&quot;Reading manifest: &quot; + manifestPath);</span>
+        Manifest m;
+        try {
+<span class="fc" id="L286">            m = ManifestReader.read(manifestPath);</span>
+<span class="nc" id="L287">        } catch (ManifestException e) {</span>
+<span class="nc" id="L288">            throw new MojoException(</span>
+<span class="nc" id="L289">                    &quot;Failed to read workspace manifest: &quot; + e.getMessage(), e);</span>
+<span class="fc" id="L290">        }</span>
+<span class="fc" id="L291">        WorkspaceGraph graph = new WorkspaceGraph(m);</span>
+<span class="fc" id="L292">        File root = manifestPath.getParent().toFile();</span>
+<span class="fc" id="L293">        String wsName = resolveWorkspaceName(root);</span>
+
+        // Refresh the managed comment header in workspace.yaml so the
+        // bootstrap instructions stay in lockstep with current goal
+        // names (#458). Best-effort — a failure here doesn't abort the
+        // init since subproject cloning is the primary effect.
+        try {
+<span class="fc" id="L300">            String org = resolveGitHubOrg(root);</span>
+<span class="fc" id="L301">            boolean refreshed = WorkspaceBootstrap.refreshManagedHeader(</span>
+                    manifestPath, wsName, wsName, org);
+<span class="pc bpc" id="L303" title="1 of 2 branches missed.">            if (refreshed) {</span>
+<span class="fc" id="L304">                log.info(Ansi.green(&quot;  ✓ &quot;) + &quot;Refreshed workspace.yaml header.&quot;);</span>
+            }
+<span class="nc" id="L306">        } catch (IOException e) {</span>
+<span class="nc" id="L307">            log.warn(&quot;Could not refresh workspace.yaml header: &quot; + e.getMessage());</span>
+<span class="fc" id="L308">        }</span>
+
+        // Refresh the managed ike-workspace-extension entry in
+        // .mvn/extensions.xml so the literal version stays in lockstep
+        // with the ike-parent property (#460). Best-effort — a failure
+        // here doesn't abort the init.
+        try {
+<span class="fc" id="L315">            Path extensionsXml = root.toPath().resolve(&quot;.mvn/extensions.xml&quot;);</span>
+<span class="pc bpc" id="L316" title="1 of 2 branches missed.">            if (Files.exists(extensionsXml)) {</span>
+<span class="nc" id="L317">                String extVersion = loadBuildProperty(&quot;ike-workspace-extension.version&quot;);</span>
+<span class="nc" id="L318">                boolean refreshed = WorkspaceBootstrap</span>
+<span class="nc" id="L319">                        .refreshExtensionsManagedBlock(extensionsXml, extVersion);</span>
+<span class="nc bnc" id="L320" title="All 2 branches missed.">                if (refreshed) {</span>
+<span class="nc" id="L321">                    log.info(Ansi.green(&quot;  ✓ &quot;) + &quot;Refreshed .mvn/extensions.xml (&quot;</span>
+                            + extVersion + &quot;).&quot;);
+                }
+            }
+<span class="nc" id="L325">        } catch (IOException e) {</span>
+<span class="nc" id="L326">            log.warn(&quot;Could not refresh .mvn/extensions.xml: &quot; + e.getMessage());</span>
+<span class="fc" id="L327">        }</span>
+
+<span class="fc" id="L329">        SubprojectInitializer initializer =</span>
+                new SubprojectInitializer(graph, root, wsName, log);
+<span class="fc" id="L331">        SubprojectInitializer.Result result = initializer.run();</span>
+
+<span class="pc bpc" id="L333" title="1 of 2 branches missed.">        if (result.nothingChanged()) {</span>
+<span class="nc" id="L334">            log.info(Ansi.green(&quot;  ✓ &quot;) + &quot;All &quot; + result.alreadyClean()</span>
+                    + &quot; declared subproject(s) already initialized.&quot;);
+        }
+<span class="fc" id="L337">    }</span>
+
+    /**
+     * Parse the GitHub org from {@code git config --get remote.origin.url}
+     * in the workspace root. Returns {@code null} when the URL is absent
+     * or not a recognized GitHub form — callers fall back to the
+     * {@code &lt;org&gt;} placeholder in the managed header.
+     *
+     * @param root the workspace root directory
+     * @return the GitHub org, or {@code null} when not derivable
+     */
+    private static String resolveGitHubOrg(File root) {
+        try {
+<span class="nc" id="L350">            String url = ReleaseSupport.execCapture(root,</span>
+                    &quot;git&quot;, &quot;config&quot;, &quot;--get&quot;, &quot;remote.origin.url&quot;);
+<span class="nc bnc" id="L352" title="All 2 branches missed.">            if (url == null) return null;</span>
+<span class="nc" id="L353">            url = url.trim();</span>
+            // https://github.com/&lt;org&gt;/&lt;repo&gt;(.git)?
+<span class="nc" id="L355">            int idx = url.indexOf(&quot;github.com/&quot;);</span>
+<span class="nc bnc" id="L356" title="All 2 branches missed.">            if (idx &gt;= 0) {</span>
+<span class="nc" id="L357">                String tail = url.substring(idx + &quot;github.com/&quot;.length());</span>
+<span class="nc" id="L358">                int slash = tail.indexOf('/');</span>
+<span class="nc bnc" id="L359" title="All 2 branches missed.">                if (slash &gt; 0) return tail.substring(0, slash);</span>
+            }
+            // git@github.com:&lt;org&gt;/&lt;repo&gt;(.git)?
+<span class="nc" id="L362">            idx = url.indexOf(&quot;github.com:&quot;);</span>
+<span class="nc bnc" id="L363" title="All 2 branches missed.">            if (idx &gt;= 0) {</span>
+<span class="nc" id="L364">                String tail = url.substring(idx + &quot;github.com:&quot;.length());</span>
+<span class="nc" id="L365">                int slash = tail.indexOf('/');</span>
+<span class="nc bnc" id="L366" title="All 2 branches missed.">                if (slash &gt; 0) return tail.substring(0, slash);</span>
+            }
+<span class="fc" id="L368">        } catch (RuntimeException e) {</span>
+            // git not available or no remote — fall through.
+<span class="nc" id="L370">        }</span>
+<span class="fc" id="L371">        return null;</span>
+    }
+
+    /**
+     * Read the workspace name from the root POM's artifactId. Mirrors
+     * {@code AbstractWorkspaceMojo#workspaceName()} but is duplicated
+     * here so this mojo can remain independent of that base class.
+     */
+    private static String resolveWorkspaceName(File root) {
+        try {
+<span class="fc" id="L381">            File rootPom = new File(root, &quot;pom.xml&quot;);</span>
+<span class="pc bpc" id="L382" title="1 of 2 branches missed.">            if (rootPom.exists()) {</span>
+<span class="nc" id="L383">                return ReleaseSupport.readPomArtifactId(rootPom);</span>
+            }
+<span class="nc" id="L385">        } catch (Exception e) {</span>
+            // Fall through
+<span class="fc" id="L387">        }</span>
+<span class="fc" id="L388">        return &quot;Workspace&quot;;</span>
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────
+
+    /**
+     * Load a build-time property from {@code ws-plugin.properties}
+     * (resolved by Maven resource filtering during the build). Used to
+     * pin the ike-parent version stamped into the generated POM.
+     */
+    private String loadBuildProperty(String key) {
+<span class="nc" id="L399">        try (var is = getClass().getResourceAsStream(&quot;ws-plugin.properties&quot;)) {</span>
+<span class="nc bnc" id="L400" title="All 2 branches missed.">            if (is != null) {</span>
+<span class="nc" id="L401">                var props = new java.util.Properties();</span>
+<span class="nc" id="L402">                props.load(is);</span>
+<span class="nc" id="L403">                String value = props.getProperty(key);</span>
+<span class="nc bnc" id="L404" title="All 6 branches missed.">                if (value != null &amp;&amp; !value.isBlank() &amp;&amp; !value.startsWith(&quot;${&quot;)) {</span>
+<span class="nc" id="L405">                    return value;</span>
+                }
+            }
+<span class="nc bnc" id="L408" title="All 2 branches missed.">        } catch (IOException e) {</span>
+            // Fall through to fallback
+<span class="nc" id="L410">        }</span>
+        // Fallback: use JAR manifest version
+<span class="nc" id="L412">        String jarVersion = getClass().getPackage().getImplementationVersion();</span>
+<span class="nc bnc" id="L413" title="All 2 branches missed.">        return jarVersion != null ? jarVersion : &quot;66&quot;;</span>
+    }
+
+    private String promptParam(String propertyName, String label)
+            throws MojoException {
+<span class="nc bnc" id="L418" title="All 2 branches missed.">        if (prompter == null) {</span>
+            // No session (unit tests) or batch mode -&gt; not interactive,
+            // so the prompter declines rather than blocking on stdin.
+<span class="nc bnc" id="L421" title="All 2 branches missed.">            boolean interactive = session != null</span>
+<span class="nc bnc" id="L422" title="All 2 branches missed.">                    &amp;&amp; session.getSettings().isInteractiveMode();</span>
+<span class="nc" id="L423">            prompter = new ConsoleIkePrompter(log, interactive);</span>
+        }
+<span class="nc bnc" id="L425" title="All 2 branches missed.">        if (prompter.isInteractive()) {</span>
+<span class="nc" id="L426">            String input = prompter.prompt(label + &quot;: &quot;);</span>
+<span class="nc bnc" id="L427" title="All 4 branches missed.">            if (input != null &amp;&amp; !input.isBlank()) {</span>
+<span class="nc" id="L428">                return input.trim();</span>
+            }
+        }
+<span class="nc" id="L431">        throw new MojoException(</span>
+                propertyName + &quot; is required. Specify -D&quot; + propertyName
+                        + &quot;=&lt;value&gt; or run interactively.&quot;);
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

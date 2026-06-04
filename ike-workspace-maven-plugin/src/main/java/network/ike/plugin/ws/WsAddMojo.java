@@ -2,6 +2,7 @@ package network.ike.plugin.ws;
 
 import network.ike.plugin.ReleaseSupport;
 import network.ike.plugin.support.GoalReportBuilder;
+import network.ike.plugin.ws.reconcile.FeatureVersionReconciler;
 import network.ike.plugin.ws.vcs.VcsOperations;
 import network.ike.workspace.Subproject;
 import network.ike.workspace.Dependency;
@@ -9,6 +10,7 @@ import network.ike.workspace.Manifest;
 import network.ike.workspace.ManifestException;
 import network.ike.workspace.ManifestReader;
 import network.ike.workspace.PublishedArtifactSet;
+import network.ike.workspace.VersionSupport;
 
 import org.apache.maven.api.plugin.MojoException;
 import org.apache.maven.api.plugin.annotations.Mojo;
@@ -199,6 +201,17 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
                 }
             }
 
+            // Branch-qualify on a feature branch so the added subproject
+            // is isolated like the rest (IKE-Network/ike-issues#574).
+            // No-op on main; scaffold-publish's FeatureVersionReconciler
+            // self-heals if this is skipped, so failures are non-fatal.
+            try {
+                version = qualifyForBranch(subprojectDir, version, branch);
+            } catch (IOException e) {
+                getLog().warn("  Could not branch-qualify version: "
+                        + e.getMessage());
+            }
+
             // Detect parent POM — record parent: only when the POM's
             // <parent> matches a workspace subproject by full GA (groupId
             // AND artifactId). An external parent that merely shares a
@@ -363,6 +376,43 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
 
         PostMutationSync.refresh(workspaceRoot(), getLog());
         return spec;
+    }
+
+    // ── Feature-branch version qualification (#574) ──────────────
+
+    /**
+     * On a feature branch, branch-qualify the added subproject's version
+     * and rewrite its POM so it is isolated like the rest of the
+     * workspace (IKE-Network/ike-issues#574). No-op on {@code main} and
+     * when already qualified ({@link VersionSupport#branchQualifiedVersion}
+     * is idempotent). {@code scaffold-publish}'s
+     * {@code FeatureVersionReconciler} self-heals if this is skipped, so
+     * the caller treats a rewrite failure as non-fatal. Package-private
+     * for tests.
+     *
+     * @param subprojectDir the cloned subproject directory
+     * @param version       the version about to be recorded (may be null)
+     * @param branch        the branch the subproject will track
+     * @return the version to record — branch-qualified on a feature branch
+     * @throws IOException if the subproject POM cannot be rewritten
+     */
+    static String qualifyForBranch(Path subprojectDir, String version,
+                                   String branch) throws IOException {
+        if (version == null || version.isBlank()
+                || branch == null || branch.isBlank()
+                || "main".equals(branch)) {
+            return version;
+        }
+        String qualified =
+                VersionSupport.branchQualifiedVersion(version, branch);
+        if (!qualified.equals(version)) {
+            Path pom = subprojectDir.resolve("pom.xml");
+            if (Files.exists(pom)) {
+                FeatureVersionReconciler.rewriteOwnVersion(
+                        pom, version, qualified);
+            }
+        }
+        return qualified;
     }
 
     // ── YAML generation ──────────────────────────────────────────

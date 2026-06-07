@@ -162,6 +162,9 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
 
     @Override
     protected WorkspaceReportSpec runGoal() throws MojoException {
+        if (!isWorkspaceMode()) {
+            return executeBareMode();
+        }
         WorkspaceGraph graph = loadGraph();
         File root = workspaceRoot();
 
@@ -1776,6 +1779,71 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
         return yaml.toString();
     }
 
+    // ── Bare mode: single-repo release (no workspace.yaml) ───────────
+
+    /**
+     * Bare mode: release the current single repo by delegating to
+     * {@code ike:release-draft} (preview) or {@code ike:release-publish}
+     * (execute). The single-repo case of the same operation — a working
+     * set of one — with no workspace cascade, catch-up alignment, or
+     * manifest sync (ike-issues#601). This is the {@code ws:} console verb
+     * forwarding to the per-repo release engine; in one repo,
+     * {@code ws:release} is exactly {@code ike:release}.
+     *
+     * @return the goal's report
+     * @throws MojoException if there is no Maven project here, or the
+     *                       delegated {@code ike:release-*} fails
+     */
+    private WorkspaceReportSpec executeBareMode() throws MojoException {
+        File repo = new File(System.getProperty("user.dir"));
+        if (!new File(repo, "pom.xml").exists()) {
+            throw new MojoException(
+                    "ws:release: " + repo + " has no pom.xml and no workspace.yaml "
+                    + "was found — run it in a Maven project, or a workspace.");
+        }
+        boolean draft = !publish;
+        WsGoal goal = draft ? WsGoal.RELEASE_DRAFT : WsGoal.RELEASE_PUBLISH;
+        String delegate = draft ? "ike:release-draft" : "ike:release-publish";
+
+        getLog().info("");
+        getLog().info(goal.qualified());
+        getLog().info("══════════════════════════════════════════════════════════════");
+        getLog().info("  Repo: " + repo.getName());
+        getLog().info("  Mode: single repo (no workspace.yaml) → " + delegate);
+        getLog().info("");
+
+        String mvn = findMvn(repo);
+        ReleaseSupport.exec(repo, getLog(),
+                draft ? draftCommand(mvn) : releaseCommand(mvn));
+
+        GoalReportBuilder report = new GoalReportBuilder();
+        report.paragraph("**Repo:** `" + repo + "`");
+        report.paragraph("Single-repo release " + (draft ? "preview" : "executed")
+                + " via `" + delegate + "` — a working set of one, no workspace "
+                + "cascade.");
+        return new WorkspaceReportSpec(goal, report.build());
+    }
+
+    /**
+     * Build the {@code ike:release-draft} preview command for bare mode,
+     * threading {@code ignoreWarnings} through. Mirrors
+     * {@link #releaseCommand} but for the read-only draft goal — no
+     * {@code pushRelease}, since a preview never pushes.
+     *
+     * @param mvn the resolved Maven executable
+     * @return the full command, ready for {@link ReleaseSupport#exec}
+     */
+    String[] draftCommand(String mvn) {
+        List<String> cmd = new ArrayList<>();
+        cmd.add(mvn);
+        cmd.add("ike:release-draft");
+        if (ignoreWarnings) {
+            cmd.add("-Dike.release.ignoreWarnings=true");
+        }
+        cmd.add("-B");
+        return cmd.toArray(new String[0]);
+    }
+
     // ── Helper: find mvn or mvnw ─────────────────────────────────────
 
     private String findMvn(File subDir) {
@@ -1794,7 +1862,7 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
      * @param extra any goal-specific arguments to append
      * @return the full command, ready for {@link ReleaseSupport#exec}
      */
-    private String[] releaseCommand(String mvn, String... extra) {
+    String[] releaseCommand(String mvn, String... extra) {
         List<String> cmd = new ArrayList<>();
         cmd.add(mvn);
         cmd.add("ike:release-publish");

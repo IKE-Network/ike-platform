@@ -675,6 +675,7 @@ public final class SubprojectInitializer {
                 | `ws:feature-finish-squash-publish` | Squash merge (single commit) |
                 | `ws:feature-abandon-draft` | Preview abandoning a feature branch |
                 | `ws:feature-abandon-publish` | Delete feature branch across components |
+                | `ws:sibling-create` | Clone the workspace into a sibling dir on a feature branch (isolated, Syncthing-safe) |
 
                 ## Release & Checkpoint
 
@@ -793,6 +794,24 @@ public final class SubprojectInitializer {
                 ### Abandon: `ws:feature-abandon-draft`
 
                 Delete a feature branch without merging.
+
+                ### Sibling clone: `ws:sibling-create`
+
+                Clone the whole workspace into a sibling directory
+                (`<workspace>-<feature>`) on `feature/<name>` from inception,
+                instead of switching the primary in place. Each component is a
+                self-contained clone (`--reference --dissociate` against the
+                primary, so large histories are cheap). The primary stays on
+                its branch; the sibling is disposable (`rm -rf`) after merge.
+                Isolates concurrent work — same-machine or across Syncthing
+                machines — so two streams never stage each other's edits.
+
+                | Parameter | Default | Description |
+                |-----------|---------|-------------|
+                | `feature` | prompted | Feature name (branch: `feature/<name>`) |
+                | `skipVersion` | `false` | Skip version qualification |
+
+                Branches and clones stay local (no auto-push).
 
                 ---
 

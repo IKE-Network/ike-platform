@@ -142,7 +142,7 @@ public class WsHelpMojo extends AbstractWorkspaceMojo {
      */
     private static String categoryOf(String name) {
         if (name.startsWith("feature-") || name.startsWith("update-feature")
-                || name.startsWith("switch")) {
+                || name.startsWith("switch") || name.startsWith("sibling")) {
             return "Feature Branching";
         }
         if (name.startsWith("release") || name.startsWith("checkpoint")

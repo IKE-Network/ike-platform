@@ -96,6 +96,8 @@ public enum WsGoal {
                     + " Idempotent (#393)."),
     SCAFFOLD_PUBLISH("scaffold-publish", WsScaffoldPublishMojo.class,
             "Apply scaffold + foundation drift across every cloned subproject (#350)."),
+    SIBLING_CREATE("sibling-create", SiblingCreateMojo.class,
+            "Create a sibling workspace clone on a feature branch."),
     STIGNORE("stignore", StignoreWorkspaceMojo.class,
             "Generate Syncthing ignore files from workspace.yaml."),
     SWITCH_DRAFT("switch-draft", WsSwitchDraftMojo.class,

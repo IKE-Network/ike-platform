@@ -62,7 +62,80 @@ class TestWorkspaceHelper {
         writeWorkspaceYamlWithRepos(libAUrl, libBUrl, appCUrl);
     }
 
+    /**
+     * Build a workspace laid out for sibling-clone tests
+     * (IKE-Network/ike-issues#207): bare upstreams for the workspace root and
+     * every component, the root cloned into {@code <tempDir>/primary} (so it
+     * has an {@code origin} to clone from), and each component cloned under it
+     * (so {@code ws:sibling-create}'s {@code --reference} borrow has a local
+     * source). {@code ws:sibling-create -Dfeature=foo} run against the
+     * returned root produces a sibling at {@code <tempDir>/primary-foo}.
+     *
+     * @return the primary workspace root directory
+     */
+    Path buildSiblingScenario() throws Exception {
+        Path upstreams = root.resolve(".upstreams");
+        Files.createDirectories(upstreams);
+
+        String libAUrl = createBareUpstream(upstreams, "lib-a", "1.0.0-SNAPSHOT", null);
+        String libBUrl = createBareUpstream(upstreams, "lib-b", "2.0.0-SNAPSHOT", "lib-a");
+        String appCUrl = createBareUpstream(upstreams, "app-c", "3.0.0-SNAPSHOT", "lib-b");
+        String rootUrl = createBareRootUpstream(upstreams, libAUrl, libBUrl, appCUrl);
+
+        // Clone the workspace root into <tempDir>/primary, then each component
+        // under it — mirroring a real, fully-initialised primary workspace.
+        exec(root, "git", "clone", rootUrl, "primary");
+        Path primary = root.resolve("primary");
+        exec(primary, "git", "clone", libAUrl, "lib-a");
+        exec(primary, "git", "clone", libBUrl, "lib-b");
+        exec(primary, "git", "clone", appCUrl, "app-c");
+
+        return primary;
+    }
+
     // ── Internal ────────────────────────────────────────────────────
+
+    /**
+     * Create a bare upstream for the workspace root: a {@code workspace.yaml}
+     * (with the given component repo URLs) and a minimal aggregator
+     * {@code pom.xml}, committed on {@code main} and pushed to a bare repo.
+     *
+     * @return the {@code file://} URL of the bare root upstream
+     */
+    private String createBareRootUpstream(Path upstreams, String libAUrl,
+                                          String libBUrl, String appCUrl)
+            throws Exception {
+        Path bare = upstreams.resolve("upstream-primary.git");
+        Files.createDirectories(bare);
+        exec(bare, "git", "init", "--bare");
+
+        Path work = upstreams.resolve("work-primary");
+        Files.createDirectories(work);
+
+        Files.writeString(work.resolve("workspace.yaml"),
+                workspaceYamlWithRepos(libAUrl, libBUrl, appCUrl),
+                StandardCharsets.UTF_8);
+        Files.writeString(work.resolve("pom.xml"), """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <project xmlns="http://maven.apache.org/POM/4.0.0">
+                    <modelVersion>4.0.0</modelVersion>
+                    <groupId>com.test</groupId>
+                    <artifactId>primary</artifactId>
+                    <version>1-SNAPSHOT</version>
+                    <packaging>pom</packaging>
+                </project>
+                """, StandardCharsets.UTF_8);
+
+        exec(work, "git", "init", "-b", "main");
+        configureHermetic(work);
+        exec(work, "git", "add", ".");
+        exec(work, "git", "commit", "-m", "Initial workspace root");
+        exec(work, "git", "remote", "add", "origin",
+                bare.toAbsolutePath().toString());
+        exec(work, "git", "push", "-u", "origin", "main");
+
+        return bare.toUri().toString();
+    }
 
     private void writeWorkspaceYaml() throws Exception {
         String yaml = """
@@ -197,7 +270,14 @@ class TestWorkspaceHelper {
 
     private void writeWorkspaceYamlWithRepos(String libAUrl, String libBUrl,
                                               String appCUrl) throws Exception {
-        String yaml = """
+        Files.writeString(workspaceYaml(),
+                workspaceYamlWithRepos(libAUrl, libBUrl, appCUrl),
+                StandardCharsets.UTF_8);
+    }
+
+    private static String workspaceYamlWithRepos(String libAUrl, String libBUrl,
+                                                  String appCUrl) {
+        return """
                 schema-version: "1.0"
                 generated: "2026-01-01"
 
@@ -230,7 +310,6 @@ class TestWorkspaceHelper {
                       - subproject: lib-b
                         relationship: build
                 """.formatted(libAUrl, libBUrl, appCUrl);
-        Files.writeString(workspaceYaml(), yaml, StandardCharsets.UTF_8);
     }
 
     /**

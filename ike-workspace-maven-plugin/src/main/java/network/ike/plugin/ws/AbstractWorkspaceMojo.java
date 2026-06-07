@@ -8,6 +8,8 @@ import network.ike.workspace.ManifestException;
 import network.ike.workspace.ManifestReader;
 import network.ike.workspace.MavenVersion;
 import network.ike.workspace.SubprojectName;
+import network.ike.workspace.WorkingSet;
+import network.ike.workspace.WorkingSetResolver;
 import network.ike.workspace.WorkspaceGraph;
 import network.ike.plugin.support.ConsoleIkePrompter;
 import network.ike.plugin.support.IkePrompter;
@@ -232,6 +234,28 @@ abstract class AbstractWorkspaceMojo implements Mojo {
         } catch (MojoException e) {
             return false;
         }
+    }
+
+    /**
+     * Resolve the {@link WorkingSet} this goal acts on, honoring the
+     * {@code -Dworkspace.manifest} override and the
+     * workspace-vs-single-repo decision in one place
+     * (IKE-Network/ike-issues#611). When a {@code workspace.yaml} is
+     * configured or found by searching upward, the working set is that
+     * workspace's subprojects plus the root; otherwise it is the current
+     * repository — a working set of one. This is the single home for the
+     * {@code isWorkspaceMode()} + bare-mode branch the working-tree goals
+     * otherwise each carry, delegating to the shared
+     * {@link WorkingSetResolver}.
+     *
+     * @return the resolved working set (never {@code null})
+     */
+    protected WorkingSet resolveWorkingSet() {
+        File configured = this.manifest;
+        Path startDir = (configured != null && configured.exists())
+                ? configured.getAbsoluteFile().toPath().getParent()
+                : Path.of(System.getProperty("user.dir"));
+        return WorkingSetResolver.resolve(startDir);
     }
 
     /**

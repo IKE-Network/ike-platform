@@ -3,24 +3,23 @@ package network.ike.plugin.ws;
 import network.ike.plugin.support.GoalReportBuilder;
 import network.ike.plugin.ws.vcs.VcsOperations;
 import network.ike.plugin.ws.vcs.VcsState;
-import network.ike.workspace.WorkspaceGraph;
+import network.ike.workspace.WorkingSet;
 import org.apache.maven.api.plugin.MojoException;
 import org.apache.maven.api.plugin.annotations.Mojo;
 import org.apache.maven.api.plugin.annotations.Parameter;
 
 import java.io.File;
 import java.util.ArrayList;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
-import java.util.Set;
 
 /**
  * Push with a VCS bridge catch-up preamble.
  *
  * <p>When run from a workspace root (where {@code workspace.yaml} exists),
- * iterates all subproject repositories in topological order and pushes each.
- * When run from a single repository, operates on the current directory only.
+ * iterates the workspace's subprojects and root and pushes each. When run
+ * from a single repository, operates on that repository only. The scope is
+ * resolved via {@link #resolveWorkingSet()} (ike-issues#611).
  *
  * <p>Usage:
  * <pre>{@code
@@ -53,20 +52,7 @@ public class PushMojo extends AbstractWorkspaceMojo {
 
     @Override
     protected WorkspaceReportSpec runGoal() throws MojoException {
-        if (isWorkspaceMode()) {
-            return executeWorkspace();
-        } else {
-            return executeSingleRepo(new File(System.getProperty("user.dir")));
-        }
-    }
-
-    private WorkspaceReportSpec executeWorkspace() throws MojoException {
-        WorkspaceGraph graph = loadGraph();
-        File root = workspaceRoot();
-
-        Set<String> targets = graph.manifest().subprojects().keySet();
-
-        List<String> sorted = graph.topologicalSort(new LinkedHashSet<>(targets));
+        WorkingSet workingSet = resolveWorkingSet();
 
         getLog().info("");
         getLog().info(header("Push"));
@@ -74,21 +60,17 @@ public class PushMojo extends AbstractWorkspaceMojo {
         getLog().info("");
 
         List<PushRow> rows = new ArrayList<>();
-
-        if (new File(root, ".git").exists()) {
-            rows.add(pushOne(root, "workspace root"));
-        }
-
-        for (String name : sorted) {
-            File dir = new File(root, name);
-            File gitDir = new File(dir, ".git");
-
-            if (!gitDir.exists()) {
-                getLog().debug(name + " — not cloned, skipping");
-                rows.add(PushRow.notCloned(name));
+        for (WorkingSet.Member member : workingSet.members()) {
+            File dir = member.directory().toFile();
+            if (!new File(dir, ".git").exists()) {
+                getLog().debug(member.name() + " — not cloned, skipping");
+                rows.add(PushRow.notCloned(member.name()));
                 continue;
             }
-            rows.add(pushOne(dir, name));
+            String label = workingSet.isWorkspace()
+                    && member.directory().equals(workingSet.root())
+                    ? "workspace root" : member.name();
+            rows.add(pushOne(dir, label));
         }
 
         int pushed = (int) rows.stream().filter(r -> r.outcome == Outcome.PUSHED).count();
@@ -406,24 +388,4 @@ public class PushMojo extends AbstractWorkspaceMojo {
         }
     }
 
-    private WorkspaceReportSpec executeSingleRepo(File dir) throws MojoException {
-        getLog().info("");
-        getLog().info("IKE VCS Bridge — Push");
-        getLog().info("══════════════════════════════════════════════════════════════");
-
-        VcsOperations.catchUp(dir, getLog());
-
-        String branch = VcsOperations.currentBranch(dir);
-        getLog().info("  Pushing to " + remote + "/" + branch + "...");
-        VcsOperations.push(dir, getLog(), remote, branch);
-
-        VcsOperations.writeVcsState(dir, VcsState.Action.PUSH);
-
-        getLog().info("");
-        getLog().info("  Done.");
-        getLog().info("");
-        return new WorkspaceReportSpec(WsGoal.PUSH,
-                "Pushed `" + dir.getName() + "` to `" + remote + "/"
-                        + branch + "`.\n");
-    }
 }

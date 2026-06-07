@@ -1,6 +1,7 @@
 package network.ike.plugin.ws;
 
 import network.ike.plugin.ReleaseSupport;
+import network.ike.workspace.WorkingSet;
 import network.ike.workspace.WorkspaceGraph;
 import org.apache.maven.api.plugin.MojoException;
 import org.apache.maven.api.plugin.annotations.Mojo;
@@ -42,29 +43,22 @@ public class WsCommitDraftMojo extends AbstractWorkspaceMojo {
 
     @Override
     protected WorkspaceReportSpec runGoal() throws MojoException {
-        if (isWorkspaceMode()) {
-            return previewWorkspace();
+        WorkingSet workingSet = resolveWorkingSet();
+
+        // Same pre-commit hygiene gate as ws:commit-publish (workspace
+        // mode): a #-comment'd .mvn/jvm.config would block the real commit,
+        // so the draft fails the same way rather than previewing a commit
+        // that cannot happen (ike-issues#217). Graph-scoped → workspace only.
+        if (workingSet.isWorkspace()) {
+            WorkspaceGraph graph = loadGraph();
+            network.ike.plugin.ws.preflight.Preflight.of(
+                    java.util.List.of(network.ike.plugin.ws.preflight
+                            .PreflightCondition.JVM_CONFIG_NO_HASH_COMMENTS),
+                    network.ike.plugin.ws.preflight.PreflightContext.of(
+                            workingSet.root().toFile(), graph,
+                            graph.topologicalSort()))
+                    .requirePassed(WsGoal.COMMIT_DRAFT);
         }
-        return previewSingleRepo(new File(System.getProperty("user.dir")));
-    }
-
-    // ── Workspace mode ──────────────────────────────────────────
-
-    private WorkspaceReportSpec previewWorkspace() throws MojoException {
-        WorkspaceGraph graph = loadGraph();
-        File root = workspaceRoot();
-        List<String> sorted = graph.topologicalSort();
-
-        // Same pre-commit hygiene gate as ws:commit-publish — a
-        // #-comment'd .mvn/jvm.config would block the real commit, so
-        // the draft fails the same way rather than previewing a commit
-        // that cannot happen (ike-issues#217).
-        network.ike.plugin.ws.preflight.Preflight.of(
-                java.util.List.of(network.ike.plugin.ws.preflight
-                        .PreflightCondition.JVM_CONFIG_NO_HASH_COMMENTS),
-                network.ike.plugin.ws.preflight.PreflightContext.of(
-                        root, graph, sorted))
-                .requirePassed(WsGoal.COMMIT_DRAFT);
 
         getLog().info("");
         getLog().info(header("Commit (draft)"));
@@ -72,16 +66,16 @@ public class WsCommitDraftMojo extends AbstractWorkspaceMojo {
         getLog().info("");
 
         List<RepoStatus> statuses = new ArrayList<>();
-        if (new File(root, ".git").exists()) {
-            statuses.add(statusOf(root, "(workspace root)"));
-        }
-        for (String name : sorted) {
-            File dir = new File(root, name);
+        for (WorkingSet.Member member : workingSet.members()) {
+            File dir = member.directory().toFile();
             if (!new File(dir, ".git").exists()) {
-                getLog().debug(name + " — not cloned, skipping");
+                getLog().debug(member.name() + " — not cloned, skipping");
                 continue;
             }
-            statuses.add(statusOf(dir, name));
+            String label = workingSet.isWorkspace()
+                    && member.directory().equals(workingSet.root())
+                    ? "(workspace root)" : member.name();
+            statuses.add(statusOf(dir, label));
         }
 
         int pending = 0;
@@ -107,32 +101,13 @@ public class WsCommitDraftMojo extends AbstractWorkspaceMojo {
         getLog().info("");
 
         return new WorkspaceReportSpec(WsGoal.COMMIT_DRAFT,
-                buildReport(root.toString(), statuses, summary, pending));
+                buildReport(workingSet.root().toString(), statuses, summary,
+                        pending));
     }
 
-    // ── Single-repo mode ────────────────────────────────────────
 
-    private WorkspaceReportSpec previewSingleRepo(File dir) {
-        getLog().info("");
-        getLog().info("IKE VCS Bridge — Commit (draft)");
-        getLog().info("══════════════════════════════════════════════════════════════");
-        getLog().info("");
 
-        RepoStatus s = statusOf(dir, dir.getName());
-        printToConsole(s);
 
-        String summary = s.hasWork()
-                ? s.fileCount() + " uncommitted file(s) — run "
-                  + WsGoal.COMMIT_PUBLISH.qualified() + " to commit"
-                : "Clean — nothing to commit";
-        getLog().info("");
-        getLog().info("  " + summary);
-        getLog().info("");
-
-        return new WorkspaceReportSpec(WsGoal.COMMIT_DRAFT,
-                buildReport(dir.toString(), List.of(s), summary,
-                        s.hasWork() ? 1 : 0));
-    }
 
     // ── Per-repo status capture ─────────────────────────────────
 

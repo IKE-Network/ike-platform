@@ -2,6 +2,7 @@ package network.ike.plugin.ws;
 
 import network.ike.plugin.ws.vcs.VcsOperations;
 import network.ike.plugin.ws.vcs.VcsState;
+import network.ike.workspace.WorkingSet;
 import network.ike.workspace.WorkspaceGraph;
 import org.apache.maven.api.plugin.MojoException;
 import org.apache.maven.api.plugin.annotations.Mojo;
@@ -93,39 +94,24 @@ public class WsCommitPublishMojo extends AbstractWorkspaceMojo {
 
     @Override
     protected WorkspaceReportSpec runGoal() throws MojoException {
-        if (isWorkspaceMode()) {
-            return executeWorkspace();
-        }
-        executeSingleRepo(new File(System.getProperty("user.dir")));
-        return new WorkspaceReportSpec(WsGoal.COMMIT_PUBLISH,
-                "Committed in single-repo mode (no workspace).\n");
-    }
+        WorkingSet workingSet = resolveWorkingSet();
 
-    private WorkspaceReportSpec executeWorkspace() throws MojoException {
-        WorkspaceGraph graph = loadGraph();
-        File root = workspaceRoot();
-
-        List<String> sorted = graph.topologicalSort();
-
-        // Pre-commit hygiene: catch # comments in .mvn/jvm.config files
-        // before they reach git or Syncthing. Maven's own validate phase
-        // can't catch this in the project that contains the bad file
-        // (the JVM dies before plugin code runs), so the transport
-        // boundary is the right gate (ike-issues#217). Hard-fail —
-        // committing the file would brick the affected machine.
-        if (!skipLint) {
+        // Pre-commit hygiene (workspace mode): catch # comments in
+        // .mvn/jvm.config before they reach git or Syncthing (#217). The
+        // check is graph-scoped, so it runs only for a declared workspace.
+        if (workingSet.isWorkspace() && !skipLint) {
+            WorkspaceGraph graph = loadGraph();
             network.ike.plugin.ws.preflight.Preflight.of(
                     java.util.List.of(network.ike.plugin.ws.preflight
                             .PreflightCondition.JVM_CONFIG_NO_HASH_COMMENTS),
                     network.ike.plugin.ws.preflight.PreflightContext.of(
-                            root, graph, sorted))
+                            workingSet.root().toFile(), graph,
+                            graph.topologicalSort()))
                     .requirePassed(WsGoal.COMMIT_PUBLISH);
         }
 
-        // Resolve the message before any work — prompts interactively
-        // when running in a terminal or IntelliJ's Maven runner, throws
-        // a clear error in non-interactive contexts (CI, piped input).
-        // One message applies to every repo in this invocation.
+        // Resolve the message once — it applies to every repo this
+        // invocation.
         message = requireParam(message, "message", "Commit message");
 
         getLog().info("");
@@ -138,26 +124,17 @@ public class WsCommitPublishMojo extends AbstractWorkspaceMojo {
         int skippedUnstaged = 0;
         int failed = 0;
 
-        // Include workspace root in commit scan (#102)
-        if (new File(root, ".git").exists()) {
-            CommitOutcome outcome = commitOne(root, "workspace root");
-            committed += outcome.committed;
-            skippedClean += outcome.skippedClean;
-            skippedUnstaged += outcome.skippedUnstaged;
-            failed += outcome.failed;
-        }
-
-        for (String name : sorted) {
-            File dir = new File(root, name);
-            File gitDir = new File(dir, ".git");
-
-            if (!gitDir.exists()) {
-                getLog().debug(name + " — not cloned, skipping");
+        for (WorkingSet.Member member : workingSet.members()) {
+            File dir = member.directory().toFile();
+            if (!new File(dir, ".git").exists()) {
+                getLog().debug(member.name() + " — not cloned, skipping");
                 skippedClean++;
                 continue;
             }
-
-            CommitOutcome outcome = commitOne(dir, name);
+            String label = workingSet.isWorkspace()
+                    && member.directory().equals(workingSet.root())
+                    ? "workspace root" : member.name();
+            CommitOutcome outcome = commitOne(dir, label);
             committed += outcome.committed;
             skippedClean += outcome.skippedClean;
             skippedUnstaged += outcome.skippedUnstaged;
@@ -180,7 +157,9 @@ public class WsCommitPublishMojo extends AbstractWorkspaceMojo {
         getLog().info("  Done: " + summary);
         getLog().info("");
 
-        PostMutationSync.refresh(root, getLog());
+        if (workingSet.isWorkspace()) {
+            PostMutationSync.refresh(workingSet.root().toFile(), getLog());
+        }
 
         if (failed > 0) {
             throw new MojoException(failed
@@ -189,6 +168,7 @@ public class WsCommitPublishMojo extends AbstractWorkspaceMojo {
 
         return new WorkspaceReportSpec(WsGoal.COMMIT_PUBLISH, summary + "\n");
     }
+
 
     /**
      * Commit a single repository, returning a tally for aggregation. The
@@ -316,37 +296,6 @@ public class WsCommitPublishMojo extends AbstractWorkspaceMojo {
         return sb.toString();
     }
 
-    private void executeSingleRepo(File dir) throws MojoException {
-        // Resolve message before doing anything else — prompts when run
-        // interactively, throws clearly when piped/CI.
-        message = requireParam(message, "message", "Commit message");
-
-        getLog().info("");
-        getLog().info("IKE VCS Bridge — Commit");
-        getLog().info("══════════════════════════════════════════════════════════════");
-
-        VcsOperations.catchUp(dir, getLog());
-
-        if (!stagedOnly) {
-            getLog().info("  Staging all changes...");
-            VcsOperations.addAll(dir, getLog());
-        }
-
-        getLog().info("  Committing...");
-        VcsOperations.commit(dir, getLog(), message);
-        VcsOperations.writeVcsState(dir, VcsState.Action.COMMIT);
-
-        if (push) {
-            String branch = VcsOperations.currentBranch(dir);
-            getLog().info("  Pushing to origin/" + branch + "...");
-            VcsOperations.push(dir, getLog(), "origin", branch);
-            VcsOperations.writeVcsState(dir, VcsState.Action.PUSH);
-        }
-
-        getLog().info("");
-        getLog().info("  Done.");
-        getLog().info("");
-    }
 
     /** Per-repo outcome tally. Exactly one counter is set per repo. */
     private record CommitOutcome(int committed, int skippedClean,

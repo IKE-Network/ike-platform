@@ -26,6 +26,15 @@ public class VcsOperations {
     private static final String IKE_VCS_CONTEXT = "IKE_VCS_CONTEXT";
     private static final String CONTEXT_VALUE = "ike-maven-plugin";
 
+    /**
+     * Attempts for a transient-safe read-only git query — the original
+     * call plus one retry (ike-issues#602).
+     */
+    private static final int READ_RETRY_ATTEMPTS = 2;
+
+    /** Backoff before the single retry of a read-only git query. */
+    private static final long READ_RETRY_BACKOFF_MILLIS = 150L;
+
     private VcsOperations() {}
 
     // ── Git queries ──────────────────────────────────────────────
@@ -38,7 +47,7 @@ public class VcsOperations {
      * @throws MojoException if the git command fails
      */
     public static String headSha(File dir) throws MojoException {
-        return capture(dir, "git", "rev-parse", "--short=8", "HEAD");
+        return captureRead(dir, "git", "rev-parse", "--short=8", "HEAD");
     }
 
     /**
@@ -49,7 +58,7 @@ public class VcsOperations {
      * @throws MojoException if the git command fails
      */
     public static String currentBranch(File dir) throws MojoException {
-        return capture(dir, "git", "branch", "--show-current");
+        return captureRead(dir, "git", "branch", "--show-current");
     }
 
     /**
@@ -64,7 +73,7 @@ public class VcsOperations {
     public static Optional<String> remoteSha(File dir, String remote, String branch)
             throws MojoException {
         try {
-            String output = capture(dir, "git", "ls-remote", remote, branch);
+            String output = captureRead(dir, "git", "ls-remote", remote, branch);
             if (output.isEmpty()) {
                 return Optional.empty();
             }
@@ -1200,6 +1209,18 @@ public class VcsOperations {
 
     /**
      * Run a command and capture stdout as a trimmed string.
+     *
+     * <p>On non-zero exit the thrown {@link MojoException} carries the
+     * full command, the working directory, the exit code, <em>and</em>
+     * git's stderr — so a failure is self-diagnosing instead of a bare
+     * exit code (ike-issues#602). Both stdout and stderr are drained
+     * before {@code waitFor()} so the subprocess never blocks on a full
+     * pipe.
+     *
+     * @param workDir the working directory for the command
+     * @param command the command and its arguments
+     * @return the captured stdout, trimmed
+     * @throws MojoException if the command cannot be run or exits non-zero
      */
     private static String capture(File workDir, String... command)
             throws MojoException {
@@ -1208,22 +1229,72 @@ public class VcsOperations {
                     .directory(workDir)
                     .redirectErrorStream(false)
                     .start();
-            String output;
+            String stdout;
             try (BufferedReader reader = new BufferedReader(
                     new InputStreamReader(proc.getInputStream(),
                             StandardCharsets.UTF_8))) {
-                output = reader.lines().collect(Collectors.joining("\n")).trim();
+                stdout = reader.lines().collect(Collectors.joining("\n")).trim();
             }
+            String stderr = new String(
+                    proc.getErrorStream().readAllBytes(),
+                    StandardCharsets.UTF_8).trim();
             int exit = proc.waitFor();
             if (exit != 0) {
                 throw new MojoException(
-                        "Command failed (exit " + exit + "): "
-                                + String.join(" ", command));
+                        String.join(" ", command) + " in " + workDir
+                                + " failed (exit " + exit + ")"
+                                + (stderr.isEmpty() ? "" : ": " + stderr));
             }
-            return output;
-        } catch (IOException | InterruptedException e) {
+            return stdout;
+        } catch (IOException e) {
             throw new MojoException(
-                    "Failed to execute: " + String.join(" ", command), e);
+                    "Failed to execute " + String.join(" ", command)
+                            + " in " + workDir + ": " + e.getMessage(), e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new MojoException(
+                    "Interrupted while executing " + String.join(" ", command)
+                            + " in " + workDir, e);
         }
+    }
+
+    /**
+     * Run a read-only git query through {@link #capture}, retrying once
+     * after a short backoff if it fails.
+     *
+     * <p>The read-only queries that drive {@code ws:push} and
+     * {@code ws:sync} — {@code rev-parse}, {@code branch --show-current},
+     * {@code ls-remote} — are idempotent, so a transient per-repository
+     * collision (a concurrent index or ref read, a momentary lock) can be
+     * retried safely rather than failing the whole repository
+     * (ike-issues#602). Use this only for side-effect-free reads; mutating
+     * commands must call {@link #capture} directly so they are never run
+     * twice.
+     *
+     * @param workDir the repository directory
+     * @param command the git read command and its arguments
+     * @return the captured stdout, trimmed
+     * @throws MojoException if both attempts fail — carrying the last
+     *                       attempt's self-diagnosing message
+     */
+    private static String captureRead(File workDir, String... command)
+            throws MojoException {
+        MojoException last = null;
+        for (int attempt = 1; attempt <= READ_RETRY_ATTEMPTS; attempt++) {
+            try {
+                return capture(workDir, command);
+            } catch (MojoException e) {
+                last = e;
+                if (attempt < READ_RETRY_ATTEMPTS) {
+                    try {
+                        Thread.sleep(READ_RETRY_BACKOFF_MILLIS);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        throw e;
+                    }
+                }
+            }
+        }
+        throw last;
     }
 }

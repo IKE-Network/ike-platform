@@ -25,6 +25,10 @@ class VcsOperationsTest {
     @TempDir
     Path tempDir;
 
+    /** A separate temp dir with no git repo above it — for failure tests. */
+    @TempDir
+    Path nonRepoDir;
+
     private File repoDir;
     private final Log log = new TestLog();
 
@@ -57,6 +61,22 @@ class VcsOperationsTest {
     @Test
     void currentBranch_returnsMain() throws MojoException {
         assertThat(VcsOperations.currentBranch(repoDir)).isEqualTo("main");
+    }
+
+    @Test
+    void readQuery_failure_carriesCommandDirectoryAndStderr() {
+        // nonRepoDir has no .git anywhere above it, so `git rev-parse`
+        // exits 128 with "not a git repository" on stderr. Before
+        // ike-issues#602 that surfaced as a bare "Command failed
+        // (exit 128)"; now the exception names the command, the
+        // directory, and git's stderr.
+        File notARepo = nonRepoDir.toFile();
+
+        assertThatThrownBy(() -> VcsOperations.headSha(notARepo))
+                .isInstanceOf(MojoException.class)
+                .hasMessageContaining("git rev-parse")
+                .hasMessageContaining(notARepo.toString())
+                .hasMessageContaining("not a git repository");
     }
 
     @Test

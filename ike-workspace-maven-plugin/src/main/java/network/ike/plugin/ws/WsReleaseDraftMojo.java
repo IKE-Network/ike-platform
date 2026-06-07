@@ -1795,7 +1795,10 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
      *                       delegated {@code ike:release-*} fails
      */
     private WorkspaceReportSpec executeBareMode() throws MojoException {
-        File repo = new File(System.getProperty("user.dir"));
+        // The single-repo release is a cohort of one (ike-issues#612);
+        // resolve it through the shared CohortResolver rather than reading
+        // user.dir directly.
+        File repo = resolveCohort().members().getFirst().directory().toFile();
         if (!new File(repo, "pom.xml").exists()) {
             throw new MojoException(
                     "ws:release: " + repo + " has no pom.xml and no workspace.yaml "

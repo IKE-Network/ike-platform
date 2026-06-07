@@ -2,6 +2,8 @@ package network.ike.plugin.ws;
 
 import network.ike.plugin.ReleaseSupport;
 
+import network.ike.workspace.Cohort;
+import network.ike.workspace.CohortResolver;
 import network.ike.workspace.FeatureName;
 import network.ike.workspace.Manifest;
 import network.ike.workspace.ManifestException;
@@ -256,6 +258,26 @@ abstract class AbstractWorkspaceMojo implements Mojo {
                 ? configured.getAbsoluteFile().toPath().getParent()
                 : Path.of(System.getProperty("user.dir"));
         return WorkingSetResolver.resolve(startDir);
+    }
+
+    /**
+     * Resolve the {@link Cohort} an artifact / release-style goal acts on,
+     * honoring {@code -Dworkspace.manifest} (IKE-Network/ike-issues#612).
+     * When a {@code workspace.yaml} is configured or found by searching
+     * upward, the cohort is its subprojects in topological order (the
+     * aggregator root excluded); otherwise it is the current repository — a
+     * cohort of one. The dependency-ordered counterpart to
+     * {@link #resolveWorkingSet()}, delegating to the shared
+     * {@link CohortResolver}.
+     *
+     * @return the resolved cohort (never {@code null})
+     */
+    protected Cohort resolveCohort() {
+        File configured = this.manifest;
+        Path startDir = (configured != null && configured.exists())
+                ? configured.getAbsoluteFile().toPath().getParent()
+                : Path.of(System.getProperty("user.dir"));
+        return CohortResolver.resolve(startDir);
     }
 
     /**

@@ -269,7 +269,9 @@ public class SiblingCreateMojo extends AbstractWorkspaceMojo {
     private WorkspaceReportSpec executeBareMode(FeatureName featureName,
                                                 String branchName)
             throws MojoException {
-        File repo = new File(System.getProperty("user.dir"));
+        // The single repo to fork is a working set of one (ike-issues#611) —
+        // resolve it through the shared resolver, not user.dir directly.
+        File repo = resolveWorkingSet().members().getFirst().directory().toFile();
         if (!new File(repo, ".git").exists()) {
             throw new MojoException(
                     "ws:sibling-create: " + repo + " is not a git repository and "

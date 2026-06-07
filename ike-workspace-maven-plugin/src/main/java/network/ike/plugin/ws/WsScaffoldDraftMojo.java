@@ -230,7 +230,9 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
      *                       delegated {@code ike:scaffold-*} fails
      */
     private WorkspaceReportSpec executeBareMode() throws MojoException {
-        File repo = new File(System.getProperty("user.dir"));
+        // Single-repo scaffold is a working set of one (ike-issues#611) —
+        // resolve it through the shared resolver, not user.dir directly.
+        File repo = resolveWorkingSet().members().getFirst().directory().toFile();
         if (!new File(repo, "pom.xml").exists()) {
             throw new MojoException(
                     "ws:scaffold: " + repo + " has no pom.xml and no "

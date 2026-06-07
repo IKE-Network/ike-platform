@@ -111,10 +111,7 @@ public class SiblingCreateMojo extends AbstractWorkspaceMojo {
         String branchName = "feature/" + feature;
 
         if (!isWorkspaceMode()) {
-            throw new MojoException(
-                    "ws:sibling-create operates on a workspace — no workspace.yaml "
-                    + "found. Run it from a workspace root; for a single repo use "
-                    + "ws:feature-start.");
+            return executeBareMode(featureName, branchName);
         }
 
         WorkspaceGraph graph = loadGraph();
@@ -257,6 +254,103 @@ public class SiblingCreateMojo extends AbstractWorkspaceMojo {
     }
 
     /**
+     * Bare mode (no {@code workspace.yaml}): fork the current single repo
+     * into {@code <parent>/<repo>-<feature>/} on the feature branch. The
+     * single-repo case of the same operation — a working set of one
+     * (ike-issues#601). No manifest to rewrite and no cascade; otherwise
+     * identical to one component of the workspace flow.
+     *
+     * @param featureName the validated feature name
+     * @param branchName  the {@code feature/<name>} branch to create
+     * @return the goal's report
+     * @throws MojoException if the repo has no origin, the sibling exists,
+     *                       or a git step fails
+     */
+    private WorkspaceReportSpec executeBareMode(FeatureName featureName,
+                                                String branchName)
+            throws MojoException {
+        File repo = new File(System.getProperty("user.dir"));
+        if (!new File(repo, ".git").exists()) {
+            throw new MojoException(
+                    "ws:sibling-create: " + repo + " is not a git repository and "
+                    + "no workspace.yaml was found — run it inside a repo or a "
+                    + "workspace.");
+        }
+        String remote = gitOriginUrl(repo);
+        if (remote == null) {
+            throw new MojoException(
+                    "Repository '" + repo.getName() + "' has no git 'origin' "
+                    + "remote; ws:sibling-create clones from the upstream. Add one "
+                    + "(git remote add origin <url>) and try again.");
+        }
+        File parent = repo.getParentFile();
+        if (parent == null) {
+            throw new MojoException(
+                    "Cannot resolve the parent of " + repo
+                    + "; the sibling clone lives alongside it.");
+        }
+        String siblingName = featureName.siblingDirectoryName(repo.getName());
+        File siblingRoot = new File(parent, siblingName);
+        if (siblingRoot.exists()) {
+            throw new MojoException(
+                    "Sibling '" + siblingName + "' already exists at "
+                    + siblingRoot.getAbsolutePath()
+                    + ". Remove it (rm -rf) or pick a different feature name.");
+        }
+        String base = gitBranch(repo);
+
+        getLog().info("");
+        getLog().info(header("Sibling Create"));
+        getLog().info("══════════════════════════════════════════════════════════════");
+        getLog().info("  Feature: " + feature);
+        getLog().info("  Branch:  " + branchName);
+        getLog().info("  Sibling: " + siblingRoot.getAbsolutePath());
+        getLog().info("  Mode:    single repo (no workspace.yaml)");
+        getLog().info("");
+
+        getLog().info("  Cloning " + repo.getName() + " → " + siblingName);
+        cloneOnFeatureBranch(parent, siblingName, repo, remote, base, branchName);
+
+        String qualified = "—";
+        if (!skipVersion) {
+            File pom = new File(siblingRoot, "pom.xml");
+            String effectiveVersion = null;
+            if (pom.exists()) {
+                try {
+                    effectiveVersion = ReleaseSupport.readPomVersion(pom);
+                } catch (MojoException e) {
+                    getLog().debug("Could not read POM version: " + e.getMessage());
+                }
+            }
+            if (effectiveVersion != null && !effectiveVersion.isEmpty()) {
+                String newVersion = VersionSupport.branchQualifiedVersion(
+                        effectiveVersion, branchName);
+                qualified = newVersion;
+                new FeatureStartSupport(getLog()).setPomVersion(
+                        siblingRoot, effectiveVersion, newVersion);
+                ReleaseSupport.exec(siblingRoot, getLog(), "git", "add", "pom.xml");
+                ReleaseSupport.exec(siblingRoot, getLog(), "git", "commit", "-m",
+                        "feature: set version " + newVersion + " for " + branchName);
+                getLog().info(Ansi.green("  ✓ ") + String.format("%-24s %s → %s",
+                        repo.getName(), effectiveVersion, newVersion));
+            }
+        }
+
+        getLog().info("");
+        getLog().info(Ansi.green("  ✓ ") + "Sibling ready: "
+                + siblingRoot.getAbsolutePath());
+        getLog().info("    cd " + siblingRoot.getAbsolutePath());
+        getLog().info("    # work, then ws:commit-publish / ws:push; "
+                + "rm -rf to discard");
+        getLog().info("");
+
+        List<ComponentRow> rows = List.of(
+                new ComponentRow(repo.getName(), branchName, qualified, "✓ cloned"));
+        return new WorkspaceReportSpec(WsGoal.SIBLING_CREATE,
+                buildReport(siblingName, siblingRoot, branchName, rows));
+    }
+
+    /**
      * Clone {@code remote} into {@code workDir/targetName} on
      * {@code baseBranch}, borrowing objects from {@code referenceDir} when it
      * is a local clone, then create and check out {@code branchName}.
@@ -369,7 +463,7 @@ public class SiblingCreateMojo extends AbstractWorkspaceMojo {
 
         report.paragraph("Each component is a self-contained clone on `"
                 + branchName + "`, created with `--reference --dissociate`"
-                + " against the primary workspace. The primary stays on its"
+                + " against the primary. The primary stays on its"
                 + " current branch.");
         report.paragraph("**No push** — clones and branches stay local."
                 + " Next steps:");

@@ -88,6 +88,9 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
 
     @Override
     protected WorkspaceReportSpec runGoal() throws MojoException {
+        if (!isWorkspaceMode()) {
+            return executeBareMode();
+        }
         WorkspaceGraph graph = loadGraph();
         File root = workspaceRoot();
         String goal = publish ? "ike:scaffold-publish" : "ike:scaffold-draft";
@@ -209,6 +212,66 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
         return new WorkspaceReportSpec(
                 publish ? WsGoal.SCAFFOLD_PUBLISH : WsGoal.SCAFFOLD_DRAFT,
                 report.build());
+    }
+
+    // ── Bare mode: single-repo scaffold (no workspace.yaml) ──────────
+
+    /**
+     * Bare mode: scaffold the current single repo by delegating to
+     * {@code ike:scaffold-draft} (preview) or {@code ike:scaffold-publish}
+     * (apply). The single-repo case of the same operation — a working set
+     * of one — with no workspace-level reconcilers or per-subproject walk
+     * (ike-issues#601). In one repo, {@code ws:scaffold} is exactly
+     * {@code ike:scaffold}: the console verb forwarding to the per-repo
+     * build-standards engine.
+     *
+     * @return the goal's report
+     * @throws MojoException if there is no Maven project here, or the
+     *                       delegated {@code ike:scaffold-*} fails
+     */
+    private WorkspaceReportSpec executeBareMode() throws MojoException {
+        File repo = new File(System.getProperty("user.dir"));
+        if (!new File(repo, "pom.xml").exists()) {
+            throw new MojoException(
+                    "ws:scaffold: " + repo + " has no pom.xml and no "
+                    + "workspace.yaml was found — run it in a Maven project, "
+                    + "or a workspace.");
+        }
+        WsGoal goal = publish ? WsGoal.SCAFFOLD_PUBLISH : WsGoal.SCAFFOLD_DRAFT;
+        String delegate = publish ? "ike:scaffold-publish" : "ike:scaffold-draft";
+
+        getLog().info("");
+        getLog().info(goal.qualified());
+        getLog().info("══════════════════════════════════════════════════════════════");
+        getLog().info("  Repo: " + repo.getName());
+        getLog().info("  Mode: single repo (no workspace.yaml) → " + delegate);
+        getLog().info("");
+
+        ReleaseSupport.exec(repo, getLog(),
+                bareScaffoldArgs(repo).toArray(new String[0]));
+
+        GoalReportBuilder report = new GoalReportBuilder();
+        report.paragraph("**Repo:** `" + repo + "`");
+        report.paragraph("Single-repo scaffold "
+                + (publish ? "applied" : "previewed") + " via `" + delegate
+                + "` — a working set of one, no workspace reconcilers.");
+        return new WorkspaceReportSpec(goal, report.build());
+    }
+
+    /**
+     * Build the {@code mvn} argv for the bare-mode single-repo scaffold,
+     * reusing {@link #buildScaffoldArgs} so the delegated flag set is
+     * identical to a per-subproject invocation. Package-private so the
+     * delegation can be asserted without spawning a Maven subprocess.
+     *
+     * @param repo the single repo to scaffold
+     * @return the argv, beginning with the resolved {@code mvn} command
+     */
+    List<String> bareScaffoldArgs(File repo) {
+        String mvn = WsReleaseDraftMojo.resolveMvnCommand(repo);
+        String goal = publish ? "ike:scaffold-publish" : "ike:scaffold-draft";
+        return buildScaffoldArgs(mvn, goal, publish, applyFoundation,
+                resolveFoundation);
     }
 
     /**

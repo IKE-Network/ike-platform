@@ -313,7 +313,8 @@ public class FeatureAbandonDraftMojo extends AbstractWorkspaceMojo {
 
     private WorkspaceReportSpec executeBareMode() throws MojoException {
         boolean draft = !publish;
-        File dir = new File(System.getProperty("user.dir"));
+        // Bare mode = a working set of one (ike-issues#611).
+        File dir = resolveWorkingSet().members().getFirst().directory().toFile();
 
         if (targetBranch == null || targetBranch.isBlank()) {
             targetBranch = "main";

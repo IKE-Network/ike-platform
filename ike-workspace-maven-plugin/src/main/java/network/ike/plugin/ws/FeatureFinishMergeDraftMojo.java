@@ -423,7 +423,8 @@ public class FeatureFinishMergeDraftMojo extends AbstractWorkspaceMojo {
     private WorkspaceReportSpec executeBareMode(String branchName)
             throws MojoException {
         boolean draft = !publish;
-        File dir = new File(System.getProperty("user.dir"));
+        // Bare mode = a working set of one (ike-issues#611).
+        File dir = resolveWorkingSet().members().getFirst().directory().toFile();
 
         getLog().info("");
         getLog().info("IKE Feature Finish — Merge (bare repo)");

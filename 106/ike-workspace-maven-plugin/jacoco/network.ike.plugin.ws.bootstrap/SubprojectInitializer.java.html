@@ -1,0 +1,917 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>SubprojectInitializer.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws.bootstrap</a> &gt; <span class="el_source">SubprojectInitializer.java</span></div><h1>SubprojectInitializer.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws.bootstrap;
+
+import network.ike.plugin.ReleaseSupport;
+import network.ike.plugin.ws.Ansi;
+import network.ike.plugin.ws.MavenWrapper;
+import network.ike.plugin.ws.PostMutationSync;
+import network.ike.plugin.ws.WsGoal;
+import network.ike.plugin.ws.WorkspaceReport;
+import network.ike.plugin.ws.vcs.VcsOperations;
+import network.ike.workspace.Defaults;
+import network.ike.workspace.Subproject;
+import network.ike.workspace.WorkspaceGraph;
+import org.apache.maven.api.plugin.Log;
+import org.apache.maven.api.plugin.MojoException;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Walks the subprojects declared in {@code workspace.yaml} and ensures
+ * each one is cloned and initialized with the workspace-standard
+ * configuration: post-checkout git hook, Maven wrapper at the declared
+ * version, {@code .mvn/jvm.config}, and the per-subproject
+ * {@code CLAUDE.md} / {@code CLAUDE-&lt;name&gt;.md} pair.
+ *
+ * &lt;p&gt;Subsumes the per-subproject half of the retired
+ * {@code InitWorkspaceMojo} (folded into {@code ws:scaffold-init} per
+ * IKE-Network/ike-issues#393). Three initialization modes per
+ * subproject:
+ *
+ * &lt;ol&gt;
+ *   &lt;li&gt;&lt;b&gt;Already cloned&lt;/b&gt; — directory has {@code .git/}; fetch +
+ *       rebase if clean, otherwise skip with a warning.&lt;/li&gt;
+ *   &lt;li&gt;&lt;b&gt;Syncthing working tree&lt;/b&gt; — directory exists but no
+ *       {@code .git/}. Initializes git in-place: {@code git init},
+ *       adds the remote, fetches, and resets to match the remote
+ *       branch. This preserves file content synced from another
+ *       machine.&lt;/li&gt;
+ *   &lt;li&gt;&lt;b&gt;Fresh clone&lt;/b&gt; — no directory; runs {@code git clone}.&lt;/li&gt;
+ * &lt;/ol&gt;
+ *
+ * &lt;p&gt;Subprojects are initialized in topological (dependency) order.
+ *
+ * @see WorkspaceBootstrap for the &quot;no workspace.yaml yet&quot; half of
+ *      {@code ws:scaffold-init}
+ */
+public final class SubprojectInitializer {
+
+    private final WorkspaceGraph graph;
+    private final File root;
+    private final String workspaceName;
+    private final Log log;
+
+    /**
+     * Bind an initializer to an already-loaded workspace.
+     *
+     * @param graph         the loaded workspace graph
+     * @param root          the workspace root directory
+     * @param workspaceName workspace artifactId, used in the report header
+     * @param log           the mojo logger
+     */
+    public SubprojectInitializer(WorkspaceGraph graph, File root,
+<span class="fc" id="L68">                                  String workspaceName, Log log) {</span>
+<span class="fc" id="L69">        this.graph = graph;</span>
+<span class="fc" id="L70">        this.root = root;</span>
+<span class="fc" id="L71">        this.workspaceName = workspaceName;</span>
+<span class="fc" id="L72">        this.log = log;</span>
+<span class="fc" id="L73">    }</span>
+
+    /** Outcome counters for one initialization pass. */
+<span class="fc" id="L76">    public record Result(int cloned, int syncthing, int updated,</span>
+                          int skipped, int wrappers, int alreadyClean,
+                          List&lt;String[]&gt; rows) {
+        /** True when every declared subproject was already a healthy clone. */
+        public boolean nothingChanged() {
+<span class="pc bpc" id="L81" title="7 of 8 branches missed.">            return cloned == 0 &amp;&amp; syncthing == 0 &amp;&amp; updated == 0 &amp;&amp; wrappers == 0;</span>
+        }
+    }
+
+    /**
+     * Run the full per-subproject initialization pass and emit the
+     * workspace-level docs ({@code GOALS.md}, {@code WS-REFERENCE.md},
+     * {@code CLAUDE.md}, {@code CLAUDE-&amp;lt;name&amp;gt;.md}).
+     *
+     * @return the per-subproject outcome counters
+     * @throws MojoException if any clone/fetch step fails
+     */
+    public Result run() throws MojoException {
+<span class="fc" id="L94">        Defaults defaults = graph.manifest().defaults();</span>
+<span class="fc" id="L95">        List&lt;String&gt; sorted = graph.topologicalSort();</span>
+
+<span class="fc" id="L97">        log.info(&quot;&quot;);</span>
+<span class="fc" id="L98">        log.info(workspaceName + &quot; — Scaffold-Init&quot;);</span>
+<span class="fc" id="L99">        log.info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+<span class="fc" id="L100">        log.info(&quot;  Target: all (&quot; + sorted.size() + &quot; components)&quot;);</span>
+<span class="fc" id="L101">        log.info(&quot;  Root:   &quot; + root.getAbsolutePath());</span>
+<span class="pc bpc" id="L102" title="1 of 2 branches missed.">        if (defaults.mavenVersion() != null) {</span>
+<span class="nc" id="L103">            log.info(&quot;  Maven:  &quot; + defaults.mavenVersion() + &quot; (default)&quot;);</span>
+        }
+<span class="fc" id="L105">        log.info(&quot;&quot;);</span>
+
+<span class="fc" id="L107">        int cloned = 0;</span>
+<span class="fc" id="L108">        int syncthing = 0;</span>
+<span class="fc" id="L109">        int updated = 0;</span>
+<span class="fc" id="L110">        int skipped = 0;</span>
+<span class="fc" id="L111">        int wrappers = 0;</span>
+<span class="fc" id="L112">        int alreadyClean = 0;</span>
+<span class="fc" id="L113">        List&lt;String[]&gt; rows = new ArrayList&lt;&gt;();</span>
+
+<span class="fc bfc" id="L115" title="All 2 branches covered.">        for (String name : sorted) {</span>
+<span class="fc" id="L116">            Subproject subproject = graph.manifest().subprojects().get(name);</span>
+<span class="fc" id="L117">            File dir = new File(root, name);</span>
+<span class="fc" id="L118">            File gitDir = new File(dir, &quot;.git&quot;);</span>
+
+<span class="fc bfc" id="L120" title="All 2 branches covered.">            if (gitDir.exists()) {</span>
+<span class="pc bpc" id="L121" title="1 of 2 branches missed.">                if (VcsOperations.isClean(dir)) {</span>
+                    try {
+<span class="fc" id="L123">                        String branch = VcsOperations.currentBranch(dir);</span>
+<span class="fc" id="L124">                        ReleaseSupport.exec(dir, log,</span>
+                                &quot;git&quot;, &quot;fetch&quot;, &quot;origin&quot;, &quot;--quiet&quot;);
+<span class="fc" id="L126">                        ReleaseSupport.exec(dir, log,</span>
+                                &quot;git&quot;, &quot;rebase&quot;, &quot;origin/&quot; + branch, &quot;--quiet&quot;);
+<span class="fc" id="L128">                        log.info(Ansi.green(&quot;  ✓ &quot;) + name</span>
+                                + &quot; — updated (&quot; + branch + &quot;)&quot;);
+<span class="fc" id="L130">                        updated++;</span>
+<span class="fc" id="L131">                        rows.add(new String[]{name, &quot;updated&quot;,</span>
+<span class="pc bpc" id="L132" title="1 of 2 branches missed.">                                subproject.repo() != null ? subproject.repo() : &quot;—&quot;, &quot;✓&quot;});</span>
+<span class="fc" id="L133">                    } catch (MojoException e) {</span>
+<span class="fc" id="L134">                        log.warn(Ansi.yellow(&quot;  ⚠ &quot;) + name</span>
+<span class="fc" id="L135">                                + &quot; — fetch/rebase failed: &quot; + e.getMessage());</span>
+<span class="fc" id="L136">                        rows.add(new String[]{name, &quot;update-failed&quot;,</span>
+<span class="pc bpc" id="L137" title="1 of 2 branches missed.">                                subproject.repo() != null ? subproject.repo() : &quot;—&quot;,</span>
+<span class="fc" id="L138">                                e.getMessage()});</span>
+<span class="fc" id="L139">                        skipped++;</span>
+<span class="fc" id="L140">                    }</span>
+                } else {
+<span class="nc" id="L142">                    String files = VcsOperations.unstagedFiles(dir);</span>
+<span class="nc" id="L143">                    log.warn(Ansi.yellow(&quot;  ⚠ &quot;) + name</span>
+                            + &quot; — skipped update (uncommitted changes: &quot;
+                            + files + &quot;)&quot;);
+<span class="nc" id="L146">                    skipped++;</span>
+<span class="nc" id="L147">                    rows.add(new String[]{name, &quot;skipped&quot;,</span>
+<span class="nc bnc" id="L148" title="All 2 branches missed.">                            subproject.repo() != null ? subproject.repo() : &quot;—&quot;,</span>
+                            &quot;uncommitted changes&quot;});
+                }
+<span class="pc bpc" id="L151" title="1 of 2 branches missed.">                if (ensureMavenWrapper(dir, subproject, defaults)) {</span>
+<span class="nc" id="L152">                    wrappers++;</span>
+                }
+<span class="fc" id="L154">                ensureJvmConfig(dir);</span>
+<span class="fc" id="L155">                ensureClaudeNotes(dir.toPath(), name);</span>
+<span class="fc" id="L156">                writeSubprojectClaudeMd(dir.toPath(), subproject);</span>
+<span class="fc" id="L157">                checkoutSha(dir, subproject);</span>
+<span class="fc" id="L158">                alreadyClean++;</span>
+<span class="fc" id="L159">                continue;</span>
+            }
+
+<span class="fc" id="L162">            String repo = subproject.repo();</span>
+<span class="fc" id="L163">            String branch = subproject.branch();</span>
+
+<span class="pc bpc" id="L165" title="2 of 4 branches missed.">            if (repo == null || repo.isEmpty()) {</span>
+<span class="nc" id="L166">                log.warn(Ansi.yellow(&quot;  ⚠ &quot;) + name + &quot; — no repo URL, skipping&quot;);</span>
+<span class="nc" id="L167">                rows.add(new String[]{name, &quot;skipped&quot;, &quot;—&quot;, &quot;no repo URL&quot;});</span>
+<span class="nc" id="L168">                continue;</span>
+            }
+
+<span class="pc bpc" id="L171" title="1 of 2 branches missed.">            if (dir.exists()) {</span>
+                // Syncthing working tree — init git in-place
+<span class="nc" id="L173">                log.info(Ansi.cyan(&quot;  ↻ &quot;) + name</span>
+                        + &quot; — initializing git in existing directory (Syncthing)&quot;);
+<span class="nc" id="L175">                initSyncthingRepo(dir, repo, branch);</span>
+<span class="nc" id="L176">                installHooks(dir);</span>
+<span class="nc bnc" id="L177" title="All 2 branches missed.">                if (ensureMavenWrapper(dir, subproject, defaults)) {</span>
+<span class="nc" id="L178">                    wrappers++;</span>
+                }
+<span class="nc" id="L180">                ensureJvmConfig(dir);</span>
+<span class="nc" id="L181">                ensureClaudeNotes(dir.toPath(), name);</span>
+<span class="nc" id="L182">                writeSubprojectClaudeMd(dir.toPath(), subproject);</span>
+<span class="nc" id="L183">                checkoutSha(dir, subproject);</span>
+<span class="nc" id="L184">                syncthing++;</span>
+<span class="nc" id="L185">                rows.add(new String[]{name, &quot;syncthing-init&quot;, repo, &quot;✓&quot;});</span>
+            } else {
+<span class="fc" id="L187">                log.info(Ansi.cyan(&quot;  ↓ &quot;) + name + &quot; — cloning from &quot; + repo);</span>
+<span class="fc" id="L188">                cloneRepo(root, name, repo, branch);</span>
+<span class="fc" id="L189">                File subprojectDir = new File(root, name);</span>
+<span class="fc" id="L190">                installHooks(subprojectDir);</span>
+<span class="pc bpc" id="L191" title="1 of 2 branches missed.">                if (ensureMavenWrapper(subprojectDir, subproject, defaults)) {</span>
+<span class="nc" id="L192">                    wrappers++;</span>
+                }
+<span class="fc" id="L194">                ensureJvmConfig(subprojectDir);</span>
+<span class="fc" id="L195">                ensureClaudeNotes(subprojectDir.toPath(), name);</span>
+<span class="fc" id="L196">                writeSubprojectClaudeMd(subprojectDir.toPath(), subproject);</span>
+<span class="fc" id="L197">                checkoutSha(subprojectDir, subproject);</span>
+<span class="fc" id="L198">                cloned++;</span>
+<span class="fc" id="L199">                rows.add(new String[]{name, &quot;cloned&quot;, repo, &quot;✓&quot;});</span>
+            }
+<span class="fc" id="L201">        }</span>
+
+        // Ensure Maven wrapper at the workspace root itself (the aggregator POM)
+<span class="pc bpc" id="L204" title="1 of 2 branches missed.">        if (ensureWorkspaceRootWrapper(root, defaults)) {</span>
+<span class="nc" id="L205">            wrappers++;</span>
+        }
+
+<span class="fc" id="L208">        log.info(&quot;&quot;);</span>
+<span class="fc" id="L209">        StringBuilder summary = new StringBuilder();</span>
+<span class="fc" id="L210">        summary.append(cloned).append(&quot; cloned&quot;);</span>
+<span class="pc bpc" id="L211" title="1 of 2 branches missed.">        if (syncthing &gt; 0) {</span>
+<span class="nc" id="L212">            summary.append(&quot;, &quot;).append(syncthing).append(&quot; Syncthing-initialized&quot;);</span>
+        }
+<span class="fc bfc" id="L214" title="All 2 branches covered.">        if (updated &gt; 0) {</span>
+<span class="fc" id="L215">            summary.append(&quot;, &quot;).append(updated).append(&quot; updated&quot;);</span>
+        }
+<span class="fc bfc" id="L217" title="All 2 branches covered.">        if (skipped &gt; 0) {</span>
+<span class="fc" id="L218">            summary.append(&quot;, &quot;).append(skipped).append(&quot; skipped&quot;);</span>
+        }
+<span class="pc bpc" id="L220" title="1 of 2 branches missed.">        if (wrappers &gt; 0) {</span>
+<span class="nc" id="L221">            summary.append(&quot;, &quot;).append(wrappers).append(&quot; Maven wrappers installed/updated&quot;);</span>
+        }
+<span class="fc" id="L223">        log.info(&quot;  Done: &quot; + summary);</span>
+<span class="fc" id="L224">        log.info(&quot;&quot;);</span>
+
+<span class="fc" id="L226">        writeGoalCheatsheet(root.toPath());</span>
+<span class="fc" id="L227">        writeWorkspaceReference(root.toPath());</span>
+<span class="fc" id="L228">        ensureClaudeNotes(root.toPath(), workspaceName);</span>
+<span class="fc" id="L229">        writeWorkspaceClaudeMd(root.toPath(), graph);</span>
+
+<span class="fc" id="L231">        Result result = new Result(cloned, syncthing, updated, skipped,</span>
+                wrappers, alreadyClean, rows);
+<span class="fc" id="L233">        WorkspaceReport.write(root.toPath(), WsGoal.SCAFFOLD_INIT.qualified(),</span>
+<span class="fc" id="L234">                buildInitMarkdownReport(result), log);</span>
+
+<span class="fc" id="L236">        PostMutationSync.refresh(root, log);</span>
+<span class="fc" id="L237">        return result;</span>
+    }
+
+    // ── Git operations ──────────────────────────────────────────
+
+    private void initSyncthingRepo(File dir, String repo, String branch)
+            throws MojoException {
+<span class="nc" id="L244">        ReleaseSupport.exec(dir, log, &quot;git&quot;, &quot;init&quot;);</span>
+<span class="nc" id="L245">        ReleaseSupport.exec(dir, log, &quot;git&quot;, &quot;remote&quot;, &quot;add&quot;, &quot;origin&quot;, repo);</span>
+<span class="nc" id="L246">        ReleaseSupport.exec(dir, log, &quot;git&quot;, &quot;fetch&quot;, &quot;origin&quot;, branch);</span>
+        // Mixed reset: updates HEAD and index to match remote, keeps working tree
+<span class="nc" id="L248">        ReleaseSupport.exec(dir, log,</span>
+                &quot;git&quot;, &quot;reset&quot;, &quot;origin/&quot; + branch);
+<span class="nc" id="L250">    }</span>
+
+    private void cloneRepo(File root, String name, String repo, String branch)
+            throws MojoException {
+<span class="fc" id="L254">        ReleaseSupport.exec(root, log,</span>
+                &quot;git&quot;, &quot;clone&quot;, &quot;-b&quot;, branch, repo, name);
+<span class="fc" id="L256">    }</span>
+
+    private void checkoutSha(File dir, Subproject subproject) {
+<span class="pc bpc" id="L259" title="3 of 4 branches missed.">        if (subproject.sha() == null || subproject.sha().isBlank()) {</span>
+<span class="fc" id="L260">            return;</span>
+        }
+        try {
+<span class="nc" id="L263">            String currentSha = ReleaseSupport.execCapture(dir,</span>
+                    &quot;git&quot;, &quot;rev-parse&quot;, &quot;HEAD&quot;);
+<span class="nc bnc" id="L265" title="All 2 branches missed.">            if (currentSha.startsWith(subproject.sha())</span>
+<span class="nc bnc" id="L266" title="All 2 branches missed.">                    || subproject.sha().startsWith(currentSha)) {</span>
+<span class="nc" id="L267">                return; // already at the right commit</span>
+            }
+<span class="nc" id="L269">            log.info(&quot;    Checking out SHA: &quot; + subproject.sha().substring(0, 8));</span>
+<span class="nc" id="L270">            ReleaseSupport.exec(dir, log,</span>
+<span class="nc" id="L271">                    &quot;git&quot;, &quot;checkout&quot;, subproject.sha());</span>
+<span class="nc" id="L272">        } catch (MojoException e) {</span>
+<span class="nc" id="L273">            log.warn(&quot;    Could not checkout SHA &quot; + subproject.sha()</span>
+<span class="nc" id="L274">                    + &quot;: &quot; + e.getMessage());</span>
+<span class="nc" id="L275">        }</span>
+<span class="nc" id="L276">    }</span>
+
+    /**
+     * Install a defensive post-checkout hook in the subproject's
+     * {@code .git/hooks/} directory. Skips if a hook already exists
+     * (don't overwrite custom hooks).
+     */
+    private void installHooks(File subprojectDir) {
+<span class="fc" id="L284">        File hooksDir = new File(subprojectDir, &quot;.git/hooks&quot;);</span>
+<span class="fc" id="L285">        File postCheckout = new File(hooksDir, &quot;post-checkout&quot;);</span>
+
+<span class="pc bpc" id="L287" title="1 of 2 branches missed.">        if (postCheckout.exists()) {</span>
+<span class="nc" id="L288">            log.debug(&quot;  Hook already exists: &quot; + postCheckout);</span>
+<span class="nc" id="L289">            return;</span>
+        }
+
+        try {
+<span class="pc bpc" id="L293" title="1 of 2 branches missed.">            if (!hooksDir.exists()) {</span>
+<span class="nc" id="L294">                hooksDir.mkdirs();</span>
+            }
+<span class="fc" id="L296">            String hookScript = &quot;#!/bin/sh\n&quot;</span>
+                    + &quot;# Installed by ws:scaffold-init — warns on direct branching.\n&quot;
+                    + &quot;# Remove this file to disable the check.\n&quot;
+<span class="fc" id="L299">                    + &quot;mvn -q &quot; + WsGoal.CHECK_BRANCH.qualified()</span>
+                    + &quot; 2&gt;/dev/null\n&quot;;
+<span class="fc" id="L301">            Files.writeString(postCheckout.toPath(), hookScript,</span>
+                    StandardCharsets.UTF_8);
+<span class="fc" id="L303">            postCheckout.setExecutable(true);</span>
+<span class="fc" id="L304">            log.info(&quot;    Installed post-checkout hook&quot;);</span>
+<span class="nc" id="L305">        } catch (IOException e) {</span>
+<span class="nc" id="L306">            log.warn(&quot;    Could not install hook: &quot; + e.getMessage());</span>
+<span class="fc" id="L307">        }</span>
+<span class="fc" id="L308">    }</span>
+
+    // ── Maven wrapper management ────────────────────────────────
+
+    private static String resolveMavenVersion(Subproject subproject, Defaults defaults) {
+<span class="pc bpc" id="L313" title="1 of 2 branches missed.">        if (subproject.mavenVersion() != null) {</span>
+<span class="nc" id="L314">            return subproject.mavenVersion();</span>
+        }
+<span class="fc" id="L316">        return defaults.mavenVersion();</span>
+    }
+
+    private boolean ensureWorkspaceRootWrapper(File root, Defaults defaults) {
+<span class="fc" id="L320">        String mavenVersion = defaults.mavenVersion();</span>
+<span class="pc bpc" id="L321" title="1 of 2 branches missed.">        if (mavenVersion == null) {</span>
+<span class="fc" id="L322">            return false;</span>
+        }
+<span class="nc" id="L324">        File pomFile = new File(root, &quot;pom.xml&quot;);</span>
+<span class="nc bnc" id="L325" title="All 2 branches missed.">        if (!pomFile.exists()) {</span>
+<span class="nc" id="L326">            return false;</span>
+        }
+<span class="nc" id="L328">        return writeWrapperVersion(root.toPath(), mavenVersion, &quot;workspace root&quot;);</span>
+    }
+
+    private boolean ensureMavenWrapper(File subprojectDir, Subproject subproject,
+                                        Defaults defaults) {
+<span class="fc" id="L333">        String mavenVersion = resolveMavenVersion(subproject, defaults);</span>
+<span class="pc bpc" id="L334" title="1 of 2 branches missed.">        if (mavenVersion == null) {</span>
+<span class="fc" id="L335">            return false;</span>
+        }
+<span class="nc" id="L337">        File pomFile = new File(subprojectDir, &quot;pom.xml&quot;);</span>
+<span class="nc bnc" id="L338" title="All 2 branches missed.">        if (!pomFile.exists()) {</span>
+<span class="nc" id="L339">            return false;</span>
+        }
+<span class="nc" id="L341">        return writeWrapperVersion(subprojectDir.toPath(), mavenVersion, null);</span>
+    }
+
+    /**
+     * Shared wrapper writer. Skips when the wrapper is already standard
+     * and pinned to the requested version; otherwise rewrites the
+     * properties file, creates {@code mvnw} / {@code mvnw.cmd} when
+     * missing, and replaces the legacy custom wrapper in full.
+     */
+    private boolean writeWrapperVersion(Path dir, String mavenVersion,
+                                         String rootLabel) {
+        try {
+<span class="nc" id="L353">            String currentVersion = MavenWrapper.readPinnedVersion(dir);</span>
+<span class="nc" id="L354">            boolean legacy = MavenWrapper.isLegacyWrapper(dir);</span>
+
+<span class="nc bnc" id="L356" title="All 4 branches missed.">            if (currentVersion != null &amp;&amp; !legacy</span>
+<span class="nc bnc" id="L357" title="All 2 branches missed.">                    &amp;&amp; mavenVersion.equals(currentVersion)) {</span>
+<span class="nc bnc" id="L358" title="All 2 branches missed.">                log.debug(&quot;    &quot; + (rootLabel != null ? rootLabel + &quot; &quot; : &quot;&quot;)</span>
+                        + &quot;Maven wrapper already at &quot; + mavenVersion);
+<span class="nc" id="L360">                return false;</span>
+            }
+
+<span class="nc bnc" id="L363" title="All 2 branches missed.">            String prefix = rootLabel != null ? &quot;  ↻ &quot; + rootLabel + &quot; — &quot; : &quot;    &quot;;</span>
+<span class="nc bnc" id="L364" title="All 2 branches missed.">            if (legacy) {</span>
+<span class="nc" id="L365">                log.info(prefix + &quot;replacing legacy Maven wrapper (Maven &quot;</span>
+                        + mavenVersion + &quot;)&quot;);
+<span class="nc bnc" id="L367" title="All 2 branches missed.">            } else if (currentVersion != null) {</span>
+<span class="nc" id="L368">                log.info(prefix + &quot;updating Maven wrapper: &quot; + currentVersion</span>
+                        + &quot; → &quot; + mavenVersion);
+            } else {
+<span class="nc bnc" id="L371" title="All 2 branches missed.">                log.info((rootLabel != null ? &quot;  + &quot; + rootLabel + &quot; — &quot; : &quot;    &quot;)</span>
+                        + &quot;installing Maven wrapper for Maven &quot; + mavenVersion);
+            }
+
+<span class="nc" id="L375">            Path propsFile = dir.resolve(&quot;.mvn&quot;).resolve(&quot;wrapper&quot;)</span>
+<span class="nc" id="L376">                    .resolve(&quot;maven-wrapper.properties&quot;);</span>
+<span class="nc" id="L377">            MavenWrapper.writePropertiesFile(propsFile, mavenVersion);</span>
+
+<span class="nc" id="L379">            Path mvnw = dir.resolve(&quot;mvnw&quot;);</span>
+<span class="nc bnc" id="L380" title="All 4 branches missed.">            if (legacy || !Files.exists(mvnw)) {</span>
+<span class="nc" id="L381">                MavenWrapper.writeMvnwScript(mvnw);</span>
+            }
+<span class="nc" id="L383">            Path mvnwCmd = dir.resolve(&quot;mvnw.cmd&quot;);</span>
+<span class="nc bnc" id="L384" title="All 4 branches missed.">            if (legacy || !Files.exists(mvnwCmd)) {</span>
+<span class="nc" id="L385">                MavenWrapper.writeMvnwCmdScript(mvnwCmd);</span>
+            }
+
+<span class="nc" id="L388">            return true;</span>
+<span class="nc" id="L389">        } catch (IOException e) {</span>
+<span class="nc" id="L390">            log.warn(&quot;    Could not install Maven wrapper: &quot; + e.getMessage());</span>
+<span class="nc" id="L391">            return false;</span>
+        }
+    }
+
+    private void ensureJvmConfig(File subprojectDir) {
+<span class="fc" id="L396">        File pomFile = new File(subprojectDir, &quot;pom.xml&quot;);</span>
+<span class="pc bpc" id="L397" title="1 of 2 branches missed.">        if (!pomFile.exists()) {</span>
+<span class="nc" id="L398">            return;</span>
+        }
+
+        try {
+<span class="fc" id="L402">            Path mvnDir = subprojectDir.toPath().resolve(&quot;.mvn&quot;);</span>
+<span class="fc" id="L403">            Path jvmConfig = mvnDir.resolve(&quot;jvm.config&quot;);</span>
+
+<span class="pc bpc" id="L405" title="1 of 2 branches missed.">            if (Files.exists(jvmConfig)) {</span>
+<span class="nc" id="L406">                return;</span>
+            }
+
+<span class="fc" id="L409">            Files.createDirectories(mvnDir);</span>
+<span class="fc" id="L410">            String config = &quot;-Dpolyglotimpl.AttachLibraryFailureAction=ignore\n&quot;;</span>
+<span class="fc" id="L411">            Files.writeString(jvmConfig, config, StandardCharsets.UTF_8);</span>
+<span class="fc" id="L412">            log.info(&quot;    Created .mvn/jvm.config&quot;);</span>
+<span class="nc" id="L413">        } catch (IOException e) {</span>
+<span class="nc" id="L414">            log.warn(&quot;    Could not create jvm.config: &quot; + e.getMessage());</span>
+<span class="fc" id="L415">        }</span>
+<span class="fc" id="L416">    }</span>
+
+    // ── CLAUDE.md generation ────────────────────────────────────
+
+    private void writeWorkspaceClaudeMd(Path wsRoot, WorkspaceGraph graph) {
+<span class="fc" id="L421">        Path file = wsRoot.resolve(&quot;CLAUDE.md&quot;);</span>
+        try {
+<span class="fc" id="L423">            Files.writeString(file, generateWorkspaceClaudeMd(workspaceName, graph),</span>
+                    StandardCharsets.UTF_8);
+<span class="fc" id="L425">            log.info(&quot;  Updated CLAUDE.md&quot;);</span>
+<span class="nc" id="L426">        } catch (IOException e) {</span>
+<span class="nc" id="L427">            log.debug(&quot;Could not write workspace CLAUDE.md: &quot; + e.getMessage());</span>
+<span class="fc" id="L428">        }</span>
+<span class="fc" id="L429">    }</span>
+
+    private void writeSubprojectClaudeMd(Path subprojectDir, Subproject subproject) {
+<span class="fc" id="L432">        Path file = subprojectDir.resolve(&quot;CLAUDE.md&quot;);</span>
+        try {
+<span class="fc" id="L434">            Files.writeString(file, generateComponentClaudeMd(subproject),</span>
+                    StandardCharsets.UTF_8);
+<span class="nc" id="L436">        } catch (IOException e) {</span>
+<span class="nc" id="L437">            log.debug(&quot;Could not write CLAUDE.md for &quot; + subproject.name()</span>
+<span class="nc" id="L438">                    + &quot;: &quot; + e.getMessage());</span>
+<span class="fc" id="L439">        }</span>
+<span class="fc" id="L440">    }</span>
+
+    private void ensureClaudeNotes(Path dir, String name) {
+<span class="fc" id="L443">        Path notesFile = dir.resolve(&quot;CLAUDE-&quot; + name + &quot;.md&quot;);</span>
+<span class="pc bpc" id="L444" title="1 of 2 branches missed.">        if (Files.exists(notesFile)) {</span>
+<span class="nc" id="L445">            return;</span>
+        }
+        try {
+<span class="fc" id="L448">            Path existingClaudeMd = dir.resolve(&quot;CLAUDE.md&quot;);</span>
+<span class="pc bpc" id="L449" title="1 of 2 branches missed.">            if (Files.exists(existingClaudeMd)) {</span>
+<span class="nc" id="L450">                String existing = Files.readString(existingClaudeMd, StandardCharsets.UTF_8);</span>
+<span class="nc" id="L451">                String migrated = &quot;# &quot; + name + &quot; — Project Notes\n\n&quot;</span>
+                        + &quot;&lt;!-- Migrated from CLAUDE.md by ws:scaffold-init.\n&quot;
+                        + &quot;     This file is for hand-authored, project-specific information.\n&quot;
+                        + &quot;     Commit this file to git. --&gt;\n\n&quot;
+                        + existing;
+<span class="nc" id="L456">                Files.writeString(notesFile, migrated, StandardCharsets.UTF_8);</span>
+<span class="nc" id="L457">                log.info(&quot;    Migrated CLAUDE.md → CLAUDE-&quot; + name + &quot;.md&quot;);</span>
+<span class="nc" id="L458">            } else {</span>
+<span class="fc" id="L459">                Files.writeString(notesFile, generateClaudeNotes(name),</span>
+                        StandardCharsets.UTF_8);
+<span class="fc" id="L461">                log.info(&quot;    Created CLAUDE-&quot; + name + &quot;.md (template)&quot;);</span>
+            }
+<span class="nc" id="L463">        } catch (IOException e) {</span>
+<span class="nc" id="L464">            log.debug(&quot;Could not create CLAUDE-&quot; + name + &quot;.md: &quot; + e.getMessage());</span>
+<span class="fc" id="L465">        }</span>
+<span class="fc" id="L466">    }</span>
+
+    /**
+     * Generate {@code CLAUDE.md} for the workspace root. Static so the
+     * generator can be unit-tested without instantiating the mojo.
+     *
+     * @param wsName the workspace name
+     * @param graph  the loaded workspace graph (unused in the body but
+     *               kept so future per-subproject summaries can be
+     *               threaded through without an API break)
+     * @return the markdown content
+     */
+    public static String generateWorkspaceClaudeMd(String wsName, WorkspaceGraph graph) {
+<span class="fc" id="L479">        StringBuilder sb = new StringBuilder();</span>
+<span class="fc" id="L480">        sb.append(&quot;# &quot;).append(wsName).append(&quot;\n\n&quot;);</span>
+
+<span class="fc" id="L482">        sb.append(&quot;&quot;&quot;</span>
+                ## First Steps
+
+                Run `mvn ws:scaffold-init` to clone components, then `mvn validate` to unpack
+                full build standards into `.claude/standards/`.
+
+                ## Build
+
+                ```bash
+                mvn clean verify -DskipTests -T4   # compile + javadoc
+                mvn clean verify -T4                # full build with tests
+                ```
+
+                ## Key Conventions
+
+                - Maven 4 with POM modelVersion 4.1.0
+                - `&lt;subprojects&gt;` (not `&lt;modules&gt;`) for aggregation
+                - All projects use `--enable-preview` (Java 25)
+                - Parent: `network.ike.platform:ike-parent` (from ike-platform)
+
+                ## Prohibited Patterns
+
+                These are the most critical rules. Full standards are in `.claude/standards/MAVEN.md`
+                after building.
+
+                - **Never use `maven-antrun-plugin`** — use a proper Maven goal or `exec-maven-plugin`
+                  with an external script
+                - **Never use `build-helper-maven-plugin` for multi-execution property chaining** —
+                  write a proper Maven goal in `ike-maven-plugin` instead
+                - **Never embed shell commands inline in POM** — extract to a named script
+                - **Never use `git add -A` or `git add .`** — stage specific files
+
+                ## Project-Specific Notes
+
+                &quot;&quot;&quot;);
+
+<span class="fc" id="L518">        sb.append(&quot;See `WS-REFERENCE.md` for complete workspace goal documentation.\n&quot;);</span>
+<span class="fc" id="L519">        sb.append(&quot;See `CLAUDE-&quot;).append(wsName)</span>
+<span class="fc" id="L520">                .append(&quot;.md` for workspace-specific information.\n&quot;);</span>
+<span class="fc" id="L521">        sb.append(&quot;See `.claude/standards/` (after `mvn validate`) for full build standards.\n&quot;);</span>
+
+<span class="fc" id="L523">        return sb.toString();</span>
+    }
+
+    /**
+     * Generate {@code CLAUDE.md} for a subproject directory. Static for
+     * testability.
+     *
+     * @param subproject the subproject definition
+     * @return the markdown content
+     */
+    public static String generateComponentClaudeMd(Subproject subproject) {
+<span class="fc" id="L534">        StringBuilder sb = new StringBuilder();</span>
+<span class="fc" id="L535">        sb.append(&quot;# &quot;).append(subproject.name()).append(&quot;\n\n&quot;);</span>
+
+<span class="pc bpc" id="L537" title="1 of 4 branches missed.">        if (subproject.description() != null &amp;&amp; !subproject.description().isBlank()) {</span>
+<span class="fc" id="L538">            sb.append(subproject.description().strip()).append(&quot;\n\n&quot;);</span>
+        }
+
+<span class="fc" id="L541">        sb.append(&quot;&quot;&quot;</span>
+                ## Build Standards
+
+                Files in `.claude/standards/` are build artifacts unpacked from `ike-build-standards`. DO NOT edit or commit them. See the workspace root CLAUDE.md for details.
+
+                ## Build
+
+                ```bash
+                mvn clean verify -DskipTests -T4
+                ```
+
+                ## Key Facts
+
+                &quot;&quot;&quot;);
+
+<span class="pc bpc" id="L556" title="1 of 2 branches missed.">        if (subproject.groupId() != null) {</span>
+<span class="fc" id="L557">            sb.append(&quot;- GroupId: `&quot;).append(subproject.groupId()).append(&quot;`\n&quot;);</span>
+        }
+<span class="pc bpc" id="L559" title="1 of 2 branches missed.">        if (subproject.version() != null) {</span>
+<span class="fc" id="L560">            sb.append(&quot;- Version: `&quot;).append(subproject.version()).append(&quot;`\n&quot;);</span>
+        }
+<span class="fc" id="L562">        sb.append(&quot;- Uses `--enable-preview` (Java 25)\n&quot;);</span>
+<span class="fc" id="L563">        sb.append(&quot;- BOM: imports `dev.ikm.ike:ike-bom` for dependency version management\n&quot;);</span>
+
+<span class="fc" id="L565">        sb.append(&quot;&quot;&quot;</span>
+
+                ## Prohibited Patterns
+
+                - **Never use `maven-antrun-plugin`** — use a proper Maven goal or `exec-maven-plugin`
+                - **Never use `build-helper-maven-plugin` for multi-execution property chaining** —
+                  write a proper Maven goal in `ike-maven-plugin`
+                - **Never embed shell commands inline in POM** — extract to a named script
+
+                &quot;&quot;&quot;);
+
+<span class="fc" id="L576">        sb.append(&quot;See `.claude/standards/` (after `mvn validate`) for full standards.\n&quot;);</span>
+<span class="fc" id="L577">        sb.append(&quot;See `CLAUDE-&quot;).append(subproject.name())</span>
+<span class="fc" id="L578">                .append(&quot;.md` for project-specific notes.\n&quot;);</span>
+
+<span class="fc" id="L580">        return sb.toString();</span>
+    }
+
+    /**
+     * Generate the starter template for hand-authored project notes.
+     * Static for testability.
+     *
+     * @param name the subproject or workspace name
+     * @return the markdown content
+     */
+    public static String generateClaudeNotes(String name) {
+<span class="fc" id="L591">        return &quot;# &quot; + name + &quot; — Project Notes\n\n&quot;</span>
+                + &quot;&lt;!-- This file is for hand-authored, project-specific information.\n&quot;
+                + &quot;     It is created by ws:scaffold-init but never overwritten.\n&quot;
+                + &quot;     Commit this file to git. --&gt;\n\n&quot;
+                + &quot;## Architecture\n\n&quot;
+                + &quot;## Key Classes\n\n&quot;
+                + &quot;## Testing Notes\n&quot;;
+    }
+
+    // ── GOALS.md and WS-REFERENCE.md generation ─────────────────
+
+    private void writeGoalCheatsheet(Path wsRoot) {
+<span class="fc" id="L603">        Path goalsFile = wsRoot.resolve(&quot;GOALS.md&quot;);</span>
+        try {
+<span class="fc" id="L605">            Files.writeString(goalsFile, generateGoalCheatsheet(),</span>
+                    StandardCharsets.UTF_8);
+<span class="fc" id="L607">            log.info(&quot;  Updated GOALS.md&quot;);</span>
+<span class="nc" id="L608">        } catch (IOException e) {</span>
+<span class="nc" id="L609">            log.debug(&quot;Could not write GOALS.md: &quot; + e.getMessage());</span>
+<span class="fc" id="L610">        }</span>
+<span class="fc" id="L611">    }</span>
+
+    /**
+     * Generate the workspace goal cheatsheet ({@code GOALS.md}). Static
+     * so the content can be diffed independently of the mojo.
+     *
+     * @return the markdown content
+     */
+    public static String generateGoalCheatsheet() {
+<span class="fc" id="L620">        return &quot;&quot;&quot;</span>
+                # Workspace Goals
+
+                All goals are available in IntelliJ's Maven tool window
+                under **Plugins &gt; ws** and **Plugins &gt; ike**.
+
+                ## Workspace Management
+
+                | Goal | Description |
+                |------|-------------|
+                | `ws:scaffold-init` | Bootstrap a new workspace (no manifest yet) or clone declared subprojects (manifest present). Idempotent. |
+                | `ws:add` | Add a subproject repo (prompts for URL) |
+                | `ws:scaffold-publish` | Reconcile workspace state (versions, groupIds, scaffold conventions) — subsumes the retired scaffold-upgrade goals |
+                | `ws:graph` | Print dependency graph (text or DOT format) |
+                | `ws:stignore` | Generate Syncthing ignore rules |
+                | `ws:remove` | Remove a subproject (prompts for name) |
+                | `ws:help` | List all ws: goals with descriptions |
+
+                ## Verification
+
+                | Goal | Description |
+                |------|-------------|
+                | `ws:scaffold-draft` | Check manifest, parents, BOM cascade, VCS state (folds verify per #393) |
+                | `ws:verify-convergence` | Transitive dependency convergence (slow) |
+                | `ws:overview` | Workspace overview (manifest, graph, status, cascade) |
+                | `ws:check-branch` | Warn when a subproject branch deviates from workspace.yaml |
+
+                ## Version Alignment
+
+                | Goal | Description |
+                |------|-------------|
+                | `ws:align-draft` | Preview inter-subproject POM version alignment (AlignmentReconciler) |
+                | `ws:align-publish` | Apply POM version alignment |
+                | `ws:reconcile-branches-draft` / `-publish` | Reconcile branch fields against on-disk state |
+                | `ws:scaffold-draft -DupdateParent=true` | Preview parent-POM version cascade (along with other reconciliation) |
+                | `ws:scaffold-publish -DparentVersion=&lt;v&gt;` | Pin parent to specific version and cascade |
+
+                ## Branch Coordination
+
+                | Goal | Description |
+                |------|-------------|
+                | `ws:switch-draft` | Preview switching subprojects to a coordinated branch |
+                | `ws:switch-publish` | Switch subprojects to a coordinated branch |
+                | `ws:update-feature-draft` | Preview rebasing a feature branch onto main |
+                | `ws:update-feature-publish` | Rebase a feature branch onto main |
+
+                ## Feature Branching
+
+                | Goal | Description |
+                |------|-------------|
+                | `ws:feature-start-draft` | Preview feature branch |
+                | `ws:feature-start-publish` | Create feature branch across components |
+                | `ws:feature-finish-merge-draft` | Preview no-ff merge |
+                | `ws:feature-finish-merge-publish` | No-ff merge (preserves history) |
+                | `ws:feature-finish-squash-draft` | Preview squash merge |
+                | `ws:feature-finish-squash-publish` | Squash merge (single commit) |
+                | `ws:feature-abandon-draft` | Preview abandoning a feature branch |
+                | `ws:feature-abandon-publish` | Delete feature branch across components |
+                | `ws:sibling-create` | Clone the workspace into a sibling dir on a feature branch (isolated, Syncthing-safe) |
+
+                ## Release &amp; Checkpoint
+
+                | Goal | Description |
+                |------|-------------|
+                | `ws:release-draft` | Preview what would be released |
+                | `ws:release-publish` | Execute workspace release |
+                | `ws:release-status` | Diagnose state of any in-flight workspace release |
+                | `ws:checkpoint-draft` | Preview checkpoint (tag all subprojects) |
+                | `ws:checkpoint-publish` | Execute checkpoint |
+                | `ws:post-release` | Bump to next development version |
+                | `ws:release-notes` | Generate release notes from GitHub milestone |
+
+                ## VCS Bridge (Syncthing multi-machine)
+
+                | Goal | Description |
+                |------|-------------|
+                | `ws:sync` | Pull then push across the workspace (the daily sync op) |
+                | `ws:commit-draft` | Preview what would be committed across repos (read-only) |
+                | `ws:commit-publish` | Commit across repos (stages all by default; `-DstagedOnly` to opt out) |
+                | `ws:pull` | Git pull --rebase across all subprojects |
+                | `ws:push` | Push all subprojects (warns about uncommitted changes) |
+                | `ws:report` | Aggregate ws:* goal reports into a single document |
+
+                ## Branch Cleanup
+
+                | Goal | Description |
+                |------|-------------|
+                | `ws:cleanup-draft` | List merged/stale feature branches |
+                | `ws:cleanup-publish` | Delete merged feature branches |
+
+                ## Build Goals (ike:)
+
+                | Goal | Description |
+                |------|-------------|
+                | `ike:release-draft` | Preview single-repo release |
+                | `ike:release-publish` | Execute single-repo release |
+                | `ike:generate-bom` | Generate BOM with resolved versions |
+                | `ike:site-draft` | Preview site deployment + org-site registration |
+                | `ike:site-publish` | Deploy project site and register it on the org site |
+                | `ike:help` | List all ike: goals with descriptions |
+
+                ---
+                *Generated by `ws:scaffold-init`. See `ws:help` and `ike:help` for full details.*
+                &quot;&quot;&quot;;
+    }
+
+    private void writeWorkspaceReference(Path wsRoot) {
+<span class="fc" id="L727">        Path refFile = wsRoot.resolve(&quot;WS-REFERENCE.md&quot;);</span>
+        try {
+<span class="fc" id="L729">            Files.writeString(refFile, generateWorkspaceReference(),</span>
+                    StandardCharsets.UTF_8);
+<span class="fc" id="L731">            log.info(&quot;  Updated WS-REFERENCE.md&quot;);</span>
+<span class="nc" id="L732">        } catch (IOException e) {</span>
+<span class="nc" id="L733">            log.debug(&quot;Could not write WS-REFERENCE.md: &quot; + e.getMessage());</span>
+<span class="fc" id="L734">        }</span>
+<span class="fc" id="L735">    }</span>
+
+    /**
+     * Generate the long-form workspace goal reference
+     * ({@code WS-REFERENCE.md}). Static for testability.
+     *
+     * @return the markdown content
+     */
+    public static String generateWorkspaceReference() {
+<span class="fc" id="L744">        return &quot;&quot;&quot;</span>
+                # Workspace Goals Reference
+
+                Complete reference for `ws:` goals. Quick overview: [GOALS.md](GOALS.md).
+
+                ## Convention: -draft / -publish
+
+                Most mutating goals come in pairs:
+                - **-draft** (default) — preview mode, no changes made
+                - **-publish** — executes the operation
+
+                Example: `mvn ws:feature-start-draft -Dfeature=X` previews,
+                `mvn ws:feature-start-publish -Dfeature=X` executes.
+
+                ---
+
+                ## Feature Branching
+
+                ### Start: `ws:feature-start-draft` / `ws:feature-start-publish`
+
+                Create a feature branch, qualify versions (e.g., `1.0.0-SNAPSHOT` becomes
+                `1.0.0-CssUtils-SNAPSHOT`), cascade through BOMs and properties.
+
+                | Parameter | Default | Description |
+                |-----------|---------|-------------|
+                | `feature` | prompted | Feature name (branch: `feature/&lt;name&gt;`) |
+                | `targetBranch` | `main` | Source branch |
+                | `skipVersion` | `false` | Skip version qualification |
+
+                Fails if any subproject is on a different feature branch.
+                Branches stay local (no auto-push).
+
+                ### Finish: Three Strategies
+
+                **`ws:feature-finish-squash-publish`** (recommended) — single commit on target.
+                **`ws:feature-finish-merge-publish`** — no-ff merge, preserves history.
+
+                All strategies:
+                - Auto-generate commit message from per-subproject commit history
+                - Fail-fast if any subproject has uncommitted changes
+                - Strip branch-qualified versions back to base SNAPSHOT
+                - Accept optional `-Dmessage=&quot;summary&quot;` prepended to auto-generated message
+
+                | Parameter | Default | Description |
+                |-----------|---------|-------------|
+                | `feature` | prompted | Feature name |
+                | `targetBranch` | `main` | Merge target |
+                | `keepBranch` | varies | Keep branch after merge |
+                | `message` | auto | Optional human summary |
+
+                ### Abandon: `ws:feature-abandon-draft`
+
+                Delete a feature branch without merging.
+
+                ### Sibling clone: `ws:sibling-create`
+
+                Clone the whole workspace into a sibling directory
+                (`&lt;workspace&gt;-&lt;feature&gt;`) on `feature/&lt;name&gt;` from inception,
+                instead of switching the primary in place. Each component is a
+                self-contained clone (`--reference --dissociate` against the
+                primary, so large histories are cheap). The primary stays on
+                its branch; the sibling is disposable (`rm -rf`) after merge.
+                Isolates concurrent work — same-machine or across Syncthing
+                machines — so two streams never stage each other's edits.
+
+                | Parameter | Default | Description |
+                |-----------|---------|-------------|
+                | `feature` | prompted | Feature name (branch: `feature/&lt;name&gt;`) |
+                | `skipVersion` | `false` | Skip version qualification |
+
+                Branches and clones stay local (no auto-push).
+
+                ---
+
+                ## Workspace Lifecycle
+
+                | Goal | Description |
+                |------|-------------|
+                | `ws:scaffold-init` | Bootstrap a new workspace, or clone declared subprojects when workspace.yaml already exists. Safe to re-run. |
+                | `ws:scaffold-draft` | Check manifest, BOM cascade, VCS state (folds verify per #393) |
+                | `ws:verify-convergence` | Transitive dependency convergence (slow) |
+                | `ws:overview` | Dashboard: manifest, graph, status, cascade |
+                | `ws:scaffold-publish` | Apply workspace-level reconciliation (denormalized YAML field sync, scaffold conventions, etc.) |
+                | `ws:pull` | Git pull --rebase across components |
+
+                ---
+
+                ## Release &amp; Checkpoint
+
+                | Goal | Description |
+                |------|-------------|
+                | `ws:release-draft` / `-publish` | Release release-pending components in topo order |
+                | `ws:checkpoint-draft` / `-publish` | Tag all subprojects, record SHAs |
+                | `ws:post-release` | Bump to next SNAPSHOT |
+                | `ws:align-draft` / `-publish` | Align inter-subproject versions |
+                | `ws:release-notes` | Generate notes from GitHub milestone |
+
+                ---
+
+                ## VCS Bridge (Syncthing)
+
+                | Goal | Description |
+                |------|-------------|
+                | `ws:commit-publish` | Commit across repos (`-Dpush=true -Dmessage=&quot;...&quot;`) |
+                | `ws:push` | Push all subprojects (warns about uncommitted changes) |
+                | `ws:sync` | Pull then push across the workspace |
+                | `ws:cleanup-draft` / `-publish` | List/delete merged feature branches |
+
+                ---
+
+                ## Preflight Validation
+
+                Multi-repo goals validate that all subproject working trees are clean
+                before starting. If any subproject has uncommitted changes, the goal
+                fails immediately with a list of affected repos and files — no partial
+                modifications occur.
+
+                **Goals with hard preflight (publish mode):**
+                `release`, `align`, `scaffold`, `checkpoint`, `pull`, `switch`,
+                `feature-start`, `feature-finish-*`, `feature-abandon`, `update-feature`
+
+                **Draft goals:** warn about uncommitted changes that would block the
+                corresponding `-publish` goal, but still run the preview.
+
+                **`ws:commit-publish`:** skips VCS bridge catch-up when there are pending
+                changes to commit, preventing branch-switch conflicts.
+
+                **`ws:push`:** warns about uncommitted changes after pushing, and
+                automatically sets upstream tracking for new branches.
+
+                ## Troubleshooting
+
+                **&quot;Cannot X — uncommitted changes in:&quot;** — Run `mvn ws:commit-publish -Dmessage=&quot;...&quot;` to commit all pending changes, then retry.
+
+                **Maven discovers `.teamcity/pom.xml`** — Add `-pl !.teamcity` to `.mvn/maven.config`.
+
+                **Feature finish: &quot;uncommitted changes&quot;** — Run `mvn ws:commit-publish -Dmessage=&quot;...&quot;` first.
+
+                **Feature start: &quot;already on feature branch&quot;** — Finish/abandon the current feature first.
+
+                **Plugin version mismatch** — After upgrading `ike-parent`, run `mvn ws:scaffold-init`.
+
+                **Stale clones on CI** — `ws:scaffold-init` now fetches and rebases existing clones. Delete subproject directories manually only if rebase conflicts occur.
+
+                ---
+                *Generated by `ws:scaffold-init`. Regenerated when workspace plugin version changes.*
+                &quot;&quot;&quot;;
+    }
+
+    // ── Report ──────────────────────────────────────────────────
+
+    private String buildInitMarkdownReport(Result result) {
+<span class="fc" id="L896">        StringBuilder sb = new StringBuilder();</span>
+<span class="fc" id="L897">        sb.append(result.cloned()).append(&quot; cloned, &quot;)</span>
+<span class="fc" id="L898">                .append(result.syncthing()).append(&quot; Syncthing-initialized, &quot;)</span>
+<span class="fc" id="L899">                .append(result.updated()).append(&quot; updated, &quot;)</span>
+<span class="fc" id="L900">                .append(result.skipped()).append(&quot; skipped&quot;);</span>
+<span class="pc bpc" id="L901" title="1 of 2 branches missed.">        if (result.wrappers() &gt; 0) {</span>
+<span class="nc" id="L902">            sb.append(&quot;, &quot;).append(result.wrappers()).append(&quot; Maven wrappers updated&quot;);</span>
+        }
+<span class="fc" id="L904">        sb.append(&quot;.\n\n&quot;);</span>
+<span class="fc" id="L905">        sb.append(&quot;| Subproject | Action | URL | Status |\n&quot;);</span>
+<span class="fc" id="L906">        sb.append(&quot;|-----------|--------|-----|--------|\n&quot;);</span>
+<span class="fc bfc" id="L907" title="All 2 branches covered.">        for (String[] row : result.rows()) {</span>
+<span class="fc" id="L908">            sb.append(&quot;| &quot;).append(row[0])</span>
+<span class="fc" id="L909">                    .append(&quot; | &quot;).append(row[1])</span>
+<span class="fc" id="L910">                    .append(&quot; | &quot;).append(row[2])</span>
+<span class="fc" id="L911">                    .append(&quot; | &quot;).append(row[3])</span>
+<span class="fc" id="L912">                    .append(&quot; |\n&quot;);</span>
+<span class="fc" id="L913">        }</span>
+<span class="fc" id="L914">        return sb.toString();</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

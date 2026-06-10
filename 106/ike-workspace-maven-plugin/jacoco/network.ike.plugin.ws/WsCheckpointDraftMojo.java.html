@@ -1,0 +1,657 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>WsCheckpointDraftMojo.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">WsCheckpointDraftMojo.java</span></div><h1>WsCheckpointDraftMojo.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.plugin.ReleaseNotesSupport;
+import network.ike.plugin.ReleaseSupport;
+import network.ike.plugin.support.GoalReportBuilder;
+import network.ike.plugin.ws.preflight.Preflight;
+import network.ike.plugin.ws.preflight.PreflightCondition;
+import network.ike.plugin.ws.preflight.PreflightContext;
+import network.ike.plugin.ws.preflight.PreflightResult;
+
+import network.ike.workspace.ManifestWriter;
+import network.ike.workspace.WorkspaceGraph;
+import network.ike.plugin.ws.vcs.VcsOperations;
+import network.ike.plugin.ws.vcs.VcsState;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+/**
+ * Create a workspace checkpoint — tag every subproject at its current HEAD
+ * and record the snapshot in a YAML manifest.
+ *
+ * &lt;p&gt;A checkpoint records the current state of the workspace for reproduction.
+ * It is not a build or a release — no POM version changes, no compilation,
+ * no deployment. TeamCity watches for checkpoint tags on the workspace repo
+ * and handles CI.
+ *
+ * &lt;p&gt;Each subproject is tagged in topological order (dependencies before
+ * dependents). After all subprojects are tagged, a YAML file recording
+ * the SHAs, versions, and branches is committed and tagged in the
+ * workspace aggregator repo.
+ *
+ * &lt;pre&gt;{@code
+ * mvn ws:checkpoint                          # auto-derived name
+ * mvn ws:checkpoint -Dname=sprint-42         # explicit name
+ * mvn ws:checkpoint                          # draft (default)
+ * mvn ws:checkpoint-publish                  # execute
+ * }&lt;/pre&gt;
+ *
+ * @see CheckpointSupport the per-subproject tagging engine
+ */
+@Mojo(name = &quot;checkpoint-draft&quot;, projectRequired = false, aggregator = true)
+public class WsCheckpointDraftMojo extends AbstractWorkspaceMojo {
+
+<span class="fc" id="L60">    private static final DateTimeFormatter ISO_UTC =</span>
+<span class="fc" id="L61">            DateTimeFormatter.ofPattern(&quot;yyyy-MM-dd'T'HH:mm:ss'Z'&quot;)</span>
+<span class="fc" id="L62">                    .withZone(ZoneOffset.UTC);</span>
+
+<span class="fc" id="L64">    private static final DateTimeFormatter COMPACT_UTC =</span>
+<span class="fc" id="L65">            DateTimeFormatter.ofPattern(&quot;yyyyMMdd-HHmmss&quot;)</span>
+<span class="fc" id="L66">                    .withZone(ZoneOffset.UTC);</span>
+
+    /**
+     * Checkpoint name. Used in the YAML filename and tag names.
+     * If omitted, auto-derived from the workspace branch and a compact
+     * UTC timestamp ({@code &lt;branch&gt;-&lt;yyyyMMdd&gt;-&lt;HHmmss&gt;}).
+     */
+    @Parameter(property = &quot;name&quot;)
+    String name;
+
+    /**
+     * Show what the checkpoint would do without creating tags or writing
+     * files. Set automatically by {@code ws:checkpoint} (bare goal is
+     * draft; use {@code ws:checkpoint-publish} to execute).
+     */
+    @Parameter(property = &quot;publish&quot;, defaultValue = &quot;false&quot;)
+    boolean publish;
+
+    /**
+     * GitHub repository for issue tracking, used to snapshot active
+     * issues into the checkpoint's testing context.
+     */
+    @Parameter(property = &quot;issueRepo&quot;, defaultValue = &quot;IKE-Network/ike-issues&quot;)
+    String issueRepo;
+
+    /**
+     * Milestone name to snapshot for testing context. If omitted,
+     * looks for an open milestone matching the workspace's primary
+     * subproject (first subproject in manifest) in the form
+     * {@code &lt;artifactId&gt; v&lt;version&gt;} where version is the current
+     * SNAPSHOT stripped of the suffix.
+     */
+    @Parameter(property = &quot;milestone&quot;)
+    String milestone;
+
+    /** Creates this goal instance. */
+<span class="fc" id="L102">    public WsCheckpointDraftMojo() {}</span>
+
+    @Override
+    protected WorkspaceReportSpec runGoal() throws MojoException {
+<span class="fc" id="L106">        WorkspaceGraph graph = loadGraph();</span>
+<span class="fc" id="L107">        File root = workspaceRoot();</span>
+
+<span class="fc bfc" id="L109" title="All 2 branches covered.">        boolean draft = !publish;</span>
+
+        // Preflight: all working trees must be clean (#132, #154)
+<span class="fc" id="L112">        PreflightResult preflight = Preflight.of(</span>
+<span class="fc" id="L113">                List.of(PreflightCondition.WORKING_TREE_CLEAN),</span>
+<span class="fc" id="L114">                PreflightContext.of(root, graph, graph.topologicalSort()));</span>
+<span class="fc bfc" id="L115" title="All 2 branches covered.">        if (draft) {</span>
+<span class="fc" id="L116">            preflight.warnIfFailed(getLog(), WsGoal.CHECKPOINT_PUBLISH);</span>
+        } else {
+<span class="fc" id="L118">            preflight.requirePassed(WsGoal.CHECKPOINT_PUBLISH);</span>
+        }
+
+<span class="pc bpc" id="L121" title="2 of 4 branches missed.">        if (name == null || name.isBlank()) {</span>
+<span class="nc" id="L122">            name = deriveCheckpointName(root);</span>
+        }
+
+        // Idempotency guard (#294): in publish mode, exit cleanly when a
+        // checkpoint with this name was already created. The checkpoint
+        // file in checkpoints/ is the durable success marker; if it
+        // exists, re-running would either duplicate-tag (failing at git)
+        // or rewrite the file with a fresh timestamp (changing the
+        // commit). Either way &quot;running twice = same result&quot; is violated.
+<span class="fc bfc" id="L131" title="All 2 branches covered.">        if (publish) {</span>
+<span class="fc" id="L132">            Path existingCheckpoint = root.toPath().resolve(&quot;checkpoints&quot;)</span>
+<span class="fc" id="L133">                    .resolve(checkpointFileName(name));</span>
+<span class="fc bfc" id="L134" title="All 2 branches covered.">            if (Files.isRegularFile(existingCheckpoint)) {</span>
+<span class="fc" id="L135">                getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L136">                getLog().info(&quot;  Checkpoint '&quot; + name</span>
+                        + &quot;' already exists — nothing to do.&quot;);
+<span class="fc" id="L138">                getLog().info(&quot;    &quot; + existingCheckpoint);</span>
+<span class="fc" id="L139">                getLog().info(&quot;  To create a new checkpoint, pass a &quot;</span>
+                        + &quot;different -Dname=…, or delete the existing&quot;);
+<span class="fc" id="L141">                getLog().info(&quot;  file (and the matching checkpoint/&quot;</span>
+                        + name + &quot; tag in each subproject) first.&quot;);
+<span class="fc" id="L143">                getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L144">                return new WorkspaceReportSpec(WsGoal.CHECKPOINT_PUBLISH,</span>
+                        &quot;Idempotent skip — checkpoint **`&quot; + name
+                                + &quot;`** already exists at `&quot;
+<span class="fc" id="L147">                                + root.toPath().relativize(existingCheckpoint)</span>
+                                + &quot;`.\n&quot;);
+            }
+        }
+
+<span class="fc" id="L152">        String wsTagName = &quot;checkpoint/&quot; + name;</span>
+<span class="fc" id="L153">        String timestamp = ISO_UTC.format(Instant.now());</span>
+<span class="fc" id="L154">        String author = resolveAuthor(root);</span>
+
+<span class="fc" id="L156">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L157">        getLog().info(header(&quot;Checkpoint&quot;));</span>
+<span class="fc" id="L158">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+<span class="fc" id="L159">        getLog().info(&quot;  Name:   &quot; + name);</span>
+<span class="fc" id="L160">        getLog().info(&quot;  Tag:    &quot; + wsTagName);</span>
+<span class="fc" id="L161">        getLog().info(&quot;  Time:   &quot; + timestamp);</span>
+<span class="fc" id="L162">        getLog().info(&quot;  Author: &quot; + author);</span>
+<span class="fc bfc" id="L163" title="All 2 branches covered.">        if (draft) {</span>
+<span class="fc" id="L164">            getLog().info(&quot;  Mode:   DRAFT — no tags, no files written&quot;);</span>
+        }
+<span class="fc" id="L166">        getLog().info(&quot;&quot;);</span>
+
+        // ── Tag each subproject in dependency order ────────────────────
+<span class="fc" id="L169">        List&lt;SubprojectSnapshot&gt; snapshots = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L170">        List&lt;String&gt; absentComponents = new ArrayList&lt;&gt;();</span>
+        // Per-subproject closing-keyword trailer issue refs (#394) —
+        // report-only, never mutates issue state.
+<span class="fc" id="L173">        Map&lt;String, List&lt;ReleaseNotesSupport.IssueRef&gt;&gt; issuesSinceLastRelease =</span>
+                new LinkedHashMap&lt;&gt;();
+
+<span class="fc" id="L176">        List&lt;String&gt; ordered = graph.topologicalSort(</span>
+<span class="fc" id="L177">                new LinkedHashSet&lt;&gt;(graph.manifest().subprojects().keySet()));</span>
+
+<span class="fc bfc" id="L179" title="All 2 branches covered.">        for (String subName : ordered) {</span>
+<span class="fc" id="L180">            File dir = new File(root, subName);</span>
+<span class="fc" id="L181">            File gitDir = new File(dir, &quot;.git&quot;);</span>
+
+<span class="pc bpc" id="L183" title="1 of 2 branches missed.">            if (!gitDir.exists()) {</span>
+<span class="nc" id="L184">                absentComponents.add(subName);</span>
+<span class="nc" id="L185">                getLog().info(&quot;  - &quot; + subName + &quot; [absent — skipped]&quot;);</span>
+<span class="nc" id="L186">                continue;</span>
+            }
+
+<span class="fc" id="L189">            String branch   = gitBranch(dir);</span>
+<span class="fc" id="L190">            String sha      = gitFullSha(dir);</span>
+<span class="fc" id="L191">            String shortSha = gitShortSha(dir);</span>
+<span class="fc" id="L192">            String version  = readVersion(dir);</span>
+
+            // Collect issue refs from closing-keyword trailers in commits
+            // since the last release tag. Pure read — does not close
+            // issues or remove pending-release labels (#394).
+<span class="fc" id="L197">            List&lt;ReleaseNotesSupport.IssueRef&gt; issues =</span>
+<span class="fc" id="L198">                    collectClosingTrailerIssuesSinceLastRelease(dir);</span>
+<span class="pc bpc" id="L199" title="1 of 2 branches missed.">            if (!issues.isEmpty()) {</span>
+<span class="nc" id="L200">                issuesSinceLastRelease.put(subName, issues);</span>
+            }
+
+<span class="fc bfc" id="L203" title="All 2 branches covered.">            if (draft) {</span>
+<span class="fc" id="L204">                getLog().info(Ansi.green(&quot;  ✓ &quot;) + subName</span>
+                        + &quot; [&quot; + shortSha + &quot;] &quot; + branch
+                        + &quot; (&quot; + version + &quot;)&quot;
+<span class="pc bpc" id="L207" title="1 of 2 branches missed.">                        + (issues.isEmpty() ? &quot;&quot;</span>
+<span class="pc" id="L208">                            : &quot; — &quot; + issues.size() + &quot; issue(s) since last release&quot;));</span>
+<span class="fc" id="L209">                CheckpointSupport.preview(dir, wsTagName, getLog());</span>
+<span class="fc" id="L210">                snapshots.add(new SubprojectSnapshot(</span>
+                        subName, sha, shortSha, branch, version, false));
+            } else {
+<span class="fc" id="L213">                CheckpointSupport.checkpoint(dir, wsTagName, getLog());</span>
+<span class="fc" id="L214">                getLog().info(Ansi.green(&quot;  ✓ &quot;) + subName</span>
+                        + &quot; [&quot; + shortSha + &quot;] → &quot; + wsTagName
+<span class="pc bpc" id="L216" title="1 of 2 branches missed.">                        + (issues.isEmpty() ? &quot;&quot;</span>
+<span class="pc" id="L217">                            : &quot; — &quot; + issues.size() + &quot; issue(s) since last release&quot;));</span>
+<span class="fc" id="L218">                snapshots.add(new SubprojectSnapshot(</span>
+                        subName, sha, shortSha, branch, version, false));
+            }
+<span class="fc" id="L221">        }</span>
+
+        // ── Build checkpoint YAML ──────────────────────────────────────
+<span class="fc" id="L224">        String yamlContent = buildCheckpointYaml(</span>
+                name, timestamp, author,
+<span class="fc" id="L226">                graph.manifest().schemaVersion(),</span>
+                snapshots, absentComponents, issuesSinceLastRelease);
+
+        // ── Append testing context from milestone ─────────────────────
+<span class="fc" id="L230">        ReleaseNotesSupport.TestingContext testingContext = snapshotTestingContext(graph);</span>
+<span class="pc bpc" id="L231" title="1 of 2 branches missed.">        if (testingContext != null) {</span>
+<span class="nc" id="L232">            yamlContent = yamlContent + &quot;\n&quot; + testingContext.toYaml(&quot;  &quot;);</span>
+        }
+
+<span class="fc" id="L235">        File wsGitDir = new File(root, &quot;.git&quot;);</span>
+<span class="fc" id="L236">        boolean workspaceHasGit = wsGitDir.exists();</span>
+
+<span class="fc" id="L238">        Path checkpointFile = null;</span>
+<span class="fc" id="L239">        boolean manifestUpdated = false;</span>
+<span class="fc" id="L240">        boolean tagPushed = false;</span>
+
+<span class="fc bfc" id="L242" title="All 2 branches covered.">        if (draft) {</span>
+<span class="fc" id="L243">            getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L244">            getLog().info(&quot;[DRAFT] Checkpoint file would be written to:&quot;);</span>
+<span class="fc" id="L245">            getLog().info(&quot;[DRAFT]   checkpoints/&quot; + checkpointFileName(name));</span>
+<span class="fc" id="L246">            getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L247">            getLog().info(&quot;[DRAFT] Contents:&quot;);</span>
+<span class="fc" id="L248">            yamlContent.lines().forEach(line -&gt;</span>
+<span class="fc" id="L249">                    getLog().info(&quot;[DRAFT]   &quot; + line));</span>
+<span class="fc" id="L250">            getLog().info(&quot;&quot;);</span>
+        } else {
+            // ── Write subproject SHAs into workspace.yaml ────────────────
+            try {
+<span class="fc" id="L254">                java.util.Map&lt;String, String&gt; shaUpdates = new java.util.LinkedHashMap&lt;&gt;();</span>
+<span class="fc bfc" id="L255" title="All 2 branches covered.">                for (SubprojectSnapshot snap : snapshots) {</span>
+<span class="fc" id="L256">                    shaUpdates.put(snap.name(), snap.sha());</span>
+<span class="fc" id="L257">                }</span>
+<span class="fc" id="L258">                ManifestWriter.updateShas(resolveManifest(), shaUpdates);</span>
+<span class="fc" id="L259">                manifestUpdated = true;</span>
+<span class="fc" id="L260">                getLog().info(&quot;  Updated workspace.yaml with subproject SHAs&quot;);</span>
+<span class="nc" id="L261">            } catch (IOException e) {</span>
+<span class="nc" id="L262">                getLog().warn(&quot;  Could not update workspace.yaml SHAs: &quot; + e.getMessage());</span>
+<span class="fc" id="L263">            }</span>
+
+            // ── Write checkpoint file ──────────────────────────────────────
+<span class="fc" id="L266">            Path checkpointsDir = root.toPath().resolve(&quot;checkpoints&quot;);</span>
+            try {
+<span class="fc" id="L268">                Files.createDirectories(checkpointsDir);</span>
+<span class="nc" id="L269">            } catch (IOException e) {</span>
+<span class="nc" id="L270">                throw new MojoException(</span>
+                        &quot;Cannot create checkpoints directory&quot;, e);
+<span class="fc" id="L272">            }</span>
+<span class="fc" id="L273">            checkpointFile = checkpointsDir.resolve(checkpointFileName(name));</span>
+            try {
+<span class="fc" id="L275">                Files.writeString(checkpointFile, yamlContent, StandardCharsets.UTF_8);</span>
+<span class="nc" id="L276">            } catch (IOException e) {</span>
+<span class="nc" id="L277">                throw new MojoException(</span>
+                        &quot;Failed to write &quot; + checkpointFile, e);
+<span class="fc" id="L279">            }</span>
+
+            // ── Tag and push workspace aggregator repo ──────────────────
+<span class="fc bfc" id="L282" title="All 2 branches covered.">            if (workspaceHasGit) {</span>
+<span class="fc" id="L283">                ReleaseSupport.exec(root, getLog(),</span>
+                        &quot;git&quot;, &quot;add&quot;, &quot;workspace.yaml&quot;,
+<span class="fc" id="L285">                        &quot;checkpoints/&quot; + checkpointFileName(name));</span>
+<span class="fc" id="L286">                ReleaseSupport.exec(root, getLog(),</span>
+                        &quot;git&quot;, &quot;commit&quot;, &quot;-m&quot;,
+                        &quot;checkpoint: &quot; + name);
+<span class="fc" id="L289">                ReleaseSupport.exec(root, getLog(),</span>
+                        &quot;git&quot;, &quot;tag&quot;, &quot;-a&quot;, wsTagName,
+                        &quot;-m&quot;, &quot;Workspace checkpoint &quot; + name);
+
+<span class="fc" id="L293">                boolean hasOrigin = ReleaseSupport.hasRemote(root, &quot;origin&quot;);</span>
+<span class="pc bpc" id="L294" title="1 of 2 branches missed.">                if (hasOrigin) {</span>
+<span class="nc" id="L295">                    ReleaseSupport.exec(root, getLog(),</span>
+                            &quot;git&quot;, &quot;push&quot;, &quot;origin&quot;, wsTagName);
+<span class="nc" id="L297">                    ReleaseSupport.exec(root, getLog(),</span>
+                            &quot;git&quot;, &quot;push&quot;, &quot;origin&quot;,
+<span class="nc" id="L299">                            ReleaseSupport.currentBranch(root));</span>
+<span class="nc" id="L300">                    tagPushed = true;</span>
+<span class="nc" id="L301">                    getLog().info(&quot;  Workspace tag pushed: &quot; + wsTagName);</span>
+                }
+            }
+
+            // VCS bridge: write state file after checkpoint
+<span class="fc bfc" id="L306" title="All 2 branches covered.">            for (var entry : graph.manifest().subprojects().entrySet()) {</span>
+<span class="fc" id="L307">                File subDir = new File(root, entry.getKey());</span>
+<span class="pc bpc" id="L308" title="1 of 2 branches missed.">                if (new File(subDir, &quot;.git&quot;).exists()</span>
+<span class="pc bpc" id="L309" title="1 of 2 branches missed.">                        &amp;&amp; VcsState.isIkeManaged(subDir.toPath())) {</span>
+<span class="nc" id="L310">                    VcsOperations.writeVcsState(subDir, VcsState.Action.CHECKPOINT);</span>
+                }
+<span class="fc" id="L312">            }</span>
+<span class="pc bpc" id="L313" title="1 of 2 branches missed.">            if (VcsState.isIkeManaged(root.toPath())) {</span>
+<span class="nc" id="L314">                VcsOperations.writeVcsState(root, VcsState.Action.CHECKPOINT);</span>
+            }
+
+<span class="fc" id="L317">            getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L318">            getLog().info(&quot;  Checkpoint: &quot; + checkpointFile);</span>
+<span class="fc" id="L319">            getLog().info(&quot;  Components: &quot; + snapshots.size()</span>
+<span class="fc" id="L320">                    + &quot; | Absent: &quot; + absentComponents.size());</span>
+<span class="fc" id="L321">            getLog().info(&quot;&quot;);</span>
+        }
+
+<span class="fc" id="L324">        var reportContext = new CheckpointReportContext(</span>
+                name, wsTagName, timestamp, author, draft,
+                snapshots, absentComponents, yamlContent,
+                checkpointFile, workspaceHasGit, manifestUpdated, tagPushed,
+                testingContext, issuesSinceLastRelease);
+<span class="fc" id="L329">        return new WorkspaceReportSpec(</span>
+<span class="fc bfc" id="L330" title="All 2 branches covered.">                publish ? WsGoal.CHECKPOINT_PUBLISH : WsGoal.CHECKPOINT_DRAFT,</span>
+<span class="fc" id="L331">                buildCheckpointMarkdownReport(reportContext));</span>
+    }
+
+    // ── Per-subproject checkpoint (overridable for tests) ──────────────
+
+    /**
+     * Tag a single subproject at its current HEAD. Override in tests
+     * to substitute a lighter-weight simulation.
+     *
+     * @param dir     the subproject directory to checkpoint
+     * @param tagName the tag name to apply
+     * @throws MojoException if the tagging operation fails
+     */
+    protected void checkpointComponent(File dir, String tagName)
+            throws MojoException {
+<span class="nc" id="L346">        CheckpointSupport.checkpoint(dir, tagName, getLog());</span>
+<span class="nc" id="L347">    }</span>
+
+    // ── Report ────────────────────────────────────────────────────────
+
+    /**
+     * All inputs needed to render the checkpoint markdown report.
+     *
+     * @param name                the checkpoint name
+     * @param wsTagName           the workspace aggregator tag (e.g. {@code checkpoint/&lt;name&gt;})
+     * @param checkpointTimestamp ISO-UTC timestamp recorded in the checkpoint
+     * @param author              git user.name (or system user) at execution time
+     * @param draft               {@code true} for draft mode, {@code false} for publish
+     * @param snapshots           per-subproject HEAD snapshots in topological order
+     * @param absentComponents    component names declared in the manifest but not on disk
+     * @param yamlContent         the full checkpoint YAML body (for the draft preview)
+     * @param checkpointFile      path the YAML was written to (publish only; {@code null} in draft)
+     * @param workspaceHasGit     whether the workspace aggregator has its own {@code .git}
+     * @param manifestUpdated     whether the workspace.yaml SHA write succeeded (publish only)
+     * @param tagPushed           whether the workspace tag was pushed to {@code origin} (publish only)
+     * @param testingContext      milestone snapshot for testing context, or {@code null} when unavailable
+     */
+<span class="fc" id="L368">    private record CheckpointReportContext(</span>
+            String name,
+            String wsTagName,
+            String checkpointTimestamp,
+            String author,
+            boolean draft,
+            List&lt;SubprojectSnapshot&gt; snapshots,
+            List&lt;String&gt; absentComponents,
+            String yamlContent,
+            Path checkpointFile,
+            boolean workspaceHasGit,
+            boolean manifestUpdated,
+            boolean tagPushed,
+            ReleaseNotesSupport.TestingContext testingContext,
+            Map&lt;String, List&lt;ReleaseNotesSupport.IssueRef&gt;&gt; issuesSinceLastRelease) {}
+
+    private String buildCheckpointMarkdownReport(CheckpointReportContext ctx) {
+<span class="fc" id="L385">        GoalReportBuilder report = new GoalReportBuilder();</span>
+
+<span class="fc" id="L387">        StringBuilder lead = new StringBuilder();</span>
+<span class="fc" id="L388">        lead.append(ctx.snapshots().size()).append(&quot; subproject(s) checkpointed&quot;);</span>
+<span class="pc bpc" id="L389" title="1 of 2 branches missed.">        if (!ctx.absentComponents().isEmpty()) {</span>
+<span class="nc" id="L390">            lead.append(&quot;, &quot;).append(ctx.absentComponents().size()).append(&quot; absent&quot;);</span>
+        }
+<span class="fc bfc" id="L392" title="All 2 branches covered.">        lead.append(ctx.draft() ? &quot; (draft)&quot; : &quot;&quot;).append(&quot;.&quot;);</span>
+<span class="fc" id="L393">        report.paragraph(lead.toString());</span>
+
+<span class="fc" id="L395">        report.section(&quot;Checkpoint&quot;)</span>
+<span class="fc" id="L396">                .bullet(&quot;**Name:** &quot; + ctx.name())</span>
+<span class="fc" id="L397">                .bullet(&quot;**Tag:** `&quot; + ctx.wsTagName() + &quot;`&quot;)</span>
+<span class="fc" id="L398">                .bullet(&quot;**Time:** &quot; + ctx.checkpointTimestamp())</span>
+<span class="fc" id="L399">                .bullet(&quot;**Author:** &quot; + ctx.author())</span>
+<span class="fc bfc" id="L400" title="All 2 branches covered.">                .bullet(&quot;**Mode:** &quot; + (ctx.draft()</span>
+<span class="fc" id="L401">                        ? &quot;DRAFT — no tags, no files written&quot; : &quot;PUBLISH&quot;));</span>
+
+<span class="fc" id="L403">        List&lt;String[]&gt; subprojectRows = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L404" title="All 2 branches covered.">        for (var snap : ctx.snapshots()) {</span>
+<span class="fc" id="L405">            subprojectRows.add(new String[]{</span>
+<span class="fc" id="L406">                    snap.name(), snap.version(),</span>
+<span class="fc" id="L407">                    &quot;`&quot; + snap.shortSha() + &quot;`&quot;, snap.branch(), &quot;✓&quot;});</span>
+<span class="fc" id="L408">        }</span>
+<span class="pc bpc" id="L409" title="1 of 2 branches missed.">        for (String absentName : ctx.absentComponents()) {</span>
+<span class="nc" id="L410">            subprojectRows.add(new String[]{</span>
+                    absentName, &quot;—&quot;, &quot;—&quot;, &quot;—&quot;, &quot;not cloned&quot;});
+<span class="nc" id="L412">        }</span>
+<span class="fc" id="L413">        report.section(&quot;Subprojects&quot;)</span>
+<span class="fc" id="L414">                .table(List.of(&quot;Subproject&quot;, &quot;Version&quot;, &quot;SHA&quot;, &quot;Branch&quot;,</span>
+                        &quot;Status&quot;), subprojectRows);
+
+<span class="fc" id="L417">        report.section(&quot;Outputs&quot;);</span>
+<span class="fc" id="L418">        String checkpointPath = &quot;checkpoints/&quot; + checkpointFileName(ctx.name());</span>
+<span class="fc bfc" id="L419" title="All 2 branches covered.">        if (ctx.draft()) {</span>
+<span class="fc" id="L420">            report.bullet(&quot;Checkpoint file `&quot; + checkpointPath</span>
+                    + &quot;` would be written.&quot;);
+<span class="pc bpc" id="L422" title="1 of 2 branches missed.">            if (ctx.workspaceHasGit()) {</span>
+<span class="nc" id="L423">                report.bullet(&quot;Workspace tag `&quot; + ctx.wsTagName()</span>
+                        + &quot;` would be created.&quot;);
+            } else {
+<span class="fc" id="L426">                report.bullet(&quot;No `.git` at workspace root; &quot;</span>
+                        + &quot;tag/commit/push would be skipped.&quot;);
+            }
+<span class="fc" id="L429">            report.bullet(&quot;`workspace.yaml` subproject SHAs would be updated.&quot;);</span>
+        } else {
+<span class="fc" id="L431">            report.bullet(&quot;Checkpoint file written: `&quot; + checkpointPath + &quot;`&quot;);</span>
+<span class="fc bfc" id="L432" title="All 2 branches covered.">            if (ctx.workspaceHasGit()) {</span>
+<span class="pc bpc" id="L433" title="1 of 2 branches missed.">                String tagOutcome = ctx.tagPushed()</span>
+<span class="nc" id="L434">                        ? &quot;pushed to `origin`.&quot;</span>
+<span class="fc" id="L435">                        : &quot;created locally (no `origin` remote — not pushed).&quot;;</span>
+<span class="fc" id="L436">                report.bullet(&quot;Workspace tag `&quot; + ctx.wsTagName()</span>
+                        + &quot;` &quot; + tagOutcome);
+<span class="fc" id="L438">            } else {</span>
+<span class="fc" id="L439">                report.bullet(&quot;No `.git` at workspace root; &quot;</span>
+                        + &quot;tag/commit/push skipped.&quot;);
+            }
+<span class="fc" id="L442">            report.bullet(&quot;`workspace.yaml` subproject SHAs &quot;</span>
+<span class="pc bpc" id="L443" title="1 of 2 branches missed.">                    + (ctx.manifestUpdated()</span>
+<span class="pc" id="L444">                            ? &quot;updated&quot; : &quot;**not updated** (write failed)&quot;)</span>
+                    + &quot;.&quot;);
+        }
+
+<span class="pc bpc" id="L448" title="1 of 2 branches missed.">        if (ctx.testingContext() != null) {</span>
+<span class="nc" id="L449">            report.raw(ctx.testingContext().toMarkdown().stripTrailing()</span>
+                    + &quot;\n\n&quot;);
+        } else {
+<span class="fc" id="L452">            report.section(&quot;Testing context&quot;)</span>
+<span class="fc" id="L453">                    .paragraph(&quot;No milestone found — skipping.&quot;);</span>
+        }
+
+        // #394: report issues referenced by closing trailers in commits
+        // since each subproject's last release tag. Report-only — checkpoint
+        // never closes issues or removes pending-release labels.
+<span class="fc" id="L459">        report.section(&quot;Issues since last release&quot;);</span>
+<span class="pc bpc" id="L460" title="1 of 2 branches missed.">        if (ctx.issuesSinceLastRelease().isEmpty()) {</span>
+<span class="fc" id="L461">            report.paragraph(&quot;No closing-trailer issue references found in &quot;</span>
+                    + &quot;commits since the last release tag in each subproject.&quot;);
+        } else {
+<span class="nc" id="L464">            report.paragraph(&quot;Per-subproject `Fixes`/`Closes`/`Resolves` &quot;</span>
+                    + &quot;trailers in commits since the last `v*` tag. **This &quot;
+                    + &quot;checkpoint does not close any of these issues** — they &quot;
+                    + &quot;remain in their current state until an actual release &quot;
+                    + &quot;ships.&quot;);
+<span class="nc bnc" id="L469" title="All 2 branches missed.">            for (var entry : ctx.issuesSinceLastRelease().entrySet()) {</span>
+<span class="nc" id="L470">                report.section(entry.getKey());</span>
+<span class="nc bnc" id="L471" title="All 2 branches missed.">                for (ReleaseNotesSupport.IssueRef ref : entry.getValue()) {</span>
+<span class="nc" id="L472">                    report.bullet(ref.repo() + &quot;#&quot; + ref.number());</span>
+<span class="nc" id="L473">                }</span>
+<span class="nc" id="L474">            }</span>
+        }
+
+<span class="fc bfc" id="L477" title="All 2 branches covered.">        if (ctx.draft()) {</span>
+<span class="fc" id="L478">            report.section(&quot;Checkpoint YAML (preview)&quot;)</span>
+<span class="fc" id="L479">                    .codeBlock(&quot;yaml&quot;, ctx.yamlContent().stripTrailing());</span>
+        }
+
+<span class="fc" id="L482">        return report.build();</span>
+    }
+
+    // ── YAML generation (pure, static, testable) ──────────────────────
+
+    /**
+     * Build checkpoint YAML content from pre-gathered subproject data.
+     *
+     * @param name          the checkpoint name
+     * @param timestamp     the ISO-UTC creation timestamp
+     * @param author        the author who created the checkpoint
+     * @param schemaVersion the workspace manifest schema version
+     * @param snapshots     the per-subproject snapshot records
+     * @param absentNames   names of components not present on disk
+     * @return the checkpoint YAML content as a string
+     */
+    public static String buildCheckpointYaml(String name, String timestamp,
+                                              String author, String schemaVersion,
+                                              List&lt;SubprojectSnapshot&gt; snapshots,
+                                              List&lt;String&gt; absentNames,
+                                              Map&lt;String, List&lt;ReleaseNotesSupport.IssueRef&gt;&gt;
+                                                      issuesSinceLastRelease) {
+<span class="fc" id="L504">        List&lt;String&gt; yaml = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L505">        yaml.add(&quot;# IKE Workspace Checkpoint&quot;);</span>
+<span class="fc" id="L506">        yaml.add(&quot;# Generated by: mvn &quot; + WsGoal.CHECKPOINT_PUBLISH.qualified());</span>
+<span class="fc" id="L507">        yaml.add(&quot;#&quot;);</span>
+<span class="fc" id="L508">        yaml.add(&quot;checkpoint:&quot;);</span>
+<span class="fc" id="L509">        yaml.add(&quot;  name: \&quot;&quot; + name + &quot;\&quot;&quot;);</span>
+<span class="fc" id="L510">        yaml.add(&quot;  created: \&quot;&quot; + timestamp + &quot;\&quot;&quot;);</span>
+<span class="fc" id="L511">        yaml.add(&quot;  author: \&quot;&quot; + author + &quot;\&quot;&quot;);</span>
+<span class="fc" id="L512">        yaml.add(&quot;  schema-version: \&quot;&quot; + schemaVersion + &quot;\&quot;&quot;);</span>
+<span class="fc" id="L513">        yaml.add(&quot;&quot;);</span>
+<span class="fc" id="L514">        yaml.add(&quot;  subprojects:&quot;);</span>
+
+<span class="fc bfc" id="L516" title="All 2 branches covered.">        for (String absent : absentNames) {</span>
+<span class="fc" id="L517">            yaml.add(&quot;    &quot; + absent + &quot;:&quot;);</span>
+<span class="fc" id="L518">            yaml.add(&quot;      status: absent&quot;);</span>
+<span class="fc" id="L519">        }</span>
+
+<span class="fc bfc" id="L521" title="All 2 branches covered.">        for (SubprojectSnapshot snap : snapshots) {</span>
+<span class="fc" id="L522">            yaml.add(&quot;    &quot; + snap.name() + &quot;:&quot;);</span>
+<span class="fc bfc" id="L523" title="All 2 branches covered.">            if (snap.version() != null) {</span>
+<span class="fc" id="L524">                yaml.add(&quot;      version: \&quot;&quot; + snap.version() + &quot;\&quot;&quot;);</span>
+            }
+<span class="fc" id="L526">            yaml.add(&quot;      sha: \&quot;&quot; + snap.sha() + &quot;\&quot;&quot;);</span>
+<span class="fc" id="L527">            yaml.add(&quot;      short-sha: \&quot;&quot; + snap.shortSha() + &quot;\&quot;&quot;);</span>
+<span class="fc" id="L528">            yaml.add(&quot;      branch: \&quot;&quot; + snap.branch() + &quot;\&quot;&quot;);</span>
+<span class="fc" id="L529">            List&lt;ReleaseNotesSupport.IssueRef&gt; refs =</span>
+<span class="fc" id="L530">                    issuesSinceLastRelease.get(snap.name());</span>
+<span class="pc bpc" id="L531" title="3 of 4 branches missed.">            if (refs != null &amp;&amp; !refs.isEmpty()) {</span>
+<span class="nc" id="L532">                yaml.add(&quot;      issues-since-last-release:&quot;);</span>
+<span class="nc bnc" id="L533" title="All 2 branches missed.">                for (ReleaseNotesSupport.IssueRef ref : refs) {</span>
+<span class="nc" id="L534">                    yaml.add(&quot;        - \&quot;&quot; + ref.repo() + &quot;#&quot;</span>
+<span class="nc" id="L535">                            + ref.number() + &quot;\&quot;&quot;);</span>
+<span class="nc" id="L536">                }</span>
+            }
+<span class="fc" id="L538">        }</span>
+
+<span class="fc" id="L540">        return String.join(&quot;\n&quot;, yaml) + &quot;\n&quot;;</span>
+    }
+
+    /**
+     * Derive the checkpoint file name from the checkpoint name.
+     *
+     * @param checkpointName the checkpoint name
+     * @return the filename in the form {@code checkpoint-&lt;name&gt;.yaml}
+     */
+    public static String checkpointFileName(String checkpointName) {
+<span class="fc" id="L550">        return &quot;checkpoint-&quot; + checkpointName + &quot;.yaml&quot;;</span>
+    }
+
+    // ── Private helpers ────────────────────────────────────────────────
+
+    private String gitFullSha(File dir) {
+        try {
+<span class="fc" id="L557">            return ReleaseSupport.execCapture(dir, &quot;git&quot;, &quot;rev-parse&quot;, &quot;HEAD&quot;);</span>
+<span class="nc" id="L558">        } catch (MojoException e) {</span>
+<span class="nc" id="L559">            return &quot;unknown&quot;;</span>
+        }
+    }
+
+    private String readVersion(File dir) throws MojoException {
+<span class="fc" id="L564">        return ReleaseSupport.readPomVersion(new File(dir, &quot;pom.xml&quot;));</span>
+    }
+
+    /**
+     * Collect issue references from closing-keyword trailers
+     * ({@code Fixes}, {@code Closes}, {@code Resolves} and grammatical
+     * variants) in commits since the given subproject's last release
+     * tag (matching {@code v*}). Returns an empty list when no
+     * previous release tag is reachable, when no commits are in the
+     * range, or when {@code git} or the parser fails.
+     *
+     * &lt;p&gt;Per IKE-Network/ike-issues#394: this is a &lt;em&gt;report-only&lt;/em&gt;
+     * collection. The checkpoint never closes any of these issues and
+     * never removes {@code pending-release} labels — that's reserved
+     * for actual releases ({@link ReleaseNotesSupport#removePendingReleaseLabels}).
+     *
+     * @param subDir the subproject's git working tree
+     * @return ordered set of unique issue references, empty when none
+     */
+    private List&lt;ReleaseNotesSupport.IssueRef&gt;
+            collectClosingTrailerIssuesSinceLastRelease(File subDir) {
+        try {
+<span class="nc" id="L586">            String previousTag = ReleaseSupport.execCapture(subDir,</span>
+                    &quot;git&quot;, &quot;describe&quot;, &quot;--tags&quot;, &quot;--abbrev=0&quot;,
+                    &quot;--match&quot;, &quot;v*&quot;, &quot;HEAD&quot;);
+<span class="nc bnc" id="L589" title="All 4 branches missed.">            if (previousTag == null || previousTag.isBlank()) {</span>
+<span class="nc" id="L590">                return List.of();</span>
+            }
+<span class="nc" id="L592">            String body = ReleaseSupport.execCapture(subDir,</span>
+                    &quot;git&quot;, &quot;log&quot;,
+                    &quot;--format=%B%n--end--&quot;, previousTag + &quot;..HEAD&quot;);
+<span class="nc" id="L595">            Set&lt;ReleaseNotesSupport.IssueRef&gt; refs =</span>
+<span class="nc" id="L596">                    ReleaseNotesSupport.parseClosingTrailers(body, null);</span>
+<span class="nc" id="L597">            return new ArrayList&lt;&gt;(refs);</span>
+<span class="fc" id="L598">        } catch (Exception e) {</span>
+            // No previous tag, no commits, or git failure — non-fatal
+            // for a checkpoint. Empty list signals &quot;nothing to report.&quot;
+<span class="fc" id="L601">            return List.of();</span>
+        }
+    }
+
+    private String resolveAuthor(File root) {
+        try {
+<span class="fc" id="L607">            return ReleaseSupport.execCapture(root, &quot;git&quot;, &quot;config&quot;, &quot;user.name&quot;);</span>
+<span class="nc" id="L608">        } catch (MojoException e) {</span>
+<span class="nc" id="L609">            return System.getProperty(&quot;user.name&quot;, &quot;unknown&quot;);</span>
+        }
+    }
+
+    private ReleaseNotesSupport.TestingContext snapshotTestingContext(WorkspaceGraph graph)
+            throws MojoException {
+<span class="pc bpc" id="L615" title="1 of 4 branches missed.">        if (issueRepo == null || issueRepo.isBlank()) return null;</span>
+
+<span class="nc" id="L617">        String milestoneName = milestone;</span>
+
+<span class="nc bnc" id="L619" title="All 4 branches missed.">        if (milestoneName == null || milestoneName.isBlank()) {</span>
+<span class="nc" id="L620">            var components = graph.manifest().subprojects();</span>
+<span class="nc bnc" id="L621" title="All 2 branches missed.">            if (!components.isEmpty()) {</span>
+<span class="nc" id="L622">                var first = components.entrySet().iterator().next();</span>
+<span class="nc" id="L623">                String subName = first.getKey();</span>
+<span class="nc" id="L624">                String version = first.getValue().version();</span>
+<span class="nc bnc" id="L625" title="All 2 branches missed.">                if (version != null) {</span>
+<span class="nc" id="L626">                    String releaseVersion = version.replace(&quot;-SNAPSHOT&quot;, &quot;&quot;);</span>
+<span class="nc" id="L627">                    milestoneName = subName + &quot; v&quot; + releaseVersion;</span>
+                }
+            }
+        }
+
+<span class="nc bnc" id="L632" title="All 4 branches missed.">        if (milestoneName == null || milestoneName.isBlank()) return null;</span>
+
+<span class="nc" id="L634">        getLog().info(&quot;  Querying milestone: &quot; + milestoneName);</span>
+<span class="nc" id="L635">        var context = ReleaseNotesSupport.snapshotMilestone(</span>
+<span class="nc" id="L636">                issueRepo, milestoneName, getLog());</span>
+
+<span class="nc bnc" id="L638" title="All 2 branches missed.">        if (context == null) {</span>
+<span class="nc" id="L639">            getLog().info(&quot;  No milestone found — skipping testing context&quot;);</span>
+<span class="nc" id="L640">            return null;</span>
+        }
+
+<span class="nc" id="L643">        getLog().info(&quot;  Testing context: &quot;</span>
+<span class="nc" id="L644">                + context.readyToTest().size() + &quot; ready, &quot;</span>
+<span class="nc" id="L645">                + context.inProgress().size() + &quot; in progress&quot;);</span>
+
+<span class="nc" id="L647">        return context;</span>
+    }
+
+    private String deriveCheckpointName(File root) throws MojoException {
+<span class="nc" id="L651">        String branch = gitBranch(root);</span>
+<span class="nc" id="L652">        String safeBranch = branch.replace('/', '-');</span>
+<span class="nc" id="L653">        String compactTime = COMPACT_UTC.format(Instant.now());</span>
+<span class="nc" id="L654">        return safeBranch + &quot;-&quot; + compactTime;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

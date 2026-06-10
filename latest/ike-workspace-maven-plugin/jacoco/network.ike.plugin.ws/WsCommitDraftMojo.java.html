@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>WsCommitDraftMojo.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">WsCommitDraftMojo.java</span></div><h1>WsCommitDraftMojo.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
 
 import network.ike.plugin.ReleaseSupport;
+import network.ike.workspace.WorkingSet;
 import network.ike.workspace.WorkspaceGraph;
 import org.apache.maven.api.plugin.MojoException;
 import org.apache.maven.api.plugin.annotations.Mojo;
@@ -38,101 +39,75 @@ import java.util.List;
 public class WsCommitDraftMojo extends AbstractWorkspaceMojo {
 
     /** Creates this goal instance. */
-<span class="nc" id="L41">    public WsCommitDraftMojo() {}</span>
+<span class="nc" id="L42">    public WsCommitDraftMojo() {}</span>
 
     @Override
     protected WorkspaceReportSpec runGoal() throws MojoException {
-<span class="nc bnc" id="L45" title="All 2 branches missed.">        if (isWorkspaceMode()) {</span>
-<span class="nc" id="L46">            return previewWorkspace();</span>
+<span class="nc" id="L46">        WorkingSet workingSet = resolveWorkingSet();</span>
+
+        // Same pre-commit hygiene gate as ws:commit-publish (workspace
+        // mode): a #-comment'd .mvn/jvm.config would block the real commit,
+        // so the draft fails the same way rather than previewing a commit
+        // that cannot happen (ike-issues#217). Graph-scoped → workspace only.
+<span class="nc bnc" id="L52" title="All 2 branches missed.">        if (workingSet.isWorkspace()) {</span>
+<span class="nc" id="L53">            WorkspaceGraph graph = loadGraph();</span>
+<span class="nc" id="L54">            network.ike.plugin.ws.preflight.Preflight.of(</span>
+<span class="nc" id="L55">                    java.util.List.of(network.ike.plugin.ws.preflight</span>
+                            .PreflightCondition.JVM_CONFIG_NO_HASH_COMMENTS),
+<span class="nc" id="L57">                    network.ike.plugin.ws.preflight.PreflightContext.of(</span>
+<span class="nc" id="L58">                            workingSet.root().toFile(), graph,</span>
+<span class="nc" id="L59">                            graph.topologicalSort()))</span>
+<span class="nc" id="L60">                    .requirePassed(WsGoal.COMMIT_DRAFT);</span>
         }
-<span class="nc" id="L48">        return previewSingleRepo(new File(System.getProperty(&quot;user.dir&quot;)));</span>
-    }
 
-    // ── Workspace mode ──────────────────────────────────────────
+<span class="nc" id="L63">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L64">        getLog().info(header(&quot;Commit (draft)&quot;));</span>
+<span class="nc" id="L65">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+<span class="nc" id="L66">        getLog().info(&quot;&quot;);</span>
 
-    private WorkspaceReportSpec previewWorkspace() throws MojoException {
-<span class="nc" id="L54">        WorkspaceGraph graph = loadGraph();</span>
-<span class="nc" id="L55">        File root = workspaceRoot();</span>
-<span class="nc" id="L56">        List&lt;String&gt; sorted = graph.topologicalSort();</span>
-
-        // Same pre-commit hygiene gate as ws:commit-publish — a
-        // #-comment'd .mvn/jvm.config would block the real commit, so
-        // the draft fails the same way rather than previewing a commit
-        // that cannot happen (ike-issues#217).
-<span class="nc" id="L62">        network.ike.plugin.ws.preflight.Preflight.of(</span>
-<span class="nc" id="L63">                java.util.List.of(network.ike.plugin.ws.preflight</span>
-                        .PreflightCondition.JVM_CONFIG_NO_HASH_COMMENTS),
-<span class="nc" id="L65">                network.ike.plugin.ws.preflight.PreflightContext.of(</span>
-                        root, graph, sorted))
-<span class="nc" id="L67">                .requirePassed(WsGoal.COMMIT_DRAFT);</span>
-
-<span class="nc" id="L69">        getLog().info(&quot;&quot;);</span>
-<span class="nc" id="L70">        getLog().info(header(&quot;Commit (draft)&quot;));</span>
-<span class="nc" id="L71">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
-<span class="nc" id="L72">        getLog().info(&quot;&quot;);</span>
-
-<span class="nc" id="L74">        List&lt;RepoStatus&gt; statuses = new ArrayList&lt;&gt;();</span>
-<span class="nc bnc" id="L75" title="All 2 branches missed.">        if (new File(root, &quot;.git&quot;).exists()) {</span>
-<span class="nc" id="L76">            statuses.add(statusOf(root, &quot;(workspace root)&quot;));</span>
-        }
-<span class="nc bnc" id="L78" title="All 2 branches missed.">        for (String name : sorted) {</span>
-<span class="nc" id="L79">            File dir = new File(root, name);</span>
-<span class="nc bnc" id="L80" title="All 2 branches missed.">            if (!new File(dir, &quot;.git&quot;).exists()) {</span>
-<span class="nc" id="L81">                getLog().debug(name + &quot; — not cloned, skipping&quot;);</span>
-<span class="nc" id="L82">                continue;</span>
+<span class="nc" id="L68">        List&lt;RepoStatus&gt; statuses = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L69" title="All 2 branches missed.">        for (WorkingSet.Member member : workingSet.members()) {</span>
+<span class="nc" id="L70">            File dir = member.directory().toFile();</span>
+<span class="nc bnc" id="L71" title="All 2 branches missed.">            if (!new File(dir, &quot;.git&quot;).exists()) {</span>
+<span class="nc" id="L72">                getLog().debug(member.name() + &quot; — not cloned, skipping&quot;);</span>
+<span class="nc" id="L73">                continue;</span>
             }
-<span class="nc" id="L84">            statuses.add(statusOf(dir, name));</span>
-<span class="nc" id="L85">        }</span>
+<span class="nc bnc" id="L75" title="All 2 branches missed.">            String label = workingSet.isWorkspace()</span>
+<span class="nc bnc" id="L76" title="All 2 branches missed.">                    &amp;&amp; member.directory().equals(workingSet.root())</span>
+<span class="nc" id="L77">                    ? &quot;(workspace root)&quot; : member.name();</span>
+<span class="nc" id="L78">            statuses.add(statusOf(dir, label));</span>
+<span class="nc" id="L79">        }</span>
 
-<span class="nc" id="L87">        int pending = 0;</span>
-<span class="nc" id="L88">        int clean = 0;</span>
-<span class="nc bnc" id="L89" title="All 2 branches missed.">        for (RepoStatus s : statuses) {</span>
-<span class="nc" id="L90">            printToConsole(s);</span>
-<span class="nc bnc" id="L91" title="All 2 branches missed.">            if (s.hasWork()) {</span>
-<span class="nc" id="L92">                pending++;</span>
+<span class="nc" id="L81">        int pending = 0;</span>
+<span class="nc" id="L82">        int clean = 0;</span>
+<span class="nc bnc" id="L83" title="All 2 branches missed.">        for (RepoStatus s : statuses) {</span>
+<span class="nc" id="L84">            printToConsole(s);</span>
+<span class="nc bnc" id="L85" title="All 2 branches missed.">            if (s.hasWork()) {</span>
+<span class="nc" id="L86">                pending++;</span>
             } else {
-<span class="nc" id="L94">                clean++;</span>
+<span class="nc" id="L88">                clean++;</span>
             }
-<span class="nc" id="L96">        }</span>
+<span class="nc" id="L90">        }</span>
 
-<span class="nc" id="L98">        String summary = pending + &quot; repo(s) with uncommitted work, &quot;</span>
+<span class="nc" id="L92">        String summary = pending + &quot; repo(s) with uncommitted work, &quot;</span>
                 + clean + &quot; clean&quot;;
-<span class="nc" id="L100">        getLog().info(&quot;&quot;);</span>
-<span class="nc" id="L101">        getLog().info(&quot;  &quot; + summary);</span>
-<span class="nc bnc" id="L102" title="All 2 branches missed.">        if (pending &gt; 0) {</span>
-<span class="nc" id="L103">            getLog().info(&quot;  Run &quot;</span>
-<span class="nc" id="L104">                    + WsGoal.COMMIT_PUBLISH.qualified()</span>
+<span class="nc" id="L94">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L95">        getLog().info(&quot;  &quot; + summary);</span>
+<span class="nc bnc" id="L96" title="All 2 branches missed.">        if (pending &gt; 0) {</span>
+<span class="nc" id="L97">            getLog().info(&quot;  Run &quot;</span>
+<span class="nc" id="L98">                    + WsGoal.COMMIT_PUBLISH.qualified()</span>
                     + &quot; -Dmessage=\&quot;...\&quot; to commit.&quot;);
         }
-<span class="nc" id="L107">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L101">        getLog().info(&quot;&quot;);</span>
 
-<span class="nc" id="L109">        return new WorkspaceReportSpec(WsGoal.COMMIT_DRAFT,</span>
-<span class="nc" id="L110">                buildReport(root.toString(), statuses, summary, pending));</span>
+<span class="nc" id="L103">        return new WorkspaceReportSpec(WsGoal.COMMIT_DRAFT,</span>
+<span class="nc" id="L104">                buildReport(workingSet.root().toString(), statuses, summary,</span>
+                        pending));
     }
 
-    // ── Single-repo mode ────────────────────────────────────────
 
-    private WorkspaceReportSpec previewSingleRepo(File dir) {
-<span class="nc" id="L116">        getLog().info(&quot;&quot;);</span>
-<span class="nc" id="L117">        getLog().info(&quot;IKE VCS Bridge — Commit (draft)&quot;);</span>
-<span class="nc" id="L118">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
-<span class="nc" id="L119">        getLog().info(&quot;&quot;);</span>
 
-<span class="nc" id="L121">        RepoStatus s = statusOf(dir, dir.getName());</span>
-<span class="nc" id="L122">        printToConsole(s);</span>
 
-<span class="nc bnc" id="L124" title="All 2 branches missed.">        String summary = s.hasWork()</span>
-<span class="nc" id="L125">                ? s.fileCount() + &quot; uncommitted file(s) — run &quot;</span>
-<span class="nc" id="L126">                  + WsGoal.COMMIT_PUBLISH.qualified() + &quot; to commit&quot;</span>
-<span class="nc" id="L127">                : &quot;Clean — nothing to commit&quot;;</span>
-<span class="nc" id="L128">        getLog().info(&quot;&quot;);</span>
-<span class="nc" id="L129">        getLog().info(&quot;  &quot; + summary);</span>
-<span class="nc" id="L130">        getLog().info(&quot;&quot;);</span>
-
-<span class="nc" id="L132">        return new WorkspaceReportSpec(WsGoal.COMMIT_DRAFT,</span>
-<span class="nc" id="L133">                buildReport(dir.toString(), List.of(s), summary,</span>
-<span class="nc bnc" id="L134" title="All 2 branches missed.">                        s.hasWork() ? 1 : 0));</span>
-    }
 
     // ── Per-repo status capture ─────────────────────────────────
 
@@ -145,9 +120,9 @@ public class WsCommitDraftMojo extends AbstractWorkspaceMojo {
      * @param porcelainLines  one porcelain line per changed file;
      *                        empty list means the repo is clean
      */
-<span class="nc" id="L148">    private record RepoStatus(String label, List&lt;String&gt; porcelainLines) {</span>
-<span class="nc bnc" id="L149" title="All 2 branches missed.">        boolean hasWork() { return !porcelainLines.isEmpty(); }</span>
-<span class="nc" id="L150">        int fileCount() { return porcelainLines.size(); }</span>
+<span class="nc" id="L123">    private record RepoStatus(String label, List&lt;String&gt; porcelainLines) {</span>
+<span class="nc bnc" id="L124" title="All 2 branches missed.">        boolean hasWork() { return !porcelainLines.isEmpty(); }</span>
+<span class="nc" id="L125">        int fileCount() { return porcelainLines.size(); }</span>
     }
 
     /**
@@ -163,35 +138,35 @@ public class WsCommitDraftMojo extends AbstractWorkspaceMojo {
      */
     private RepoStatus statusOf(File dir, String label) {
         try {
-<span class="nc" id="L166">            String output = ReleaseSupport.execCapture(dir,</span>
+<span class="nc" id="L141">            String output = ReleaseSupport.execCapture(dir,</span>
                     &quot;git&quot;, &quot;status&quot;, &quot;--porcelain&quot;);
-<span class="nc bnc" id="L168" title="All 4 branches missed.">            if (output == null || output.isBlank()) {</span>
-<span class="nc" id="L169">                return new RepoStatus(label, List.of());</span>
+<span class="nc bnc" id="L143" title="All 4 branches missed.">            if (output == null || output.isBlank()) {</span>
+<span class="nc" id="L144">                return new RepoStatus(label, List.of());</span>
             }
-<span class="nc" id="L171">            List&lt;String&gt; lines = new ArrayList&lt;&gt;();</span>
-<span class="nc bnc" id="L172" title="All 2 branches missed.">            for (String line : output.split(&quot;\n&quot;)) {</span>
-<span class="nc bnc" id="L173" title="All 2 branches missed.">                if (!line.isBlank()) {</span>
-<span class="nc" id="L174">                    lines.add(line);</span>
+<span class="nc" id="L146">            List&lt;String&gt; lines = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L147" title="All 2 branches missed.">            for (String line : output.split(&quot;\n&quot;)) {</span>
+<span class="nc bnc" id="L148" title="All 2 branches missed.">                if (!line.isBlank()) {</span>
+<span class="nc" id="L149">                    lines.add(line);</span>
                 }
             }
-<span class="nc" id="L177">            return new RepoStatus(label, lines);</span>
-<span class="nc" id="L178">        } catch (RuntimeException e) {</span>
-<span class="nc" id="L179">            getLog().warn(label + &quot; — git status failed: &quot; + e.getMessage());</span>
-<span class="nc" id="L180">            return new RepoStatus(label, List.of());</span>
+<span class="nc" id="L152">            return new RepoStatus(label, lines);</span>
+<span class="nc" id="L153">        } catch (RuntimeException e) {</span>
+<span class="nc" id="L154">            getLog().warn(label + &quot; — git status failed: &quot; + e.getMessage());</span>
+<span class="nc" id="L155">            return new RepoStatus(label, List.of());</span>
         }
     }
 
     private void printToConsole(RepoStatus s) {
-<span class="nc bnc" id="L185" title="All 2 branches missed.">        if (!s.hasWork()) {</span>
-<span class="nc" id="L186">            getLog().info(&quot;  · &quot; + s.label + &quot; — clean&quot;);</span>
-<span class="nc" id="L187">            return;</span>
+<span class="nc bnc" id="L160" title="All 2 branches missed.">        if (!s.hasWork()) {</span>
+<span class="nc" id="L161">            getLog().info(&quot;  · &quot; + s.label + &quot; — clean&quot;);</span>
+<span class="nc" id="L162">            return;</span>
         }
-<span class="nc" id="L189">        getLog().info(Ansi.yellow(&quot;  ⟳ &quot;) + s.label + &quot; — &quot;</span>
-<span class="nc" id="L190">                + s.fileCount() + &quot; file(s):&quot;);</span>
-<span class="nc bnc" id="L191" title="All 2 branches missed.">        for (String line : s.porcelainLines) {</span>
-<span class="nc" id="L192">            getLog().info(&quot;      &quot; + line);</span>
-<span class="nc" id="L193">        }</span>
-<span class="nc" id="L194">    }</span>
+<span class="nc" id="L164">        getLog().info(Ansi.yellow(&quot;  ⟳ &quot;) + s.label + &quot; — &quot;</span>
+<span class="nc" id="L165">                + s.fileCount() + &quot; file(s):&quot;);</span>
+<span class="nc bnc" id="L166" title="All 2 branches missed.">        for (String line : s.porcelainLines) {</span>
+<span class="nc" id="L167">            getLog().info(&quot;      &quot; + line);</span>
+<span class="nc" id="L168">        }</span>
+<span class="nc" id="L169">    }</span>
 
     /**
      * Build the Markdown report body: a leading summary, then a
@@ -206,23 +181,23 @@ public class WsCommitDraftMojo extends AbstractWorkspaceMojo {
      */
     private String buildReport(String rootLabel, List&lt;RepoStatus&gt; statuses,
                                 String summary, int pending) {
-<span class="nc" id="L209">        StringBuilder body = new StringBuilder();</span>
-<span class="nc" id="L210">        body.append(&quot;**Workspace:** `&quot;).append(rootLabel).append(&quot;`\n\n&quot;);</span>
-<span class="nc" id="L211">        body.append(summary).append(&quot;.\n&quot;);</span>
-<span class="nc bnc" id="L212" title="All 2 branches missed.">        if (pending &gt; 0) {</span>
-<span class="nc bnc" id="L213" title="All 2 branches missed.">            for (RepoStatus s : statuses) {</span>
-<span class="nc bnc" id="L214" title="All 2 branches missed.">                if (!s.hasWork()) continue;</span>
-<span class="nc" id="L215">                body.append(&quot;\n### &quot;).append(s.label).append(&quot; — &quot;)</span>
-<span class="nc" id="L216">                    .append(s.fileCount()).append(&quot; file(s)\n&quot;);</span>
-<span class="nc bnc" id="L217" title="All 2 branches missed.">                for (String line : s.porcelainLines) {</span>
-<span class="nc" id="L218">                    body.append(&quot;- `&quot;).append(line).append(&quot;`\n&quot;);</span>
-<span class="nc" id="L219">                }</span>
-<span class="nc" id="L220">            }</span>
-<span class="nc" id="L221">            body.append(&quot;\nRun `&quot;)</span>
-<span class="nc" id="L222">                .append(WsGoal.COMMIT_PUBLISH.qualified())</span>
-<span class="nc" id="L223">                .append(&quot; -Dmessage=\&quot;...\&quot;` to commit.\n&quot;);</span>
+<span class="nc" id="L184">        StringBuilder body = new StringBuilder();</span>
+<span class="nc" id="L185">        body.append(&quot;**Workspace:** `&quot;).append(rootLabel).append(&quot;`\n\n&quot;);</span>
+<span class="nc" id="L186">        body.append(summary).append(&quot;.\n&quot;);</span>
+<span class="nc bnc" id="L187" title="All 2 branches missed.">        if (pending &gt; 0) {</span>
+<span class="nc bnc" id="L188" title="All 2 branches missed.">            for (RepoStatus s : statuses) {</span>
+<span class="nc bnc" id="L189" title="All 2 branches missed.">                if (!s.hasWork()) continue;</span>
+<span class="nc" id="L190">                body.append(&quot;\n### &quot;).append(s.label).append(&quot; — &quot;)</span>
+<span class="nc" id="L191">                    .append(s.fileCount()).append(&quot; file(s)\n&quot;);</span>
+<span class="nc bnc" id="L192" title="All 2 branches missed.">                for (String line : s.porcelainLines) {</span>
+<span class="nc" id="L193">                    body.append(&quot;- `&quot;).append(line).append(&quot;`\n&quot;);</span>
+<span class="nc" id="L194">                }</span>
+<span class="nc" id="L195">            }</span>
+<span class="nc" id="L196">            body.append(&quot;\nRun `&quot;)</span>
+<span class="nc" id="L197">                .append(WsGoal.COMMIT_PUBLISH.qualified())</span>
+<span class="nc" id="L198">                .append(&quot; -Dmessage=\&quot;...\&quot;` to commit.\n&quot;);</span>
         }
-<span class="nc" id="L225">        return body.toString();</span>
+<span class="nc" id="L200">        return body.toString();</span>
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

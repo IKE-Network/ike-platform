@@ -232,6 +232,67 @@ class VcsOperationsTest {
         VcsOperations.pushSafe(repoDir, log, "origin", "main");
     }
 
+    @Test
+    void addAll_stagesEverything() throws Exception {
+        Files.writeString(tempDir.resolve("new.txt"), "new", StandardCharsets.UTF_8);
+
+        VcsOperations.addAll(repoDir, log);
+
+        String staged = execCapture("git", "diff", "--cached", "--name-only");
+        assertThat(staged).contains("new.txt");
+    }
+
+    @Test
+    void addAll_retriesAcrossTransientIndexLock() throws Exception {
+        // Simulates the ike-issues#636 collision: a concurrent process
+        // holds .git/index.lock when `git add -A` starts, but releases
+        // it before the single retry fires. Attempt 1 exits 128, the
+        // backoff elapses, attempt 2 stages normally.
+        Files.writeString(tempDir.resolve("new.txt"), "new", StandardCharsets.UTF_8);
+        Path lock = tempDir.resolve(".git").resolve("index.lock");
+        Files.writeString(lock, "", StandardCharsets.UTF_8);
+
+        Thread releaser = new Thread(() -> {
+            try {
+                Thread.sleep(50);
+                Files.deleteIfExists(lock);
+            } catch (Exception ignored) {
+                // deletion failure leaves the lock in place; the test
+                // then fails loudly in addAll below
+            }
+        });
+        releaser.start();
+        try {
+            VcsOperations.addAll(repoDir, log);
+        } finally {
+            releaser.join();
+        }
+
+        String staged = execCapture("git", "diff", "--cached", "--name-only");
+        assertThat(staged).contains("new.txt");
+    }
+
+    @Test
+    void addAll_persistentLockFailureIsSelfDiagnosing() throws Exception {
+        // A lock that never clears: both attempts fail and the thrown
+        // exception carries the command, the directory, and git's
+        // stderr naming index.lock (#602-style diagnostics, applied to
+        // the mutation path by ike-issues#636).
+        Files.writeString(tempDir.resolve("new.txt"), "new", StandardCharsets.UTF_8);
+        Path lock = tempDir.resolve(".git").resolve("index.lock");
+        Files.writeString(lock, "", StandardCharsets.UTF_8);
+
+        try {
+            assertThatThrownBy(() -> VcsOperations.addAll(repoDir, log))
+                    .isInstanceOf(MojoException.class)
+                    .hasMessageContaining("git add -A")
+                    .hasMessageContaining(repoDir.toString())
+                    .hasMessageContaining("index.lock");
+        } finally {
+            Files.deleteIfExists(lock);
+        }
+    }
+
     // ── Helpers ──────────────────────────────────────────────────
 
     private void exec(String... command) throws Exception {

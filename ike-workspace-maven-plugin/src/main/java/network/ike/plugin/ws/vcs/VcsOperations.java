@@ -27,13 +27,14 @@ public class VcsOperations {
     private static final String CONTEXT_VALUE = "ike-maven-plugin";
 
     /**
-     * Attempts for a transient-safe read-only git query — the original
-     * call plus one retry (ike-issues#602).
+     * Attempts for a transient-safe git command — the original call
+     * plus one retry. Covers read-only queries (ike-issues#602) and
+     * idempotent mutations (ike-issues#636).
      */
-    private static final int READ_RETRY_ATTEMPTS = 2;
+    private static final int TRANSIENT_RETRY_ATTEMPTS = 2;
 
-    /** Backoff before the single retry of a read-only git query. */
-    private static final long READ_RETRY_BACKOFF_MILLIS = 150L;
+    /** Backoff before the single retry of a transient-safe git command. */
+    private static final long TRANSIENT_RETRY_BACKOFF_MILLIS = 150L;
 
     private VcsOperations() {}
 
@@ -359,12 +360,21 @@ public class VcsOperations {
     /**
      * Fetch from all remotes.
      *
+     * <p>Passes {@code -c maintenance.auto=false}: git 2.47+ otherwise
+     * spawns a <em>detached</em> {@code maintenance run --auto} after
+     * the fetch — a background git process that can still hold object
+     * and ref locks while the plugin's next git command runs against
+     * the same repository (ike-issues#636). The repository's own
+     * maintenance policy is unaffected; only the plugin's fetches opt
+     * out of triggering it.
+     *
      * @param dir the repository root directory
      * @param log Maven logger
      * @throws MojoException if the git command fails
      */
     public static void fetch(File dir, Log log) throws MojoException {
-        run(dir, log, null, "git", "fetch", "--all", "--quiet");
+        run(dir, log, null, "git", "-c", "maintenance.auto=false",
+                "fetch", "--all", "--quiet");
     }
 
     /**
@@ -497,12 +507,19 @@ public class VcsOperations {
     /**
      * Stage all files.
      *
+     * <p>{@code git add -A} is idempotent — a failed attempt leaves no
+     * partial state and re-running converges on the same index — so it
+     * is routed through {@link #captureIdempotentMutation} and survives
+     * a transient {@code index.lock} collision with a concurrent
+     * process (ike-issues#636).
+     *
      * @param dir the repository root directory
      * @param log Maven logger
-     * @throws MojoException if the git command fails
+     * @throws MojoException if the git command fails on both attempts
      */
     public static void addAll(File dir, Log log) throws MojoException {
-        run(dir, log, null, "git", "add", "-A");
+        log.debug("» git add -A");
+        captureIdempotentMutation(dir, "git", "add", "-A");
     }
 
     /**
@@ -891,6 +908,11 @@ public class VcsOperations {
      * Fetch a remote ref into a local ref of the same name
      * ({@code git fetch <remote> <ref>:<ref>}).
      *
+     * <p>Passes {@code -c maintenance.auto=false} so the fetch never
+     * spawns a detached background {@code maintenance run --auto} that
+     * could race the plugin's subsequent git commands — see
+     * {@link #fetch(File, Log)} and ike-issues#636.
+     *
      * @param dir    the repository root directory
      * @param log    Maven logger
      * @param remote the remote name
@@ -899,7 +921,8 @@ public class VcsOperations {
      */
     public static void fetchRef(File dir, Log log, String remote, String ref)
             throws MojoException {
-        run(dir, log, null, "git", "fetch", remote, ref + ":" + ref);
+        run(dir, log, null, "git", "-c", "maintenance.auto=false",
+                "fetch", remote, ref + ":" + ref);
     }
 
     // ── VCS state operations ─────────────────────────────────────
@@ -1267,9 +1290,7 @@ public class VcsOperations {
      * {@code ls-remote} — are idempotent, so a transient per-repository
      * collision (a concurrent index or ref read, a momentary lock) can be
      * retried safely rather than failing the whole repository
-     * (ike-issues#602). Use this only for side-effect-free reads; mutating
-     * commands must call {@link #capture} directly so they are never run
-     * twice.
+     * (ike-issues#602).
      *
      * @param workDir the repository directory
      * @param command the git read command and its arguments
@@ -1279,15 +1300,59 @@ public class VcsOperations {
      */
     private static String captureRead(File workDir, String... command)
             throws MojoException {
+        return captureWithRetry(workDir, command);
+    }
+
+    /**
+     * Run an idempotent git mutation through {@link #capture}, retrying
+     * once after a short backoff if it fails.
+     *
+     * <p>{@code git add -A} is the canonical caller: git's index write
+     * is atomic (staged in {@code index.lock}, then renamed into place),
+     * so a failed attempt leaves no partial state and re-running
+     * converges on the same result. That makes it safe to retry across
+     * a transient {@code index.lock} collision with a concurrent
+     * process — an IDE refresh, an agent's status query
+     * (ike-issues#636).
+     *
+     * <p>Genuinely non-idempotent mutations ({@code commit}, {@code tag},
+     * {@code push}) must never be routed here — after an ambiguous
+     * failure a retry could apply them twice. They call {@link #run} or
+     * {@link #capture} directly.
+     *
+     * @param workDir the repository directory
+     * @param command the git mutation command and its arguments
+     * @return the captured stdout, trimmed
+     * @throws MojoException if both attempts fail — carrying the last
+     *                       attempt's self-diagnosing message
+     */
+    private static String captureIdempotentMutation(File workDir, String... command)
+            throws MojoException {
+        return captureWithRetry(workDir, command);
+    }
+
+    /**
+     * Retry engine behind {@link #captureRead} and
+     * {@link #captureIdempotentMutation}: the original call plus one
+     * retry after a {@link #TRANSIENT_RETRY_BACKOFF_MILLIS} backoff.
+     *
+     * @param workDir the repository directory
+     * @param command the git command and its arguments
+     * @return the captured stdout, trimmed
+     * @throws MojoException if both attempts fail — carrying the last
+     *                       attempt's self-diagnosing message
+     */
+    private static String captureWithRetry(File workDir, String... command)
+            throws MojoException {
         MojoException last = null;
-        for (int attempt = 1; attempt <= READ_RETRY_ATTEMPTS; attempt++) {
+        for (int attempt = 1; attempt <= TRANSIENT_RETRY_ATTEMPTS; attempt++) {
             try {
                 return capture(workDir, command);
             } catch (MojoException e) {
                 last = e;
-                if (attempt < READ_RETRY_ATTEMPTS) {
+                if (attempt < TRANSIENT_RETRY_ATTEMPTS) {
                     try {
-                        Thread.sleep(READ_RETRY_BACKOFF_MILLIS);
+                        Thread.sleep(TRANSIENT_RETRY_BACKOFF_MILLIS);
                     } catch (InterruptedException ie) {
                         Thread.currentThread().interrupt();
                         throw e;

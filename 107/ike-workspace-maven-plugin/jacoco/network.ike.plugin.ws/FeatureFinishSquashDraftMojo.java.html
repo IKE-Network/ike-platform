@@ -1,0 +1,673 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>FeatureFinishSquashDraftMojo.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">FeatureFinishSquashDraftMojo.java</span></div><h1>FeatureFinishSquashDraftMojo.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.workspace.Subproject;
+import network.ike.workspace.WorkspaceGraph;
+import network.ike.plugin.support.GoalReportBuilder;
+import network.ike.plugin.ws.vcs.VcsOperations;
+import network.ike.plugin.ws.vcs.VcsState;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
+
+import java.io.File;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashSet;
+import java.util.List;
+
+/**
+ * Squash-merge a feature branch back to the target branch.
+ *
+ * &lt;p&gt;This is the &lt;b&gt;default and recommended&lt;/b&gt; strategy for finishing
+ * features. The feature branch's full commit history is compressed into
+ * a single commit on the target branch. The feature branch is deleted
+ * after merge because squash creates divergent history — continuing
+ * on the branch would cause conflicts.
+ *
+ * &lt;p&gt;Use {@code -DkeepBranch=true} only if you understand that the
+ * branch can no longer be cleanly merged again.
+ *
+ * &lt;p&gt;Before performing the squash-merge, this goal refreshes local
+ * {@code main} from {@code origin/main} via {@link RefreshMainSupport}
+ * so the feature is not landed on top of stale main. If the refresh
+ * would produce file conflicts, the goal hard-errors before touching
+ * any feature branch. See ike-issues#284.
+ *
+ * &lt;p&gt;When to use: most features. Feature branch history is disposable.
+ * Target branch gets one clean commit.
+ *
+ * &lt;pre&gt;{@code
+ * mvn ws:feature-finish-squash-draft   -Dfeature=my-feature -Dmessage=&quot;Add widget&quot;
+ * mvn ws:feature-finish-squash-publish -Dfeature=my-feature -Dmessage=&quot;Add widget&quot;
+ * }&lt;/pre&gt;
+ *
+ * @see RefreshMainSupport for the local-main refresh contract
+ * @see FeatureFinishMergeDraftMojo for long-lived branches
+ */
+@Mojo(name = &quot;feature-finish-squash-draft&quot;, projectRequired = false, aggregator = true)
+public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
+
+    /** Creates this goal instance. */
+<span class="fc" id="L52">    public FeatureFinishSquashDraftMojo() {}</span>
+
+    /** Feature name. Expects branch {@code feature/&lt;name&gt;}. Prompted if omitted. */
+    @Parameter(property = &quot;feature&quot;)
+    String feature;
+
+    /** Target branch to merge into. */
+    @Parameter(property = &quot;targetBranch&quot;, defaultValue = &quot;main&quot;)
+    String targetBranch;
+
+    /**
+     * Keep the feature branch after squash-merge. Default is false because
+     * squash creates divergent history — the branch cannot be cleanly merged
+     * again.
+     */
+    @Parameter(property = &quot;keepBranch&quot;, defaultValue = &quot;false&quot;)
+    boolean keepBranch;
+
+    /**
+     * Skip the remote-branch deletion step entirely (still deletes the
+     * local branch unless {@code keepBranch=true}). Useful when branch
+     * protection forbids deletion and you don't want the goal to even
+     * try. Remote-deletion failures are &lt;em&gt;soft&lt;/em&gt; by default — the
+     * goal warns and continues; this flag suppresses the warning by
+     * not attempting the delete at all. IKE-Network/ike-issues#532.
+     */
+    @Parameter(property = &quot;keepRemoteBranch&quot;, defaultValue = &quot;false&quot;)
+    boolean keepRemoteBranch;
+
+    /**
+     * Squash commit message. Optional — when omitted, an auto-generated
+     * message is built from the feature-branch commit history of every
+     * eligible subproject (see {@link FeatureFinishSupport#generateFeatureMessage},
+     * matching the merge-variant behaviour and the {@code git merge
+     * --squash} convention). Pass {@code -Dmessage=&quot;...&quot;} to override.
+     * Fixes #160 (pre-validation) and #531 (auto-generation).
+     */
+    @Parameter(property = &quot;message&quot;)
+    String message;
+
+    /**
+     * Push merged target branch to origin after merge. Default is false
+     * because checkpoint is the natural CI handoff point, not feature-finish.
+     */
+    @Parameter(property = &quot;push&quot;, defaultValue = &quot;false&quot;)
+    boolean push;
+
+    /** Show plan without executing. */
+    @Parameter(property = &quot;publish&quot;, defaultValue = &quot;false&quot;)
+    boolean publish;
+
+    @Override
+    protected WorkspaceReportSpec runGoal() throws MojoException {
+<span class="fc bfc" id="L105" title="All 2 branches covered.">        if (!isWorkspaceMode()) {</span>
+<span class="pc bpc" id="L106" title="2 of 4 branches missed.">            if (feature == null || feature.isBlank()) {</span>
+<span class="nc" id="L107">                feature = requireParam(feature, &quot;feature&quot;,</span>
+                        &quot;Feature to squash-merge (without feature/ prefix)&quot;);
+            }
+<span class="fc" id="L110">            validateFeatureName(feature);</span>
+<span class="fc" id="L111">            return executeBareMode(&quot;feature/&quot; + feature);</span>
+        }
+
+        // Auto-detect feature from subproject branches if not specified
+<span class="pc bpc" id="L115" title="2 of 4 branches missed.">        if (feature == null || feature.isBlank()) {</span>
+<span class="nc" id="L116">            WorkspaceGraph g = loadGraph();</span>
+<span class="nc" id="L117">            List&lt;String&gt; all = g.topologicalSort();</span>
+<span class="nc" id="L118">            feature = FeatureFinishSupport.detectFeature(</span>
+<span class="nc" id="L119">                    workspaceRoot(), all, this, getLog());</span>
+        }
+<span class="fc" id="L121">        validateFeatureName(feature);</span>
+        // No pre-validation of message: per #531 the squash commit
+        // message is now auto-generated from feature-branch commit
+        // history when -Dmessage is missing, matching the merge variant
+        // and git's own `git merge --squash` ergonomics. The #160 NPE
+        // it used to protect is gone — generateFeatureMessage always
+        // returns a non-blank string.
+<span class="fc" id="L128">        return executeWorkspaceMode(&quot;feature/&quot; + feature);</span>
+    }
+
+    private WorkspaceReportSpec executeWorkspaceMode(String branchName) throws MojoException {
+<span class="fc bfc" id="L132" title="All 2 branches covered.">        boolean draft = !publish;</span>
+<span class="fc" id="L133">        WorkspaceGraph graph = loadGraph();</span>
+<span class="fc" id="L134">        File root = workspaceRoot();</span>
+<span class="fc" id="L135">        Path manifestPath = resolveManifest();</span>
+
+<span class="fc" id="L137">        var targets = graph.manifest().subprojects().keySet();</span>
+<span class="fc" id="L138">        List&lt;String&gt; sorted = graph.topologicalSort(new LinkedHashSet&lt;&gt;(targets));</span>
+<span class="fc" id="L139">        List&lt;String&gt; reversed = new ArrayList&lt;&gt;(sorted);</span>
+<span class="fc" id="L140">        Collections.reverse(reversed);</span>
+
+<span class="fc" id="L142">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L143">        getLog().info(header(&quot;Feature Finish (squash)&quot;));</span>
+<span class="fc" id="L144">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+<span class="fc" id="L145">        getLog().info(&quot;  Feature:  &quot; + feature);</span>
+<span class="fc" id="L146">        getLog().info(&quot;  Branch:   &quot; + branchName + &quot; → &quot; + targetBranch);</span>
+<span class="fc" id="L147">        getLog().info(&quot;  Strategy: squash-merge&quot;);</span>
+<span class="fc bfc" id="L148" title="All 2 branches covered.">        if (draft) getLog().info(&quot;  Mode:     DRAFT&quot;);</span>
+<span class="fc" id="L149">        getLog().info(&quot;&quot;);</span>
+
+        // Catch-up
+<span class="fc" id="L152">        VcsOperations.catchUp(root, getLog());</span>
+
+        // Validate and collect eligible components
+<span class="fc" id="L155">        List&lt;String&gt; eligible = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L156">        List&lt;String&gt; uncommitted = new ArrayList&lt;&gt;();</span>
+        // #535: subprojects whose local checkout is on the target branch
+        // but whose workspace.yaml branch field still points at the
+        // feature branch — fallout from a prior partially-failed
+        // feature-finish run. They don't need a re-squash; they only
+        // need workspace.yaml reconciliation, which happens below.
+<span class="fc" id="L162">        List&lt;String&gt; alreadyDone = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L163" title="All 2 branches covered.">        for (String name : reversed) {</span>
+<span class="fc" id="L164">            Subproject subproject = graph.manifest().subprojects().get(name);</span>
+<span class="fc" id="L165">            String reason = FeatureFinishSupport.validateComponent(</span>
+                    root, name, branchName, targetBranch, subproject, this);
+<span class="fc bfc" id="L167" title="All 2 branches covered.">            if (reason == null) {</span>
+<span class="fc" id="L168">                eligible.add(name);</span>
+<span class="pc bpc" id="L169" title="1 of 2 branches missed.">            } else if (&quot;MODIFIED&quot;.equals(reason)) {</span>
+<span class="nc" id="L170">                uncommitted.add(name);</span>
+<span class="fc bfc" id="L171" title="All 2 branches covered.">            } else if (FeatureFinishSupport.ALREADY_DONE.equals(reason)) {</span>
+<span class="fc" id="L172">                alreadyDone.add(name);</span>
+<span class="fc" id="L173">                getLog().info(Ansi.green(&quot;  ✓ &quot;) + name</span>
+                        + &quot; — already on &quot; + targetBranch
+                        + &quot; from a prior run (workspace.yaml will be reconciled)&quot;);
+            } else {
+<span class="fc" id="L177">                getLog().info(Ansi.yellow(&quot;  · &quot;) + name + &quot; — &quot; + reason + &quot;, skipping&quot;);</span>
+            }
+<span class="fc" id="L179">        }</span>
+
+        // Check workspace root for uncommitted changes (#102)
+<span class="pc bpc" id="L182" title="3 of 4 branches missed.">        if (new File(root, &quot;.git&quot;).exists() &amp;&amp; !gitStatus(root).isEmpty()) {</span>
+<span class="nc" id="L183">            uncommitted.add(&quot;workspace root&quot;);</span>
+        }
+
+<span class="pc bpc" id="L186" title="1 of 2 branches missed.">        if (!uncommitted.isEmpty()) {</span>
+<span class="nc" id="L187">            var sb = new StringBuilder();</span>
+<span class="nc" id="L188">            sb.append(&quot;Cannot finish feature — uncommitted changes in:\n&quot;);</span>
+<span class="nc bnc" id="L189" title="All 2 branches missed.">            for (String name : uncommitted) {</span>
+<span class="nc" id="L190">                sb.append(&quot;  &quot;).append(name).append(&quot;\n&quot;);</span>
+<span class="nc" id="L191">            }</span>
+<span class="nc" id="L192">            sb.append(&quot;Please commit these changes first (mvn &quot;</span>
+<span class="nc" id="L193">                      + WsGoal.COMMIT_PUBLISH.qualified() + &quot;), &quot;)</span>
+<span class="nc" id="L194">              .append(&quot;then re-run feature-finish.&quot;);</span>
+<span class="nc bnc" id="L195" title="All 2 branches missed.">            if (draft) {</span>
+<span class="nc" id="L196">                getLog().warn(&quot;&quot;);</span>
+<span class="nc" id="L197">                getLog().warn(sb.toString());</span>
+<span class="nc" id="L198">                getLog().warn(&quot;&quot;);</span>
+            } else {
+<span class="nc" id="L200">                throw new MojoException(sb.toString());</span>
+            }
+        }
+
+<span class="pc bpc" id="L204" title="1 of 4 branches missed.">        if (eligible.isEmpty() &amp;&amp; alreadyDone.isEmpty()) {</span>
+<span class="fc" id="L205">            getLog().info(&quot;  No components on &quot; + branchName + &quot; — nothing to do.&quot;);</span>
+<span class="fc" id="L206">            return new WorkspaceReportSpec(</span>
+<span class="pc bpc" id="L207" title="1 of 2 branches missed.">                    publish ? WsGoal.FEATURE_FINISH_SQUASH_PUBLISH</span>
+<span class="pc" id="L208">                            : WsGoal.FEATURE_FINISH_SQUASH_DRAFT,</span>
+                    &quot;No components on `&quot; + branchName + &quot;` — nothing to do.\n&quot;);
+        }
+
+        // Refresh local main from origin/main before squash-merging the
+        // feature branch in. Avoids shipping the feature on top of stale
+        // main. In draft, preview read-only — never mutate local main
+        // (#570). See ike-issues#284.
+<span class="fc bfc" id="L216" title="All 2 branches covered.">        if (publish) {</span>
+<span class="fc" id="L217">            RefreshMainSupport.refreshOrThrow(root, eligible, targetBranch, getLog());</span>
+        } else {
+<span class="fc" id="L219">            RefreshMainSupport.previewRefresh(root, eligible, targetBranch, getLog());</span>
+        }
+
+        // #531: auto-generate the squash commit message from per-subproject
+        // feature-branch history when -Dmessage was not supplied. When the
+        // user did supply -Dmessage, generateFeatureMessage prepends it
+        // and appends the per-subproject sections below.
+<span class="fc" id="L226">        String effectiveMessage = FeatureFinishSupport.generateFeatureMessage(</span>
+<span class="fc" id="L227">                root, eligible, branchName, targetBranch, message, getLog());</span>
+<span class="fc" id="L228">        getLog().info(&quot;  Commit message:&quot;);</span>
+<span class="fc bfc" id="L229" title="All 2 branches covered.">        for (String line : effectiveMessage.split(&quot;\n&quot;)) {</span>
+<span class="fc" id="L230">            getLog().info(&quot;    &quot; + line);</span>
+        }
+<span class="fc" id="L232">        getLog().info(&quot;&quot;);</span>
+
+        // Merge each subproject
+<span class="fc" id="L235">        int merged = 0;</span>
+        // #532: undeleted remote feature branches surface in the summary
+        // rather than aborting the goal mid-flight.
+<span class="fc" id="L238">        java.util.LinkedHashMap&lt;String, String&gt; undeletedRemote =</span>
+                new java.util.LinkedHashMap&lt;&gt;();
+        // #544: per-subproject outcome capture so the report can
+        // distinguish real-content squashes from version-only no-ops
+        // and surface the resulting target-branch HEAD.
+<span class="fc" id="L243">        java.util.Map&lt;String, SquashKind&gt; squashKind =</span>
+                new java.util.LinkedHashMap&lt;&gt;();
+<span class="fc" id="L245">        java.util.Map&lt;String, String&gt; targetSha =</span>
+                new java.util.LinkedHashMap&lt;&gt;();
+<span class="fc bfc" id="L247" title="All 2 branches covered.">        for (String name : eligible) {</span>
+<span class="fc" id="L248">            Subproject subproject = graph.manifest().subprojects().get(name);</span>
+<span class="fc" id="L249">            File dir = new File(root, name);</span>
+
+<span class="fc bfc" id="L251" title="All 2 branches covered.">            if (draft) {</span>
+                // Predict the version-only no-op (read-only): a feature
+                // branch that changes only pom.xml carries just the
+                // version bump, which publish strips before merging —
+                // leaving nothing to commit. The publish path remains
+                // authoritative. Empty diff → also a no-op.
+<span class="fc" id="L257">                List&lt;String&gt; changed = VcsOperations.changedFiles(</span>
+                        dir, targetBranch, branchName);
+<span class="fc" id="L259">                boolean versionOnly = changed.stream().allMatch(</span>
+<span class="pc bpc" id="L260" title="1 of 4 branches missed.">                        p -&gt; p.equals(&quot;pom.xml&quot;) || p.endsWith(&quot;/pom.xml&quot;));</span>
+<span class="fc bfc" id="L261" title="All 2 branches covered.">                squashKind.put(name, versionOnly</span>
+<span class="fc" id="L262">                        ? SquashKind.VERSION_ONLY_NOOP</span>
+<span class="fc" id="L263">                        : SquashKind.CONTENT_SQUASHED);</span>
+<span class="fc" id="L264">                getLog().info(&quot;  [draft] &quot; + name + &quot; — would squash-merge → &quot;</span>
+                        + targetBranch
+<span class="fc bfc" id="L266" title="All 2 branches covered.">                        + (versionOnly ? &quot; (version-only — no commit expected)&quot; : &quot;&quot;));</span>
+<span class="fc" id="L267">                merged++;</span>
+<span class="fc" id="L268">                continue;</span>
+            }
+
+<span class="fc" id="L271">            getLog().info(Ansi.cyan(&quot;  → &quot;) + name);</span>
+<span class="fc" id="L272">            VcsOperations.catchUp(dir, getLog());</span>
+<span class="fc" id="L273">            FeatureFinishSupport.stripBranchVersion(dir, subproject, branchName, getLog());</span>
+
+<span class="fc" id="L275">            VcsOperations.checkout(dir, getLog(), targetBranch);</span>
+<span class="fc" id="L276">            VcsOperations.mergeSquash(dir, getLog(), branchName);</span>
+
+            SquashKind kind;
+<span class="fc bfc" id="L279" title="All 2 branches covered.">            if (VcsOperations.hasStagedChanges(dir)) {</span>
+<span class="fc" id="L280">                VcsOperations.commit(dir, getLog(), effectiveMessage);</span>
+<span class="fc" id="L281">                FeatureFinishSupport.verifyAndFixQualifiers(dir, branchName, getLog());</span>
+<span class="pc bpc" id="L282" title="1 of 2 branches missed.">                if (push) {</span>
+<span class="nc" id="L283">                    VcsOperations.pushIfRemoteExists(dir, getLog(), &quot;origin&quot;, targetBranch);</span>
+                }
+<span class="fc" id="L285">                kind = SquashKind.CONTENT_SQUASHED;</span>
+            } else {
+<span class="fc" id="L287">                getLog().info(&quot;    no changes after squash (version-only branch) — skipping commit&quot;);</span>
+                // #162: clear .git/SQUASH_MSG &amp; .git/MERGE_MSG so a later
+                // git commit doesn't pick up the template and land an
+                // empty &quot;Squashed commit of the following:&quot; on main.
+<span class="fc" id="L291">                VcsOperations.resetHard(dir, getLog(), &quot;HEAD&quot;);</span>
+<span class="fc" id="L292">                kind = SquashKind.VERSION_ONLY_NOOP;</span>
+            }
+<span class="fc" id="L294">            squashKind.put(name, kind);</span>
+            try {
+<span class="fc" id="L296">                targetSha.put(name, VcsOperations.headSha(dir));</span>
+<span class="nc" id="L297">            } catch (MojoException ignored) {</span>
+                // Best-effort enrichment; report tolerates absence.
+<span class="fc" id="L299">            }</span>
+
+<span class="pc bpc" id="L301" title="1 of 2 branches missed.">            if (!keepBranch) {</span>
+<span class="fc" id="L302">                String remoteFailReason = FeatureFinishSupport.deleteBranch(</span>
+<span class="fc" id="L303">                        dir, getLog(), branchName, keepRemoteBranch);</span>
+<span class="pc bpc" id="L304" title="1 of 2 branches missed.">                if (remoteFailReason != null) {</span>
+<span class="nc" id="L305">                    undeletedRemote.put(name, remoteFailReason);</span>
+                }
+            }
+
+<span class="fc" id="L309">            VcsOperations.writeVcsState(dir, VcsState.Action.FEATURE_FINISH);</span>
+<span class="fc" id="L310">            merged++;</span>
+<span class="fc" id="L311">        }</span>
+
+        // #544: include already-done subprojects' current target-branch
+        // SHA so the report's table row can carry it next to the
+        // reconciliation status.
+<span class="fc bfc" id="L316" title="All 2 branches covered.">        for (String name : alreadyDone) {</span>
+<span class="fc" id="L317">            File dir = new File(root, name);</span>
+            try {
+<span class="fc" id="L319">                targetSha.put(name, VcsOperations.headSha(dir));</span>
+<span class="pc" id="L320">            } catch (MojoException ignored) {}</span>
+<span class="fc" id="L321">        }</span>
+
+        // #535: workspace.yaml branch reconciliation runs for both
+        // subprojects squashed in this invocation AND those that a
+        // prior partial run already moved onto the target branch but
+        // never got around to recording. Without this second group,
+        // the manifest stays pinned to a dead feature branch and the
+        // next scaffold/init/clone fails.
+<span class="fc" id="L329">        List&lt;String&gt; needsYamlReconcile = new ArrayList&lt;&gt;(eligible);</span>
+<span class="fc bfc" id="L330" title="All 2 branches covered.">        for (String name : alreadyDone) {</span>
+<span class="pc bpc" id="L331" title="1 of 2 branches missed.">            if (!needsYamlReconcile.contains(name)) {</span>
+<span class="fc" id="L332">                needsYamlReconcile.add(name);</span>
+            }
+<span class="fc" id="L334">        }</span>
+
+        // Clean up sites (only for what we actually touched this run)
+<span class="pc bpc" id="L337" title="1 of 4 branches missed.">        if (merged &gt; 0 &amp;&amp; publish) {</span>
+<span class="fc" id="L338">            FeatureFinishSupport.cleanFeatureSites(root, eligible, branchName, getLog());</span>
+<span class="fc" id="L339">            FeatureFinishSupport.mergeWorkspaceRepo(</span>
+<span class="fc" id="L340">                    manifestPath, branchName, targetBranch, keepBranch, push, getLog());</span>
+        }
+
+        // YAML reconciliation runs regardless of whether anything was
+        // squashed THIS invocation — a re-run after a partial failure
+        // may have nothing to squash but still need to clear stale
+        // branch fields for the already-done subprojects.
+<span class="pc bpc" id="L347" title="1 of 4 branches missed.">        if (publish &amp;&amp; !needsYamlReconcile.isEmpty()) {</span>
+<span class="fc" id="L348">            FeatureFinishSupport.updateWorkspaceYaml(</span>
+<span class="fc" id="L349">                    manifestPath, needsYamlReconcile, targetBranch, feature, getLog());</span>
+        }
+
+        // Offer stale branch cleanup (#100)
+<span class="pc bpc" id="L353" title="1 of 4 branches missed.">        if (publish &amp;&amp; merged &gt; 0) {</span>
+<span class="fc" id="L354">            FeatureFinishSupport.promptStaleBranchCleanup(</span>
+                    root, eligible, branchName, targetBranch,
+<span class="fc" id="L356">                    getPrompter(), getLog());</span>
+        }
+
+<span class="fc" id="L359">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L360">        getLog().info(&quot;  Squash-merged: &quot; + merged + &quot; components&quot;);</span>
+<span class="fc bfc" id="L361" title="All 2 branches covered.">        if (!alreadyDone.isEmpty()) {</span>
+<span class="fc" id="L362">            getLog().info(&quot;  Already-done from prior run: &quot; + alreadyDone.size()</span>
+                    + &quot; (workspace.yaml reconciled)&quot;);
+        }
+<span class="pc bpc" id="L365" title="1 of 2 branches missed.">        if (!keepBranch) {</span>
+<span class="fc" id="L366">            getLog().info(&quot;  Branch deleted: &quot; + branchName);</span>
+        }
+<span class="pc bpc" id="L368" title="1 of 2 branches missed.">        if (!undeletedRemote.isEmpty()) {</span>
+<span class="nc" id="L369">            getLog().warn(&quot;&quot;);</span>
+<span class="nc" id="L370">            getLog().warn(&quot;  &quot; + undeletedRemote.size()</span>
+                    + &quot; remote feature branch(es) could not be deleted &quot;
+                    + &quot;(soft-fail per #532):&quot;);
+<span class="nc bnc" id="L373" title="All 2 branches missed.">            for (var entry : undeletedRemote.entrySet()) {</span>
+<span class="nc" id="L374">                getLog().warn(&quot;    • &quot; + entry.getKey()</span>
+<span class="nc" id="L375">                        + &quot; — &quot; + entry.getValue());</span>
+<span class="nc" id="L376">            }</span>
+<span class="nc" id="L377">            getLog().warn(&quot;  To clean up by hand:&quot;);</span>
+<span class="nc bnc" id="L378" title="All 2 branches missed.">            for (String subName : undeletedRemote.keySet()) {</span>
+<span class="nc" id="L379">                getLog().warn(&quot;    (cd &quot; + subName</span>
+                        + &quot; &amp;&amp; git push origin --delete &quot; + branchName + &quot;)&quot;);
+<span class="nc" id="L381">            }</span>
+        }
+<span class="fc" id="L383">        getLog().info(&quot;&quot;);</span>
+
+        // Structured markdown report
+<span class="fc" id="L386">        return new WorkspaceReportSpec(</span>
+<span class="fc bfc" id="L387" title="All 2 branches covered.">                publish ? WsGoal.FEATURE_FINISH_SQUASH_PUBLISH</span>
+<span class="pc bpc" id="L388" title="1 of 2 branches missed.">                        : WsGoal.FEATURE_FINISH_SQUASH_DRAFT,</span>
+<span class="fc" id="L389">                buildSquashReport(</span>
+                        eligible, branchName, targetBranch, merged, draft,
+                        keepBranch, effectiveMessage,
+<span class="pc bpc" id="L392" title="1 of 2 branches missed.">                        message == null || message.isBlank(),</span>
+                        undeletedRemote, alreadyDone, squashKind, targetSha));
+    }
+
+    private static String shorten(String sha) {
+<span class="pc bpc" id="L397" title="2 of 4 branches missed.">        if (sha == null || sha.length() &lt;= 7) return sha;</span>
+<span class="fc" id="L398">        return sha.substring(0, 7);</span>
+    }
+
+    /**
+     * Outcome kind for a per-subproject squash row in the report (#544).
+     * {@code CONTENT_SQUASHED} is the normal path; {@code VERSION_ONLY_NOOP}
+     * captures the case the goal already detected internally (&quot;no
+     * changes after squash (version-only branch)&quot;) and silently
+     * collapsed into the count.
+     */
+<span class="fc" id="L408">    enum SquashKind {CONTENT_SQUASHED, VERSION_ONLY_NOOP}</span>
+
+    /**
+     * Build the markdown report. When {@code messageAutoGenerated} is
+     * true the report flags the message as generated and shows the
+     * exact override command — covering the {@code -draft} actionable-
+     * remediation principle.
+     *
+     * @param components          subprojects participating in the squash
+     * @param branch              feature branch name
+     * @param target              target branch name
+     * @param merged              count of subprojects squashed (or that would be)
+     * @param isDraft             whether this is a draft preview
+     * @param kept                whether {@code -DkeepBranch=true}
+     * @param effectiveMessage    the message that will be / was used
+     * @param messageAutoGenerated whether the message was auto-built
+     *                            (no user-supplied {@code -Dmessage})
+     * @param undeletedRemote     subproject → git error for any remote
+     *                            feature branch that the soft-fail step
+     *                            could not delete (#532)
+     */
+    private String buildSquashReport(List&lt;String&gt; components, String branch,
+                                      String target, int merged,
+                                      boolean isDraft, boolean kept,
+                                      String effectiveMessage,
+                                      boolean messageAutoGenerated,
+                                      java.util.Map&lt;String, String&gt; undeletedRemote,
+                                      List&lt;String&gt; alreadyDone,
+                                      java.util.Map&lt;String, SquashKind&gt; squashKind,
+                                      java.util.Map&lt;String, String&gt; targetSha) {
+<span class="fc" id="L438">        GoalReportBuilder report = new GoalReportBuilder();</span>
+<span class="fc" id="L439">        report.paragraph(&quot;**Branch:** `&quot; + branch + &quot;` → `&quot; + target + &quot;`  \n&quot;</span>
+                + &quot;**Strategy:** squash-merge&quot;);
+
+        // #544: rows include the squash kind (real content vs version-
+        // only no-op) and the resulting target-branch HEAD SHA so the
+        // reviewer can audit exactly which subprojects shipped code
+        // without running git log by hand.
+<span class="fc" id="L446">        List&lt;String[]&gt; rows = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L447" title="All 2 branches covered.">        for (String name : components) {</span>
+<span class="fc" id="L448">            SquashKind kind = squashKind.get(name);</span>
+            String status;
+<span class="fc bfc" id="L450" title="All 2 branches covered.">            if (isDraft) {</span>
+<span class="fc bfc" id="L451" title="All 2 branches covered.">                status = kind == SquashKind.VERSION_ONLY_NOOP</span>
+<span class="fc" id="L452">                        ? &quot;would squash (version-only — no commit expected)&quot;</span>
+<span class="fc" id="L453">                        : &quot;would squash&quot;;</span>
+<span class="fc bfc" id="L454" title="All 2 branches covered.">            } else if (kind == SquashKind.VERSION_ONLY_NOOP) {</span>
+<span class="fc" id="L455">                status = &quot;squashed (version-only — no commit)&quot;;</span>
+            } else {
+<span class="fc" id="L457">                status = &quot;squashed&quot;;</span>
+            }
+<span class="fc" id="L459">            String sha = targetSha.getOrDefault(name, &quot;—&quot;);</span>
+<span class="fc" id="L460">            rows.add(new String[]{name, status,</span>
+<span class="fc bfc" id="L461" title="All 2 branches covered.">                    &quot;—&quot;.equals(sha) ? &quot;—&quot; : &quot;`&quot; + shorten(sha) + &quot;`&quot;});</span>
+<span class="fc" id="L462">        }</span>
+<span class="fc bfc" id="L463" title="All 2 branches covered.">        for (String name : alreadyDone) {</span>
+            // #535: surface these explicitly so the report makes the
+            // partial-recovery state obvious. They are NOT being squashed
+            // again; only workspace.yaml is being brought into line.
+<span class="pc bpc" id="L467" title="1 of 2 branches missed.">            String status = isDraft</span>
+<span class="nc" id="L468">                    ? &quot;would reconcile workspace.yaml only&quot;</span>
+                    : &quot;reconciled workspace.yaml only (already on &quot;
+<span class="fc" id="L470">                            + target + &quot; from a prior run)&quot;;</span>
+<span class="fc" id="L471">            String sha = targetSha.getOrDefault(name, &quot;—&quot;);</span>
+<span class="fc" id="L472">            rows.add(new String[]{name, status,</span>
+<span class="pc bpc" id="L473" title="1 of 2 branches missed.">                    &quot;—&quot;.equals(sha) ? &quot;—&quot; : &quot;`&quot; + shorten(sha) + &quot;`&quot;});</span>
+<span class="fc" id="L474">        }</span>
+<span class="fc" id="L475">        report.table(List.of(&quot;Subproject&quot;, &quot;Status&quot;, target + &quot; HEAD&quot;), rows);</span>
+
+<span class="fc" id="L477">        report.paragraph(&quot;**&quot; + merged + &quot; subproject(s)** &quot;</span>
+<span class="fc bfc" id="L478" title="All 2 branches covered.">                + (isDraft ? &quot;would be squash-merged&quot; : &quot;squash-merged&quot;)</span>
+<span class="fc bfc" id="L479" title="All 2 branches covered.">                + (alreadyDone.isEmpty()</span>
+<span class="fc" id="L480">                        ? &quot;&quot;</span>
+<span class="fc" id="L481">                        : &quot;; **&quot; + alreadyDone.size() + &quot;** already-done &quot;</span>
+                                + &quot;from a prior run (workspace.yaml &quot;
+<span class="pc bpc" id="L483" title="1 of 2 branches missed.">                                + (isDraft ? &quot;would be&quot; : &quot;was&quot;)</span>
+<span class="fc" id="L484">                                + &quot; reconciled)&quot;)</span>
+<span class="pc bpc" id="L485" title="1 of 2 branches missed.">                + &quot;. Branch &quot; + (kept ? &quot;kept&quot; : &quot;deleted&quot;) + &quot;.&quot;);</span>
+
+<span class="fc" id="L487">        report.section(&quot;Commit message&quot;);</span>
+<span class="pc bpc" id="L488" title="1 of 2 branches missed.">        report.paragraph(messageAutoGenerated</span>
+<span class="nc" id="L489">                ? &quot;Auto-generated from feature-branch history. Override &quot;</span>
+                        + &quot;with `-Dmessage=\&quot;...\&quot;` if you'd prefer a different &quot;
+                        + &quot;subject.&quot;
+<span class="fc" id="L492">                : &quot;Supplied via `-Dmessage`.&quot;);</span>
+<span class="fc" id="L493">        report.codeBlock(&quot;&quot;, effectiveMessage);</span>
+
+        // #532: surface remote-deletion failures with a copy-pasteable
+        // manual cleanup block, per the drafts-actionable-remediation
+        // principle. Caller still reports merged &gt; 0 even when this
+        // section is populated — the squash succeeded; only the remote
+        // branch cleanup is incomplete.
+<span class="pc bpc" id="L500" title="1 of 2 branches missed.">        if (!undeletedRemote.isEmpty()) {</span>
+<span class="nc" id="L501">            report.section(&quot;Remote feature branches not deleted&quot;);</span>
+<span class="nc" id="L502">            report.paragraph(&quot;The squash succeeded, but origin refused &quot;</span>
+<span class="nc" id="L503">                    + &quot;to delete &quot; + undeletedRemote.size()</span>
+                    + &quot; remote feature branch(es) — typically because &quot;
+                    + &quot;branch protection forbids deletion. The goal &quot;
+                    + &quot;soft-failed and continued; clean these up manually:&quot;);
+<span class="nc bnc" id="L507" title="All 2 branches missed.">            for (var entry : undeletedRemote.entrySet()) {</span>
+<span class="nc" id="L508">                report.bullet(&quot;**&quot; + entry.getKey() + &quot;** — `&quot;</span>
+<span class="nc" id="L509">                        + entry.getValue() + &quot;`&quot;);</span>
+<span class="nc" id="L510">            }</span>
+<span class="nc" id="L511">            StringBuilder cleanup = new StringBuilder();</span>
+<span class="nc bnc" id="L512" title="All 2 branches missed.">            for (String subName : undeletedRemote.keySet()) {</span>
+<span class="nc" id="L513">                cleanup.append(&quot;(cd &quot;).append(subName)</span>
+<span class="nc" id="L514">                        .append(&quot; &amp;&amp; git push origin --delete &quot;)</span>
+<span class="nc" id="L515">                        .append(branch).append(&quot;)\n&quot;);</span>
+<span class="nc" id="L516">            }</span>
+<span class="nc" id="L517">            report.codeBlock(&quot;bash&quot;, cleanup.toString().stripTrailing());</span>
+<span class="nc" id="L518">            report.paragraph(&quot;Or, to skip the remote-deletion attempt &quot;</span>
+                    + &quot;next time, pass `-DkeepRemoteBranch=true`.&quot;);
+        }
+
+<span class="fc bfc" id="L522" title="All 2 branches covered.">        if (isDraft) {</span>
+<span class="fc" id="L523">            report.section(&quot;To publish&quot;);</span>
+<span class="fc" id="L524">            String publishCmd = &quot;mvn &quot; + WsGoal.FEATURE_FINISH_SQUASH_PUBLISH.qualified()</span>
+<span class="pc bpc" id="L525" title="1 of 2 branches missed.">                    + &quot; -Dfeature=&quot; + (feature == null ? &quot;&lt;name&gt;&quot; : feature);</span>
+<span class="pc bpc" id="L526" title="1 of 2 branches missed.">            if (!messageAutoGenerated) {</span>
+<span class="fc" id="L527">                publishCmd += &quot; -Dmessage=\&quot;&quot; + message.replace(&quot;\&quot;&quot;, &quot;\\\&quot;&quot;) + &quot;\&quot;&quot;;</span>
+            }
+<span class="pc bpc" id="L529" title="1 of 2 branches missed.">            if (keepBranch) publishCmd += &quot; -DkeepBranch=true&quot;;</span>
+<span class="pc bpc" id="L530" title="1 of 2 branches missed.">            if (keepRemoteBranch) publishCmd += &quot; -DkeepRemoteBranch=true&quot;;</span>
+<span class="pc bpc" id="L531" title="1 of 2 branches missed.">            if (push) publishCmd += &quot; -Dpush=true&quot;;</span>
+<span class="fc" id="L532">            report.codeBlock(&quot;bash&quot;, publishCmd);</span>
+        }
+<span class="fc" id="L534">        return report.build();</span>
+    }
+
+    /**
+     * Build the bare-mode squash commit message. With a user-supplied
+     * {@code -Dmessage} we prepend it; otherwise we build a default
+     * from the feature-branch commit subjects (matching {@code git
+     * merge --squash}'s {@code SQUASH_MSG} format). #531.
+     *
+     * @param dir          repository root
+     * @param branchName   feature branch name
+     * @param targetBranch target branch (commits are listed in
+     *                     {@code targetBranch..branchName} range)
+     * @param userMessage  the user-supplied {@code -Dmessage} or null/blank
+     * @param log          Maven logger
+     * @return non-blank commit message ready for {@code git commit -m}
+     */
+    static String buildBareSquashMessage(File dir, String branchName,
+                                          String targetBranch,
+                                          String userMessage,
+                                          org.apache.maven.api.plugin.Log log) {
+<span class="fc" id="L555">        StringBuilder sb = new StringBuilder();</span>
+<span class="pc bpc" id="L556" title="1 of 4 branches missed.">        if (userMessage != null &amp;&amp; !userMessage.isBlank()) {</span>
+<span class="fc" id="L557">            sb.append(userMessage).append(&quot;\n\n&quot;);</span>
+        }
+<span class="fc" id="L559">        sb.append(&quot;Squash &quot;).append(branchName).append(&quot; into &quot;)</span>
+<span class="fc" id="L560">                .append(targetBranch).append(&quot;\n&quot;);</span>
+        try {
+<span class="fc" id="L562">            List&lt;String&gt; commits = VcsOperations.commitLog(</span>
+                    dir, targetBranch, branchName);
+<span class="pc bpc" id="L564" title="1 of 2 branches missed.">            if (!commits.isEmpty()) {</span>
+<span class="fc" id="L565">                sb.append(&quot;\n* &quot;).append(branchName).append(&quot; commits (&quot;)</span>
+<span class="fc" id="L566">                        .append(commits.size()).append(&quot;):\n&quot;);</span>
+<span class="fc bfc" id="L567" title="All 2 branches covered.">                for (String line : commits) {</span>
+<span class="pc bpc" id="L568" title="1 of 2 branches missed.">                    String msg = line.contains(&quot; &quot;)</span>
+<span class="pc" id="L569">                            ? line.substring(line.indexOf(' ') + 1) : line;</span>
+<span class="fc" id="L570">                    sb.append(&quot;  - &quot;).append(msg).append(&quot;\n&quot;);</span>
+<span class="fc" id="L571">                }</span>
+            }
+<span class="nc" id="L573">        } catch (MojoException e) {</span>
+<span class="nc" id="L574">            log.debug(&quot;Could not collect bare-mode commit log: &quot; + e.getMessage());</span>
+<span class="fc" id="L575">        }</span>
+<span class="fc" id="L576">        return sb.toString().stripTrailing();</span>
+    }
+
+    private WorkspaceReportSpec executeBareMode(String branchName) throws MojoException {
+<span class="fc bfc" id="L580" title="All 2 branches covered.">        boolean draft = !publish;</span>
+        // Bare mode = a working set of one (ike-issues#611).
+<span class="fc" id="L582">        File dir = resolveWorkingSet().members().getFirst().directory().toFile();</span>
+
+<span class="fc" id="L584">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L585">        getLog().info(&quot;IKE Feature Finish — Squash (bare repo)&quot;);</span>
+<span class="fc" id="L586">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+<span class="fc" id="L587">        getLog().info(&quot;  Feature:  &quot; + feature);</span>
+<span class="fc" id="L588">        getLog().info(&quot;  Branch:   &quot; + branchName + &quot; → &quot; + targetBranch);</span>
+<span class="fc bfc" id="L589" title="All 2 branches covered.">        if (draft) getLog().info(&quot;  Mode:     DRAFT&quot;);</span>
+<span class="fc" id="L590">        getLog().info(&quot;&quot;);</span>
+
+<span class="fc" id="L592">        VcsOperations.catchUp(dir, getLog());</span>
+
+<span class="fc" id="L594">        String currentBranch = gitBranch(dir);</span>
+<span class="fc bfc" id="L595" title="All 2 branches covered.">        if (!currentBranch.equals(branchName)) {</span>
+<span class="fc" id="L596">            throw new MojoException(</span>
+                    &quot;Not on &quot; + branchName + &quot; (currently on &quot; + currentBranch + &quot;)&quot;);
+        }
+<span class="pc bpc" id="L599" title="1 of 2 branches missed.">        if (!gitStatus(dir).isEmpty()) {</span>
+<span class="nc" id="L600">            throw new MojoException(&quot;Uncommitted changes. Commit or stash first.&quot;);</span>
+        }
+
+        // #531: auto-generate the squash commit message from this repo's
+        // feature-branch commit history when -Dmessage was not supplied.
+<span class="fc" id="L605">        String effectiveMessage = buildBareSquashMessage(</span>
+<span class="fc" id="L606">                dir, branchName, targetBranch, message, getLog());</span>
+<span class="fc" id="L607">        getLog().info(&quot;  Commit message:&quot;);</span>
+<span class="fc bfc" id="L608" title="All 2 branches covered.">        for (String line : effectiveMessage.split(&quot;\n&quot;)) {</span>
+<span class="fc" id="L609">            getLog().info(&quot;    &quot; + line);</span>
+        }
+<span class="fc" id="L611">        getLog().info(&quot;&quot;);</span>
+
+<span class="fc bfc" id="L613" title="All 2 branches covered.">        if (draft) {</span>
+<span class="fc" id="L614">            getLog().info(&quot;  [draft] Would squash-merge → &quot; + targetBranch);</span>
+<span class="fc" id="L615">            return new WorkspaceReportSpec(WsGoal.FEATURE_FINISH_SQUASH_DRAFT,</span>
+                    &quot;Bare repo: would squash-merge `&quot; + branchName + &quot;` → `&quot;
+                            + targetBranch + &quot;`.\n\n&quot;
+                            + &quot;**Commit message** &quot;
+<span class="pc bpc" id="L619" title="1 of 4 branches missed.">                            + (message == null || message.isBlank()</span>
+<span class="fc" id="L620">                                ? &quot;(auto-generated; override with `-Dmessage=\&quot;...\&quot;`)&quot;</span>
+<span class="fc" id="L621">                                : &quot;(supplied via `-Dmessage`)&quot;) + &quot;:\n\n&quot;</span>
+                            + &quot;```\n&quot; + effectiveMessage + &quot;\n```\n&quot;);
+        }
+
+<span class="fc" id="L625">        FeatureFinishSupport.stripBranchVersionBare(dir, branchName, getLog());</span>
+
+<span class="fc" id="L627">        VcsOperations.checkout(dir, getLog(), targetBranch);</span>
+<span class="fc" id="L628">        VcsOperations.mergeSquash(dir, getLog(), branchName);</span>
+
+<span class="fc bfc" id="L630" title="All 2 branches covered.">        if (VcsOperations.hasStagedChanges(dir)) {</span>
+<span class="fc" id="L631">            VcsOperations.commit(dir, getLog(), effectiveMessage);</span>
+<span class="fc" id="L632">            FeatureFinishSupport.verifyAndFixQualifiers(dir, branchName, getLog());</span>
+<span class="pc bpc" id="L633" title="1 of 2 branches missed.">            if (push) {</span>
+<span class="nc" id="L634">                VcsOperations.pushIfRemoteExists(dir, getLog(), &quot;origin&quot;, targetBranch);</span>
+            }
+        } else {
+<span class="fc" id="L637">            getLog().info(&quot;  No changes after squash — skipping commit&quot;);</span>
+            // #162: see executeWorkspaceMode for rationale.
+<span class="fc" id="L639">            VcsOperations.resetHard(dir, getLog(), &quot;HEAD&quot;);</span>
+        }
+
+<span class="fc" id="L642">        String remoteFailReason = null;</span>
+<span class="fc bfc" id="L643" title="All 2 branches covered.">        if (!keepBranch) {</span>
+<span class="fc" id="L644">            remoteFailReason = FeatureFinishSupport.deleteBranch(</span>
+<span class="fc" id="L645">                    dir, getLog(), branchName, keepRemoteBranch);</span>
+        }
+
+<span class="fc" id="L648">        VcsOperations.writeVcsState(dir, VcsState.Action.FEATURE_FINISH);</span>
+
+<span class="fc" id="L650">        getLog().info(&quot;&quot;);</span>
+<span class="fc bfc" id="L651" title="All 2 branches covered.">        if (remoteFailReason != null) {</span>
+<span class="fc" id="L652">            getLog().warn(&quot;  Remote feature branch could not be deleted &quot;</span>
+                    + &quot;(soft-fail per #532): &quot; + remoteFailReason);
+<span class="fc" id="L654">            getLog().warn(&quot;  Clean up manually: git push origin --delete &quot;</span>
+                    + branchName);
+        }
+<span class="fc" id="L657">        getLog().info(&quot;  Done.&quot;);</span>
+<span class="fc" id="L658">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L659">        StringBuilder body = new StringBuilder();</span>
+<span class="fc" id="L660">        body.append(&quot;Bare repo: squash-merged `&quot;).append(branchName)</span>
+<span class="fc" id="L661">                .append(&quot;` → `&quot;).append(targetBranch).append(&quot;`.\n&quot;);</span>
+<span class="fc bfc" id="L662" title="All 2 branches covered.">        if (remoteFailReason != null) {</span>
+<span class="fc" id="L663">            body.append(&quot;\n**Remote feature branch not deleted** — `&quot;)</span>
+<span class="fc" id="L664">                    .append(remoteFailReason).append(&quot;`.\n\n&quot;)</span>
+<span class="fc" id="L665">                    .append(&quot;Clean up manually:\n\n```bash\n&quot;)</span>
+<span class="fc" id="L666">                    .append(&quot;git push origin --delete &quot;).append(branchName)</span>
+<span class="fc" id="L667">                    .append(&quot;\n```\n&quot;);</span>
+        }
+<span class="fc" id="L669">        return new WorkspaceReportSpec(WsGoal.FEATURE_FINISH_SQUASH_PUBLISH,</span>
+<span class="fc" id="L670">                body.toString());</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

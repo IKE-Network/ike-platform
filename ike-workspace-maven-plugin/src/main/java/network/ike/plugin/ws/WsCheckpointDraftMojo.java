@@ -241,6 +241,10 @@ public class WsCheckpointDraftMojo extends AbstractWorkspaceMojo {
 
         if (draft) {
             getLog().info("");
+            getLog().info("  [DRAFT] Publish would build the reactor "
+                    + "(ws.checkpoint.verifyGoals) before tagging and refuse "
+                    + "to cut on failure (#689).");
+            getLog().info("");
             getLog().info("[DRAFT] Checkpoint file would be written to:");
             getLog().info("[DRAFT]   checkpoints/" + checkpointFileName(name));
             getLog().info("");

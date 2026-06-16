@@ -42,7 +42,19 @@ class CheckpointPublishIdempotencyTest {
                 """;
         Files.writeString(checkpoint, original, StandardCharsets.UTF_8);
 
-        WsCheckpointDraftMojo mojo = TestLog.createMojo(WsCheckpointPublishMojo.class);
+        // Local subclass that no-ops the auto-align and the #689
+        // pre-checkpoint reactor verify so the idempotency guard is
+        // exercised without spawning any nested Maven build.
+        WsCheckpointPublishMojo mojo = new WsCheckpointPublishMojo() {
+            @Override
+            protected void autoAlign() {
+            }
+
+            @Override
+            protected void verifyReactor() {
+            }
+        };
+        TestLog.injectInto(mojo);
         setField(mojo, "manifest", tempDir.resolve("workspace.yaml").toFile(),
                 AbstractWorkspaceMojo.class);
         setField(mojo, "name", "pre-existing");

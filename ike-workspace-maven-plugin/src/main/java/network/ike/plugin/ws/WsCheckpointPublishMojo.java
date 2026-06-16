@@ -9,8 +9,10 @@ import network.ike.workspace.WorkspaceGraph;
 
 import org.apache.maven.api.plugin.MojoException;
 import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
 
 import java.io.File;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -26,6 +28,11 @@ import java.util.List;
  *       goal-owned message so that the subsequent preflight inside the
  *       superclass sees a clean tree (IKE-Network/ike-issues#537 — the
  *       preflight must not fail on changes the goal itself produced).</li>
+ *   <li>Verify the reactor still builds in its aligned-and-committed state
+ *       and refuse to tag on failure (IKE-Network/ike-issues#689 — a
+ *       checkpoint whose pinned subprojects no longer compile together
+ *       must not be cut, otherwise the skew is only discovered across CI
+ *       cycles).</li>
  *   <li>Delegate to {@link WsCheckpointDraftMojo} with {@code publish = true}
  *       to do the actual tagging and manifest write.</li>
  * </ol>
@@ -40,6 +47,26 @@ public class WsCheckpointPublishMojo extends WsCheckpointDraftMojo {
     /** Commit message used for the auto-aligned state, per #537. */
     static final String ALIGNMENT_COMMIT_MESSAGE =
             "workspace: pre-checkpoint alignment";
+
+    /**
+     * Skip the pre-checkpoint reactor build (#689). Off by default — the
+     * gate is the whole point. Set {@code -Dws.checkpoint.skipVerify=true}
+     * to cut a checkpoint without first proving the reactor compiles
+     * (e.g. when the failure is known and being tracked separately).
+     */
+    @Parameter(property = "ws.checkpoint.skipVerify", defaultValue = "false")
+    boolean skipVerify;
+
+    /**
+     * Maven goals run against the workspace root to verify the reactor
+     * builds before tagging (#689). Defaults to {@code clean test-compile
+     * -T 1C} — fast, and enough to catch the compile-skew failures that
+     * motivated the gate. Pass something heavier for more assurance, e.g.
+     * {@code -Dws.checkpoint.verifyGoals="clean verify -DskipTests"}.
+     */
+    @Parameter(property = "ws.checkpoint.verifyGoals",
+            defaultValue = "clean test-compile -T 1C")
+    String verifyGoals;
 
     /** Creates this goal instance. */
     public WsCheckpointPublishMojo() {}
@@ -65,6 +92,13 @@ public class WsCheckpointPublishMojo extends WsCheckpointDraftMojo {
         // goal-owned message so the checkpoint records the aligned state.
         commitAlignmentSideEffects();
 
+        // #689: prove the reactor still builds in its aligned-and-committed
+        // state before any tag is cut. Runs after the alignment commit so
+        // the build sees exactly the state the checkpoint will record, and
+        // before super.runGoal() so a failure prevents every subproject and
+        // workspace tag — a broken checkpoint never gets created.
+        verifyReactor();
+
         return super.runGoal();
     }
 
@@ -88,6 +122,57 @@ public class WsCheckpointPublishMojo extends WsCheckpointDraftMojo {
         } catch (MojoException e) {
             getLog().warn("Auto-alignment completed with warnings: "
                     + e.getMessage());
+        }
+    }
+
+    /**
+     * Build the reactor against the workspace root and refuse to cut the
+     * checkpoint if it fails (IKE-Network/ike-issues#689). Runs {@link
+     * #verifyGoals} (default {@code clean test-compile -T 1C}) as a
+     * subprocess against the aligned-and-committed workspace; a non-zero
+     * build aborts the goal so no tag is ever created for a checkpoint
+     * whose pinned subprojects don't compile together.
+     *
+     * <p>Unlike {@link #autoAlign()} this is deliberately <em>fail-loud</em>:
+     * a build failure is the exact condition the gate exists to catch, so
+     * it is rethrown rather than logged as a warning. Honors {@link
+     * #skipVerify} as an explicit escape hatch.
+     *
+     * <p>Overridable from tests so the #689 gate coverage can drive the
+     * pass/fail outcome without invoking a nested Maven build.
+     *
+     * @throws MojoException if the reactor build fails (and {@link
+     *                       #skipVerify} is not set), or if the subprocess
+     *                       setup itself fails
+     */
+    protected void verifyReactor() throws MojoException {
+        if (skipVerify) {
+            getLog().info("Pre-checkpoint reactor verify skipped "
+                    + "(ws.checkpoint.skipVerify=true).");
+            return;
+        }
+        File root = workspaceRoot();
+        String mvn = WsReleaseDraftMojo.resolveMvnCommand(root);
+        getLog().info("Verifying the reactor builds before tagging ("
+                + verifyGoals + ") ...");
+
+        List<String> cmd = new ArrayList<>();
+        cmd.add(mvn);
+        for (String token : verifyGoals.split("\\s+")) {
+            if (!token.isBlank()) {
+                cmd.add(token);
+            }
+        }
+        cmd.add("-B");
+
+        try {
+            ReleaseSupport.exec(root, getLog(), cmd.toArray(new String[0]));
+        } catch (MojoException e) {
+            throw new MojoException(
+                    "Pre-checkpoint reactor build failed — refusing to cut "
+                    + "the checkpoint. Fix the build, or re-run with "
+                    + "-Dws.checkpoint.skipVerify=true. Cause: "
+                    + e.getMessage(), e);
         }
     }
 

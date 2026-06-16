@@ -232,5 +232,15 @@ class CheckpointPublishSelfTripTest {
                 throw new RuntimeException(e);
             }
         }
+
+        /**
+         * No-op the #689 pre-checkpoint reactor verify — this test
+         * isolates the #537 alignment/commit behavior and must not spawn a
+         * nested Maven build (the verify gate is covered by
+         * {@link WsCheckpointVerifyGateTest}).
+         */
+        @Override
+        protected void verifyReactor() {
+        }
     }
 }

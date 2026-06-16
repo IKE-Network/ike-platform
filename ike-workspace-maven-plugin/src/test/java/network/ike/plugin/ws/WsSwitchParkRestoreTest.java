@@ -28,6 +28,104 @@ class WsSwitchParkRestoreTest {
     @Test
     void parks_feature_only_member_on_switch_to_main_then_restores()
             throws Exception {
+        String[] urls = buildDivergentWorkspace();
+        String extraUrl = urls[1];
+
+        // ── Switch to main → extra parked, shared switched ──────────────
+        switchTo("main");
+
+        assertThat(tmp.resolve("extra"))
+                .as("feature-only member parked (clone removed)").doesNotExist();
+        assertThat(branchOf(tmp.resolve("shared")))
+                .as("both-branch member switched").isEqualTo("main");
+        assertThat(branchOf(tmp))
+                .as("workspace root switched").isEqualTo("main");
+        // The parked branch survives on origin (work never lost).
+        assertThat(lsRemoteHasBranch(extraUrl, "feature/x")).isTrue();
+
+        // ── Switch back to feature/x → extra restored ───────────────────
+        switchTo("feature/x");
+
+        assertThat(tmp.resolve("extra").resolve(".git"))
+                .as("feature-only member restored (re-cloned)").exists();
+        assertThat(branchOf(tmp.resolve("extra"))).isEqualTo("feature/x");
+        assertThat(branchOf(tmp.resolve("shared"))).isEqualTo("feature/x");
+        assertThat(branchOf(tmp)).isEqualTo("feature/x");
+    }
+
+    /**
+     * #573 criterion 4 — content identity across the park/restore round-trip.
+     * The existing round-trip test asserts only directory existence and branch
+     * name; this one commits a sentinel file with known content onto
+     * {@code extra}'s {@code feature/x} branch <em>before</em> the round-trip
+     * (so it travels through park → push-to-origin → re-clone under
+     * {@code -DnoStash}) and asserts after {@code feature → main → feature}
+     * that the sentinel is back with byte-for-byte identical content — not just
+     * present.
+     *
+     * <p>This is what distinguishes a real restore (the parked branch's commits
+     * come back intact from origin) from a vacuous one (an empty re-clone, or a
+     * stale tree). If park failed to push the committed sentinel, or restore
+     * re-cloned the wrong branch, the content assertion would fail.
+     */
+    @Test
+    void round_trip_preserves_subproject_content() throws Exception {
+        buildDivergentWorkspace();
+
+        // Commit a sentinel with known content onto extra's feature/x branch,
+        // so it is part of the branch that gets parked (pushed to origin) and
+        // later restored (re-cloned). Committed — not a WIP file — so it
+        // survives under -DnoStash, which skips the stash flow entirely.
+        Path extra = tmp.resolve("extra");
+        Files.writeString(extra.resolve(SENTINEL_NAME), SENTINEL_BODY,
+                StandardCharsets.UTF_8);
+        git(extra, "add", SENTINEL_NAME);
+        git(extra, "commit", "-m", "add sentinel on feature/x");
+
+        // ── Round-trip: feature/x → main (park extra) → feature/x (restore) ─
+        switchTo("main");
+        assertThat(tmp.resolve("extra"))
+                .as("feature-only member parked on switch to main")
+                .doesNotExist();
+
+        switchTo("feature/x");
+
+        // The restored clone exists on feature/x …
+        assertThat(extra.resolve(".git"))
+                .as("feature-only member restored (re-cloned)").exists();
+        assertThat(branchOf(extra)).isEqualTo("feature/x");
+
+        // … and the sentinel is back with IDENTICAL content (not just present).
+        Path restoredSentinel = extra.resolve(SENTINEL_NAME);
+        assertThat(restoredSentinel)
+                .as("sentinel file restored").exists();
+        assertThat(Files.readString(restoredSentinel, StandardCharsets.UTF_8))
+                .as("sentinel content preserved byte-for-byte across round-trip")
+                .isEqualTo(SENTINEL_BODY);
+    }
+
+    // ── Fixture helpers ──────────────────────────────────────────────
+
+    /** Sentinel filename committed onto extra's feature/x branch (criterion 4). */
+    private static final String SENTINEL_NAME = "SENTINEL.txt";
+
+    /** Known sentinel content asserted byte-for-byte after the round-trip. */
+    private static final String SENTINEL_BODY =
+            "park/restore content identity — #573 criterion 4\n";
+
+    /**
+     * Build the branch-divergent workspace shared by the round-trip tests:
+     * bare upstreams for {@code shared} and {@code extra} (each with
+     * {@code main} + {@code feature/x}), both cloned in and checked out to
+     * {@code feature/x}; a git root whose {@code main} declares
+     * {@code {shared}} and whose {@code feature/x} declares
+     * {@code {shared, extra}}. Leaves the root and both clones on
+     * {@code feature/x}.
+     *
+     * @return {@code [sharedUrl, extraUrl]} — the bare-upstream URLs
+     * @throws Exception on fixture or git failure
+     */
+    private String[] buildDivergentWorkspace() throws Exception {
         Files.createDirectories(tmp.resolve(".nohooks"));
 
         // Bare upstreams, each with main + feature/x branches.
@@ -56,30 +154,8 @@ class WsSwitchParkRestoreTest {
         git(tmp, "add", "workspace.yaml");
         git(tmp, "commit", "-m", "feature");
         // Root is now on feature/x; shared + extra present on feature/x.
-
-        // ── Switch to main → extra parked, shared switched ──────────────
-        switchTo("main");
-
-        assertThat(tmp.resolve("extra"))
-                .as("feature-only member parked (clone removed)").doesNotExist();
-        assertThat(branchOf(tmp.resolve("shared")))
-                .as("both-branch member switched").isEqualTo("main");
-        assertThat(branchOf(tmp))
-                .as("workspace root switched").isEqualTo("main");
-        // The parked branch survives on origin (work never lost).
-        assertThat(lsRemoteHasBranch(extraUrl, "feature/x")).isTrue();
-
-        // ── Switch back to feature/x → extra restored ───────────────────
-        switchTo("feature/x");
-
-        assertThat(tmp.resolve("extra").resolve(".git"))
-                .as("feature-only member restored (re-cloned)").exists();
-        assertThat(branchOf(tmp.resolve("extra"))).isEqualTo("feature/x");
-        assertThat(branchOf(tmp.resolve("shared"))).isEqualTo("feature/x");
-        assertThat(branchOf(tmp)).isEqualTo("feature/x");
+        return new String[] {sharedUrl, extraUrl};
     }
-
-    // ── Fixture helpers ──────────────────────────────────────────────
 
     private void switchTo(String branch) throws Exception {
         WsSwitchDraftMojo mojo = TestLog.createMojo(WsSwitchDraftMojo.class);

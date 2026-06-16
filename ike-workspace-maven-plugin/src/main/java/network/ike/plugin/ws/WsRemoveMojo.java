@@ -1,6 +1,7 @@
 package network.ike.plugin.ws;
 
 import network.ike.workspace.WorkspaceGraph;
+import network.ike.plugin.ws.vcs.VcsOperations;
 
 import org.apache.maven.api.plugin.MojoException;
 import org.apache.maven.api.plugin.annotations.Mojo;
@@ -29,10 +30,17 @@ import java.util.regex.Pattern;
  *   <li>Optionally deletes the cloned directory</li>
  * </ol>
  *
+ * <p>Removal is branch-scoped (IKE-Network/ike-issues#575): it edits the
+ * <em>current branch's</em> {@code workspace.yaml} / {@code pom.xml} and works
+ * on any branch, mirroring {@code ws:add}. With {@code -DdeleteDir=true} the
+ * clone is <b>parked</b> (its branch pushed to origin, then removed), not
+ * {@code rm}-ed — uncommitted work is stashed first and the push is a
+ * precondition for removal, so no work is lost.
+ *
  * <pre>{@code
- * mvn ike:ws-remove -Dsubproject=tinkar-core
- * mvn ike:ws-remove -Dsubproject=tinkar-core -Dforce=true
- * mvn ike:ws-remove -Dsubproject=tinkar-core -DdeleteDir=true
+ * mvn ws:remove -Dsubproject=tinkar-core
+ * mvn ws:remove -Dsubproject=tinkar-core -Dforce=true
+ * mvn ws:remove -Dsubproject=tinkar-core -DdeleteDir=true
  * }</pre>
  *
  * @see WsAddMojo for adding a subproject
@@ -53,10 +61,24 @@ public class WsRemoveMojo extends AbstractWorkspaceMojo {
     private boolean force;
 
     /**
-     * Also delete the cloned subproject directory from disk.
+     * Also remove the cloned subproject directory from disk. When set, the
+     * clone is <b>parked</b> (its branch pushed to origin, then the clone
+     * removed), not {@code rm}-ed — see {@link ParkSupport#parkSubproject}.
      */
     @Parameter(property = "deleteDir", defaultValue = "false")
     private boolean deleteDir;
+
+    /**
+     * Opt out of auto-stash when parking a clone with uncommitted work
+     * ({@code -DdeleteDir=true}). When {@code false} (default), uncommitted
+     * changes are stashed to {@code refs/ws-stash/<user-slug>/<branch>} on
+     * origin before the clone is parked so the work follows the developer;
+     * when {@code true}, no stash is taken (the work still survives on the
+     * pushed branch if committed, but uncommitted changes are discarded with
+     * the clone). Mirrors {@code ws:switch}'s {@code -DnoStash}.
+     */
+    @Parameter(property = "noStash", defaultValue = "false")
+    private boolean noStash;
 
     /** Creates this goal instance. */
     public WsRemoveMojo() {}
@@ -72,27 +94,13 @@ public class WsRemoveMojo extends AbstractWorkspaceMojo {
         Path wsDir = manifestPath.getParent();
         Path pomPath = wsDir.resolve("pom.xml");
 
-        // Remove is main-only — workspace composition changes belong on main,
-        // not on feature branches. Add is allowed on any branch (discovery
-        // during development), but removal is a structural decision.
-        File subDir = wsDir.resolve(subproject).toFile();
-        if (new File(subDir, ".git").exists()) {
-            String currentBranch = gitBranch(subDir);
-            if (!currentBranch.equals("main")) {
-                throw new MojoException(
-                        "Cannot remove a subproject from a feature branch ('"
-                        + currentBranch + "'). Switch to 'main' first. "
-                        + "Workspace composition changes belong on main.");
-            }
-
-            // Verify clean working tree — no uncommitted changes
-            String status = gitStatus(subDir);
-            if (!status.isEmpty()) {
-                throw new MojoException(
-                        "Cannot remove '" + subproject + "' — working tree has "
-                        + "uncommitted changes. Commit or stash first.");
-            }
-        }
+        // Removal is branch-scoped (#575): it operates on the current branch's
+        // workspace.yaml / pom.xml and works on any branch, mirroring ws:add —
+        // no main-only guard. Uncommitted work is not refused either: in the
+        // default deleteDir=false path the clone is left untouched (its dirty
+        // state preserved), and under -DdeleteDir=true the park path below
+        // stashes WIP and pushes the branch before removing the clone, so
+        // nothing is lost.
 
         // Load graph and validate subproject exists
         WorkspaceGraph graph = loadGraph();
@@ -134,11 +142,35 @@ public class WsRemoveMojo extends AbstractWorkspaceMojo {
                     "Failed to update workspace files: " + e.getMessage(), e);
         }
 
-        // Optionally delete the cloned directory
+        // Optionally remove the cloned directory — work-preserving (#575).
+        // A git clone is PARKED, not rm-ed: its branch is pushed to origin
+        // (and any uncommitted work stashed) first, and the push is a hard
+        // precondition for removal, so nothing is lost. A non-clone directory
+        // (nothing to preserve) is plain-deleted.
+        boolean parked = false;
         if (deleteDir) {
             Path subprojectDir = wsDir.resolve(subproject);
-            if (Files.isDirectory(subprojectDir)) {
-                deleteDirectory(subprojectDir);
+            File subDir = subprojectDir.toFile();
+            if (new File(subDir, ".git").exists()) {
+                String compBranch = gitBranch(subDir);
+                // Preserve uncommitted work before parking: a dirty clone is
+                // auto-stashed to refs/ws-stash/<slug>/<branch> on origin. The
+                // slug is derived exactly as ws:switch does — fail-loud on a
+                // missing git user.email — so WIP is never silently dropped;
+                // set user.email, or pass -DnoStash to discard it, then re-run.
+                if (!noStash && !gitStatus(subDir).isEmpty()) {
+                    String slug = VcsOperations.userSlug(
+                            VcsOperations.userEmail(wsDir.toFile()));
+                    ParkSupport.stashLeave(subDir, getLog(), slug, compBranch);
+                }
+                ParkSupport.parkSubproject(subDir, getLog(), subproject, compBranch);
+                getLog().info(Ansi.green("  ✓ ") + "Parked clone: "
+                        + subprojectDir + " (" + compBranch + " → origin, "
+                        + "clone removed)");
+                parked = true;
+            } else if (Files.isDirectory(subprojectDir)) {
+                // Not a clone — nothing to preserve, plain delete.
+                ParkSupport.deleteDirectory(subprojectDir);
                 getLog().info(Ansi.green("  ✓ ") + "Deleted directory: " + subprojectDir);
             } else {
                 getLog().info("  - Directory not present: " + subprojectDir);
@@ -151,7 +183,8 @@ public class WsRemoveMojo extends AbstractWorkspaceMojo {
 
         WorkspaceReportSpec spec = new WorkspaceReportSpec(WsGoal.REMOVE,
                 "Removed subproject **" + subproject + "**."
-                + (deleteDir ? " Directory deleted." : "") + "\n");
+                + (parked ? " Clone parked (branch pushed to origin, clone "
+                        + "removed)." : "") + "\n");
 
         PostMutationSync.refresh(workspaceRoot(), getLog());
         return spec;
@@ -226,27 +259,4 @@ public class WsRemoveMojo extends AbstractWorkspaceMojo {
         Files.writeString(pomPath, pom, StandardCharsets.UTF_8);
     }
 
-    // ── Directory deletion ──────────────────────────────────────
-
-    /**
-     * Recursively delete a directory tree.
-     */
-    private void deleteDirectory(Path dir) throws MojoException {
-        try {
-            // Walk the tree bottom-up and delete
-            Files.walk(dir)
-                    .sorted(java.util.Comparator.reverseOrder())
-                    .forEach(path -> {
-                        try {
-                            Files.delete(path);
-                        } catch (IOException e) {
-                            throw new RuntimeException(
-                                    "Failed to delete " + path + ": " + e.getMessage(), e);
-                        }
-                    });
-        } catch (IOException | RuntimeException e) {
-            throw new MojoException(
-                    "Failed to delete directory " + dir + ": " + e.getMessage(), e);
-        }
-    }
 }

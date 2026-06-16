@@ -16,13 +16,10 @@ import org.apache.maven.api.plugin.annotations.Mojo;
 import org.apache.maven.api.plugin.annotations.Parameter;
 
 import java.io.File;
-import java.io.IOException;
 import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -67,10 +64,10 @@ import java.util.TreeSet;
 public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
 
     /** Full ref prefix for auto-stash refs (see #153). */
-    static final String STASH_REF_PREFIX = "refs/ws-stash/";
+    static final String STASH_REF_PREFIX = ParkSupport.STASH_REF_PREFIX;
 
     /** Remote name for auto-stash push/fetch/delete. */
-    static final String STASH_REMOTE = "origin";
+    static final String STASH_REMOTE = ParkSupport.STASH_REMOTE;
 
     /** Creates this goal instance. */
     public WsSwitchDraftMojo() {}
@@ -231,7 +228,7 @@ public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
                     continue;
                 }
                 if (!noStash && !VcsOperations.isClean(dir)) {
-                    stashLeave(dir, slug, compBranch);
+                    ParkSupport.stashLeave(dir, getLog(), slug, compBranch);
                     stashed++;
                 }
                 parkSubproject(dir, name, compBranch);
@@ -278,7 +275,7 @@ public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
 
             // ── Leave flow: stash work on source branch ──────────
             if (!noStash && !VcsOperations.isClean(dir)) {
-                stashLeave(dir, slug, compBranch);
+                ParkSupport.stashLeave(dir, getLog(), slug, compBranch);
                 stashed++;
             }
 
@@ -289,7 +286,7 @@ public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
 
             // ── Arrive flow: apply stash on target branch if any ─
             if (!noStash) {
-                if (stashArrive(dir, slug, branch)) {
+                if (ParkSupport.stashArrive(dir, getLog(), slug, branch)) {
                     applied++;
                 }
             }
@@ -357,7 +354,7 @@ public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
                 } else {
                     report.paragraph("**" + wouldStash.size()
                             + "** subproject(s) with uncommitted work would be "
-                            + "stashed to `" + stashRef(slug, currentBranch)
+                            + "stashed to `" + ParkSupport.stashRef(slug, currentBranch)
                             + "` on `" + STASH_REMOTE + "`:");
                     for (String n : wouldStash) report.bullet("`" + n + "`");
                     report.paragraph("Restored automatically when you return to `"
@@ -371,7 +368,7 @@ public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
                     report.paragraph("**" + wouldRestore.size()
                             + "** subproject(s) have a parked stash on `" + branch
                             + "` that would be restored from `"
-                            + stashRef(slug, branch) + "`:");
+                            + ParkSupport.stashRef(slug, branch) + "`:");
                     for (String n : wouldRestore) report.bullet("`" + n + "`");
                 }
             }
@@ -434,6 +431,9 @@ public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
      * remove the local clone. Aborts in place (no deletion) if the push
      * fails — the working tree is never reduced below what is on origin.
      *
+     * <p>Delegates to {@link ParkSupport#parkSubproject} (the shared
+     * primitive, ike-issues#575).
+     *
      * @param dir        the subproject directory
      * @param name       the subproject name
      * @param compBranch the branch the subproject is currently on
@@ -441,17 +441,7 @@ public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
      */
     private void parkSubproject(File dir, String name, String compBranch)
             throws MojoException {
-        try {
-            VcsOperations.push(dir, getLog(), STASH_REMOTE, compBranch);
-        } catch (MojoException e) {
-            throw new MojoException("Park aborted for '" + name + "': could not "
-                    + "push '" + compBranch + "' to " + STASH_REMOTE
-                    + " — refusing to remove a clone whose work is not on "
-                    + "origin. " + e.getMessage(), e);
-        }
-        getLog().info("  " + Ansi.cyan("⇲ ") + name + " — parked ("
-                + compBranch + " → " + STASH_REMOTE + ", clone removed)");
-        deleteDirectory(dir.toPath());
+        ParkSupport.parkSubproject(dir, getLog(), name, compBranch);
     }
 
     /**
@@ -488,7 +478,7 @@ public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
                         graph.manifest().subprojects().get(name).branch();
                 if (memberBranch != null && !memberBranch.isBlank()) {
                     try {
-                        stashArrive(dir, slug, memberBranch);
+                        ParkSupport.stashArrive(dir, getLog(), slug, memberBranch);
                     } catch (MojoException e) {
                         getLog().warn("    could not restore stash for " + name
                                 + ": " + e.getMessage());
@@ -499,99 +489,6 @@ public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
             restored++;
         }
         return restored;
-    }
-
-    /**
-     * Recursively delete a directory tree (removes a parked clone).
-     *
-     * @param dir the directory to delete
-     * @throws MojoException if deletion fails
-     */
-    private static void deleteDirectory(Path dir) throws MojoException {
-        try (var paths = Files.walk(dir)) {
-            paths.sorted(Comparator.reverseOrder())
-                    .forEach(p -> {
-                        try {
-                            Files.delete(p);
-                        } catch (IOException e) {
-                            throw new RuntimeException(e);
-                        }
-                    });
-        } catch (IOException | RuntimeException e) {
-            throw new MojoException(
-                    "Failed to delete " + dir + ": " + e.getMessage(), e);
-        }
-    }
-
-    /**
-     * Build the auto-stash ref path for a given user slug and branch.
-     * Branches with {@code /} in their name (e.g. {@code feature/A})
-     * become multi-segment ref paths, which git supports.
-     *
-     * @param slug   user slug from {@link VcsOperations#userSlug(String)}
-     * @param branch the branch name
-     * @return full ref path, e.g.
-     *         {@code "refs/ws-stash/kec--knowledge-design/feature/A"}
-     */
-    static String stashRef(String slug, String branch) {
-        return STASH_REF_PREFIX + slug + "/" + branch;
-    }
-
-    /**
-     * Execute the leave flow on a subproject with uncommitted work:
-     * stash (including untracked), move stash to custom ref, drop local
-     * stash entry, push ref to origin. A collision on the source ref is
-     * detected at preflight; hitting it here means state changed between
-     * preflight and execute (racy), so fail loudly.
-     *
-     * @param dir          the subproject directory
-     * @param slug         user slug
-     * @param sourceBranch the branch we're leaving
-     * @throws MojoException if any step fails
-     */
-    private void stashLeave(File dir, String slug, String sourceBranch)
-            throws MojoException {
-        String ref = stashRef(slug, sourceBranch);
-        String message = "ws-auto/" + sourceBranch;
-        VcsOperations.stashPushUntracked(dir, getLog(), message);
-        VcsOperations.updateRef(dir, getLog(), ref, "refs/stash");
-        VcsOperations.stashDrop(dir, getLog());
-        VcsOperations.pushRef(dir, getLog(), STASH_REMOTE, ref);
-        getLog().info("    " + Ansi.yellow("↟ ") + "stashed → " + ref);
-    }
-
-    /**
-     * Execute the arrive flow on a subproject that's just checked out
-     * the target branch: probe for a remote stash ref for this
-     * user/branch; if present, fetch it, apply it, and delete the ref
-     * locally and remotely.
-     *
-     * @param dir          the subproject directory
-     * @param slug         user slug
-     * @param targetBranch the branch we just switched to
-     * @return {@code true} if a stash was applied, {@code false} if no
-     *         stash was present
-     * @throws MojoException if the apply or cleanup fails
-     */
-    private boolean stashArrive(File dir, String slug, String targetBranch)
-            throws MojoException {
-        String ref = stashRef(slug, targetBranch);
-        boolean present;
-        try {
-            present = VcsOperations.remoteRefExists(dir, STASH_REMOTE, ref);
-        } catch (MojoException e) {
-            getLog().warn("    " + Ansi.yellow("⚠ ") + "could not probe "
-                    + STASH_REMOTE + " for " + ref + " — " + e.getMessage());
-            return false;
-        }
-        if (!present) return false;
-
-        VcsOperations.fetchRef(dir, getLog(), STASH_REMOTE, ref);
-        VcsOperations.stashApply(dir, getLog(), ref);
-        VcsOperations.deleteLocalRef(dir, getLog(), ref);
-        VcsOperations.deleteRemoteRef(dir, getLog(), STASH_REMOTE, ref);
-        getLog().info("    " + Ansi.green("↡ ") + "stash applied from " + ref);
-        return true;
     }
 
     /**
@@ -612,7 +509,7 @@ public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
         if (slug == null) return false;
         try {
             return VcsOperations.remoteRefExists(dir, STASH_REMOTE,
-                    stashRef(slug, targetBranch));
+                    ParkSupport.stashRef(slug, targetBranch));
         } catch (MojoException e) {
             return false;
         }
@@ -660,7 +557,7 @@ public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
 
             boolean hasWip = !VcsOperations.isClean(dir);
             if (hasWip) {
-                String sourceRef = stashRef(slug, sourceBranch);
+                String sourceRef = ParkSupport.stashRef(slug, sourceBranch);
                 try {
                     if (VcsOperations.remoteRefExists(dir, STASH_REMOTE, sourceRef)) {
                         collisions.add(name + " (" + sourceRef + ")");
@@ -670,7 +567,7 @@ public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
                 }
             }
 
-            String targetRef = stashRef(slug, targetBranch);
+            String targetRef = ParkSupport.stashRef(slug, targetBranch);
             try {
                 if (VcsOperations.remoteRefExists(dir, STASH_REMOTE, targetRef)) {
                     targetStashes.add(name);
@@ -701,11 +598,11 @@ public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
                             .orElse("")
                     + "\n\nResolve manually (per subproject):\n"
                     + "  # recover the old stash:\n"
-                    + "  git fetch origin " + stashRef(slug, sourceBranch) + ":"
-                    + stashRef(slug, sourceBranch) + "\n"
-                    + "  git stash apply " + stashRef(slug, sourceBranch) + "\n"
+                    + "  git fetch origin " + ParkSupport.stashRef(slug, sourceBranch) + ":"
+                    + ParkSupport.stashRef(slug, sourceBranch) + "\n"
+                    + "  git stash apply " + ParkSupport.stashRef(slug, sourceBranch) + "\n"
                     + "  # OR, if the old stash is obsolete:\n"
-                    + "  git push origin :" + stashRef(slug, sourceBranch) + "\n"
+                    + "  git push origin :" + ParkSupport.stashRef(slug, sourceBranch) + "\n"
                     + "\nThen retry ws:switch.";
             if (draft) {
                 getLog().warn("");

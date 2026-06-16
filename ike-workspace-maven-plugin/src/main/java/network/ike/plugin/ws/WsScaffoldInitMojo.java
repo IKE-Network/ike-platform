@@ -167,6 +167,18 @@ public class WsScaffoldInitMojo implements Mojo {
     @Parameter(property = "workspace.manifest")
     File manifest;
 
+    /**
+     * Reach each subproject's pinned {@code sha} with
+     * {@code git reset --hard} and fail the build if a pin cannot be
+     * reached (init mode only). Off by default: the interactive path uses
+     * a lenient {@code git checkout} that never clobbers uncommitted work
+     * and only warns on failure. Turn this on in CI/force runs so a stale
+     * clone can never build silently-stale code
+     * (IKE-Network/ike-issues#685).
+     */
+    @Parameter(property = "ws.scaffold.resetToPin", defaultValue = "false")
+    boolean resetToPin;
+
     /** Creates this goal instance. */
     public WsScaffoldInitMojo() {}
 
@@ -327,7 +339,7 @@ public class WsScaffoldInitMojo implements Mojo {
         }
 
         SubprojectInitializer initializer =
-                new SubprojectInitializer(graph, root, wsName, log);
+                new SubprojectInitializer(graph, root, wsName, log, resetToPin);
         SubprojectInitializer.Result result = initializer.run();
 
         if (result.nothingChanged()) {

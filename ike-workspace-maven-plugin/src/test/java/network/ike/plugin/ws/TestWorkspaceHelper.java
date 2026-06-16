@@ -20,11 +20,11 @@ import java.nio.file.Path;
  *   app-c  (depends on lib-b)
  * </pre>
  */
-class TestWorkspaceHelper {
+public class TestWorkspaceHelper {
 
     private final Path root;
 
-    TestWorkspaceHelper(Path tempDir) {
+    public TestWorkspaceHelper(Path tempDir) {
         this.root = tempDir;
     }
 
@@ -51,7 +51,7 @@ class TestWorkspaceHelper {
      * to them, and writes workspace.yaml with {@code file://} repo URLs.
      * Does NOT create subproject directories — init will clone them.
      */
-    void buildWorkspaceWithUpstreams() throws Exception {
+    public void buildWorkspaceWithUpstreams() throws Exception {
         Path upstreams = root.resolve(".upstreams");
         Files.createDirectories(upstreams);
 

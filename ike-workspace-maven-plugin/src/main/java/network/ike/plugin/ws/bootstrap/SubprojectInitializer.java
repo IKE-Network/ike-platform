@@ -57,7 +57,32 @@ public final class SubprojectInitializer {
     private final Log log;
 
     /**
-     * Bind an initializer to an already-loaded workspace.
+     * When {@code true}, reach a pinned {@code sha} with
+     * {@code git reset --hard} (deterministic even over a dirty tree)
+     * and <em>fail loud</em> if the pin cannot be reached; when
+     * {@code false} (the interactive default), reach it with a lenient
+     * {@code git checkout} (which refuses to clobber local work) and
+     * merely warn on failure.
+     *
+     * <p>Added for IKE-Network/ike-issues#685: a stale clone that lacks
+     * the pinned commit used to fail a bare {@code git checkout <sha>}
+     * with {@code unable to read tree <sha>}, get swallowed to a
+     * {@code log.warn}, and let CI build silently-stale code. In CI/force
+     * mode this flag turns that swallow into a hard failure so a stale
+     * pin can never ship. The accompanying {@code git fetch} (run in
+     * <em>both</em> modes when the pin is missing locally) fixes the core
+     * "unable to read tree" bug.
+     *
+     * <p><b>Invariant:</b> {@code git reset --hard} is only ever issued
+     * when this flag is {@code true} — the default path never destroys
+     * uncommitted work.
+     */
+    private final boolean resetToPin;
+
+    /**
+     * Bind an initializer to an already-loaded workspace, in the
+     * interactive default mode (lenient {@code git checkout} for pins,
+     * warn-only on failure).
      *
      * @param graph         the loaded workspace graph
      * @param root          the workspace root directory
@@ -66,10 +91,31 @@ public final class SubprojectInitializer {
      */
     public SubprojectInitializer(WorkspaceGraph graph, File root,
                                   String workspaceName, Log log) {
+        this(graph, root, workspaceName, log, false);
+    }
+
+    /**
+     * Bind an initializer to an already-loaded workspace, choosing how
+     * a pinned {@code sha} is reached.
+     *
+     * @param graph         the loaded workspace graph
+     * @param root          the workspace root directory
+     * @param workspaceName workspace artifactId, used in the report header
+     * @param log           the mojo logger
+     * @param resetToPin    {@code true} (CI/force) to reach a pin with
+     *                      {@code git reset --hard} and fail loud when it
+     *                      cannot be reached; {@code false} (interactive)
+     *                      to use a lenient {@code git checkout} and warn
+     *                      only. See {@link #resetToPin} (ike-issues#685).
+     */
+    public SubprojectInitializer(WorkspaceGraph graph, File root,
+                                  String workspaceName, Log log,
+                                  boolean resetToPin) {
         this.graph = graph;
         this.root = root;
         this.workspaceName = workspaceName;
         this.log = log;
+        this.resetToPin = resetToPin;
     }
 
     /** Outcome counters for one initialization pass. */
@@ -255,23 +301,101 @@ public final class SubprojectInitializer {
                 "git", "clone", "-b", branch, repo, name);
     }
 
+    /**
+     * Move a subproject's working tree onto the {@code sha} pinned in
+     * {@code workspace.yaml}, if any.
+     *
+     * <p>Deterministically reaches the pin (IKE-Network/ike-issues#685):
+     * <ol>
+     *   <li>No pin → nothing to do.</li>
+     *   <li>Already at the pin (by prefix match) → nothing to do.</li>
+     *   <li><b>Ensure the commit is present locally</b> — a stale clone
+     *       may not have the pinned object yet. When absent, run a
+     *       read-only {@code git fetch origin}; this is done in
+     *       <em>both</em> modes and is what fixes the original
+     *       "unable to read tree {@code <sha>}" failure that used to be
+     *       swallowed to a warning.</li>
+     *   <li>Reach the pin: {@code git reset --hard <sha>} when
+     *       {@link #resetToPin} (deterministic even over a dirty tree),
+     *       otherwise the lenient {@code git checkout <sha>} (which
+     *       refuses to clobber uncommitted work).</li>
+     * </ol>
+     *
+     * <p>On failure, CI/force mode ({@code resetToPin == true})
+     * <em>rethrows</em> — a stale pin must never build — while the
+     * interactive default warns and proceeds, preserving local WIP.
+     *
+     * @param dir        the subproject working directory
+     * @param subproject the subproject definition (its {@link Subproject#sha()}
+     *                   is the pin)
+     * @throws MojoException only in {@link #resetToPin} mode, when the pin
+     *                       cannot be reached
+     */
     private void checkoutSha(File dir, Subproject subproject) {
         if (subproject.sha() == null || subproject.sha().isBlank()) {
             return;
         }
+        String sha = subproject.sha();
         try {
             String currentSha = ReleaseSupport.execCapture(dir,
                     "git", "rev-parse", "HEAD");
-            if (currentSha.startsWith(subproject.sha())
-                    || subproject.sha().startsWith(currentSha)) {
+            if (currentSha.startsWith(sha) || sha.startsWith(currentSha)) {
                 return; // already at the right commit
             }
-            log.info("    Checking out SHA: " + subproject.sha().substring(0, 8));
-            ReleaseSupport.exec(dir, log,
-                    "git", "checkout", subproject.sha());
+
+            // A stale clone may lack the pinned object. Fetch (read-only)
+            // before trying to reach it — this is the core #685 fix.
+            if (!commitPresent(dir, sha)) {
+                log.info("    Fetching pinned commit "
+                        + sha.substring(0, Math.min(8, sha.length())));
+                ReleaseSupport.exec(dir, log,
+                        "git", "fetch", "origin", "--quiet");
+            }
+
+            if (resetToPin) {
+                log.info("    Resetting to pinned SHA: "
+                        + sha.substring(0, Math.min(8, sha.length())));
+                ReleaseSupport.exec(dir, log,
+                        "git", "reset", "--hard", sha);
+            } else {
+                log.info("    Checking out SHA: "
+                        + sha.substring(0, Math.min(8, sha.length())));
+                ReleaseSupport.exec(dir, log,
+                        "git", "checkout", sha);
+            }
         } catch (MojoException e) {
-            log.warn("    Could not checkout SHA " + subproject.sha()
+            if (resetToPin) {
+                // CI/force mode must never build silently-stale code:
+                // a pin that cannot be reached is a hard failure.
+                throw new MojoException(
+                        "Could not reset " + subproject.name()
+                                + " to pinned SHA " + sha
+                                + " (workspace.yaml). The pinned commit is "
+                                + "not reachable even after fetching origin: "
+                                + e.getMessage(), e);
+            }
+            log.warn("    Could not checkout SHA " + sha
                     + ": " + e.getMessage());
+        }
+    }
+
+    /**
+     * Whether the given commit object already exists in {@code dir}'s
+     * local object store, tested with {@code git cat-file -e <sha>^{commit}}
+     * (exit 0 ⇒ present). Used to decide whether a fetch is needed before
+     * reaching a pin (IKE-Network/ike-issues#685).
+     *
+     * @param dir the subproject working directory
+     * @param sha the candidate commit SHA
+     * @return {@code true} if the commit is present locally, else {@code false}
+     */
+    private boolean commitPresent(File dir, String sha) {
+        try {
+            ReleaseSupport.execCapture(dir,
+                    "git", "cat-file", "-e", sha + "^{commit}");
+            return true;
+        } catch (MojoException e) {
+            return false;
         }
     }
 

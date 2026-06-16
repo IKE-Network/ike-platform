@@ -244,11 +244,10 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
                 new java.util.LinkedHashMap<>();
         java.util.Map<String, String> targetSha =
                 new java.util.LinkedHashMap<>();
-        for (String name : eligible) {
-            Subproject subproject = graph.manifest().subprojects().get(name);
-            File dir = new File(root, name);
 
-            if (draft) {
+        if (draft) {
+            for (String name : eligible) {
+                File dir = new File(root, name);
                 // Predict the version-only no-op (read-only): a feature
                 // branch that changes only pom.xml carries just the
                 // version bump, which publish strips before merging —
@@ -265,49 +264,79 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
                         + targetBranch
                         + (versionOnly ? " (version-only — no commit expected)" : ""));
                 merged++;
-                continue;
+            }
+        } else {
+            // #667: front-load the version strip into its own pass over
+            // every eligible subproject BEFORE any squash-merge runs. After
+            // this pass each feature-branch POM is plain -SNAPSHOT, so a
+            // crash partway through the merge pass leaves a compilable tree
+            // rather than a mix of stripped and branch-qualified POMs.
+            for (String name : eligible) {
+                Subproject subproject = graph.manifest().subprojects().get(name);
+                File dir = new File(root, name);
+                getLog().info(Ansi.cyan("  ⤓ ") + name + " — strip version qualifier");
+                VcsOperations.catchUp(dir, getLog());
+                FeatureFinishSupport.stripBranchVersion(dir, subproject, branchName, getLog());
             }
 
-            getLog().info(Ansi.cyan("  → ") + name);
-            VcsOperations.catchUp(dir, getLog());
-            FeatureFinishSupport.stripBranchVersion(dir, subproject, branchName, getLog());
+            // #667: merge pass — checkout target + squash-merge + post-steps
+            // per subproject. Track what has merged so a failure here can
+            // tell the user exactly how to resume (re-running this goal
+            // skips already-merged subprojects via ALREADY_DONE).
+            List<String> mergedSoFar = new ArrayList<>();
+            for (int i = 0; i < eligible.size(); i++) {
+                String name = eligible.get(i);
+                File dir = new File(root, name);
 
-            VcsOperations.checkout(dir, getLog(), targetBranch);
-            VcsOperations.mergeSquash(dir, getLog(), branchName);
+                try {
+                    getLog().info(Ansi.cyan("  → ") + name);
+                    VcsOperations.checkout(dir, getLog(), targetBranch);
+                    VcsOperations.mergeSquash(dir, getLog(), branchName);
 
-            SquashKind kind;
-            if (VcsOperations.hasStagedChanges(dir)) {
-                VcsOperations.commit(dir, getLog(), effectiveMessage);
-                FeatureFinishSupport.verifyAndFixQualifiers(dir, branchName, getLog());
-                if (push) {
-                    VcsOperations.pushIfRemoteExists(dir, getLog(), "origin", targetBranch);
+                    SquashKind kind;
+                    if (VcsOperations.hasStagedChanges(dir)) {
+                        VcsOperations.commit(dir, getLog(), effectiveMessage);
+                        FeatureFinishSupport.verifyAndFixQualifiers(dir, branchName, getLog());
+                        if (push) {
+                            VcsOperations.pushIfRemoteExists(dir, getLog(), "origin", targetBranch);
+                        }
+                        kind = SquashKind.CONTENT_SQUASHED;
+                    } else {
+                        getLog().info("    no changes after squash (version-only branch) — skipping commit");
+                        // #162: clear .git/SQUASH_MSG & .git/MERGE_MSG so a later
+                        // git commit doesn't pick up the template and land an
+                        // empty "Squashed commit of the following:" on main.
+                        VcsOperations.resetHard(dir, getLog(), "HEAD");
+                        kind = SquashKind.VERSION_ONLY_NOOP;
+                    }
+                    squashKind.put(name, kind);
+                    try {
+                        targetSha.put(name, VcsOperations.headSha(dir));
+                    } catch (MojoException ignored) {
+                        // Best-effort enrichment; report tolerates absence.
+                    }
+
+                    if (!keepBranch) {
+                        String remoteFailReason = FeatureFinishSupport.deleteBranch(
+                                dir, getLog(), branchName, keepRemoteBranch);
+                        if (remoteFailReason != null) {
+                            undeletedRemote.put(name, remoteFailReason);
+                        }
+                    }
+
+                    VcsOperations.writeVcsState(dir, VcsState.Action.FEATURE_FINISH);
+                    mergedSoFar.add(name);
+                    merged++;
+                } catch (MojoException e) {
+                    List<String> remaining =
+                            new ArrayList<>(eligible.subList(i + 1, eligible.size()));
+                    throw new MojoException(
+                            FeatureFinishSupport.resumeGuidance(
+                                    WsGoal.FEATURE_FINISH_SQUASH_PUBLISH, feature,
+                                    mergedSoFar, name, remaining),
+                            e);
                 }
-                kind = SquashKind.CONTENT_SQUASHED;
-            } else {
-                getLog().info("    no changes after squash (version-only branch) — skipping commit");
-                // #162: clear .git/SQUASH_MSG & .git/MERGE_MSG so a later
-                // git commit doesn't pick up the template and land an
-                // empty "Squashed commit of the following:" on main.
-                VcsOperations.resetHard(dir, getLog(), "HEAD");
-                kind = SquashKind.VERSION_ONLY_NOOP;
             }
-            squashKind.put(name, kind);
-            try {
-                targetSha.put(name, VcsOperations.headSha(dir));
-            } catch (MojoException ignored) {
-                // Best-effort enrichment; report tolerates absence.
-            }
-
-            if (!keepBranch) {
-                String remoteFailReason = FeatureFinishSupport.deleteBranch(
-                        dir, getLog(), branchName, keepRemoteBranch);
-                if (remoteFailReason != null) {
-                    undeletedRemote.put(name, remoteFailReason);
-                }
-            }
-
-            VcsOperations.writeVcsState(dir, VcsState.Action.FEATURE_FINISH);
-            merged++;
         }
 
         // #544: include already-done subprojects' current target-branch

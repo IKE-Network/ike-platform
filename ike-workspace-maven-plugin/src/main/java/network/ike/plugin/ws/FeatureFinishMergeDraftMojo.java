@@ -215,40 +215,68 @@ public class FeatureFinishMergeDraftMojo extends AbstractWorkspaceMojo {
         // the report can show the resulting SHA next to the status.
         java.util.Map<String, String> targetSha =
                 new java.util.LinkedHashMap<>();
-        for (String name : eligible) {
-            Subproject subproject = graph.manifest().subprojects().get(name);
-            File dir = new File(root, name);
 
-            if (draft) {
+        if (draft) {
+            for (String name : eligible) {
                 getLog().info("  [draft] " + name + " — would merge → " + targetBranch);
                 merged++;
-                continue;
+            }
+        } else {
+            // #667: front-load the version strip into its own pass over
+            // every eligible subproject BEFORE any merge runs. After this
+            // pass each feature-branch POM is plain -SNAPSHOT, so a crash
+            // partway through the merge pass leaves a compilable tree
+            // rather than a mix of stripped and branch-qualified POMs.
+            for (String name : eligible) {
+                Subproject subproject = graph.manifest().subprojects().get(name);
+                File dir = new File(root, name);
+                getLog().info(Ansi.cyan("  ⤓ ") + name + " — strip version qualifier");
+                VcsOperations.catchUp(dir, getLog());
+                FeatureFinishSupport.stripBranchVersion(dir, subproject, branchName, getLog());
             }
 
-            getLog().info(Ansi.cyan("  → ") + name);
-            VcsOperations.catchUp(dir, getLog());
-            FeatureFinishSupport.stripBranchVersion(dir, subproject, branchName, getLog());
+            // #667: merge pass — checkout target + no-ff merge + post-steps
+            // per subproject. Track what has merged so a failure here can
+            // tell the user exactly how to resume (re-running this goal
+            // skips already-merged subprojects via ALREADY_DONE).
+            List<String> mergedSoFar = new ArrayList<>();
+            for (int i = 0; i < eligible.size(); i++) {
+                String name = eligible.get(i);
+                File dir = new File(root, name);
 
-            VcsOperations.checkout(dir, getLog(), targetBranch);
-            VcsOperations.mergeNoFf(dir, getLog(), branchName, generatedMessage);
-            FeatureFinishSupport.verifyAndFixQualifiers(dir, branchName, getLog());
-            if (push) {
-                VcsOperations.pushIfRemoteExists(dir, getLog(), "origin", targetBranch);
-            }
-            try {
-                targetSha.put(name, VcsOperations.headSha(dir));
-            } catch (MojoException ignored) {}
+                try {
+                    getLog().info(Ansi.cyan("  → ") + name);
+                    VcsOperations.checkout(dir, getLog(), targetBranch);
+                    VcsOperations.mergeNoFf(dir, getLog(), branchName, generatedMessage);
+                    FeatureFinishSupport.verifyAndFixQualifiers(dir, branchName, getLog());
+                    if (push) {
+                        VcsOperations.pushIfRemoteExists(dir, getLog(), "origin", targetBranch);
+                    }
+                    try {
+                        targetSha.put(name, VcsOperations.headSha(dir));
+                    } catch (MojoException ignored) {}
 
-            if (!keepBranch) {
-                String remoteFailReason = FeatureFinishSupport.deleteBranch(
-                        dir, getLog(), branchName, keepRemoteBranch);
-                if (remoteFailReason != null) {
-                    undeletedRemote.put(name, remoteFailReason);
+                    if (!keepBranch) {
+                        String remoteFailReason = FeatureFinishSupport.deleteBranch(
+                                dir, getLog(), branchName, keepRemoteBranch);
+                        if (remoteFailReason != null) {
+                            undeletedRemote.put(name, remoteFailReason);
+                        }
+                    }
+
+                    VcsOperations.writeVcsState(dir, VcsState.Action.FEATURE_FINISH);
+                    mergedSoFar.add(name);
+                    merged++;
+                } catch (MojoException e) {
+                    List<String> remaining =
+                            new ArrayList<>(eligible.subList(i + 1, eligible.size()));
+                    throw new MojoException(
+                            FeatureFinishSupport.resumeGuidance(
+                                    WsGoal.FEATURE_FINISH_MERGE_PUBLISH, feature,
+                                    mergedSoFar, name, remaining),
+                            e);
                 }
             }
-
-            VcsOperations.writeVcsState(dir, VcsState.Action.FEATURE_FINISH);
-            merged++;
         }
 
         // #544 + #535: include already-done subprojects' current target-

@@ -223,8 +223,65 @@ class FeatureFinishSupport {
     }
 
     /**
+     * Build the crash-recovery guidance message thrown when a subproject's
+     * merge sequence fails partway through the merge pass (ike-issues#667).
+     *
+     * <p>By the time the merge pass runs, the prep pass has already
+     * stripped the branch qualifier from <em>every</em> eligible
+     * subproject's feature-branch POM (a {@code merge-prep} commit on the
+     * feature branch), so the workspace compiles regardless of where the
+     * merge pass stopped. The message states exactly that, names which
+     * subprojects already merged, which one failed, and which remain, and
+     * emits the resume command — re-running the same publish goal skips
+     * already-merged subprojects via {@link #ALREADY_DONE} and finishes
+     * the rest.
+     *
+     * @param goal       the publish goal to resume with (e.g.
+     *                   {@code FEATURE_FINISH_MERGE_PUBLISH})
+     * @param feature    the feature name (for the {@code -Dfeature=} flag)
+     * @param mergedSoFar subprojects whose merge completed before the failure
+     * @param failed     the subproject whose merge sequence threw
+     * @param remaining  eligible subprojects not yet attempted
+     * @return the formatted guidance message
+     */
+    static String resumeGuidance(WsGoal goal, String feature,
+                                  List<String> mergedSoFar, String failed,
+                                  List<String> remaining) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("Feature-finish failed while merging '").append(failed)
+                .append("'.\n\n");
+        sb.append("The version strip is already applied to all subprojects, "
+                + "so the workspace still compiles — no subproject is left on "
+                + "a branch-qualified version.\n\n");
+        if (mergedSoFar.isEmpty()) {
+            sb.append("Merged before the failure: (none)\n");
+        } else {
+            sb.append("Merged before the failure: ")
+                    .append(String.join(", ", mergedSoFar)).append("\n");
+        }
+        sb.append("Failed: ").append(failed).append("\n");
+        if (remaining.isEmpty()) {
+            sb.append("Remaining: (none)\n");
+        } else {
+            sb.append("Remaining: ").append(String.join(", ", remaining))
+                    .append("\n");
+        }
+        sb.append("\nFix the cause above, then re-run the same goal to resume "
+                + "— already-merged subprojects are skipped automatically:\n\n");
+        sb.append("  ./mvnw ").append(goal.qualified())
+                .append(" -Dfeature=").append(feature);
+        return sb.toString();
+    }
+
+    /**
      * Strip branch-qualified version back to base SNAPSHOT.
      * Returns the base version, or null if no stripping was needed.
+     *
+     * <p>Idempotent: when the POM version is already a plain
+     * {@code -SNAPSHOT} (the qualifier was stripped by an earlier run),
+     * {@code containsBranchQualifier} returns {@code false} and the method
+     * returns {@code null} without staging or committing. This makes the
+     * front-loaded prep pass safe to repeat on resume (ike-issues#667).
      */
     static String stripBranchVersion(File dir, Subproject subproject,
                                       String branchName, Log log)

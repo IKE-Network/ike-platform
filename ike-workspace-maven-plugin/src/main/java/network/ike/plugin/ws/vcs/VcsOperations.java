@@ -1135,12 +1135,30 @@ public class VcsOperations {
     // ── Internal helpers ─────────────────────────────────────────
 
     /**
+     * Test seam (ike-issues#691): intercepts each git subprocess before it runs.
+     * Throwing {@link MojoException} simulates a command failure WITHOUT executing
+     * the real subprocess; returning normally lets the command proceed. Default no-op.
+     */
+    @FunctionalInterface
+    public interface CommandInterceptor {
+        void beforeCommand(File workDir, String[] command) throws MojoException;
+    }
+
+    private static volatile CommandInterceptor commandInterceptor = (dir, cmd) -> { };
+
+    /** Install a command interceptor (tests only). Pass {@code null} to reset to the default no-op. */
+    static void setCommandInterceptor(CommandInterceptor interceptor) {
+        commandInterceptor = (interceptor != null) ? interceptor : (dir, cmd) -> { };
+    }
+
+    /**
      * Run a command with output routed through the Maven logger.
      * Optionally sets environment variables.
      */
     private static void run(File workDir, Log log, Map<String, String> env,
                             String... command) throws MojoException {
         log.debug("» " + String.join(" ", command));
+        commandInterceptor.beforeCommand(workDir, command);
         try {
             ProcessBuilder pb = new ProcessBuilder(command)
                     .directory(workDir)
@@ -1196,6 +1214,7 @@ public class VcsOperations {
                                          String message, String... command)
             throws MojoException {
         log.debug("» " + String.join(" ", command) + " <<< (message via stdin)");
+        commandInterceptor.beforeCommand(workDir, command);
         try {
             ProcessBuilder pb = new ProcessBuilder(command)
                     .directory(workDir)

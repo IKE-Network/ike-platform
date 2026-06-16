@@ -1,0 +1,456 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>FeatureAbandonDraftMojo.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">FeatureAbandonDraftMojo.java</span></div><h1>FeatureAbandonDraftMojo.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.plugin.ReleaseSupport;
+import network.ike.plugin.support.GoalReportBuilder;
+import network.ike.plugin.ws.preflight.Preflight;
+import network.ike.plugin.ws.preflight.PreflightCondition;
+import network.ike.plugin.ws.preflight.PreflightContext;
+import network.ike.plugin.ws.preflight.PreflightResult;
+
+import network.ike.workspace.Subproject;
+import network.ike.workspace.ManifestWriter;
+import network.ike.workspace.WorkspaceGraph;
+import network.ike.plugin.ws.vcs.VcsOperations;
+import network.ike.plugin.ws.vcs.VcsState;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
+
+/**
+ * Abandon a feature branch across all workspace subprojects.
+ *
+ * &lt;p&gt;The draft variant previews what would be abandoned — which components,
+ * how many unmerged commits, what would be lost. The publish variant
+ * prompts for confirmation then executes the deletion.
+ *
+ * &lt;p&gt;Components are processed in reverse topological order (downstream
+ * first) to avoid transient dependency issues.
+ *
+ * &lt;pre&gt;{@code
+ * mvn ws:feature-abandon-draft                       # preview
+ * mvn ws:feature-abandon-publish                     # execute (with confirmation)
+ * mvn ws:feature-abandon-publish -Dforce=true        # skip confirmation
+ * mvn ws:feature-abandon-publish -DdeleteRemote=true # also delete remote branches
+ * }&lt;/pre&gt;
+ *
+ * @see FeatureStartDraftMojo for creating feature branches
+ */
+@Mojo(name = &quot;feature-abandon-draft&quot;, projectRequired = false, aggregator = true)
+public class FeatureAbandonDraftMojo extends AbstractWorkspaceMojo {
+
+    @Parameter(property = &quot;feature&quot;)
+    String feature;
+
+    @Parameter(property = &quot;targetBranch&quot;)
+    String targetBranch;
+
+    @Parameter(property = &quot;deleteRemote&quot;, defaultValue = &quot;false&quot;)
+    boolean deleteRemote;
+
+    @Parameter(property = &quot;force&quot;, defaultValue = &quot;false&quot;)
+    boolean force;
+
+    /** Execute the abandon. Default is draft (preview only). */
+    @Parameter(property = &quot;publish&quot;, defaultValue = &quot;false&quot;)
+    boolean publish;
+
+    /** Creates this goal instance. */
+<span class="nc" id="L70">    public FeatureAbandonDraftMojo() {}</span>
+
+    @Override
+    protected WorkspaceReportSpec runGoal() throws MojoException {
+<span class="nc bnc" id="L74" title="All 2 branches missed.">        if (!isWorkspaceMode()) {</span>
+<span class="nc" id="L75">            return executeBareMode();</span>
+        }
+
+<span class="nc" id="L78">        return executeWorkspaceMode();</span>
+    }
+
+    private WorkspaceReportSpec executeWorkspaceMode() throws MojoException {
+<span class="nc bnc" id="L82" title="All 2 branches missed.">        boolean draft = !publish;</span>
+<span class="nc" id="L83">        WorkspaceGraph graph = loadGraph();</span>
+<span class="nc" id="L84">        File root = workspaceRoot();</span>
+<span class="nc" id="L85">        Path manifestPath = resolveManifest();</span>
+
+<span class="nc bnc" id="L87" title="All 4 branches missed.">        if (targetBranch == null || targetBranch.isBlank()) {</span>
+<span class="nc" id="L88">            targetBranch = graph.manifest().defaults().branch();</span>
+<span class="nc bnc" id="L89" title="All 2 branches missed.">            if (targetBranch == null) targetBranch = &quot;main&quot;;</span>
+        }
+
+<span class="nc" id="L92">        Set&lt;String&gt; targets = graph.manifest().subprojects().keySet();</span>
+
+<span class="nc" id="L94">        List&lt;String&gt; sorted = graph.topologicalSort(new LinkedHashSet&lt;&gt;(targets));</span>
+<span class="nc" id="L95">        List&lt;String&gt; reversed = new ArrayList&lt;&gt;(sorted);</span>
+<span class="nc" id="L96">        Collections.reverse(reversed);</span>
+
+        // Preflight: all working trees must be clean (#132)
+<span class="nc" id="L99">        PreflightResult preflight = Preflight.of(</span>
+<span class="nc" id="L100">                List.of(PreflightCondition.WORKING_TREE_CLEAN),</span>
+<span class="nc" id="L101">                PreflightContext.of(root, graph, sorted));</span>
+<span class="nc bnc" id="L102" title="All 2 branches missed.">        if (draft) {</span>
+<span class="nc" id="L103">            preflight.warnIfFailed(getLog(), WsGoal.FEATURE_ABANDON_PUBLISH);</span>
+        } else {
+<span class="nc" id="L105">            preflight.requirePassed(WsGoal.FEATURE_ABANDON_PUBLISH);</span>
+        }
+
+        // Auto-detect feature branch if not specified
+<span class="nc bnc" id="L109" title="All 4 branches missed.">        if (feature == null || feature.isBlank()) {</span>
+<span class="nc" id="L110">            feature = detectFeatureBranch(root, reversed);</span>
+        }
+<span class="nc" id="L112">        validateFeatureName(feature);</span>
+<span class="nc" id="L113">        String branchName = &quot;feature/&quot; + feature;</span>
+
+        // Collect eligible components and show preview
+<span class="nc" id="L116">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L117">        getLog().info(header(&quot;Feature Abandon&quot;));</span>
+<span class="nc" id="L118">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+<span class="nc" id="L119">        getLog().info(&quot;  Feature:  &quot; + feature);</span>
+<span class="nc" id="L120">        getLog().info(&quot;  Branch:   &quot; + branchName + &quot; → &quot; + targetBranch);</span>
+<span class="nc bnc" id="L121" title="All 2 branches missed.">        if (deleteRemote) getLog().info(&quot;  Remote:   will delete origin/&quot; + branchName);</span>
+<span class="nc bnc" id="L122" title="All 2 branches missed.">        if (draft) getLog().info(&quot;  Mode:     DRAFT&quot;);</span>
+<span class="nc" id="L123">        getLog().info(&quot;&quot;);</span>
+
+<span class="nc" id="L125">        List&lt;String&gt; eligible = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L126">        List&lt;String&gt; skipped = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L127">        List&lt;String[]&gt; reportRows = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L128">        int totalUnmerged = 0;</span>
+
+<span class="nc bnc" id="L130" title="All 2 branches missed.">        for (String name : reversed) {</span>
+<span class="nc" id="L131">            File dir = new File(root, name);</span>
+<span class="nc" id="L132">            File gitDir = new File(dir, &quot;.git&quot;);</span>
+
+<span class="nc bnc" id="L134" title="All 2 branches missed.">            if (!gitDir.exists()) {</span>
+<span class="nc" id="L135">                getLog().info(Ansi.yellow(&quot;  · &quot;) + name + &quot; — not cloned&quot;);</span>
+<span class="nc" id="L136">                skipped.add(name);</span>
+<span class="nc" id="L137">                reportRows.add(new String[]{name, &quot;not cloned&quot;, &quot;0&quot;});</span>
+<span class="nc" id="L138">                continue;</span>
+            }
+
+<span class="nc" id="L141">            String currentBranch = gitBranch(dir);</span>
+<span class="nc bnc" id="L142" title="All 2 branches missed.">            if (!currentBranch.equals(branchName)) {</span>
+<span class="nc" id="L143">                getLog().info(Ansi.yellow(&quot;  · &quot;) + name + &quot; — on &quot;</span>
+                        + currentBranch + &quot;, not on feature&quot;);
+<span class="nc" id="L145">                skipped.add(name);</span>
+<span class="nc" id="L146">                reportRows.add(new String[]{name, &quot;not on feature&quot;, &quot;0&quot;});</span>
+<span class="nc" id="L147">                continue;</span>
+            }
+
+            // Check for uncommitted changes
+<span class="nc" id="L151">            String status = gitStatus(dir);</span>
+<span class="nc bnc" id="L152" title="All 2 branches missed.">            if (!status.isEmpty()) {</span>
+<span class="nc" id="L153">                throw new MojoException(</span>
+                        name + &quot; has uncommitted changes. Commit, stash, or discard before abandoning.&quot;);
+            }
+
+            // Check for unmerged commits
+<span class="nc" id="L158">            int unmergedCount = 0;</span>
+            try {
+<span class="nc" id="L160">                String unmerged = ReleaseSupport.execCapture(dir,</span>
+                        &quot;git&quot;, &quot;log&quot;, &quot;--oneline&quot;,
+                        targetBranch + &quot;..&quot; + branchName);
+<span class="nc bnc" id="L163" title="All 2 branches missed.">                if (!unmerged.isBlank()) {</span>
+<span class="nc" id="L164">                    unmergedCount = (int) unmerged.lines().count();</span>
+                }
+<span class="nc" id="L166">            } catch (MojoException e) {</span>
+                // Target branch may not exist locally
+<span class="nc" id="L168">            }</span>
+
+<span class="nc" id="L170">            totalUnmerged += unmergedCount;</span>
+
+<span class="nc bnc" id="L172" title="All 2 branches missed.">            if (unmergedCount &gt; 0) {</span>
+<span class="nc bnc" id="L173" title="All 2 branches missed.">                String label = draft ? &quot;would abandon&quot; : &quot;abandon&quot;;</span>
+<span class="nc" id="L174">                getLog().info(Ansi.yellow(&quot;  ⚠ &quot;) + name + &quot; — &quot;</span>
+                        + unmergedCount + &quot; unmerged commit(s) — &quot; + label);
+<span class="nc" id="L176">            } else {</span>
+<span class="nc bnc" id="L177" title="All 2 branches missed.">                String label = draft ? &quot;would abandon (clean)&quot; : &quot;abandon&quot;;</span>
+<span class="nc" id="L178">                getLog().info(Ansi.cyan(&quot;  → &quot;) + name + &quot; — &quot; + label);</span>
+            }
+<span class="nc" id="L180">            eligible.add(name);</span>
+<span class="nc" id="L181">            reportRows.add(new String[]{name,</span>
+<span class="nc bnc" id="L182" title="All 2 branches missed.">                    draft ? &quot;would abandon&quot; : &quot;abandoned&quot;,</span>
+<span class="nc" id="L183">                    String.valueOf(unmergedCount)});</span>
+<span class="nc" id="L184">        }</span>
+
+<span class="nc bnc" id="L186" title="All 2 branches missed.">        if (eligible.isEmpty()) {</span>
+<span class="nc" id="L187">            getLog().info(&quot;  No components on &quot; + branchName + &quot; — nothing to abandon.&quot;);</span>
+<span class="nc" id="L188">            getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L189">            return new WorkspaceReportSpec(</span>
+<span class="nc bnc" id="L190" title="All 2 branches missed.">                    publish ? WsGoal.FEATURE_ABANDON_PUBLISH : WsGoal.FEATURE_ABANDON_DRAFT,</span>
+                    &quot;No components on `&quot; + branchName + &quot;` — nothing to abandon.\n&quot;);
+        }
+
+<span class="nc" id="L194">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L195">        getLog().info(&quot;  &quot; + eligible.size() + &quot; subproject(s) on &quot; + branchName);</span>
+<span class="nc bnc" id="L196" title="All 2 branches missed.">        if (totalUnmerged &gt; 0) {</span>
+<span class="nc" id="L197">            getLog().warn(&quot;  &quot; + totalUnmerged + &quot; total unmerged commit(s) will be lost&quot;);</span>
+        }
+
+<span class="nc bnc" id="L200" title="All 2 branches missed.">        if (draft) {</span>
+<span class="nc" id="L201">            getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L202">            getLog().info(&quot;  Next: mvn &quot;</span>
+<span class="nc" id="L203">                    + WsGoal.FEATURE_ABANDON_PUBLISH.qualified()</span>
+<span class="nc bnc" id="L204" title="All 2 branches missed.">                    + (force ? &quot;&quot; : &quot; (will prompt for confirmation)&quot;));</span>
+<span class="nc" id="L205">            getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L206">            return writeAbandonReport(branchName, reportRows, eligible, skipped, draft);</span>
+        }
+
+        // Publish mode — prompt for confirmation
+<span class="nc bnc" id="L210" title="All 4 branches missed.">        if (!force &amp;&amp; !confirm(&quot;Abandon feature/&quot; + feature + &quot;?&quot;, false)) {</span>
+<span class="nc" id="L211">            throw new MojoException(&quot;Abandon cancelled.&quot;);</span>
+        }
+
+        // Execute
+<span class="nc bnc" id="L215" title="All 2 branches missed.">        for (String name : eligible) {</span>
+<span class="nc" id="L216">            Subproject subproject = graph.manifest().subprojects().get(name);</span>
+<span class="nc" id="L217">            File dir = new File(root, name);</span>
+
+            // Strip branch-qualified versions before switching
+<span class="nc" id="L220">            FeatureFinishSupport.stripBranchVersion(dir, subproject, branchName, getLog());</span>
+
+<span class="nc" id="L222">            VcsOperations.checkout(dir, getLog(), targetBranch);</span>
+<span class="nc" id="L223">            VcsOperations.deleteBranch(dir, getLog(), branchName);</span>
+
+<span class="nc bnc" id="L225" title="All 2 branches missed.">            if (deleteRemote) {</span>
+                try {
+<span class="nc" id="L227">                    VcsOperations.deleteRemoteBranch(dir, getLog(), &quot;origin&quot;, branchName);</span>
+<span class="nc" id="L228">                } catch (MojoException e) {</span>
+<span class="nc" id="L229">                    getLog().warn(&quot;    could not delete remote branch: &quot; + e.getMessage());</span>
+<span class="nc" id="L230">                }</span>
+            }
+
+<span class="nc" id="L233">            VcsOperations.writeVcsState(dir, VcsState.Action.FEATURE_FINISH);</span>
+<span class="nc" id="L234">            getLog().info(Ansi.green(&quot;  ✓ &quot;) + name + &quot; → &quot; + targetBranch);</span>
+<span class="nc" id="L235">        }</span>
+
+        // Update workspace.yaml and workspace repo
+<span class="nc bnc" id="L238" title="All 2 branches missed.">        if (!eligible.isEmpty()) {</span>
+<span class="nc" id="L239">            abandonWorkspaceRepo(manifestPath, eligible, branchName);</span>
+        }
+
+<span class="nc" id="L242">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L243">        getLog().info(&quot;  Abandoned: &quot; + eligible.size()</span>
+<span class="nc" id="L244">                + &quot; | Skipped: &quot; + skipped.size());</span>
+<span class="nc bnc" id="L245" title="All 2 branches missed.">        if (!deleteRemote) {</span>
+<span class="nc" id="L246">            getLog().info(&quot;  Remote branches kept. Use -DdeleteRemote=true to delete them.&quot;);</span>
+        }
+<span class="nc" id="L248">        getLog().info(&quot;&quot;);</span>
+
+<span class="nc" id="L250">        return writeAbandonReport(branchName, reportRows, eligible, skipped, draft);</span>
+    }
+
+    private WorkspaceReportSpec writeAbandonReport(String branchName, List&lt;String[]&gt; rows,
+                                     List&lt;String&gt; eligible, List&lt;String&gt; skipped,
+                                     boolean isDraft) {
+<span class="nc" id="L256">        GoalReportBuilder report = new GoalReportBuilder();</span>
+<span class="nc" id="L257">        report.paragraph(&quot;**Branch:** `&quot; + branchName + &quot;`&quot;);</span>
+<span class="nc" id="L258">        report.table(List.of(&quot;Subproject&quot;, &quot;Status&quot;, &quot;Unmerged Commits&quot;), rows);</span>
+<span class="nc" id="L259">        report.paragraph(&quot;**&quot; + eligible.size() + &quot;** &quot;</span>
+<span class="nc bnc" id="L260" title="All 2 branches missed.">                + (isDraft ? &quot;would be abandoned&quot; : &quot;abandoned&quot;)</span>
+<span class="nc" id="L261">                + &quot;, **&quot; + skipped.size() + &quot;** skipped.&quot;);</span>
+<span class="nc" id="L262">        return new WorkspaceReportSpec(</span>
+<span class="nc bnc" id="L263" title="All 2 branches missed.">                publish ? WsGoal.FEATURE_ABANDON_PUBLISH : WsGoal.FEATURE_ABANDON_DRAFT,</span>
+<span class="nc" id="L264">                report.build());</span>
+    }
+
+    // ── Auto-detect ─────────────────────────────────────────────────
+
+    /**
+     * Scan workspace subprojects for feature branches and return
+     * the feature name. If multiple features are found, prompts
+     * the user to choose.
+     */
+    private String detectFeatureBranch(File root, List&lt;String&gt; components)
+            throws MojoException {
+<span class="nc" id="L276">        Set&lt;String&gt; features = new TreeSet&lt;&gt;();</span>
+
+<span class="nc bnc" id="L278" title="All 2 branches missed.">        for (String name : components) {</span>
+<span class="nc" id="L279">            File dir = new File(root, name);</span>
+<span class="nc bnc" id="L280" title="All 2 branches missed.">            if (!new File(dir, &quot;.git&quot;).exists()) continue;</span>
+
+<span class="nc" id="L282">            String branch = gitBranch(dir);</span>
+<span class="nc bnc" id="L283" title="All 2 branches missed.">            if (branch.startsWith(&quot;feature/&quot;)) {</span>
+<span class="nc" id="L284">                features.add(branch.substring(&quot;feature/&quot;.length()));</span>
+            }
+<span class="nc" id="L286">        }</span>
+
+<span class="nc bnc" id="L288" title="All 2 branches missed.">        if (features.isEmpty()) {</span>
+<span class="nc" id="L289">            throw new MojoException(</span>
+                    &quot;No components are on a feature branch. Nothing to abandon.&quot;);
+        }
+
+<span class="nc bnc" id="L293" title="All 2 branches missed.">        if (features.size() == 1) {</span>
+<span class="nc" id="L294">            String detected = features.iterator().next();</span>
+<span class="nc" id="L295">            getLog().info(&quot;  Detected feature: &quot; + detected);</span>
+<span class="nc" id="L296">            return detected;</span>
+        }
+
+        // Multiple features — present a numbered selection menu
+<span class="nc" id="L300">        List&lt;String&gt; featureList = new ArrayList&lt;&gt;(features);</span>
+<span class="nc" id="L301">        String picked = selectFromList(&quot;Multiple feature branches detected&quot;</span>
+                + &quot; — pick one to abandon&quot;, featureList);
+<span class="nc bnc" id="L303" title="All 2 branches missed.">        if (picked != null) {</span>
+<span class="nc" id="L304">            return picked;</span>
+        }
+
+<span class="nc" id="L307">        throw new MojoException(</span>
+                &quot;Multiple features found: &quot; + features
+                        + &quot;. Specify with -Dfeature=&lt;name&gt;.&quot;);
+    }
+
+    // ── Bare mode ───────────────────────────────────────────────────
+
+    private WorkspaceReportSpec executeBareMode() throws MojoException {
+<span class="nc bnc" id="L315" title="All 2 branches missed.">        boolean draft = !publish;</span>
+        // Bare mode = a working set of one (ike-issues#611).
+<span class="nc" id="L317">        File dir = resolveWorkingSet().members().getFirst().directory().toFile();</span>
+
+<span class="nc bnc" id="L319" title="All 4 branches missed.">        if (targetBranch == null || targetBranch.isBlank()) {</span>
+<span class="nc" id="L320">            targetBranch = &quot;main&quot;;</span>
+        }
+
+<span class="nc" id="L323">        String currentBranch = gitBranch(dir);</span>
+<span class="nc bnc" id="L324" title="All 4 branches missed.">        if (feature == null || feature.isBlank()) {</span>
+<span class="nc bnc" id="L325" title="All 2 branches missed.">            if (currentBranch.startsWith(&quot;feature/&quot;)) {</span>
+<span class="nc" id="L326">                feature = currentBranch.substring(&quot;feature/&quot;.length());</span>
+            } else {
+<span class="nc" id="L328">                throw new MojoException(</span>
+                        &quot;Not on a feature branch (on &quot; + currentBranch
+                                + &quot;). Specify with -Dfeature=&lt;name&gt;.&quot;);
+            }
+        }
+<span class="nc" id="L333">        validateFeatureName(feature);</span>
+<span class="nc" id="L334">        String branchName = &quot;feature/&quot; + feature;</span>
+
+<span class="nc" id="L336">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L337">        getLog().info(&quot;IKE Feature Abandon (bare repo)&quot;);</span>
+<span class="nc" id="L338">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+<span class="nc" id="L339">        getLog().info(&quot;  Feature: &quot; + feature);</span>
+<span class="nc" id="L340">        getLog().info(&quot;  Branch:  &quot; + branchName + &quot; → &quot; + targetBranch);</span>
+<span class="nc bnc" id="L341" title="All 2 branches missed.">        if (draft) getLog().info(&quot;  Mode:    DRAFT&quot;);</span>
+<span class="nc" id="L342">        getLog().info(&quot;&quot;);</span>
+
+<span class="nc bnc" id="L344" title="All 2 branches missed.">        if (!currentBranch.equals(branchName)) {</span>
+<span class="nc" id="L345">            throw new MojoException(</span>
+                    &quot;Not on &quot; + branchName + &quot; (currently on &quot; + currentBranch + &quot;)&quot;);
+        }
+<span class="nc bnc" id="L348" title="All 2 branches missed.">        if (!gitStatus(dir).isEmpty()) {</span>
+<span class="nc" id="L349">            throw new MojoException(</span>
+                    &quot;Uncommitted changes. Commit, stash, or discard first.&quot;);
+        }
+
+<span class="nc bnc" id="L353" title="All 2 branches missed.">        if (draft) {</span>
+<span class="nc" id="L354">            getLog().info(&quot;  [draft] Would abandon &quot; + branchName</span>
+                    + &quot; and switch to &quot; + targetBranch);
+<span class="nc" id="L356">            getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L357">            getLog().info(&quot;  Next: mvn &quot;</span>
+<span class="nc" id="L358">                    + WsGoal.FEATURE_ABANDON_PUBLISH.qualified());</span>
+<span class="nc" id="L359">            getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L360">            return new WorkspaceReportSpec(WsGoal.FEATURE_ABANDON_DRAFT,</span>
+                    &quot;Bare repo: would abandon `&quot; + branchName + &quot;` and switch to `&quot;
+                            + targetBranch + &quot;`.\n&quot;);
+        }
+
+        // Publish mode — prompt for confirmation
+<span class="nc bnc" id="L366" title="All 4 branches missed.">        if (!force &amp;&amp; !confirm(&quot;Abandon feature/&quot; + feature + &quot;?&quot;, false)) {</span>
+<span class="nc" id="L367">            throw new MojoException(&quot;Abandon cancelled.&quot;);</span>
+        }
+
+<span class="nc" id="L370">        FeatureFinishSupport.stripBranchVersionBare(dir, branchName, getLog());</span>
+
+<span class="nc" id="L372">        VcsOperations.checkout(dir, getLog(), targetBranch);</span>
+<span class="nc" id="L373">        VcsOperations.deleteBranch(dir, getLog(), branchName);</span>
+<span class="nc" id="L374">        getLog().info(Ansi.green(&quot;  ✓ &quot;) + &quot;Switched to &quot; + targetBranch</span>
+                + &quot;, deleted &quot; + branchName);
+
+<span class="nc bnc" id="L377" title="All 2 branches missed.">        if (deleteRemote) {</span>
+            try {
+<span class="nc" id="L379">                VcsOperations.deleteRemoteBranch(dir, getLog(), &quot;origin&quot;, branchName);</span>
+<span class="nc" id="L380">                getLog().info(Ansi.green(&quot;  ✓ &quot;) + &quot;Deleted remote branch&quot;);</span>
+<span class="nc" id="L381">            } catch (MojoException e) {</span>
+<span class="nc" id="L382">                getLog().warn(&quot;  Could not delete remote branch: &quot; + e.getMessage());</span>
+<span class="nc" id="L383">            }</span>
+        }
+
+<span class="nc" id="L386">        VcsOperations.writeVcsState(dir, VcsState.Action.FEATURE_FINISH);</span>
+<span class="nc" id="L387">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L388">        return new WorkspaceReportSpec(WsGoal.FEATURE_ABANDON_PUBLISH,</span>
+                &quot;Bare repo: abandoned `&quot; + branchName + &quot;`, switched to `&quot;
+                        + targetBranch + &quot;`.\n&quot;);
+    }
+
+    // ── Workspace repo cleanup ──────────────────────────────────────
+
+    private void abandonWorkspaceRepo(Path manifestPath,
+                                       List&lt;String&gt; components,
+                                       String branchName)
+            throws MojoException {
+        try {
+<span class="nc" id="L400">            Map&lt;String, String&gt; updates = new LinkedHashMap&lt;&gt;();</span>
+<span class="nc bnc" id="L401" title="All 2 branches missed.">            for (String name : components) {</span>
+<span class="nc" id="L402">                updates.put(name, targetBranch);</span>
+<span class="nc" id="L403">            }</span>
+<span class="nc" id="L404">            ManifestWriter.updateBranches(manifestPath, updates);</span>
+
+<span class="nc" id="L406">            File wsRoot = manifestPath.getParent().toFile();</span>
+<span class="nc bnc" id="L407" title="All 2 branches missed.">            if (!new File(wsRoot, &quot;.git&quot;).exists()) return;</span>
+
+<span class="nc" id="L409">            String wsBranch = gitBranch(wsRoot);</span>
+<span class="nc bnc" id="L410" title="All 2 branches missed.">            if (wsBranch.equals(branchName)) {</span>
+<span class="nc" id="L411">                ReleaseSupport.exec(wsRoot, getLog(), &quot;git&quot;, &quot;add&quot;, &quot;workspace.yaml&quot;);</span>
+<span class="nc bnc" id="L412" title="All 2 branches missed.">                if (VcsOperations.hasStagedChanges(wsRoot)) {</span>
+<span class="nc" id="L413">                    VcsOperations.commit(wsRoot, getLog(),</span>
+                            &quot;workspace: revert branches for abandon &quot; + branchName);
+                }
+
+<span class="nc" id="L417">                VcsOperations.checkout(wsRoot, getLog(), targetBranch);</span>
+
+                try {
+<span class="nc" id="L420">                    ReleaseSupport.exec(wsRoot, getLog(),</span>
+                            &quot;git&quot;, &quot;cherry-pick&quot;, branchName);
+<span class="nc" id="L422">                } catch (MojoException e) {</span>
+<span class="nc" id="L423">                    ManifestWriter.updateBranches(manifestPath, updates);</span>
+<span class="nc" id="L424">                    ReleaseSupport.exec(wsRoot, getLog(), &quot;git&quot;, &quot;add&quot;, &quot;workspace.yaml&quot;);</span>
+<span class="nc bnc" id="L425" title="All 2 branches missed.">                    if (VcsOperations.hasStagedChanges(wsRoot)) {</span>
+<span class="nc" id="L426">                        VcsOperations.commit(wsRoot, getLog(),</span>
+                                &quot;workspace: revert branches after abandon &quot; + branchName);
+                    }
+<span class="nc" id="L429">                }</span>
+
+<span class="nc" id="L431">                VcsOperations.deleteBranch(wsRoot, getLog(), branchName);</span>
+
+<span class="nc bnc" id="L433" title="All 2 branches missed.">                if (deleteRemote) {</span>
+                    try {
+<span class="nc" id="L435">                        VcsOperations.deleteRemoteBranch(wsRoot, getLog(), &quot;origin&quot;, branchName);</span>
+<span class="nc" id="L436">                    } catch (MojoException e) {</span>
+<span class="nc" id="L437">                        getLog().warn(&quot;  Could not delete workspace remote branch: &quot;</span>
+<span class="nc" id="L438">                                + e.getMessage());</span>
+<span class="nc" id="L439">                    }</span>
+                }
+            } else {
+<span class="nc" id="L442">                ReleaseSupport.exec(wsRoot, getLog(), &quot;git&quot;, &quot;add&quot;, &quot;workspace.yaml&quot;);</span>
+<span class="nc bnc" id="L443" title="All 2 branches missed.">                if (VcsOperations.hasStagedChanges(wsRoot)) {</span>
+<span class="nc" id="L444">                    VcsOperations.commit(wsRoot, getLog(),</span>
+                            &quot;workspace: revert branches after abandon &quot; + branchName);
+                }
+            }
+
+<span class="nc" id="L449">            VcsOperations.pushIfRemoteExists(wsRoot, getLog(), &quot;origin&quot;, targetBranch);</span>
+
+<span class="nc" id="L451">        } catch (IOException e) {</span>
+<span class="nc" id="L452">            getLog().warn(&quot;  Could not update workspace.yaml: &quot; + e.getMessage());</span>
+<span class="nc" id="L453">        }</span>
+<span class="nc" id="L454">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

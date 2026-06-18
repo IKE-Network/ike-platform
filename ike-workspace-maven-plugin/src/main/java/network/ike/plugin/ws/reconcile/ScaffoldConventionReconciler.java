@@ -46,7 +46,8 @@ import java.util.regex.Pattern;
  *   <li><b>pom-root</b> — Maven 4.1.0 {@code root="true"} on the
  *       workspace POM.</li>
  *   <li><b>maven-config</b> — ensure {@code .mvn/maven.config} exists
- *       with {@code -T 1C}.</li>
+ *       with {@code -T 1C}, and strip the retired {@code ws:ide-sync}
+ *       {@code -P?with-*} block (IKE-Network/ike-issues#460).</li>
  *   <li><b>gitattributes</b> — line-ending policy at workspace root
  *       (ike-issues#189: Windows {@code mvnw.cmd} must be CRLF).</li>
  *   <li><b>mvnw</b> — regenerate missing Maven wrapper files, and
@@ -459,20 +460,67 @@ public class ScaffoldConventionReconciler implements Reconciler {
                                             boolean publish, Log log) {
         Path config = root.resolve(".mvn/maven.config");
         try {
-            if (Files.exists(config)) {
+            if (!Files.exists(config)) {
+                run.drift.add("maven-config: create .mvn/maven.config with -T 1C");
+                if (publish) {
+                    Files.createDirectories(config.getParent());
+                    Files.writeString(config, "-T 1C\n", StandardCharsets.UTF_8);
+                    run.applied++;
+                }
                 return;
             }
 
-            run.drift.add("maven-config: create .mvn/maven.config with -T 1C");
-
+            // Strip the retired ws:ide-sync managed -P?with-* block: it
+            // force-activated the legacy with-* subproject profiles, which
+            // the #460 migration to top-level <subprojects> retires
+            // (IKE-Network/ike-issues#696). The block references profiles
+            // that no longer exist; the leading '?' kept it non-fatal, but
+            // it is dead config.
+            String content = Files.readString(config, StandardCharsets.UTF_8);
+            String stripped = stripIdeSyncBlock(content);
+            if (stripped.equals(content)) {
+                return;
+            }
+            run.drift.add("maven-config: remove retired ws:ide-sync "
+                    + "-P?with-* block (#460)");
             if (publish) {
-                Files.createDirectories(config.getParent());
-                Files.writeString(config, "-T 1C\n", StandardCharsets.UTF_8);
+                Files.writeString(config, stripped, StandardCharsets.UTF_8);
                 run.applied++;
             }
         } catch (IOException e) {
-            log.warn("  Could not create .mvn/maven.config: " + e.getMessage());
+            log.warn("  Could not update .mvn/maven.config: " + e.getMessage());
         }
+    }
+
+    /**
+     * Remove the {@code ws:ide-sync} managed block — the
+     * {@code -P?with-*} profile-activation lines IntelliJ once needed —
+     * from {@code .mvn/maven.config} content. The block is delimited by
+     * the {@code # >>> ws:ide-sync managed >>>} /
+     * {@code # <<< ws:ide-sync managed <<<} sentinels. Returns the input
+     * unchanged when the block is absent or its sentinels are malformed.
+     * Visible for tests.
+     *
+     * @param content the current {@code .mvn/maven.config} content
+     * @return the content with the managed block removed
+     */
+    public static String stripIdeSyncBlock(String content) {
+        final String begin = "# >>> ws:ide-sync managed >>>";
+        final String end = "# <<< ws:ide-sync managed <<<";
+        int b = content.indexOf(begin);
+        if (b < 0) {
+            return content;
+        }
+        int e = content.indexOf(end, b);
+        if (e < 0) {
+            return content;            // malformed — leave it untouched
+        }
+        e += end.length();
+        if (e < content.length() && content.charAt(e) == '\n') {
+            e++;
+        }
+        String result = content.substring(0, b) + content.substring(e);
+        return result.isBlank() ? result : result.stripTrailing() + "\n";
     }
 
     // ── 6. .gitattributes ─────────────────────────────────────────

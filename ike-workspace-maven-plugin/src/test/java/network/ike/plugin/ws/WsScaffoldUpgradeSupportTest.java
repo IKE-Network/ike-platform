@@ -375,4 +375,35 @@ class WsScaffoldUpgradeSupportTest {
         assertThat(twice).isEqualTo(once);
         assertThat(once).doesNotContain("!.idea/misc.xml");
     }
+
+    // ── stripIdeSyncBlock (#460/#696) ──────────────────────────────────
+
+    @Test
+    void stripIdeSyncBlock_removes_managed_block_keeping_the_rest() {
+        String config = """
+                -T 1C
+                # >>> ws:ide-sync managed >>>
+                -P?with-alpha,?with-beta
+                # <<< ws:ide-sync managed <<<
+                """;
+        assertThat(ScaffoldConventionReconciler.stripIdeSyncBlock(config))
+                .isEqualTo("-T 1C\n");
+    }
+
+    @Test
+    void stripIdeSyncBlock_is_idempotent_and_noop_without_block() {
+        String clean = "-T 1C\n";
+        assertThat(ScaffoldConventionReconciler.stripIdeSyncBlock(clean))
+                .isEqualTo(clean);
+        // Idempotent: stripping an already-stripped config is a no-op.
+        String config = """
+                -T 1C
+                # >>> ws:ide-sync managed >>>
+                -P?with-alpha
+                # <<< ws:ide-sync managed <<<
+                """;
+        String once = ScaffoldConventionReconciler.stripIdeSyncBlock(config);
+        assertThat(ScaffoldConventionReconciler.stripIdeSyncBlock(once))
+                .isEqualTo(once);
+    }
 }

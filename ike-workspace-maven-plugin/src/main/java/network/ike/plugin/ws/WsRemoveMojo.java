@@ -25,7 +25,9 @@ import java.util.regex.Pattern;
  *   <li>Checks for downstream dependents — fails if any exist
  *       (unless {@code -Dforce=true})</li>
  *   <li>Removes the subproject entry from workspace.yaml</li>
- *   <li>Removes the file-activated profile from the aggregator pom.xml</li>
+ *   <li>Removes the top-level {@code <subprojects>} entry (and any legacy
+ *       {@code with-*} profile) from the aggregator pom.xml
+ *       (IKE-Network/ike-issues#696)</li>
  *   <li>Removes the subproject from any group lists in workspace.yaml</li>
  *   <li>Optionally deletes the cloned directory</li>
  * </ol>
@@ -133,9 +135,9 @@ public class WsRemoveMojo extends AbstractWorkspaceMojo {
             removeSubprojectFromManifest(manifestPath);
             getLog().info(Ansi.green("  ✓ ") + "workspace.yaml updated — subproject entry removed");
 
-            // Remove profile from pom.xml
-            removeProfileFromPom(pomPath);
-            getLog().info(Ansi.green("  ✓ ") + "pom.xml updated — profile with-" + subproject + " removed");
+            // Remove the reactor membership from pom.xml
+            removeSubprojectFromPom(pomPath);
+            getLog().info(Ansi.green("  ✓ ") + "pom.xml updated — subproject " + subproject + " removed");
 
         } catch (IOException e) {
             throw new MojoException(
@@ -222,41 +224,37 @@ public class WsRemoveMojo extends AbstractWorkspaceMojo {
     // ── POM removal ─────────────────────────────────────────────
 
     /**
-     * Remove the file-activated profile for this subproject from pom.xml.
+     * Remove this subproject's reactor membership from the aggregator POM
+     * via the OpenRewrite-LST {@link ReactorPom} editor (no regex on POMs):
+     * drop its top-level {@code <subprojects>} entry and any legacy
+     * {@code with-<subproject>} profile.
      *
-     * <p>Matches the entire {@code <profile>} block whose
-     * {@code <id>} is {@code with-<subproject>}.
+     * @param pomPath the aggregator POM path
+     * @throws IOException if the POM cannot be read or written
      */
-    void removeProfileFromPom(Path pomPath) throws IOException {
+    void removeSubprojectFromPom(Path pomPath) throws IOException {
         if (!Files.exists(pomPath)) {
             getLog().warn("  No pom.xml found at " + pomPath);
             return;
         }
 
         String pom = Files.readString(pomPath, StandardCharsets.UTF_8);
-        String profileId = "with-" + subproject;
+        String updated = pom;
 
-        if (!pom.contains(profileId)) {
-            getLog().info("  - Profile " + profileId + " not found in pom.xml (already removed?)");
+        List<String> names = ReactorPom.listSubprojects(updated);
+        if (names.contains(subproject)) {
+            updated = ReactorPom.setSubprojects(updated,
+                    names.stream().filter(n -> !n.equals(subproject)).toList());
+        }
+        // Drop any residual legacy file-activated profile too.
+        updated = ReactorPom.removeProfile(updated, "with-" + subproject);
+
+        if (updated.equals(pom)) {
+            getLog().info("  - Subproject " + subproject
+                    + " not found in pom.xml (already removed?)");
             return;
         }
-
-        // Match the entire <profile>...</profile> block containing this profile id.
-        // Allow flexible whitespace. The profile block ends at </profile>.
-        String escapedId = Pattern.quote(profileId);
-        Pattern profilePattern = Pattern.compile(
-                "\\s*<profile>\\s*\\n"
-                + "\\s*<id>" + escapedId + "</id>\\s*\\n"
-                + ".*?"
-                + "\\s*</profile>\\s*\\n",
-                Pattern.DOTALL);
-
-        Matcher m = profilePattern.matcher(pom);
-        if (m.find()) {
-            pom = pom.substring(0, m.start()) + "\n" + pom.substring(m.end());
-        }
-
-        Files.writeString(pomPath, pom, StandardCharsets.UTF_8);
+        Files.writeString(pomPath, updated, StandardCharsets.UTF_8);
     }
 
 }

@@ -59,13 +59,16 @@ public class WsCheckpointPublishMojo extends WsCheckpointDraftMojo {
 
     /**
      * Maven goals run against the workspace root to verify the reactor
-     * builds before tagging (#689). Defaults to {@code clean test-compile
-     * -T 1C} — fast, and enough to catch the compile-skew failures that
-     * motivated the gate. Pass something heavier for more assurance, e.g.
-     * {@code -Dws.checkpoint.verifyGoals="clean verify -DskipTests"}.
+     * builds before tagging (#689). Defaults to {@code clean verify
+     * -DskipTests -T 1C} — beyond a bare compile it runs the {@code verify}
+     * phase (packaging, enforcer/convergence checks), so it catches the
+     * dependency-pin half of the skew that motivated the gate (e.g. a
+     * lagging {@code komet-bom} elk pin, #687), not just source compile
+     * errors. Pass a lighter goal set for speed when a compile is enough,
+     * e.g. {@code -Dws.checkpoint.verifyGoals="clean test-compile -T 1C"}.
      */
     @Parameter(property = "ws.checkpoint.verifyGoals",
-            defaultValue = "clean test-compile -T 1C")
+            defaultValue = "clean verify -DskipTests -T 1C")
     String verifyGoals;
 
     /** Creates this goal instance. */
@@ -128,7 +131,7 @@ public class WsCheckpointPublishMojo extends WsCheckpointDraftMojo {
     /**
      * Build the reactor against the workspace root and refuse to cut the
      * checkpoint if it fails (IKE-Network/ike-issues#689). Runs {@link
-     * #verifyGoals} (default {@code clean test-compile -T 1C}) as a
+     * #verifyGoals} (default {@code clean verify -DskipTests -T 1C}) as a
      * subprocess against the aligned-and-committed workspace; a non-zero
      * build aborts the goal so no tag is ever created for a checkpoint
      * whose pinned subprojects don't compile together.

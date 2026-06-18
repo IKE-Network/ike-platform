@@ -38,6 +38,13 @@ public final class ReconcilerRegistry {
                 // first, and the scaffold layer reconciles against the
                 // updated POMs.
                 new ScaffoldConventionReconciler(),
+                // Reactor-membership convergence runs after the scaffold
+                // layer (which guarantees root="true" on the reactor POM)
+                // and is independent of alignment/version state: it only
+                // syncs the top-level <subprojects> block to
+                // workspace.yaml and retires the legacy with-* profile
+                // pattern (IKE-Network/ike-issues#696, completing #460).
+                new ReactorSubprojectsReconciler(),
                 // Inter-subproject alignment runs after scaffold so the
                 // POMs it rewrites already reflect the current
                 // ike-tooling.version property and parent cascade. The

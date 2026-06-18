@@ -47,7 +47,9 @@ import java.util.stream.Collectors;
  *       dependencies (matching dependency/parent groupIds against
  *       already-registered workspace subprojects)</li>
  *   <li>Appends a subproject entry to workspace.yaml</li>
- *   <li>Adds a file-activated profile to the reactor POM</li>
+ *   <li>Adds a top-level {@code <subprojects>} entry to the reactor POM
+ *       (IKE-Network/ike-issues#696; {@code SubprojectPruneTransformer}
+ *       prunes it at model-read time until the repo is cloned)</li>
  *   <li>Re-scans existing subprojects to discover any that depend
  *       on the newly added subproject (backward resolution)</li>
  * </ol>
@@ -301,9 +303,10 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
                 getLog().info(Ansi.green("  ✓ ") + "workspace.yaml updated");
             }
 
-            // Profile is idempotent — addProfileToPom already checks for existence
-            addProfileToPom(pomPath);
-            getLog().info(Ansi.green("  ✓ ") + "pom.xml updated (profile: with-" + subproject + ")");
+            // Reactor membership is a top-level <subprojects> entry now
+            // (#696); addSubprojectToPom is idempotent.
+            addSubprojectToPom(pomPath);
+            getLog().info(Ansi.green("  ✓ ") + "pom.xml updated (subproject: " + subproject + ")");
 
         } catch (IOException e) {
             throw new MojoException(
@@ -584,37 +587,36 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
 
     // ── POM generation ───────────────────────────────────────────
 
-    void addProfileToPom(Path pomPath) throws IOException {
+    /**
+     * Add the subproject to the reactor POM's top-level
+     * {@code <subprojects>} block via the OpenRewrite-LST {@link ReactorPom}
+     * editor (no regex on POMs). Idempotent — a no-op when the entry is
+     * already declared. Any residual legacy {@code with-<subproject>}
+     * profile is dropped so {@code ws:add} never re-creates the pattern the
+     * #696 reconciler retires.
+     *
+     * @param pomPath the reactor POM path
+     * @throws IOException if the POM cannot be read or written
+     */
+    void addSubprojectToPom(Path pomPath) throws IOException {
         String pom = Files.readString(pomPath, StandardCharsets.UTF_8);
+        String updated = pom;
 
-        // Check if profile already exists
-        if (pom.contains("with-" + subproject)) {
-            getLog().info("  Profile with-" + subproject + " already exists");
+        if (!ReactorPom.listSubprojects(updated).contains(subproject)) {
+            List<String> names = new ArrayList<>(
+                    ReactorPom.listSubprojects(updated));
+            names.add(subproject);
+            updated = ReactorPom.setSubprojects(updated, names);
+        }
+        // Retire any legacy file-activated profile for this subproject.
+        updated = ReactorPom.removeProfile(updated, "with-" + subproject);
+
+        if (updated.equals(pom)) {
+            getLog().info("  Subproject " + subproject
+                    + " already in <subprojects>");
             return;
         }
-
-        String profile = "\n"
-                + "        <profile>\n"
-                + "            <id>with-" + subproject + "</id>\n"
-                + "            <activation>\n"
-                + "                <file>\n"
-                + "                    <exists>${project.basedir}/" + subproject + "/pom.xml</exists>\n"
-                + "                </file>\n"
-                + "            </activation>\n"
-                + "            <subprojects>\n"
-                + "                <subproject>" + subproject + "</subproject>\n"
-                + "            </subprojects>\n"
-                + "        </profile>\n";
-
-        // Insert before closing </profiles>
-        int closingIdx = pom.lastIndexOf("</profiles>");
-        if (closingIdx >= 0) {
-            pom = pom.substring(0, closingIdx) + profile + "\n    " + pom.substring(closingIdx);
-        } else {
-            getLog().warn("  No </profiles> tag found in pom.xml — add profile manually");
-        }
-
-        Files.writeString(pomPath, pom, StandardCharsets.UTF_8);
+        Files.writeString(pomPath, updated, StandardCharsets.UTF_8);
     }
 
     // ── Branch resolution ────────────────────────────────────────

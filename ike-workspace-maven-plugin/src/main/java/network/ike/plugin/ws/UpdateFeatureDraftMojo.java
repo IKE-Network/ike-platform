@@ -1,5 +1,6 @@
 package network.ike.plugin.ws;
 
+import network.ike.workspace.WorkingSet;
 import network.ike.workspace.WorkspaceGraph;
 import network.ike.plugin.support.GoalReportBuilder;
 import network.ike.plugin.ws.vcs.VcsOperations;
@@ -12,7 +13,6 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Set;
 
 /**
  * Update the current feature branch by incorporating changes from main.
@@ -39,6 +39,12 @@ import java.util.Set;
  * conflicting files with instructions for resolving in IntelliJ.
  * Re-running the goal after resolution continues with the remaining
  * components.
+ *
+ * <p><strong>Single repo (no {@code workspace.yaml})</strong>: updates the
+ * current repository only — a working set of one. The repo's own current
+ * branch is taken as the feature branch (unless {@code -Dfeature} is given),
+ * and {@code main} is merged in exactly as the workspace path does per
+ * subproject (IKE-Network/ike-issues#703).
  *
  * <p>The draft variant fetches and refreshes local main but does not
  * modify the feature branch or working tree. Conflict prediction uses
@@ -78,29 +84,52 @@ public class UpdateFeatureDraftMojo extends AbstractWorkspaceMojo {
 
     @Override
     protected WorkspaceReportSpec runGoal() throws MojoException {
-        if (!isWorkspaceMode()) {
-            throw new MojoException(
-                    "ws:update-feature requires a workspace (workspace.yaml).");
-        }
-
         // strategy is always "merge" — see field declaration
-
         boolean draft = !publish;
-        WorkspaceGraph graph = loadGraph();
-        File root = workspaceRoot();
 
-        // Auto-detect feature if not specified
-        if (feature == null || feature.isBlank()) {
-            List<String> all = graph.topologicalSort();
-            feature = FeatureFinishSupport.detectFeature(
-                    root, all, this, getLog());
+        // Resolve scope: a workspace updates every subproject on the feature
+        // branch; a bare repo is a working set of one (no workspace.yaml,
+        // IKE-Network/ike-issues#703). Both drive the same eligibility +
+        // refresh-main + merge loop below over (root, components).
+        WorkingSet workingSet = resolveWorkingSet();
+        File root;
+        List<String> sorted;
+        if (workingSet.isWorkspace()) {
+            WorkspaceGraph graph = loadGraph();
+            root = workspaceRoot();
+            // Auto-detect feature if not specified
+            if (feature == null || feature.isBlank()) {
+                feature = FeatureFinishSupport.detectFeature(
+                        root, graph.topologicalSort(), this, getLog());
+            }
+            sorted = graph.topologicalSort(new LinkedHashSet<>(
+                    graph.manifest().subprojects().keySet()));
+        } else {
+            File repo = workingSet.root().toFile();
+            if (!new File(repo, ".git").exists()) {
+                throw new MojoException("ws:update-feature: " + repo
+                        + " is not a git repository.");
+            }
+            // The repo's own current branch is the feature branch unless
+            // -Dfeature pins one explicitly.
+            if (feature == null || feature.isBlank()) {
+                String current = gitBranch(repo);
+                if (!current.startsWith("feature/")) {
+                    throw new MojoException("ws:update-feature: "
+                            + repo.getName() + " is on '" + current
+                            + "', not a feature/* branch. Check out the feature"
+                            + " branch, or pass -Dfeature=<name>.");
+                }
+                feature = current.substring("feature/".length());
+            }
+            // Drive the shared loop with the repo's parent as root so
+            // new File(root, name) resolves back to the repo.
+            root = repo.getParentFile();
+            sorted = List.of(repo.getName());
         }
+
         validateFeatureName(feature);
         String branchName = "feature/" + feature;
-
-        Set<String> targets = graph.manifest().subprojects().keySet();
-
-        List<String> sorted = graph.topologicalSort(new LinkedHashSet<>(targets));
 
         getLog().info("");
         getLog().info(header("Update Feature"));
@@ -141,8 +170,11 @@ public class UpdateFeatureDraftMojo extends AbstractWorkspaceMojo {
             eligible.add(name);
         }
 
-        // Check workspace root
-        if (new File(root, ".git").exists() && !gitStatus(root).isEmpty()) {
+        // Check workspace root (workspace mode only — a bare repo's parent
+        // directory is not part of the working set).
+        if (workingSet.isWorkspace()
+                && new File(root, ".git").exists()
+                && !gitStatus(root).isEmpty()) {
             uncommitted.add("workspace root");
         }
 

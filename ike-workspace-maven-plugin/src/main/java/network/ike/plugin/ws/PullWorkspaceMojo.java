@@ -7,6 +7,7 @@ import network.ike.plugin.ws.preflight.PreflightCondition;
 import network.ike.plugin.ws.preflight.PreflightContext;
 import network.ike.plugin.ws.vcs.VcsOperations;
 
+import network.ike.workspace.WorkingSet;
 import network.ike.workspace.WorkspaceGraph;
 import org.apache.maven.api.plugin.MojoException;
 import org.apache.maven.api.plugin.annotations.Mojo;
@@ -27,6 +28,13 @@ import java.util.Set;
  * topological order (dependencies first). Uninitialized components are
  * skipped with a warning.
  *
+ * <p><strong>Single repo (no {@code workspace.yaml})</strong>: operates on
+ * the current repository only — a working set of one — pulling its tracked
+ * branch with {@code git pull --rebase}. The scope is resolved via
+ * {@link #resolveWorkingSet()} (IKE-Network/ike-issues#703, completing the
+ * #611 working-set migration so {@code ws:pull} matches {@code ws:commit} /
+ * {@code ws:push}).
+ *
  * <pre>{@code
  * mvn ws:pull
  * }</pre>
@@ -39,6 +47,27 @@ public class PullWorkspaceMojo extends AbstractWorkspaceMojo {
 
     @Override
     protected WorkspaceReportSpec runGoal() throws MojoException {
+        // Resolve the scope once: a workspace pulls its subprojects + root;
+        // a bare repo is a working set of one (IKE-Network/ike-issues#703,
+        // completing the #611 working-set migration).
+        WorkingSet workingSet = resolveWorkingSet();
+        if (!workingSet.isWorkspace()) {
+            return pullSingleRepo(workingSet.root().toFile(),
+                    workingSet.members().getFirst().name());
+        }
+        return pullWorkspace();
+    }
+
+    /**
+     * Pull every member of a workspace: the workspace root first (so any
+     * update to the root POM or {@code workspace.yaml} is observed before
+     * subproject pulls, #179), then each cloned subproject in topological
+     * order. Gated by a workspace-wide working-tree-clean preflight
+     * (#132/#154).
+     *
+     * @return the pull report for the workspace
+     */
+    private WorkspaceReportSpec pullWorkspace() throws MojoException {
         WorkspaceGraph graph = loadGraph();
         File root = workspaceRoot();
 
@@ -52,10 +81,7 @@ public class PullWorkspaceMojo extends AbstractWorkspaceMojo {
                 PreflightContext.of(root, graph, sorted))
                 .requirePassed(WsGoal.PULL);
 
-        getLog().info("");
-        getLog().info(header("Pull"));
-        getLog().info("══════════════════════════════════════════════════════════════");
-        getLog().info("");
+        printPullBanner();
 
         List<PullRow> rows = new ArrayList<>();
 
@@ -63,7 +89,7 @@ public class PullWorkspaceMojo extends AbstractWorkspaceMojo {
         // before subproject pulls so any update to the root POM or
         // workspace.yaml is observed by downstream steps.
         if (new File(root, ".git").exists()) {
-            rows.add(pullOne(root, "workspace root"));
+            rows.add(pullOne(root, "workspace root", true));
         }
 
         for (String name : sorted) {
@@ -75,9 +101,52 @@ public class PullWorkspaceMojo extends AbstractWorkspaceMojo {
                 rows.add(PullRow.notCloned(name));
                 continue;
             }
-            rows.add(pullOne(dir, name));
+            rows.add(pullOne(dir, name, false));
         }
 
+        WorkspaceReportSpec spec = pullReport(rows);
+        PostMutationSync.refresh(root, getLog());
+        return spec;
+    }
+
+    /**
+     * Pull a single repository — a working set of one (no
+     * {@code workspace.yaml}, IKE-Network/ike-issues#703). Applies the same
+     * {@code git pull --rebase} per-repo logic the workspace path uses for
+     * each member, with no workspace preflight ({@code git}'s own rebase
+     * guard rejects a dirty tree) and no {@link PostMutationSync}
+     * (workspace-only).
+     *
+     * @param dir  the single repository's directory
+     * @param name the repository's directory name, used as the report label
+     * @return the pull report for the one repository
+     */
+    private WorkspaceReportSpec pullSingleRepo(File dir, String name) {
+        printPullBanner();
+        if (!new File(dir, ".git").exists()) {
+            throw new MojoException("ws:pull: " + dir
+                    + " is not a git repository.");
+        }
+        return pullReport(List.of(pullOne(dir, name, true)));
+    }
+
+    /** Print the goal banner, shared by the workspace and bare paths. */
+    private void printPullBanner() {
+        getLog().info("");
+        getLog().info(header("Pull"));
+        getLog().info("══════════════════════════════════════════════════════════════");
+        getLog().info("");
+    }
+
+    /**
+     * Tally the per-repo outcomes, log the one-line summary, and build the
+     * {@link WorkspaceReportSpec}. Shared by the workspace and single-repo
+     * paths so both render an identical report shape.
+     *
+     * @param rows the per-repository pull outcomes
+     * @return the pull report
+     */
+    private WorkspaceReportSpec pullReport(List<PullRow> rows) {
         int pulled = (int) rows.stream().filter(r -> r.outcome == Outcome.PULLED).count();
         int upToDate = (int) rows.stream().filter(r -> r.outcome == Outcome.UP_TO_DATE).count();
         int noUpstream = (int) rows.stream().filter(r -> r.outcome == Outcome.NO_UPSTREAM).count();
@@ -98,12 +167,8 @@ public class PullWorkspaceMojo extends AbstractWorkspaceMojo {
             getLog().warn("  Some pulls failed — check output above for details.");
         }
 
-        // Structured markdown report
-        WorkspaceReportSpec spec = new WorkspaceReportSpec(WsGoal.PULL,
+        return new WorkspaceReportSpec(WsGoal.PULL,
                 buildPullReport(rows, summary.toString()));
-
-        PostMutationSync.refresh(root, getLog());
-        return spec;
     }
 
     /**
@@ -112,8 +177,17 @@ public class PullWorkspaceMojo extends AbstractWorkspaceMojo {
      * HEAD SHA, commit count + subjects merged in, explicit
      * up-to-date detection, no-upstream detection with a copy-paste
      * recovery command, and failure detail with a retry command.
+     *
+     * @param dir   the git directory to pull
+     * @param label the report label ("workspace root", a subproject name,
+     *              or a single repository's directory name)
+     * @param atCwd {@code true} when {@code dir} is the invocation directory
+     *              (the workspace root, or the lone repo of a working set of
+     *              one) — recovery commands are then emitted plain; {@code
+     *              false} for a subproject, which gets a {@code cd} prefix
+     * @return the populated row
      */
-    private PullRow pullOne(File dir, String label) {
+    private PullRow pullOne(File dir, String label, boolean atCwd) {
         String branch;
         try {
             branch = VcsOperations.currentBranch(dir);
@@ -121,7 +195,7 @@ public class PullWorkspaceMojo extends AbstractWorkspaceMojo {
             getLog().warn(Ansi.red("  ✗ ") + label + " — "
                     + e.getMessage());
             return PullRow.failure(label, "?", e.getMessage(),
-                    "git pull --rebase");
+                    buildRetryCommand(label, atCwd));
         }
 
         // Detect "no upstream" up front. ReleaseSupport.exec routes
@@ -134,7 +208,8 @@ public class PullWorkspaceMojo extends AbstractWorkspaceMojo {
         if (VcsOperations.aheadBehindUpstream(dir).isEmpty()) {
             getLog().warn(Ansi.yellow("  ⚠ ") + label
                     + " — no upstream configured");
-            return PullRow.noUpstream(label, branch);
+            return PullRow.noUpstream(label, branch,
+                    buildSetUpstreamCommand(label, branch, atCwd));
         }
 
         String preHead;
@@ -144,7 +219,7 @@ public class PullWorkspaceMojo extends AbstractWorkspaceMojo {
             getLog().warn(Ansi.red("  ✗ ") + label + " — "
                     + e.getMessage());
             return PullRow.failure(label, branch, e.getMessage(),
-                    buildRetryCommand(label));
+                    buildRetryCommand(label, atCwd));
         }
 
         getLog().info(Ansi.cyan("  ↓ ") + label);
@@ -156,7 +231,7 @@ public class PullWorkspaceMojo extends AbstractWorkspaceMojo {
             getLog().warn(Ansi.red("  ✗ ") + label + " — pull failed: "
                     + msg);
             return PullRow.failure(label, branch, msg,
-                    buildRetryCommand(label));
+                    buildRetryCommand(label, atCwd));
         }
 
         String postHead;
@@ -188,15 +263,16 @@ public class PullWorkspaceMojo extends AbstractWorkspaceMojo {
                 commitCount, subjects);
     }
 
-    private static String buildRetryCommand(String label) {
-        if ("workspace root".equals(label)) {
+    private static String buildRetryCommand(String label, boolean atCwd) {
+        if (atCwd) {
             return "git pull --rebase";
         }
         return "(cd " + label + " && git pull --rebase)";
     }
 
-    private static String buildSetUpstreamCommand(String label, String branch) {
-        if ("workspace root".equals(label)) {
+    private static String buildSetUpstreamCommand(String label, String branch,
+                                                  boolean atCwd) {
+        if (atCwd) {
             return "git push -u origin " + branch;
         }
         return "(cd " + label + " && git push -u origin " + branch + ")";
@@ -301,8 +377,7 @@ public class PullWorkspaceMojo extends AbstractWorkspaceMojo {
                     + "establish a baseline:");
             StringBuilder fix = new StringBuilder();
             for (PullRow r : noUpstream) {
-                fix.append(buildSetUpstreamCommand(r.label, r.branch))
-                        .append("\n");
+                fix.append(r.retryCommand).append("\n");
             }
             report.codeBlock("bash", fix.toString().stripTrailing());
         }
@@ -362,9 +437,12 @@ public class PullWorkspaceMojo extends AbstractWorkspaceMojo {
                     headSha, headSha, 0, List.of(), null, null);
         }
 
-        static PullRow noUpstream(String label, String branch) {
+        // A NO_UPSTREAM row never also FAILS, so it reuses the
+        // retryCommand slot to carry its set-upstream recovery command.
+        static PullRow noUpstream(String label, String branch,
+                                  String recoveryCommand) {
             return new PullRow(label, branch, Outcome.NO_UPSTREAM,
-                    null, null, 0, List.of(), null, null);
+                    null, null, 0, List.of(), null, recoveryCommand);
         }
 
         static PullRow notCloned(String name) {

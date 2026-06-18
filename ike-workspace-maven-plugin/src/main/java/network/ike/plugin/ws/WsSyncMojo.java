@@ -41,6 +41,12 @@ import java.util.Set;
  * {@link WsRefreshMainMojo ws:refresh-main}, or
  * {@link PushMojo ws:push} directly.
  *
+ * <p><strong>Single repo (no {@code workspace.yaml})</strong>: syncs the
+ * current repository only — a working set of one. The pull and push halves
+ * each resolve their own single-repo scope; the workspace-only
+ * refresh-main and {@link PostMutationSync} steps are skipped
+ * (IKE-Network/ike-issues#703).
+ *
  * <pre>{@code
  * mvn ws:sync                       # pull, refresh main, push
  * mvn ws:sync -DpullOnly            # pull and refresh main only
@@ -144,7 +150,12 @@ public class WsSyncMojo extends AbstractWorkspaceMojo {
             pushPhaseBody = readChildReport(WsGoal.PUSH);
         }
 
-        PostMutationSync.refresh(workspaceRoot(), getLog());
+        // PostMutationSync refreshes workspace-derived state (IDE files,
+        // git-init scripts) and is workspace-only — a single-repo sync
+        // (working set of one, IKE-Network/ike-issues#703) has none.
+        if (isWorkspaceMode()) {
+            PostMutationSync.refresh(workspaceRoot(), getLog());
+        }
 
         String body = buildSyncReport(pullPhaseBody, pushPhaseBody,
                 pushFailed, pushFailureMessage);
@@ -155,7 +166,7 @@ public class WsSyncMojo extends AbstractWorkspaceMojo {
             // on success. Emit the sync report manually first so the
             // user still has the combined audit trail.
             try {
-                WorkspaceReport.write(workspaceRoot().toPath(),
+                WorkspaceReport.write(resolveWorkingSet().root(),
                         WsGoal.SYNC.qualified(), body, getLog());
             } catch (MojoException writeException) {
                 getLog().debug("Could not write sync report on failure: "
@@ -176,7 +187,7 @@ public class WsSyncMojo extends AbstractWorkspaceMojo {
     private String readChildReport(WsGoal childGoal) {
         try {
             Path reportFile = WorkspaceReport.reportPath(
-                    workspaceRoot().toPath(), childGoal.qualified());
+                    resolveWorkingSet().root(), childGoal.qualified());
             if (!Files.isRegularFile(reportFile)) return null;
             return Files.readString(reportFile, StandardCharsets.UTF_8);
         } catch (IOException | MojoException e) {

@@ -21,10 +21,13 @@ import org.apache.maven.api.services.VersionRangeResolverResult;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 /**
  * Workspace-walking variant of {@code ike:scaffold-draft} (#350).
@@ -151,6 +154,19 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
         }
         // Workspace root last (mirrors ws:release-publish ordering).
         boolean walkRoot = new File(root, "pom.xml").exists();
+
+        // #700: in publish mode the reconcilers above have just rewritten
+        // each subproject's <version> to its branch-qualified form and
+        // propagated the qualified BOM into consumers' dependencyManagement
+        // imports — but the qualified BOM exists only as a rewritten POM on
+        // disk; it was never mvn install-ed. The per-subproject walk below
+        // delegates to a *standalone* mvn invocation outside the reactor,
+        // which cannot resolve a sibling BOM and fails at validate with
+        // "Non-resolvable import POM". Seed the local repo with the
+        // qualified BOM/parent artifacts first so each delegation resolves.
+        if (publish) {
+            installReconciledBoms(root, targets, report);
+        }
 
         report.section("Subprojects walked");
         int processed = 0;
@@ -351,6 +367,82 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
             }
         }
         return args;
+    }
+
+    /** Matches a project-level {@code <packaging>pom</packaging>}. */
+    private static final Pattern POM_PACKAGING =
+            Pattern.compile("<packaging>\\s*pom\\s*</packaging>");
+
+    /**
+     * Install the workspace's BOM/parent-only subprojects into the local
+     * Maven repository so the per-subproject scaffold delegations that
+     * follow can resolve them (IKE-Network/ike-issues#700).
+     *
+     * <p>Only {@code <packaging>pom</packaging>} subprojects are installed:
+     * BOMs, parent POMs, and aggregators are the artifacts that downstream
+     * subprojects import (via {@code <scope>import</scope>}) or inherit
+     * (via {@code <parent>}), and after feature-version qualification the
+     * only copy of the qualified artifact is the rewritten POM on disk. A
+     * {@code mvn install -N} is cheap for a POM project — no compilation,
+     * just the POM copied into {@code ~/.m2}.
+     *
+     * <p>{@code targets} is already in topological order, so a BOM whose
+     * own {@code <parent>} is itself a workspace member is installed after
+     * that parent. Each install uses the subproject's own Maven wrapper —
+     * by this point {@link network.ike.plugin.ws.reconcile.MavenWrapperReconciler}
+     * has already pinned every wrapper to the workspace Maven version (#701).
+     *
+     * @param root    the workspace root directory
+     * @param targets the cloned subproject names, in topological order
+     * @param report  the goal report being accumulated
+     * @throws MojoException if a BOM install fails
+     */
+    private void installReconciledBoms(File root, List<String> targets,
+            GoalReportBuilder report) throws MojoException {
+        List<String> installed = new ArrayList<>();
+        for (String name : targets) {
+            File subDir = new File(root, name);
+            if (!isPomPackaging(new File(subDir, "pom.xml"))) {
+                continue;
+            }
+            getLog().info("");
+            getLog().info("  Installing reconciled BOM/parent: " + name);
+            String mvn = WsReleaseDraftMojo.resolveMvnCommand(subDir);
+            ReleaseSupport.exec(subDir, getLog(),
+                    mvn, "install", "-N", "-B");
+            installed.add(name);
+        }
+        if (!installed.isEmpty()) {
+            report.section("Reconciled BOMs installed")
+                    .paragraph("Seeded the local repository with "
+                            + installed.size() + " branch-qualified "
+                            + "BOM/parent artifact(s) so each standalone "
+                            + "subproject scaffold can resolve them "
+                            + "(IKE-Network/ike-issues#700): `"
+                            + String.join("`, `", installed) + "`.");
+        }
+    }
+
+    /**
+     * Report whether a POM declares {@code <packaging>pom</packaging>}.
+     * Package-private and pure so the BOM-detection predicate can be
+     * unit-tested without spawning Maven.
+     *
+     * @param pom the POM file to inspect
+     * @return {@code true} when the file exists and declares pom packaging;
+     *         {@code false} when absent, jar-packaged, or unreadable
+     */
+    static boolean isPomPackaging(File pom) {
+        if (!pom.exists()) {
+            return false;
+        }
+        try {
+            String content =
+                    Files.readString(pom.toPath(), StandardCharsets.UTF_8);
+            return POM_PACKAGING.matcher(content).find();
+        } catch (IOException e) {
+            return false;
+        }
     }
 
     /**

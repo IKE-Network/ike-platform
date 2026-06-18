@@ -187,4 +187,95 @@ class MavenWrapperTest {
 
         assertThat(MavenWrapper.readPinnedVersion(tmp)).isNull();
     }
+
+    // ── rewritePinnedVersion (#701) ────────────────────────────────
+
+    @Test
+    void rewritePinnedVersion_returnsFalseWhenPropertiesAbsent(@TempDir Path tmp) throws IOException {
+        assertThat(MavenWrapper.rewritePinnedVersion(tmp, VERSION)).isFalse();
+    }
+
+    @Test
+    void rewritePinnedVersion_repinsStandardOnlyScriptWrapper(@TempDir Path tmp) throws IOException {
+        // A standard only-script wrapper pinned to the wrong version.
+        MavenWrapper.writeMissingFiles(tmp, "3.9.11");
+
+        boolean changed = MavenWrapper.rewritePinnedVersion(tmp, VERSION);
+
+        assertThat(changed).isTrue();
+        // Both the path segment and the filename in distributionUrl move,
+        // so the URL stays internally consistent and resolvable.
+        String props = Files.readString(
+                tmp.resolve(".mvn/wrapper/maven-wrapper.properties"),
+                StandardCharsets.UTF_8);
+        assertThat(props)
+                .contains("apache-maven/" + VERSION + "/apache-maven-"
+                        + VERSION + "-bin.zip")
+                .doesNotContain("3.9.11");
+        // The surgical rewrite preserves the file's existing shape.
+        assertThat(props)
+                .contains("distributionType=only-script")
+                .contains("wrapperVersion=" + MavenWrapper.WRAPPER_VERSION);
+        // And readPinnedVersion now agrees.
+        assertThat(MavenWrapper.readPinnedVersion(tmp)).isEqualTo(VERSION);
+    }
+
+    @Test
+    void rewritePinnedVersion_repinsLegacyMavenVersionAndUrl(@TempDir Path tmp) throws IOException {
+        // Legacy subproject wrapper shape: explicit maven.version key plus a
+        // distributionUrl carrying the version — as ike:init once emitted.
+        Files.createDirectories(tmp.resolve(".mvn/wrapper"));
+        Files.writeString(tmp.resolve(".mvn/wrapper/maven-wrapper.properties"),
+                "maven.version=3.9.11\n"
+                + "distributionUrl=https://repo.maven.apache.org/maven2/org/"
+                + "apache/maven/apache-maven/3.9.11/apache-maven-3.9.11-bin.zip\n",
+                StandardCharsets.UTF_8);
+
+        boolean changed = MavenWrapper.rewritePinnedVersion(tmp, VERSION);
+
+        assertThat(changed).isTrue();
+        String props = Files.readString(
+                tmp.resolve(".mvn/wrapper/maven-wrapper.properties"),
+                StandardCharsets.UTF_8);
+        // Both the legacy key and the URL move to the new version.
+        assertThat(props)
+                .contains("maven.version=" + VERSION)
+                .contains("apache-maven/" + VERSION + "/apache-maven-"
+                        + VERSION + "-bin.zip")
+                .doesNotContain("3.9.11");
+        assertThat(MavenWrapper.readPinnedVersion(tmp)).isEqualTo(VERSION);
+    }
+
+    @Test
+    void rewritePinnedVersion_preservesTarGzExtension(@TempDir Path tmp) throws IOException {
+        Files.createDirectories(tmp.resolve(".mvn/wrapper"));
+        Files.writeString(tmp.resolve(".mvn/wrapper/maven-wrapper.properties"),
+                "distributionUrl=https://repo.maven.apache.org/maven2/org/"
+                + "apache/maven/apache-maven/3.9.11/apache-maven-3.9.11-bin.tar.gz\n",
+                StandardCharsets.UTF_8);
+
+        MavenWrapper.rewritePinnedVersion(tmp, VERSION);
+
+        assertThat(Files.readString(
+                tmp.resolve(".mvn/wrapper/maven-wrapper.properties"),
+                StandardCharsets.UTF_8))
+                .contains("apache-maven-" + VERSION + "-bin.tar.gz")
+                .doesNotContain("3.9.11");
+    }
+
+    @Test
+    void rewritePinnedVersion_isNoOpWhenAlreadyAtTarget(@TempDir Path tmp) throws IOException {
+        MavenWrapper.writeMissingFiles(tmp, VERSION);
+        String before = Files.readString(
+                tmp.resolve(".mvn/wrapper/maven-wrapper.properties"),
+                StandardCharsets.UTF_8);
+
+        boolean changed = MavenWrapper.rewritePinnedVersion(tmp, VERSION);
+
+        assertThat(changed).isFalse();
+        assertThat(Files.readString(
+                tmp.resolve(".mvn/wrapper/maven-wrapper.properties"),
+                StandardCharsets.UTF_8))
+                .isEqualTo(before);
+    }
 }

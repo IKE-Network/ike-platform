@@ -45,6 +45,13 @@ public final class ReconcilerRegistry {
                 // workspace.yaml and retires the legacy with-* profile
                 // pattern (IKE-Network/ike-issues#696, completing #460).
                 new ReactorSubprojectsReconciler(),
+                // Maven wrapper version convergence groups with the other
+                // "workspace infrastructure" reconcilers (reactor membership
+                // above). Independent of alignment/version state — it pins
+                // each subproject's .mvn/wrapper to defaults.maven-version so
+                // a subproject onboarded with a stale wrapper can't break the
+                // Maven 4 enforcer (IKE-Network/ike-issues#701).
+                new MavenWrapperReconciler(),
                 // Inter-subproject alignment runs after scaffold so the
                 // POMs it rewrites already reflect the current
                 // ike-tooling.version property and parent cascade. The

@@ -55,6 +55,21 @@ public final class MavenWrapper {
     private static final Pattern DISTRIBUTION_VERSION =
             Pattern.compile("apache-maven-(.+?)-bin\\.(?:zip|tar\\.gz)");
 
+    /**
+     * Matches the full {@code apache-maven/<ver>/apache-maven-<ver>-bin.<ext>}
+     * span of a {@code distributionUrl}, so {@link #rewritePinnedVersion}
+     * can swap <em>both</em> the path-segment version and the filename
+     * version in one pass (leaving them mismatched would break the URL).
+     * Captures the archive extension to preserve it.
+     */
+    private static final Pattern DISTRIBUTION_URL_VERSION =
+            Pattern.compile(
+                    "apache-maven/[^/]+/apache-maven-.+?-bin\\.(zip|tar\\.gz)");
+
+    /** Matches the legacy {@code maven.version=...} property line. */
+    private static final Pattern MAVEN_VERSION_KEY =
+            Pattern.compile("(?m)^maven\\.version=.*$");
+
     private MavenWrapper() {}
 
     /**
@@ -163,6 +178,49 @@ public final class MavenWrapper {
             }
         }
         return props.getProperty("maven.version");
+    }
+
+    /**
+     * Rewrite the Maven version pinned in an existing
+     * {@code .mvn/wrapper/maven-wrapper.properties} to {@code newVersion},
+     * preserving the file's existing shape (key set, ordering, comment
+     * header). Replaces the version embedded in the {@code distributionUrl}
+     * — both its path segment and filename — and, when present, the
+     * legacy {@code maven.version} key.
+     *
+     * <p>Surgical counterpart to {@link #writePropertiesFile}: where the
+     * latter regenerates the canonical {@code only-script} file, this
+     * only swaps the version, so a subproject wrapper authored in a
+     * different-but-valid shape is re-pinned without being reformatted.
+     * Used by {@code MavenWrapperReconciler} to converge each subproject's
+     * wrapper to {@code defaults.maven-version} (IKE-Network/ike-issues#701).
+     *
+     * @param wsDir      directory whose {@code .mvn/wrapper/maven-wrapper.properties}
+     *                   to rewrite
+     * @param newVersion the Maven version to pin (e.g. {@code 4.0.0-rc-5})
+     * @return {@code true} if the file existed and was changed;
+     *         {@code false} when the file is absent or already pins
+     *         {@code newVersion}
+     * @throws IOException if the file exists but cannot be read or written
+     */
+    public static boolean rewritePinnedVersion(Path wsDir, String newVersion)
+            throws IOException {
+        Path propsFile = wsDir.resolve(".mvn").resolve("wrapper")
+                .resolve("maven-wrapper.properties");
+        if (!Files.exists(propsFile)) {
+            return false;
+        }
+        String content = Files.readString(propsFile, StandardCharsets.UTF_8);
+        String updated = DISTRIBUTION_URL_VERSION.matcher(content).replaceAll(
+                Matcher.quoteReplacement("apache-maven/" + newVersion
+                        + "/apache-maven-" + newVersion + "-bin.") + "$1");
+        updated = MAVEN_VERSION_KEY.matcher(updated).replaceAll(
+                Matcher.quoteReplacement("maven.version=" + newVersion));
+        if (updated.equals(content)) {
+            return false;
+        }
+        Files.writeString(propsFile, updated, StandardCharsets.UTF_8);
+        return true;
     }
 
     /**

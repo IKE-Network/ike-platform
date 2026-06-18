@@ -21,6 +21,10 @@ import java.util.stream.Stream;
  * This goal lists those reports newest-first and opens the workspace
  * root in the default file manager so you can browse them.
  *
+ * <p><strong>Single repo (no {@code workspace.yaml})</strong>: lists the
+ * {@code ws꞉*.md} reports at the current repository's root — a working set
+ * of one (IKE-Network/ike-issues#704).
+ *
  * <p>Usage:
  * <pre>
  *   mvn ws:report                    # list and open
@@ -46,7 +50,11 @@ public class ReportMojo extends AbstractWorkspaceMojo {
 
     @Override
     protected WorkspaceReportSpec runGoal() throws MojoException {
-        Path root = workspaceRoot().toPath();
+        // Scope the report scan to the working set's root — the workspace
+        // root, or a single repository (a working set of one). Previously
+        // anchored on workspaceRoot(), which threw outside a workspace
+        // (IKE-Network/ike-issues#704).
+        Path root = resolveWorkingSet().root();
         List<Path> reports = findReports(root);
 
         if (reports.isEmpty()) {

@@ -26,7 +26,8 @@ public enum WsGoal {
     ALIGN_PUBLISH("align-publish", WsAlignPublishMojo.class,
             "Apply inter-subproject version alignment."),
     CHECK_BRANCH("check-branch", CheckBranchMojo.class,
-            "Warn when a subproject branch deviates from workspace.yaml."),
+            "Warn when a subproject branch deviates from workspace.yaml."
+                    + " (No-op in a single repo — no manifest to check.)"),
     CHECKPOINT_DRAFT("checkpoint-draft", WsCheckpointDraftMojo.class,
             "Preview a workspace checkpoint."),
     CHECKPOINT_PUBLISH("checkpoint-publish", WsCheckpointPublishMojo.class,
@@ -36,29 +37,40 @@ public enum WsGoal {
     CLEANUP_PUBLISH("cleanup-publish", CleanupWorkspacePublishMojo.class,
             "Execute workspace cleanup."),
     COMMIT_DRAFT("commit-draft", WsCommitDraftMojo.class,
-            "Preview what would be committed across subprojects (read-only)."),
+            "Preview what would be committed across the working set (read-only).",
+            WorkspaceScope.BARE_AND_WORKSPACE),
     COMMIT_PUBLISH("commit-publish", WsCommitPublishMojo.class,
-            "Commit uncommitted changes across subprojects."),
+            "Commit uncommitted changes across the working set.",
+            WorkspaceScope.BARE_AND_WORKSPACE),
     FEATURE_ABANDON_DRAFT("feature-abandon-draft", FeatureAbandonDraftMojo.class,
-            "Preview abandoning a feature branch across subprojects."),
+            "Preview abandoning a feature branch across the working set.",
+            WorkspaceScope.BARE_AND_WORKSPACE),
     FEATURE_ABANDON_PUBLISH("feature-abandon-publish", FeatureAbandonPublishMojo.class,
-            "Abandon a feature branch across subprojects."),
+            "Abandon a feature branch across the working set.",
+            WorkspaceScope.BARE_AND_WORKSPACE),
     FEATURE_FINISH_MERGE_DRAFT("feature-finish-merge-draft", FeatureFinishMergeDraftMojo.class,
-            "Preview a no-fast-forward merge of a feature branch."),
+            "Preview a no-fast-forward merge of a feature branch.",
+            WorkspaceScope.BARE_AND_WORKSPACE),
     FEATURE_FINISH_MERGE_PUBLISH("feature-finish-merge-publish", FeatureFinishMergePublishMojo.class,
-            "Execute a no-fast-forward merge of a feature branch."),
+            "Execute a no-fast-forward merge of a feature branch.",
+            WorkspaceScope.BARE_AND_WORKSPACE),
     FEATURE_FINISH_SQUASH_DRAFT("feature-finish-squash-draft", FeatureFinishSquashDraftMojo.class,
-            "Preview a squash-merge of a feature branch."),
+            "Preview a squash-merge of a feature branch.",
+            WorkspaceScope.BARE_AND_WORKSPACE),
     FEATURE_FINISH_SQUASH_PUBLISH("feature-finish-squash-publish", FeatureFinishSquashPublishMojo.class,
-            "Execute a squash-merge of a feature branch."),
+            "Execute a squash-merge of a feature branch.",
+            WorkspaceScope.BARE_AND_WORKSPACE),
     FEATURE_START_DRAFT("feature-start-draft", FeatureStartDraftMojo.class,
-            "Preview starting a feature branch across subprojects."),
+            "Preview starting a feature branch across the working set.",
+            WorkspaceScope.BARE_AND_WORKSPACE),
     FEATURE_START_PUBLISH("feature-start-publish", FeatureStartPublishMojo.class,
-            "Start a feature branch across subprojects."),
+            "Start a feature branch across the working set.",
+            WorkspaceScope.BARE_AND_WORKSPACE),
     GRAPH("graph", GraphWorkspaceMojo.class,
             "Emit a Mermaid dependency graph for the workspace."),
     HELP("help", WsHelpMojo.class,
-            "List ws:* goals discovered from the plugin descriptor."),
+            "List ws:* goals discovered from the plugin descriptor.",
+            WorkspaceScope.BARE_AND_WORKSPACE),
     LINT("lint", WsLintMojo.class,
             "Surface preflight conditions as a hygiene gate (read-only)."),
     OVERVIEW("overview", OverviewWorkspaceMojo.class,
@@ -66,9 +78,11 @@ public enum WsGoal {
     POST_RELEASE("post-release", WsPostReleaseMojo.class,
             "Post-release bump of SNAPSHOT versions."),
     PULL("pull", PullWorkspaceMojo.class,
-            "Pull all subprojects."),
+            "Pull the working set — a single repo, or every subproject.",
+            WorkspaceScope.BARE_AND_WORKSPACE),
     PUSH("push", PushMojo.class,
-            "Push all subprojects."),
+            "Push the working set — a single repo, or every subproject.",
+            WorkspaceScope.BARE_AND_WORKSPACE),
     RECONCILE_BRANCHES_DRAFT("reconcile-branches-draft",
             WsReconcileBranchesDraftMojo.class,
             "Preview reconciliation of workspace.yaml branch fields with on-disk state."),
@@ -78,26 +92,34 @@ public enum WsGoal {
     REFRESH_MAIN("refresh-main", WsRefreshMainMojo.class,
             "Refresh local main from origin/main across the workspace."),
     RELEASE_DRAFT("release-draft", WsReleaseDraftMojo.class,
-            "Preview a workspace release."),
+            "Preview a release of the working set.",
+            WorkspaceScope.BARE_AND_WORKSPACE),
     RELEASE_NOTES("release-notes", WsReleaseNotesMojo.class,
-            "Generate release notes from a milestone."),
+            "Generate release notes from a milestone.",
+            WorkspaceScope.BARE_AND_WORKSPACE),
     RELEASE_PUBLISH("release-publish", WsReleasePublishMojo.class,
-            "Execute a workspace release."),
+            "Execute a release of the working set.",
+            WorkspaceScope.BARE_AND_WORKSPACE),
     RELEASE_STATUS("release-status", WsReleaseStatusMojo.class,
             "Diagnose state of any in-flight workspace release."),
     REMOVE("remove", WsRemoveMojo.class,
             "Remove a subproject from the workspace."),
     REPORT("report", ReportMojo.class,
-            "Aggregate ws:* goal reports into a single document."),
+            "List the ws:* goal reports for the working set.",
+            WorkspaceScope.BARE_AND_WORKSPACE),
     SCAFFOLD_DRAFT("scaffold-draft", WsScaffoldDraftMojo.class,
-            "Report scaffold + foundation drift across every cloned subproject (#350)."),
+            "Report scaffold + foundation drift across the working set (#350).",
+            WorkspaceScope.BARE_AND_WORKSPACE),
     SCAFFOLD_INIT("scaffold-init", WsScaffoldInitMojo.class,
             "Bootstrap a new workspace, or clone declared-but-missing subprojects."
-                    + " Idempotent (#393)."),
+                    + " Idempotent (#393).",
+            WorkspaceScope.BARE_AND_WORKSPACE),
     SCAFFOLD_PUBLISH("scaffold-publish", WsScaffoldPublishMojo.class,
-            "Apply scaffold + foundation drift across every cloned subproject (#350)."),
+            "Apply scaffold + foundation drift across the working set (#350).",
+            WorkspaceScope.BARE_AND_WORKSPACE),
     SIBLING_CREATE("sibling-create", SiblingCreateMojo.class,
-            "Create a sibling workspace clone on a feature branch."),
+            "Create a sibling clone on a feature branch.",
+            WorkspaceScope.BARE_AND_WORKSPACE),
     STIGNORE("stignore", StignoreWorkspaceMojo.class,
             "Generate Syncthing ignore files from workspace.yaml."),
     SWITCH_DRAFT("switch-draft", WsSwitchDraftMojo.class,
@@ -105,11 +127,14 @@ public enum WsGoal {
     SWITCH_PUBLISH("switch-publish", WsSwitchPublishMojo.class,
             "Switch subprojects to a coordinated branch."),
     SYNC("sync", WsSyncMojo.class,
-            "Pull then push across the workspace (the daily sync op)."),
+            "Pull then push across the working set (the daily sync op).",
+            WorkspaceScope.BARE_AND_WORKSPACE),
     UPDATE_FEATURE_DRAFT("update-feature-draft", UpdateFeatureDraftMojo.class,
-            "Preview rebasing a feature branch onto main."),
+            "Preview updating a feature branch by merging main in.",
+            WorkspaceScope.BARE_AND_WORKSPACE),
     UPDATE_FEATURE_PUBLISH("update-feature-publish", UpdateFeaturePublishMojo.class,
-            "Rebase a feature branch onto main."),
+            "Update a feature branch by merging main in.",
+            WorkspaceScope.BARE_AND_WORKSPACE),
     VERIFY_CONVERGENCE("verify-convergence", VerifyConvergenceMojo.class,
             "Verify transitive dependency convergence across subprojects.");
 
@@ -119,13 +144,28 @@ public enum WsGoal {
     private final String goalName;
     private final Class<? extends org.apache.maven.api.plugin.Mojo> mojoClass;
     private final String description;
+    private final WorkspaceScope scope;
 
+    /**
+     * Convenience constructor for the common workspace-only goal. New
+     * goals default to {@link WorkspaceScope#WORKSPACE_ONLY}: a goal must
+     * opt in to advertising single-repo support so a forgotten scope never
+     * over-claims a bare mode the mojo does not implement (#702).
+     */
     WsGoal(String goalName,
            Class<? extends org.apache.maven.api.plugin.Mojo> mojoClass,
            String description) {
+        this(goalName, mojoClass, description, WorkspaceScope.WORKSPACE_ONLY);
+    }
+
+    WsGoal(String goalName,
+           Class<? extends org.apache.maven.api.plugin.Mojo> mojoClass,
+           String description,
+           WorkspaceScope scope) {
         this.goalName = goalName;
         this.mojoClass = mojoClass;
         this.description = description;
+        this.scope = scope;
     }
 
     /** The bare goal name as it appears in {@code @Mojo(name = ...)}. */
@@ -146,5 +186,15 @@ public enum WsGoal {
     /** One-line human description of what this goal does. */
     public String description() {
         return description;
+    }
+
+    /**
+     * Whether this goal runs on a single repository (a working set of one)
+     * as well as a workspace, or requires a {@code workspace.yaml} (#702).
+     *
+     * @return the goal's workspace scope
+     */
+    public WorkspaceScope scope() {
+        return scope;
     }
 }

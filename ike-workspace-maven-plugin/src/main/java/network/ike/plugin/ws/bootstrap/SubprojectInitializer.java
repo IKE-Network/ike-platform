@@ -815,14 +815,18 @@ public final class SubprojectInitializer {
 
                 ## VCS Bridge (Syncthing multi-machine)
 
+                These run on a working set of 1..N — every subproject in a
+                workspace, or a single repo with no `workspace.yaml`. Run
+                `ws:help` for the per-goal single-repo vs. workspace breakdown.
+
                 | Goal | Description |
                 |------|-------------|
-                | `ws:sync` | Pull then push across the workspace (the daily sync op) |
-                | `ws:commit-draft` | Preview what would be committed across repos (read-only) |
-                | `ws:commit-publish` | Commit across repos (stages all by default; `-DstagedOnly` to opt out) |
-                | `ws:pull` | Git pull --rebase across all subprojects |
-                | `ws:push` | Push all subprojects (warns about uncommitted changes) |
-                | `ws:report` | Aggregate ws:* goal reports into a single document |
+                | `ws:sync` | Pull then push across the working set (the daily sync op) |
+                | `ws:commit-draft` | Preview what would be committed across the working set (read-only) |
+                | `ws:commit-publish` | Commit across the working set (stages all by default; `-DstagedOnly` to opt out) |
+                | `ws:pull` | Git pull --rebase across the working set |
+                | `ws:push` | Push the working set (warns about uncommitted changes) |
+                | `ws:report` | List the ws:* goal reports for the working set |
 
                 ## Branch Cleanup
 
@@ -966,18 +970,22 @@ public final class SubprojectInitializer {
 
                 ## VCS Bridge (Syncthing)
 
+                Run on a working set of 1..N — the whole workspace, or a single
+                repo with no `workspace.yaml`. See `ws:help` for the per-goal
+                single-repo vs. workspace breakdown.
+
                 | Goal | Description |
                 |------|-------------|
-                | `ws:commit-publish` | Commit across repos (`-Dpush=true -Dmessage="..."`) |
-                | `ws:push` | Push all subprojects (warns about uncommitted changes) |
-                | `ws:sync` | Pull then push across the workspace |
+                | `ws:commit-publish` | Commit across the working set (`-Dpush=true -Dmessage="..."`) |
+                | `ws:push` | Push the working set (warns about uncommitted changes) |
+                | `ws:sync` | Pull then push across the working set |
                 | `ws:cleanup-draft` / `-publish` | List/delete merged feature branches |
 
                 ---
 
                 ## Preflight Validation
 
-                Multi-repo goals validate that all subproject working trees are clean
+                Workspace goals validate that all subproject working trees are clean
                 before starting. If any subproject has uncommitted changes, the goal
                 fails immediately with a list of affected repos and files — no partial
                 modifications occur.

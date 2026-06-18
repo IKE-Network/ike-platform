@@ -48,6 +48,8 @@ public class WsHelpMojo extends AbstractWorkspaceMojo {
         getLog().info("");
         getLog().info("IKE Workspace Tools — Available Goals");
         getLog().info("══════════════════════════════════════════════════════════════");
+        getLog().info("  ◆ = also runs on a single repo (working set of one);"
+                + " others require a workspace.yaml.");
 
         Map<String, List<GoalInfo>> categories = categorize(goals);
 
@@ -58,9 +60,10 @@ public class WsHelpMojo extends AbstractWorkspaceMojo {
                     56 - entry.getKey().length())) + "─");
             for (GoalInfo g : entry.getValue()) {
                 String goalName = g.goal.qualified();
+                String marker = g.goal.scope().runsBare() ? "◆ " : "  ";
                 String padding = " ".repeat(
                         Math.max(1, 46 - goalName.length()));
-                getLog().info("  " + goalName + padding + g.summary);
+                getLog().info("  " + marker + goalName + padding + g.summary);
             }
         }
 
@@ -81,11 +84,14 @@ public class WsHelpMojo extends AbstractWorkspaceMojo {
     private static String buildHelpReport(List<GoalInfo> goals) {
         List<String[]> rows = new ArrayList<>();
         for (GoalInfo g : goals) {
-            rows.add(new String[]{"`" + g.goal().qualified() + "`", g.summary()});
+            rows.add(new String[]{"`" + g.goal().qualified() + "`",
+                    g.goal().scope().label(), g.summary()});
         }
         GoalReportBuilder report = new GoalReportBuilder();
-        report.paragraph(goals.size() + " `ws:*` goals.")
-                .table(List.of("Goal", "Description"), rows);
+        report.paragraph(goals.size() + " `ws:*` goals. **Applies to** is "
+                        + "whether a goal also runs on a single repo (a "
+                        + "working set of one) or needs a `workspace.yaml`.")
+                .table(List.of("Goal", "Applies to", "Description"), rows);
         return report.build();
     }
 

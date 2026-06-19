@@ -21,10 +21,13 @@ import org.apache.maven.api.services.VersionRangeResolverResult;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 /**
  * Workspace-walking variant of {@code ike:scaffold-draft} (#350).
@@ -84,39 +87,39 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
     boolean resolveFoundation;
 
     /** Creates this goal instance. */
-<span class="fc" id="L87">    public WsScaffoldDraftMojo() {}</span>
+<span class="fc" id="L90">    public WsScaffoldDraftMojo() {}</span>
 
     @Override
     protected WorkspaceReportSpec runGoal() throws MojoException {
-<span class="pc bpc" id="L91" title="1 of 2 branches missed.">        if (!isWorkspaceMode()) {</span>
-<span class="nc" id="L92">            return executeBareMode();</span>
+<span class="pc bpc" id="L94" title="1 of 2 branches missed.">        if (!isWorkspaceMode()) {</span>
+<span class="nc" id="L95">            return executeBareMode();</span>
         }
-<span class="nc" id="L94">        WorkspaceGraph graph = loadGraph();</span>
-<span class="nc" id="L95">        File root = workspaceRoot();</span>
-<span class="nc bnc" id="L96" title="All 2 branches missed.">        String goal = publish ? &quot;ike:scaffold-publish&quot; : &quot;ike:scaffold-draft&quot;;</span>
-<span class="nc bnc" id="L97" title="All 2 branches missed.">        String goalLabel = (publish ? WsGoal.SCAFFOLD_PUBLISH</span>
-<span class="nc" id="L98">                                    : WsGoal.SCAFFOLD_DRAFT).qualified();</span>
+<span class="nc" id="L97">        WorkspaceGraph graph = loadGraph();</span>
+<span class="nc" id="L98">        File root = workspaceRoot();</span>
+<span class="nc bnc" id="L99" title="All 2 branches missed.">        String goal = publish ? &quot;ike:scaffold-publish&quot; : &quot;ike:scaffold-draft&quot;;</span>
+<span class="nc bnc" id="L100" title="All 2 branches missed.">        String goalLabel = (publish ? WsGoal.SCAFFOLD_PUBLISH</span>
+<span class="nc" id="L101">                                    : WsGoal.SCAFFOLD_DRAFT).qualified();</span>
 
-<span class="nc" id="L100">        getLog().info(&quot;&quot;);</span>
-<span class="nc" id="L101">        getLog().info(goalLabel);</span>
-<span class="nc" id="L102">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+<span class="nc" id="L103">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L104">        getLog().info(goalLabel);</span>
+<span class="nc" id="L105">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
 
         // Accumulate the markdown report alongside the console output
         // (IKE-Network/ike-issues#407) so the goal writes its
         // ws꞉scaffold-{draft,publish}.md like every other goal.
-<span class="nc" id="L107">        GoalReportBuilder report = new GoalReportBuilder();</span>
-<span class="nc" id="L108">        report.paragraph(&quot;**Workspace:** `&quot; + root + &quot;`&quot;);</span>
+<span class="nc" id="L110">        GoalReportBuilder report = new GoalReportBuilder();</span>
+<span class="nc" id="L111">        report.paragraph(&quot;**Workspace:** `&quot; + root + &quot;`&quot;);</span>
 
         // Workspace-wide verification (formerly ws:verify, retired in
         // #393). Runs in both draft and publish modes — it's read-only,
         // so the call shape is identical. Parent alignment was dropped
         // from this extraction because ParentVersionReconciler.detect()
         // (below) already covers it.
-<span class="nc" id="L115">        var verifier = new WorkspaceVerifier(getLog(), graph, root,</span>
-<span class="nc" id="L116">                resolveManifest(), false /* checkConvergence */,</span>
-<span class="nc" id="L117">                isWorkspaceMode());</span>
-<span class="nc" id="L118">        verifier.runAllChecks();</span>
-<span class="nc" id="L119">        report.paragraph(&quot;Workspace verification ran — see the console &quot;</span>
+<span class="nc" id="L118">        var verifier = new WorkspaceVerifier(getLog(), graph, root,</span>
+<span class="nc" id="L119">                resolveManifest(), false /* checkConvergence */,</span>
+<span class="nc" id="L120">                isWorkspaceMode());</span>
+<span class="nc" id="L121">        verifier.runAllChecks();</span>
+<span class="nc" id="L122">        report.paragraph(&quot;Workspace verification ran — see the console &quot;</span>
                 + &quot;output for the full check list.&quot;);
 
         // Workspace-level reconcilers run next (#393). Each owns one
@@ -124,94 +127,107 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
         // parent version, alignment, etc.) and is reported (draft) or
         // applied (publish) before the per-subproject ike:scaffold
         // delegation runs.
-<span class="nc bnc" id="L127" title="All 2 branches missed.">        report.section(publish</span>
-<span class="nc" id="L128">                ? &quot;Workspace reconcilers applied&quot;</span>
-<span class="nc" id="L129">                : &quot;Workspace reconciler drift&quot;);</span>
-<span class="nc" id="L130">        runWorkspaceReconcilers(graph, root, report);</span>
+<span class="nc bnc" id="L130" title="All 2 branches missed.">        report.section(publish</span>
+<span class="nc" id="L131">                ? &quot;Workspace reconcilers applied&quot;</span>
+<span class="nc" id="L132">                : &quot;Workspace reconciler drift&quot;);</span>
+<span class="nc" id="L133">        runWorkspaceReconcilers(graph, root, report);</span>
 
         // #417: foundation currency — discover whether a newer parent
         // has been released and offer a deterministic upgrade command.
         // Draft only; publish is already applying.
-<span class="nc bnc" id="L135" title="All 2 branches missed.">        if (!publish) {</span>
-<span class="nc" id="L136">            reportLatestParent(root, report);</span>
+<span class="nc bnc" id="L138" title="All 2 branches missed.">        if (!publish) {</span>
+<span class="nc" id="L139">            reportLatestParent(root, report);</span>
         }
 
         // Walk each subproject in topological order, then the
         // workspace root. Topological order isn't strictly needed
         // for scaffold (each project's drift is independent), but
         // keeps output predictable.
-<span class="nc" id="L143">        List&lt;String&gt; targets = new ArrayList&lt;&gt;();</span>
-<span class="nc bnc" id="L144" title="All 2 branches missed.">        for (String name : graph.topologicalSort()) {</span>
-<span class="nc" id="L145">            File subDir = new File(root, name);</span>
-<span class="nc bnc" id="L146" title="All 2 branches missed.">            if (!new File(subDir, &quot;pom.xml&quot;).exists()) {</span>
-<span class="nc" id="L147">                getLog().debug(&quot;  &quot; + name + &quot;: not cloned — skipping&quot;);</span>
-<span class="nc" id="L148">                continue;</span>
+<span class="nc" id="L146">        List&lt;String&gt; targets = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L147" title="All 2 branches missed.">        for (String name : graph.topologicalSort()) {</span>
+<span class="nc" id="L148">            File subDir = new File(root, name);</span>
+<span class="nc bnc" id="L149" title="All 2 branches missed.">            if (!new File(subDir, &quot;pom.xml&quot;).exists()) {</span>
+<span class="nc" id="L150">                getLog().debug(&quot;  &quot; + name + &quot;: not cloned — skipping&quot;);</span>
+<span class="nc" id="L151">                continue;</span>
             }
-<span class="nc" id="L150">            targets.add(name);</span>
-<span class="nc" id="L151">        }</span>
+<span class="nc" id="L153">            targets.add(name);</span>
+<span class="nc" id="L154">        }</span>
         // Workspace root last (mirrors ws:release-publish ordering).
-<span class="nc" id="L153">        boolean walkRoot = new File(root, &quot;pom.xml&quot;).exists();</span>
+<span class="nc" id="L156">        boolean walkRoot = new File(root, &quot;pom.xml&quot;).exists();</span>
 
-<span class="nc" id="L155">        report.section(&quot;Subprojects walked&quot;);</span>
-<span class="nc" id="L156">        int processed = 0;</span>
-<span class="nc" id="L157">        int failed = 0;</span>
-<span class="nc bnc" id="L158" title="All 2 branches missed.">        for (String name : targets) {</span>
-<span class="nc" id="L159">            File subDir = new File(root, name);</span>
-<span class="nc" id="L160">            getLog().info(&quot;&quot;);</span>
-<span class="nc" id="L161">            getLog().info(&quot;── &quot; + name + &quot; &quot;.repeat(Math.max(1, 60 - name.length())) + &quot;──&quot;);</span>
-            try {
-<span class="nc" id="L163">                runScaffoldInSubproject(subDir, goal);</span>
-<span class="nc" id="L164">                report.bullet(&quot;✓ &quot; + name);</span>
-<span class="nc" id="L165">                processed++;</span>
-<span class="nc" id="L166">            } catch (MojoException e) {</span>
-<span class="nc" id="L167">                getLog().error(&quot;  ✗ &quot; + name + &quot;: &quot; + e.getMessage());</span>
-<span class="nc" id="L168">                report.bullet(&quot;✗ &quot; + name + &quot; — &quot; + e.getMessage());</span>
-<span class="nc" id="L169">                failed++;</span>
-<span class="nc" id="L170">            }</span>
-<span class="nc" id="L171">        }</span>
-<span class="nc bnc" id="L172" title="All 2 branches missed.">        if (walkRoot) {</span>
-<span class="nc" id="L173">            getLog().info(&quot;&quot;);</span>
-<span class="nc" id="L174">            getLog().info(&quot;── (workspace root)&quot; + &quot; &quot;.repeat(43) + &quot;──&quot;);</span>
-            try {
-<span class="nc" id="L176">                runScaffoldInSubproject(root, goal);</span>
-<span class="nc" id="L177">                report.bullet(&quot;✓ (workspace root)&quot;);</span>
-<span class="nc" id="L178">                processed++;</span>
-<span class="nc" id="L179">            } catch (MojoException e) {</span>
-<span class="nc" id="L180">                getLog().error(&quot;  ✗ workspace root: &quot; + e.getMessage());</span>
-<span class="nc" id="L181">                report.bullet(&quot;✗ (workspace root) — &quot; + e.getMessage());</span>
-<span class="nc" id="L182">                failed++;</span>
-<span class="nc" id="L183">            }</span>
+        // #700: in publish mode the reconcilers above have just rewritten
+        // each subproject's &lt;version&gt; to its branch-qualified form and
+        // propagated the qualified BOM into consumers' dependencyManagement
+        // imports — but the qualified BOM exists only as a rewritten POM on
+        // disk; it was never mvn install-ed. The per-subproject walk below
+        // delegates to a *standalone* mvn invocation outside the reactor,
+        // which cannot resolve a sibling BOM and fails at validate with
+        // &quot;Non-resolvable import POM&quot;. Seed the local repo with the
+        // qualified BOM/parent artifacts first so each delegation resolves.
+<span class="nc bnc" id="L167" title="All 2 branches missed.">        if (publish) {</span>
+<span class="nc" id="L168">            installReconciledBoms(root, targets, report);</span>
         }
 
-<span class="nc" id="L186">        getLog().info(&quot;&quot;);</span>
-<span class="nc" id="L187">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
-<span class="nc" id="L188">        getLog().info(&quot;  Walked &quot; + processed + &quot; project(s)&quot;</span>
-<span class="nc bnc" id="L189" title="All 2 branches missed.">                + (failed &gt; 0 ? &quot;; &quot; + failed + &quot; failed&quot; : &quot;&quot;));</span>
+<span class="nc" id="L171">        report.section(&quot;Subprojects walked&quot;);</span>
+<span class="nc" id="L172">        int processed = 0;</span>
+<span class="nc" id="L173">        int failed = 0;</span>
+<span class="nc bnc" id="L174" title="All 2 branches missed.">        for (String name : targets) {</span>
+<span class="nc" id="L175">            File subDir = new File(root, name);</span>
+<span class="nc" id="L176">            getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L177">            getLog().info(&quot;── &quot; + name + &quot; &quot;.repeat(Math.max(1, 60 - name.length())) + &quot;──&quot;);</span>
+            try {
+<span class="nc" id="L179">                runScaffoldInSubproject(subDir, goal);</span>
+<span class="nc" id="L180">                report.bullet(&quot;✓ &quot; + name);</span>
+<span class="nc" id="L181">                processed++;</span>
+<span class="nc" id="L182">            } catch (MojoException e) {</span>
+<span class="nc" id="L183">                getLog().error(&quot;  ✗ &quot; + name + &quot;: &quot; + e.getMessage());</span>
+<span class="nc" id="L184">                report.bullet(&quot;✗ &quot; + name + &quot; — &quot; + e.getMessage());</span>
+<span class="nc" id="L185">                failed++;</span>
+<span class="nc" id="L186">            }</span>
+<span class="nc" id="L187">        }</span>
+<span class="nc bnc" id="L188" title="All 2 branches missed.">        if (walkRoot) {</span>
+<span class="nc" id="L189">            getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L190">            getLog().info(&quot;── (workspace root)&quot; + &quot; &quot;.repeat(43) + &quot;──&quot;);</span>
+            try {
+<span class="nc" id="L192">                runScaffoldInSubproject(root, goal);</span>
+<span class="nc" id="L193">                report.bullet(&quot;✓ (workspace root)&quot;);</span>
+<span class="nc" id="L194">                processed++;</span>
+<span class="nc" id="L195">            } catch (MojoException e) {</span>
+<span class="nc" id="L196">                getLog().error(&quot;  ✗ workspace root: &quot; + e.getMessage());</span>
+<span class="nc" id="L197">                report.bullet(&quot;✗ (workspace root) — &quot; + e.getMessage());</span>
+<span class="nc" id="L198">                failed++;</span>
+<span class="nc" id="L199">            }</span>
+        }
 
-<span class="nc" id="L191">        report.paragraph(processed + &quot; project(s) walked&quot;</span>
-<span class="nc bnc" id="L192" title="All 2 branches missed.">                + (failed &gt; 0 ? &quot;; &quot; + failed + &quot; failed&quot; : &quot;&quot;) + &quot;.&quot;);</span>
-<span class="nc" id="L193">        report.paragraph(&quot;Per-subproject scaffold detail is in each &quot;</span>
+<span class="nc" id="L202">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L203">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+<span class="nc" id="L204">        getLog().info(&quot;  Walked &quot; + processed + &quot; project(s)&quot;</span>
+<span class="nc bnc" id="L205" title="All 2 branches missed.">                + (failed &gt; 0 ? &quot;; &quot; + failed + &quot; failed&quot; : &quot;&quot;));</span>
+
+<span class="nc" id="L207">        report.paragraph(processed + &quot; project(s) walked&quot;</span>
+<span class="nc bnc" id="L208" title="All 2 branches missed.">                + (failed &gt; 0 ? &quot;; &quot; + failed + &quot; failed&quot; : &quot;&quot;) + &quot;.&quot;);</span>
+<span class="nc" id="L209">        report.paragraph(&quot;Per-subproject scaffold detail is in each &quot;</span>
                 + &quot;subproject's own `ike꞉scaffold-&quot;
-<span class="nc bnc" id="L195" title="All 2 branches missed.">                + (publish ? &quot;publish&quot; : &quot;draft&quot;) + &quot;.md` report.&quot;);</span>
+<span class="nc bnc" id="L211" title="All 2 branches missed.">                + (publish ? &quot;publish&quot; : &quot;draft&quot;) + &quot;.md` report.&quot;);</span>
 
         // ws:scaffold-publish edits POMs and scaffold files in place
         // without committing — surface the resulting uncommitted state
         // so the operator can see what to review (#431).
-<span class="nc bnc" id="L200" title="All 2 branches missed.">        if (publish) {</span>
-<span class="nc" id="L201">            reportUncommittedState(root, targets, walkRoot, report);</span>
+<span class="nc bnc" id="L216" title="All 2 branches missed.">        if (publish) {</span>
+<span class="nc" id="L217">            reportUncommittedState(root, targets, walkRoot, report);</span>
         }
 
-<span class="nc bnc" id="L204" title="All 2 branches missed.">        if (failed &gt; 0) {</span>
-<span class="nc" id="L205">            throw new MojoException(</span>
-<span class="nc bnc" id="L206" title="All 2 branches missed.">                    (publish ? WsGoal.SCAFFOLD_PUBLISH : WsGoal.SCAFFOLD_DRAFT)</span>
-<span class="nc" id="L207">                            .qualified()</span>
+<span class="nc bnc" id="L220" title="All 2 branches missed.">        if (failed &gt; 0) {</span>
+<span class="nc" id="L221">            throw new MojoException(</span>
+<span class="nc bnc" id="L222" title="All 2 branches missed.">                    (publish ? WsGoal.SCAFFOLD_PUBLISH : WsGoal.SCAFFOLD_DRAFT)</span>
+<span class="nc" id="L223">                            .qualified()</span>
                     + &quot; saw &quot; + failed + &quot; per-subproject failure(s); &quot;
                     + &quot;see logs above.&quot;);
         }
 
-<span class="nc" id="L212">        return new WorkspaceReportSpec(</span>
-<span class="nc bnc" id="L213" title="All 2 branches missed.">                publish ? WsGoal.SCAFFOLD_PUBLISH : WsGoal.SCAFFOLD_DRAFT,</span>
-<span class="nc" id="L214">                report.build());</span>
+<span class="nc" id="L228">        return new WorkspaceReportSpec(</span>
+<span class="nc bnc" id="L229" title="All 2 branches missed.">                publish ? WsGoal.SCAFFOLD_PUBLISH : WsGoal.SCAFFOLD_DRAFT,</span>
+<span class="nc" id="L230">                report.build());</span>
     }
 
     // ── Bare mode: single-repo scaffold (no workspace.yaml) ──────────
@@ -232,32 +248,32 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
     private WorkspaceReportSpec executeBareMode() throws MojoException {
         // Single-repo scaffold is a working set of one (ike-issues#611) —
         // resolve it through the shared resolver, not user.dir directly.
-<span class="fc" id="L235">        File repo = resolveWorkingSet().members().getFirst().directory().toFile();</span>
-<span class="pc bpc" id="L236" title="1 of 2 branches missed.">        if (!new File(repo, &quot;pom.xml&quot;).exists()) {</span>
-<span class="fc" id="L237">            throw new MojoException(</span>
+<span class="fc" id="L251">        File repo = resolveWorkingSet().members().getFirst().directory().toFile();</span>
+<span class="pc bpc" id="L252" title="1 of 2 branches missed.">        if (!new File(repo, &quot;pom.xml&quot;).exists()) {</span>
+<span class="fc" id="L253">            throw new MojoException(</span>
                     &quot;ws:scaffold: &quot; + repo + &quot; has no pom.xml and no &quot;
                     + &quot;workspace.yaml was found — run it in a Maven project, &quot;
                     + &quot;or a workspace.&quot;);
         }
-<span class="nc bnc" id="L242" title="All 2 branches missed.">        WsGoal goal = publish ? WsGoal.SCAFFOLD_PUBLISH : WsGoal.SCAFFOLD_DRAFT;</span>
-<span class="nc bnc" id="L243" title="All 2 branches missed.">        String delegate = publish ? &quot;ike:scaffold-publish&quot; : &quot;ike:scaffold-draft&quot;;</span>
+<span class="nc bnc" id="L258" title="All 2 branches missed.">        WsGoal goal = publish ? WsGoal.SCAFFOLD_PUBLISH : WsGoal.SCAFFOLD_DRAFT;</span>
+<span class="nc bnc" id="L259" title="All 2 branches missed.">        String delegate = publish ? &quot;ike:scaffold-publish&quot; : &quot;ike:scaffold-draft&quot;;</span>
 
-<span class="nc" id="L245">        getLog().info(&quot;&quot;);</span>
-<span class="nc" id="L246">        getLog().info(goal.qualified());</span>
-<span class="nc" id="L247">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
-<span class="nc" id="L248">        getLog().info(&quot;  Repo: &quot; + repo.getName());</span>
-<span class="nc" id="L249">        getLog().info(&quot;  Mode: single repo (no workspace.yaml) → &quot; + delegate);</span>
-<span class="nc" id="L250">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L261">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L262">        getLog().info(goal.qualified());</span>
+<span class="nc" id="L263">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+<span class="nc" id="L264">        getLog().info(&quot;  Repo: &quot; + repo.getName());</span>
+<span class="nc" id="L265">        getLog().info(&quot;  Mode: single repo (no workspace.yaml) → &quot; + delegate);</span>
+<span class="nc" id="L266">        getLog().info(&quot;&quot;);</span>
 
-<span class="nc" id="L252">        ReleaseSupport.exec(repo, getLog(),</span>
-<span class="nc" id="L253">                bareScaffoldArgs(repo).toArray(new String[0]));</span>
+<span class="nc" id="L268">        ReleaseSupport.exec(repo, getLog(),</span>
+<span class="nc" id="L269">                bareScaffoldArgs(repo).toArray(new String[0]));</span>
 
-<span class="nc" id="L255">        GoalReportBuilder report = new GoalReportBuilder();</span>
-<span class="nc" id="L256">        report.paragraph(&quot;**Repo:** `&quot; + repo + &quot;`&quot;);</span>
-<span class="nc" id="L257">        report.paragraph(&quot;Single-repo scaffold &quot;</span>
-<span class="nc bnc" id="L258" title="All 2 branches missed.">                + (publish ? &quot;applied&quot; : &quot;previewed&quot;) + &quot; via `&quot; + delegate</span>
+<span class="nc" id="L271">        GoalReportBuilder report = new GoalReportBuilder();</span>
+<span class="nc" id="L272">        report.paragraph(&quot;**Repo:** `&quot; + repo + &quot;`&quot;);</span>
+<span class="nc" id="L273">        report.paragraph(&quot;Single-repo scaffold &quot;</span>
+<span class="nc bnc" id="L274" title="All 2 branches missed.">                + (publish ? &quot;applied&quot; : &quot;previewed&quot;) + &quot; via `&quot; + delegate</span>
                 + &quot;` — a working set of one, no workspace reconcilers.&quot;);
-<span class="nc" id="L260">        return new WorkspaceReportSpec(goal, report.build());</span>
+<span class="nc" id="L276">        return new WorkspaceReportSpec(goal, report.build());</span>
     }
 
     /**
@@ -270,9 +286,9 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
      * @return the argv, beginning with the resolved {@code mvn} command
      */
     List&lt;String&gt; bareScaffoldArgs(File repo) {
-<span class="fc" id="L273">        String mvn = WsReleaseDraftMojo.resolveMvnCommand(repo);</span>
-<span class="fc bfc" id="L274" title="All 2 branches covered.">        String goal = publish ? &quot;ike:scaffold-publish&quot; : &quot;ike:scaffold-draft&quot;;</span>
-<span class="fc" id="L275">        return buildScaffoldArgs(mvn, goal, publish, applyFoundation,</span>
+<span class="fc" id="L289">        String mvn = WsReleaseDraftMojo.resolveMvnCommand(repo);</span>
+<span class="fc bfc" id="L290" title="All 2 branches covered.">        String goal = publish ? &quot;ike:scaffold-publish&quot; : &quot;ike:scaffold-draft&quot;;</span>
+<span class="fc" id="L291">        return buildScaffoldArgs(mvn, goal, publish, applyFoundation,</span>
                 resolveFoundation);
     }
 
@@ -291,11 +307,11 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
      */
     private void runScaffoldInSubproject(File subDir, String goal)
             throws MojoException {
-<span class="nc" id="L294">        String mvn = WsReleaseDraftMojo.resolveMvnCommand(subDir);</span>
-<span class="nc" id="L295">        List&lt;String&gt; args = buildScaffoldArgs(mvn, goal,</span>
+<span class="nc" id="L310">        String mvn = WsReleaseDraftMojo.resolveMvnCommand(subDir);</span>
+<span class="nc" id="L311">        List&lt;String&gt; args = buildScaffoldArgs(mvn, goal,</span>
                 publish, applyFoundation, resolveFoundation);
-<span class="nc" id="L297">        ReleaseSupport.exec(subDir, getLog(), args.toArray(new String[0]));</span>
-<span class="nc" id="L298">    }</span>
+<span class="nc" id="L313">        ReleaseSupport.exec(subDir, getLog(), args.toArray(new String[0]));</span>
+<span class="nc" id="L314">    }</span>
 
     /**
      * Build the {@code mvn} argv for one per-subproject scaffold
@@ -338,19 +354,95 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
                                            boolean publish,
                                            boolean applyFoundation,
                                            boolean resolveFoundation) {
-<span class="fc" id="L341">        List&lt;String&gt; args = new ArrayList&lt;&gt;();</span>
-<span class="fc" id="L342">        args.add(mvn);</span>
-<span class="fc" id="L343">        args.add(&quot;validate&quot;);</span>
-<span class="fc" id="L344">        args.add(goal);</span>
-<span class="fc" id="L345">        args.add(&quot;-B&quot;);</span>
-<span class="fc" id="L346">        args.add(&quot;-Dike.scaffold.skip-parent=true&quot;);</span>
-<span class="fc bfc" id="L347" title="All 4 branches covered.">        if (publish &amp;&amp; applyFoundation) {</span>
-<span class="fc" id="L348">            args.add(&quot;-Dike.scaffold.apply-foundation=true&quot;);</span>
-<span class="fc bfc" id="L349" title="All 2 branches covered.">            if (resolveFoundation) {</span>
-<span class="fc" id="L350">                args.add(&quot;-Dike.scaffold.resolve-foundation=true&quot;);</span>
+<span class="fc" id="L357">        List&lt;String&gt; args = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L358">        args.add(mvn);</span>
+<span class="fc" id="L359">        args.add(&quot;validate&quot;);</span>
+<span class="fc" id="L360">        args.add(goal);</span>
+<span class="fc" id="L361">        args.add(&quot;-B&quot;);</span>
+<span class="fc" id="L362">        args.add(&quot;-Dike.scaffold.skip-parent=true&quot;);</span>
+<span class="fc bfc" id="L363" title="All 4 branches covered.">        if (publish &amp;&amp; applyFoundation) {</span>
+<span class="fc" id="L364">            args.add(&quot;-Dike.scaffold.apply-foundation=true&quot;);</span>
+<span class="fc bfc" id="L365" title="All 2 branches covered.">            if (resolveFoundation) {</span>
+<span class="fc" id="L366">                args.add(&quot;-Dike.scaffold.resolve-foundation=true&quot;);</span>
             }
         }
-<span class="fc" id="L353">        return args;</span>
+<span class="fc" id="L369">        return args;</span>
+    }
+
+    /** Matches a project-level {@code &lt;packaging&gt;pom&lt;/packaging&gt;}. */
+<span class="fc" id="L373">    private static final Pattern POM_PACKAGING =</span>
+<span class="fc" id="L374">            Pattern.compile(&quot;&lt;packaging&gt;\\s*pom\\s*&lt;/packaging&gt;&quot;);</span>
+
+    /**
+     * Install the workspace's BOM/parent-only subprojects into the local
+     * Maven repository so the per-subproject scaffold delegations that
+     * follow can resolve them (IKE-Network/ike-issues#700).
+     *
+     * &lt;p&gt;Only {@code &lt;packaging&gt;pom&lt;/packaging&gt;} subprojects are installed:
+     * BOMs, parent POMs, and aggregators are the artifacts that downstream
+     * subprojects import (via {@code &lt;scope&gt;import&lt;/scope&gt;}) or inherit
+     * (via {@code &lt;parent&gt;}), and after feature-version qualification the
+     * only copy of the qualified artifact is the rewritten POM on disk. A
+     * {@code mvn install -N} is cheap for a POM project — no compilation,
+     * just the POM copied into {@code ~/.m2}.
+     *
+     * &lt;p&gt;{@code targets} is already in topological order, so a BOM whose
+     * own {@code &lt;parent&gt;} is itself a workspace member is installed after
+     * that parent. Each install uses the subproject's own Maven wrapper —
+     * by this point {@link network.ike.plugin.ws.reconcile.MavenWrapperReconciler}
+     * has already pinned every wrapper to the workspace Maven version (#701).
+     *
+     * @param root    the workspace root directory
+     * @param targets the cloned subproject names, in topological order
+     * @param report  the goal report being accumulated
+     * @throws MojoException if a BOM install fails
+     */
+    private void installReconciledBoms(File root, List&lt;String&gt; targets,
+            GoalReportBuilder report) throws MojoException {
+<span class="nc" id="L402">        List&lt;String&gt; installed = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L403" title="All 2 branches missed.">        for (String name : targets) {</span>
+<span class="nc" id="L404">            File subDir = new File(root, name);</span>
+<span class="nc bnc" id="L405" title="All 2 branches missed.">            if (!isPomPackaging(new File(subDir, &quot;pom.xml&quot;))) {</span>
+<span class="nc" id="L406">                continue;</span>
+            }
+<span class="nc" id="L408">            getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L409">            getLog().info(&quot;  Installing reconciled BOM/parent: &quot; + name);</span>
+<span class="nc" id="L410">            String mvn = WsReleaseDraftMojo.resolveMvnCommand(subDir);</span>
+<span class="nc" id="L411">            ReleaseSupport.exec(subDir, getLog(),</span>
+                    mvn, &quot;install&quot;, &quot;-N&quot;, &quot;-B&quot;);
+<span class="nc" id="L413">            installed.add(name);</span>
+<span class="nc" id="L414">        }</span>
+<span class="nc bnc" id="L415" title="All 2 branches missed.">        if (!installed.isEmpty()) {</span>
+<span class="nc" id="L416">            report.section(&quot;Reconciled BOMs installed&quot;)</span>
+<span class="nc" id="L417">                    .paragraph(&quot;Seeded the local repository with &quot;</span>
+<span class="nc" id="L418">                            + installed.size() + &quot; branch-qualified &quot;</span>
+                            + &quot;BOM/parent artifact(s) so each standalone &quot;
+                            + &quot;subproject scaffold can resolve them &quot;
+                            + &quot;(IKE-Network/ike-issues#700): `&quot;
+<span class="nc" id="L422">                            + String.join(&quot;`, `&quot;, installed) + &quot;`.&quot;);</span>
+        }
+<span class="nc" id="L424">    }</span>
+
+    /**
+     * Report whether a POM declares {@code &lt;packaging&gt;pom&lt;/packaging&gt;}.
+     * Package-private and pure so the BOM-detection predicate can be
+     * unit-tested without spawning Maven.
+     *
+     * @param pom the POM file to inspect
+     * @return {@code true} when the file exists and declares pom packaging;
+     *         {@code false} when absent, jar-packaged, or unreadable
+     */
+    static boolean isPomPackaging(File pom) {
+<span class="fc bfc" id="L436" title="All 2 branches covered.">        if (!pom.exists()) {</span>
+<span class="fc" id="L437">            return false;</span>
+        }
+        try {
+<span class="fc" id="L440">            String content =</span>
+<span class="fc" id="L441">                    Files.readString(pom.toPath(), StandardCharsets.UTF_8);</span>
+<span class="fc" id="L442">            return POM_PACKAGING.matcher(content).find();</span>
+<span class="nc" id="L443">        } catch (IOException e) {</span>
+<span class="nc" id="L444">            return false;</span>
+        }
     }
 
     /**
@@ -369,24 +461,24 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
      */
     private void reportUncommittedState(File root, List&lt;String&gt; targets,
             boolean walkRoot, GoalReportBuilder report) {
-<span class="nc" id="L372">        report.section(&quot;Uncommitted changes&quot;);</span>
-<span class="nc" id="L373">        StringBuilder body = new StringBuilder();</span>
-<span class="nc" id="L374">        boolean any = false;</span>
-<span class="nc bnc" id="L375" title="All 2 branches missed.">        for (String name : targets) {</span>
-<span class="nc" id="L376">            any |= appendRepoStatus(name, new File(root, name), body);</span>
-<span class="nc" id="L377">        }</span>
-<span class="nc bnc" id="L378" title="All 2 branches missed.">        if (walkRoot) {</span>
-<span class="nc" id="L379">            any |= appendRepoStatus(&quot;(workspace root)&quot;, root, body);</span>
+<span class="nc" id="L464">        report.section(&quot;Uncommitted changes&quot;);</span>
+<span class="nc" id="L465">        StringBuilder body = new StringBuilder();</span>
+<span class="nc" id="L466">        boolean any = false;</span>
+<span class="nc bnc" id="L467" title="All 2 branches missed.">        for (String name : targets) {</span>
+<span class="nc" id="L468">            any |= appendRepoStatus(name, new File(root, name), body);</span>
+<span class="nc" id="L469">        }</span>
+<span class="nc bnc" id="L470" title="All 2 branches missed.">        if (walkRoot) {</span>
+<span class="nc" id="L471">            any |= appendRepoStatus(&quot;(workspace root)&quot;, root, body);</span>
         }
-<span class="nc bnc" id="L381" title="All 2 branches missed.">        if (any) {</span>
-<span class="nc" id="L382">            report.paragraph(&quot;`&quot; + WsGoal.SCAFFOLD_PUBLISH.qualified()</span>
+<span class="nc bnc" id="L473" title="All 2 branches missed.">        if (any) {</span>
+<span class="nc" id="L474">            report.paragraph(&quot;`&quot; + WsGoal.SCAFFOLD_PUBLISH.qualified()</span>
                     + &quot;` edits files in place &quot;
                     + &quot;and does not commit. Review and commit per repo:&quot;);
-<span class="nc" id="L385">            report.raw(body.toString());</span>
+<span class="nc" id="L477">            report.raw(body.toString());</span>
         } else {
-<span class="nc" id="L387">            report.paragraph(&quot;No files were modified.&quot;);</span>
+<span class="nc" id="L479">            report.paragraph(&quot;No files were modified.&quot;);</span>
         }
-<span class="nc" id="L389">    }</span>
+<span class="nc" id="L481">    }</span>
 
     /**
      * Append one repo's {@code git status --porcelain} to {@code body}
@@ -399,28 +491,28 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
      */
     private boolean appendRepoStatus(String label, File dir,
             StringBuilder body) {
-<span class="nc bnc" id="L402" title="All 2 branches missed.">        if (!new File(dir, &quot;.git&quot;).isDirectory()) {</span>
-<span class="nc" id="L403">            return false;</span>
+<span class="nc bnc" id="L494" title="All 2 branches missed.">        if (!new File(dir, &quot;.git&quot;).isDirectory()) {</span>
+<span class="nc" id="L495">            return false;</span>
         }
         String status;
         try {
-<span class="nc" id="L407">            status = ReleaseSupport.execCapture(dir,</span>
+<span class="nc" id="L499">            status = ReleaseSupport.execCapture(dir,</span>
                     &quot;git&quot;, &quot;status&quot;, &quot;--porcelain&quot;);
-<span class="nc" id="L409">        } catch (RuntimeException e) {</span>
-<span class="nc" id="L410">            getLog().debug(&quot;  &quot; + label + &quot;: git status failed — &quot;</span>
-<span class="nc" id="L411">                    + e.getMessage());</span>
-<span class="nc" id="L412">            return false;</span>
-<span class="nc" id="L413">        }</span>
-<span class="nc bnc" id="L414" title="All 4 branches missed.">        if (status == null || status.isBlank()) {</span>
-<span class="nc" id="L415">            return false;</span>
+<span class="nc" id="L501">        } catch (RuntimeException e) {</span>
+<span class="nc" id="L502">            getLog().debug(&quot;  &quot; + label + &quot;: git status failed — &quot;</span>
+<span class="nc" id="L503">                    + e.getMessage());</span>
+<span class="nc" id="L504">            return false;</span>
+<span class="nc" id="L505">        }</span>
+<span class="nc bnc" id="L506" title="All 4 branches missed.">        if (status == null || status.isBlank()) {</span>
+<span class="nc" id="L507">            return false;</span>
         }
-<span class="nc" id="L417">        List&lt;String&gt; lines = status.strip().lines().toList();</span>
-<span class="nc" id="L418">        body.append(&quot;- **&quot;).append(label).append(&quot;** — &quot;)</span>
-<span class="nc" id="L419">                .append(lines.size()).append(&quot; file(s)\n&quot;);</span>
-<span class="nc bnc" id="L420" title="All 2 branches missed.">        for (String line : lines) {</span>
-<span class="nc" id="L421">            body.append(&quot;  - `&quot;).append(line.strip()).append(&quot;`\n&quot;);</span>
-<span class="nc" id="L422">        }</span>
-<span class="nc" id="L423">        return true;</span>
+<span class="nc" id="L509">        List&lt;String&gt; lines = status.strip().lines().toList();</span>
+<span class="nc" id="L510">        body.append(&quot;- **&quot;).append(label).append(&quot;** — &quot;)</span>
+<span class="nc" id="L511">                .append(lines.size()).append(&quot; file(s)\n&quot;);</span>
+<span class="nc bnc" id="L512" title="All 2 branches missed.">        for (String line : lines) {</span>
+<span class="nc" id="L513">            body.append(&quot;  - `&quot;).append(line.strip()).append(&quot;`\n&quot;);</span>
+<span class="nc" id="L514">        }</span>
+<span class="nc" id="L515">        return true;</span>
     }
 
     /**
@@ -435,35 +527,35 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
      */
     private void runWorkspaceReconcilers(WorkspaceGraph graph, File root,
             GoalReportBuilder report) throws MojoException {
-<span class="nc" id="L438">        WorkspaceContext ctx = new WorkspaceContext(</span>
-<span class="nc" id="L439">                root, resolveManifest(), graph,</span>
-<span class="nc" id="L440">                readReconcilerOptions(), getLog());</span>
-<span class="nc bnc" id="L441" title="All 2 branches missed.">        for (Reconciler reconciler : ReconcilerRegistry.all()) {</span>
-<span class="nc bnc" id="L442" title="All 2 branches missed.">            if (publish) {</span>
-<span class="nc bnc" id="L443" title="All 2 branches missed.">                if (ctx.options().isOptedOut(reconciler.optOutFlag())) {</span>
+<span class="nc" id="L530">        WorkspaceContext ctx = new WorkspaceContext(</span>
+<span class="nc" id="L531">                root, resolveManifest(), graph,</span>
+<span class="nc" id="L532">                readReconcilerOptions(), getLog());</span>
+<span class="nc bnc" id="L533" title="All 2 branches missed.">        for (Reconciler reconciler : ReconcilerRegistry.all()) {</span>
+<span class="nc bnc" id="L534" title="All 2 branches missed.">            if (publish) {</span>
+<span class="nc bnc" id="L535" title="All 2 branches missed.">                if (ctx.options().isOptedOut(reconciler.optOutFlag())) {</span>
                     // apply() self-checks the opt-out and no-ops; the
                     // report says so rather than claiming a change.
-<span class="nc" id="L446">                    reconciler.apply(ctx);</span>
-<span class="nc" id="L447">                    report.raw(&quot;- ⊘ **&quot; + reconciler.dimension()</span>
+<span class="nc" id="L538">                    reconciler.apply(ctx);</span>
+<span class="nc" id="L539">                    report.raw(&quot;- ⊘ **&quot; + reconciler.dimension()</span>
                             + &quot;** — skipped (opted out via -D&quot;
-<span class="nc" id="L449">                            + reconciler.optOutFlag() + &quot;=false)\n&quot;);</span>
+<span class="nc" id="L541">                            + reconciler.optOutFlag() + &quot;=false)\n&quot;);</span>
                 } else {
                     // detect() is read-only and the workspace is
                     // unchanged until apply() runs, so the captured
                     // report describes exactly what apply() does —
                     // including the per-subproject before → after
                     // detail (IKE-Network/ike-issues#431).
-<span class="nc" id="L456">                    DriftReport applied = reconciler.detect(ctx);</span>
-<span class="nc" id="L457">                    reconciler.apply(ctx);</span>
-<span class="nc" id="L458">                    report.raw(applied.toAppliedMarkdown());</span>
-<span class="nc" id="L459">                }</span>
+<span class="nc" id="L548">                    DriftReport applied = reconciler.detect(ctx);</span>
+<span class="nc" id="L549">                    reconciler.apply(ctx);</span>
+<span class="nc" id="L550">                    report.raw(applied.toAppliedMarkdown());</span>
+<span class="nc" id="L551">                }</span>
             } else {
-<span class="nc" id="L461">                DriftReport drift = reconciler.detect(ctx);</span>
-<span class="nc" id="L462">                printDriftReport(drift);</span>
-<span class="nc" id="L463">                report.raw(drift.toMarkdown());</span>
+<span class="nc" id="L553">                DriftReport drift = reconciler.detect(ctx);</span>
+<span class="nc" id="L554">                printDriftReport(drift);</span>
+<span class="nc" id="L555">                report.raw(drift.toMarkdown());</span>
             }
-<span class="nc" id="L465">        }</span>
-<span class="nc" id="L466">    }</span>
+<span class="nc" id="L557">        }</span>
+<span class="nc" id="L558">    }</span>
 
     /**
      * Collect all Maven system properties into a {@link ReconcilerOptions}
@@ -471,11 +563,11 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
      * (e.g., {@code -DupdateFields=false}, {@code -DparentVersion=55}).
      */
     private static ReconcilerOptions readReconcilerOptions() {
-<span class="nc" id="L474">        Map&lt;String, String&gt; flags = new HashMap&lt;&gt;();</span>
-<span class="nc bnc" id="L475" title="All 2 branches missed.">        for (String name : System.getProperties().stringPropertyNames()) {</span>
-<span class="nc" id="L476">            flags.put(name, System.getProperty(name));</span>
-<span class="nc" id="L477">        }</span>
-<span class="nc" id="L478">        return new ReconcilerOptions(flags);</span>
+<span class="nc" id="L566">        Map&lt;String, String&gt; flags = new HashMap&lt;&gt;();</span>
+<span class="nc bnc" id="L567" title="All 2 branches missed.">        for (String name : System.getProperties().stringPropertyNames()) {</span>
+<span class="nc" id="L568">            flags.put(name, System.getProperty(name));</span>
+<span class="nc" id="L569">        }</span>
+<span class="nc" id="L570">        return new ReconcilerOptions(flags);</span>
     }
 
     /**
@@ -497,37 +589,37 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
     private void reportLatestParent(File root, GoalReportBuilder report) {
         PomParentSupport.ParentInfo rootParent;
         try {
-<span class="nc" id="L500">            rootParent = PomParentSupport.readParent(</span>
-<span class="nc" id="L501">                    root.toPath().resolve(&quot;pom.xml&quot;));</span>
-<span class="nc" id="L502">        } catch (IOException e) {</span>
-<span class="nc" id="L503">            getLog().debug(&quot;Foundation currency: could not read the &quot;</span>
-<span class="nc" id="L504">                    + &quot;workspace root POM parent: &quot; + e.getMessage());</span>
-<span class="nc" id="L505">            return;</span>
-<span class="nc" id="L506">        }</span>
-<span class="nc bnc" id="L507" title="All 2 branches missed.">        if (rootParent == null) {</span>
-<span class="nc" id="L508">            return;</span>
+<span class="nc" id="L592">            rootParent = PomParentSupport.readParent(</span>
+<span class="nc" id="L593">                    root.toPath().resolve(&quot;pom.xml&quot;));</span>
+<span class="nc" id="L594">        } catch (IOException e) {</span>
+<span class="nc" id="L595">            getLog().debug(&quot;Foundation currency: could not read the &quot;</span>
+<span class="nc" id="L596">                    + &quot;workspace root POM parent: &quot; + e.getMessage());</span>
+<span class="nc" id="L597">            return;</span>
+<span class="nc" id="L598">        }</span>
+<span class="nc bnc" id="L599" title="All 2 branches missed.">        if (rootParent == null) {</span>
+<span class="nc" id="L600">            return;</span>
         }
-<span class="nc" id="L510">        String latest = latestReleasedVersion(rootParent.groupId(),</span>
-<span class="nc" id="L511">                rootParent.artifactId(), rootParent.version());</span>
-<span class="nc bnc" id="L512" title="All 2 branches missed.">        if (latest == null) {</span>
-<span class="nc" id="L513">            return;</span>
+<span class="nc" id="L602">        String latest = latestReleasedVersion(rootParent.groupId(),</span>
+<span class="nc" id="L603">                rootParent.artifactId(), rootParent.version());</span>
+<span class="nc bnc" id="L604" title="All 2 branches missed.">        if (latest == null) {</span>
+<span class="nc" id="L605">            return;</span>
         }
-<span class="nc" id="L515">        String command = &quot;mvn &quot; + WsGoal.SCAFFOLD_PUBLISH.qualified()</span>
+<span class="nc" id="L607">        String command = &quot;mvn &quot; + WsGoal.SCAFFOLD_PUBLISH.qualified()</span>
                 + &quot; -DparentVersion=&quot; + latest;
-<span class="nc" id="L517">        getLog().info(&quot;&quot;);</span>
-<span class="nc" id="L518">        getLog().info(&quot;Foundation currency:&quot;);</span>
-<span class="nc" id="L519">        getLog().info(&quot;  Latest released &quot; + rootParent.artifactId()</span>
+<span class="nc" id="L609">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L610">        getLog().info(&quot;Foundation currency:&quot;);</span>
+<span class="nc" id="L611">        getLog().info(&quot;  Latest released &quot; + rootParent.artifactId()</span>
                 + &quot;: &quot; + latest + &quot; (workspace root pins &quot;
-<span class="nc" id="L521">                + rootParent.version() + &quot;).&quot;);</span>
-<span class="nc" id="L522">        getLog().info(&quot;  To upgrade the whole workspace, run:&quot;);</span>
-<span class="nc" id="L523">        getLog().info(&quot;    &quot; + command);</span>
-<span class="nc" id="L524">        report.section(&quot;Foundation upgrade available&quot;)</span>
-<span class="nc" id="L525">                .paragraph(&quot;A newer `&quot; + rootParent.artifactId() + &quot;` (`&quot;</span>
+<span class="nc" id="L613">                + rootParent.version() + &quot;).&quot;);</span>
+<span class="nc" id="L614">        getLog().info(&quot;  To upgrade the whole workspace, run:&quot;);</span>
+<span class="nc" id="L615">        getLog().info(&quot;    &quot; + command);</span>
+<span class="nc" id="L616">        report.section(&quot;Foundation upgrade available&quot;)</span>
+<span class="nc" id="L617">                .paragraph(&quot;A newer `&quot; + rootParent.artifactId() + &quot;` (`&quot;</span>
                         + latest + &quot;`) is released; the workspace root &quot;
-<span class="nc" id="L527">                        + &quot;pins `&quot; + rootParent.version() + &quot;`. To &quot;</span>
+<span class="nc" id="L619">                        + &quot;pins `&quot; + rootParent.version() + &quot;`. To &quot;</span>
                         + &quot;upgrade the whole workspace, run:&quot;)
-<span class="nc" id="L529">                .codeBlock(&quot;&quot;, command);</span>
-<span class="nc" id="L530">    }</span>
+<span class="nc" id="L621">                .codeBlock(&quot;&quot;, command);</span>
+<span class="nc" id="L622">    }</span>
 
     /**
      * Resolve the highest released (non-SNAPSHOT) version of a Maven
@@ -544,25 +636,25 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
     private String latestReleasedVersion(String groupId, String artifactId,
                                          String current) {
         try {
-<span class="nc" id="L547">            Session s = getSession();</span>
-<span class="nc" id="L548">            VersionRangeResolver resolver =</span>
-<span class="nc" id="L549">                    s.getService(VersionRangeResolver.class);</span>
-<span class="nc" id="L550">            ArtifactCoordinates coords = s.createArtifactCoordinates(</span>
+<span class="nc" id="L639">            Session s = getSession();</span>
+<span class="nc" id="L640">            VersionRangeResolver resolver =</span>
+<span class="nc" id="L641">                    s.getService(VersionRangeResolver.class);</span>
+<span class="nc" id="L642">            ArtifactCoordinates coords = s.createArtifactCoordinates(</span>
                     groupId + &quot;:&quot; + artifactId + &quot;:(&quot; + current + &quot;,)&quot;);
-<span class="nc" id="L552">            VersionRangeResolverResult result = resolver.resolve(s, coords);</span>
-<span class="nc" id="L553">            String best = null;</span>
-<span class="nc bnc" id="L554" title="All 2 branches missed.">            for (Version v : result.getVersions()) {</span>
-<span class="nc" id="L555">                String str = v.toString();</span>
-<span class="nc bnc" id="L556" title="All 2 branches missed.">                if (!str.endsWith(&quot;-SNAPSHOT&quot;)) {</span>
-<span class="nc" id="L557">                    best = str;  // resolver returns ascending — last wins</span>
+<span class="nc" id="L644">            VersionRangeResolverResult result = resolver.resolve(s, coords);</span>
+<span class="nc" id="L645">            String best = null;</span>
+<span class="nc bnc" id="L646" title="All 2 branches missed.">            for (Version v : result.getVersions()) {</span>
+<span class="nc" id="L647">                String str = v.toString();</span>
+<span class="nc bnc" id="L648" title="All 2 branches missed.">                if (!str.endsWith(&quot;-SNAPSHOT&quot;)) {</span>
+<span class="nc" id="L649">                    best = str;  // resolver returns ascending — last wins</span>
                 }
-<span class="nc" id="L559">            }</span>
-<span class="nc" id="L560">            return best;</span>
-<span class="nc" id="L561">        } catch (Exception e) {</span>
-<span class="nc" id="L562">            getLog().debug(&quot;Foundation currency: could not resolve the &quot;</span>
+<span class="nc" id="L651">            }</span>
+<span class="nc" id="L652">            return best;</span>
+<span class="nc" id="L653">        } catch (Exception e) {</span>
+<span class="nc" id="L654">            getLog().debug(&quot;Foundation currency: could not resolve the &quot;</span>
                     + &quot;latest &quot; + groupId + &quot;:&quot; + artifactId + &quot; — &quot;
-<span class="nc" id="L564">                    + e.getMessage());</span>
-<span class="nc" id="L565">            return null;</span>
+<span class="nc" id="L656">                    + e.getMessage());</span>
+<span class="nc" id="L657">            return null;</span>
         }
     }
 
@@ -571,24 +663,24 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
      * with the copy-paste opt-out command inline.
      */
     private void printDriftReport(DriftReport report) {
-<span class="nc" id="L574">        getLog().info(&quot;&quot;);</span>
-<span class="nc bnc" id="L575" title="All 2 branches missed.">        if (!report.hasDrift()) {</span>
-<span class="nc" id="L576">            getLog().info(&quot;  ✓ &quot; + report.dimension());</span>
-<span class="nc" id="L577">            return;</span>
+<span class="nc" id="L666">        getLog().info(&quot;&quot;);</span>
+<span class="nc bnc" id="L667" title="All 2 branches missed.">        if (!report.hasDrift()) {</span>
+<span class="nc" id="L668">            getLog().info(&quot;  ✓ &quot; + report.dimension());</span>
+<span class="nc" id="L669">            return;</span>
         }
-<span class="nc" id="L579">        getLog().info(&quot;  ⚠ &quot; + report.dimension());</span>
-<span class="nc bnc" id="L580" title="All 2 branches missed.">        if (!report.summary().isEmpty()) {</span>
-<span class="nc" id="L581">            getLog().info(&quot;     &quot; + report.summary());</span>
+<span class="nc" id="L671">        getLog().info(&quot;  ⚠ &quot; + report.dimension());</span>
+<span class="nc bnc" id="L672" title="All 2 branches missed.">        if (!report.summary().isEmpty()) {</span>
+<span class="nc" id="L673">            getLog().info(&quot;     &quot; + report.summary());</span>
         }
-<span class="nc bnc" id="L583" title="All 2 branches missed.">        for (String line : report.detailLines()) {</span>
-<span class="nc" id="L584">            getLog().info(&quot;       &quot; + line);</span>
-<span class="nc" id="L585">        }</span>
-<span class="nc bnc" id="L586" title="All 2 branches missed.">        if (!report.defaultAction().isEmpty()) {</span>
-<span class="nc" id="L587">            getLog().info(&quot;     Default: &quot; + report.defaultAction());</span>
+<span class="nc bnc" id="L675" title="All 2 branches missed.">        for (String line : report.detailLines()) {</span>
+<span class="nc" id="L676">            getLog().info(&quot;       &quot; + line);</span>
+<span class="nc" id="L677">        }</span>
+<span class="nc bnc" id="L678" title="All 2 branches missed.">        if (!report.defaultAction().isEmpty()) {</span>
+<span class="nc" id="L679">            getLog().info(&quot;     Default: &quot; + report.defaultAction());</span>
         }
-<span class="nc bnc" id="L589" title="All 2 branches missed.">        if (!report.optOutCommand().isEmpty()) {</span>
-<span class="nc" id="L590">            getLog().info(&quot;     Opt out: &quot; + report.optOutCommand());</span>
+<span class="nc bnc" id="L681" title="All 2 branches missed.">        if (!report.optOutCommand().isEmpty()) {</span>
+<span class="nc" id="L682">            getLog().info(&quot;     Opt out: &quot; + report.optOutCommand());</span>
         }
-<span class="nc" id="L592">    }</span>
+<span class="nc" id="L684">    }</span>
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

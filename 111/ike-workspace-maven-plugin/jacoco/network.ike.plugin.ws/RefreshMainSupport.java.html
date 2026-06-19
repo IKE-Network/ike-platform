@@ -1,0 +1,430 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>RefreshMainSupport.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">RefreshMainSupport.java</span></div><h1>RefreshMainSupport.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.plugin.ws.vcs.VcsOperations;
+import org.apache.maven.api.plugin.Log;
+import org.apache.maven.api.plugin.MojoException;
+
+import java.io.File;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Refresh local main from origin/main as a workspace invariant.
+ *
+ * &lt;p&gt;Goals that read or write local main (update-feature, feature-finish,
+ * feature-start, release goals) call this helper first so the operation
+ * runs against current main rather than whatever stale state happens to
+ * be on the local machine. Particularly relevant in the workspace's
+ * Syncthing + independent-{@code .git} architecture, where each machine
+ * evolves its local {@code main} ref independently between push/pull
+ * cycles.
+ *
+ * &lt;p&gt;For each subproject, the helper:
+ * &lt;ol&gt;
+ *   &lt;li&gt;Fetches origin to update remote-tracking refs.&lt;/li&gt;
+ *   &lt;li&gt;Compares local main to {@code origin/main}:
+ *     &lt;ul&gt;
+ *       &lt;li&gt;&lt;b&gt;Up to date&lt;/b&gt; &amp;mdash; no-op.&lt;/li&gt;
+ *       &lt;li&gt;&lt;b&gt;Behind only&lt;/b&gt; &amp;mdash; fast-forward local main.&lt;/li&gt;
+ *       &lt;li&gt;&lt;b&gt;Ahead only&lt;/b&gt; &amp;mdash; leave local main alone (unpushed
+ *           commits remain intact); the caller's downstream merge will
+ *           include them.&lt;/li&gt;
+ *       &lt;li&gt;&lt;b&gt;Diverged&lt;/b&gt; &amp;mdash; auto-resolve by merging
+ *           {@code origin/main} into local main with {@code --no-ff}.
+ *           The Syncthing architecture means working-tree content is
+ *           usually pre-aligned, so the merge is usually conflict-free.
+ *           If file conflicts &lt;i&gt;are&lt;/i&gt; predicted, return a
+ *           {@link Conflicts} outcome without touching the working
+ *           tree &amp;mdash; the caller decides whether to hard-error.&lt;/li&gt;
+ *     &lt;/ul&gt;
+ *   &lt;/li&gt;
+ * &lt;/ol&gt;
+ *
+ * &lt;p&gt;Auto-resolve merge commits are local-only. They are never pushed
+ * to the remote by this helper; the user publishes via
+ * {@code ws:push} / {@code ws:sync}.
+ *
+ * &lt;p&gt;The helper restores the caller's checked-out branch when it
+ * temporarily switches to main to perform an auto-resolve merge.
+ *
+ * &lt;p&gt;See ike-issues#284.
+ */
+final class RefreshMainSupport {
+
+    /** Default git remote name used for the {@code origin/main} comparison. */
+    static final String DEFAULT_REMOTE = &quot;origin&quot;;
+
+    private RefreshMainSupport() {}
+
+    // ── Outcome model ───────────────────────────────────────────
+
+    /**
+     * Outcome of refreshing local main in a single subproject.
+     */
+    sealed interface Outcome
+            permits Skipped, UpToDate, FastForwarded, CreatedFromRemote,
+                    AheadOnly, AutoResolved, Conflicts {
+
+        /** Subproject name this outcome applies to. */
+        String component();
+    }
+
+    /** Subproject was skipped (not initialized as a git repo). */
+<span class="fc" id="L73">    record Skipped(String component, String reason) implements Outcome {}</span>
+
+    /** Local main equals {@code origin/main}. No work performed. */
+<span class="fc" id="L76">    record UpToDate(String component) implements Outcome {}</span>
+
+    /** Local main was fast-forwarded {@code commits} commit(s) to {@code origin/main}. */
+<span class="fc" id="L79">    record FastForwarded(String component, int commits) implements Outcome {}</span>
+
+    /** Local main did not exist; created by tracking {@code origin/main}. */
+<span class="nc" id="L82">    record CreatedFromRemote(String component) implements Outcome {}</span>
+
+    /**
+     * Local main is purely ahead of {@code origin/main}: it contains
+     * {@code unpushed} commit(s) that the remote does not. The local
+     * ref is intentionally left alone &amp;mdash; the caller's merge will
+     * use it, and the user publishes via {@code ws:push}.
+     */
+<span class="fc" id="L90">    record AheadOnly(String component, int unpushed) implements Outcome {}</span>
+
+    /**
+     * Local main and {@code origin/main} had diverged; resolved by
+     * merging {@code origin/main} into local main with no file
+     * conflicts. {@code localCommits} is the count of unpushed local
+     * commits preserved in the merge; {@code remoteCommits} is the
+     * count brought in from {@code origin/main}.
+     */
+<span class="nc" id="L99">    record AutoResolved(String component,</span>
+                        int localCommits,
+                        int remoteCommits) implements Outcome {}
+
+    /**
+     * Local main and {@code origin/main} had diverged AND merging
+     * {@code origin/main} into local main would produce file conflicts.
+     * The working tree was not touched &amp;mdash; the caller decides
+     * whether to hard-error or report and continue.
+     */
+<span class="nc" id="L109">    record Conflicts(String component, List&lt;String&gt; files) implements Outcome {}</span>
+
+    // ── Operations ──────────────────────────────────────────────
+
+    /**
+     * Refresh local main in a single subproject.
+     *
+     * @param subprojectDir the subproject root directory
+     * @param component     subproject name (used in outcome labelling)
+     * @param mainBranch    the conceptual main branch (e.g. {@code &quot;main&quot;})
+     * @param remote        remote name (e.g. {@code &quot;origin&quot;})
+     * @param log           Maven logger
+     * @param preview       when {@code true}, classify only — the fetch
+     *                      is read-only (remote-tracking refs) and no
+     *                      local-main mutation is performed (#570)
+     * @return outcome describing what was (or, in preview, would be) done
+     * @throws MojoException if a git operation fails for an unexpected reason
+     */
+    static Outcome refresh(File subprojectDir, String component,
+                           String mainBranch, String remote, Log log,
+                           boolean preview)
+            throws MojoException {
+<span class="fc" id="L131">        File gitDir = new File(subprojectDir, &quot;.git&quot;);</span>
+<span class="pc bpc" id="L132" title="1 of 2 branches missed.">        if (!gitDir.exists()) {</span>
+<span class="nc" id="L133">            return new Skipped(component, &quot;not initialized&quot;);</span>
+        }
+<span class="fc bfc" id="L135" title="All 2 branches covered.">        if (!network.ike.plugin.ReleaseSupport.hasRemote(subprojectDir, remote)) {</span>
+<span class="fc" id="L136">            return new Skipped(component, &quot;no '&quot; + remote + &quot;' remote&quot;);</span>
+        }
+
+        // Read-only: updates remote-tracking refs only — never local
+        // main or the working tree. Safe in preview mode.
+<span class="fc" id="L141">        VcsOperations.fetch(subprojectDir, log);</span>
+
+<span class="fc" id="L143">        String remoteRef = remote + &quot;/&quot; + mainBranch;</span>
+
+        // Fresh-clone case: local main does not exist yet.
+<span class="pc bpc" id="L146" title="1 of 2 branches missed.">        if (!VcsOperations.localBranchExists(subprojectDir, mainBranch)) {</span>
+<span class="nc bnc" id="L147" title="All 2 branches missed.">            if (!preview) {</span>
+<span class="nc" id="L148">                VcsOperations.fetchRef(subprojectDir, log, remote, mainBranch);</span>
+            }
+<span class="nc" id="L150">            return new CreatedFromRemote(component);</span>
+        }
+
+<span class="fc" id="L153">        boolean localIsAncestor = VcsOperations.isAncestor(</span>
+                subprojectDir, mainBranch, remoteRef);
+<span class="fc" id="L155">        boolean remoteIsAncestor = VcsOperations.isAncestor(</span>
+                subprojectDir, remoteRef, mainBranch);
+
+<span class="fc bfc" id="L158" title="All 4 branches covered.">        if (localIsAncestor &amp;&amp; remoteIsAncestor) {</span>
+<span class="fc" id="L159">            return new UpToDate(component);</span>
+        }
+<span class="fc bfc" id="L161" title="All 2 branches covered.">        if (localIsAncestor) {</span>
+<span class="fc" id="L162">            int behind = VcsOperations.commitLog(</span>
+<span class="fc" id="L163">                    subprojectDir, mainBranch, remoteRef).size();</span>
+<span class="fc bfc" id="L164" title="All 2 branches covered.">            if (!preview) {</span>
+<span class="fc" id="L165">                fastForwardLocalMain(subprojectDir, log, mainBranch, remote, remoteRef);</span>
+            }
+<span class="fc" id="L167">            return new FastForwarded(component, behind);</span>
+        }
+<span class="pc bpc" id="L169" title="1 of 2 branches missed.">        if (remoteIsAncestor) {</span>
+<span class="fc" id="L170">            int ahead = VcsOperations.commitLog(</span>
+<span class="fc" id="L171">                    subprojectDir, remoteRef, mainBranch).size();</span>
+<span class="fc" id="L172">            return new AheadOnly(component, ahead);</span>
+        }
+
+        // Diverged.
+<span class="nc" id="L176">        List&lt;String&gt; predicted = VcsOperations.predictConflicts(</span>
+                subprojectDir, mainBranch, remoteRef);
+<span class="nc bnc" id="L178" title="All 2 branches missed.">        if (!predicted.isEmpty()) {</span>
+<span class="nc" id="L179">            return new Conflicts(component, predicted);</span>
+        }
+
+<span class="nc" id="L182">        int localCommits = VcsOperations.commitLog(</span>
+<span class="nc" id="L183">                subprojectDir, remoteRef, mainBranch).size();</span>
+<span class="nc" id="L184">        int remoteCommits = VcsOperations.commitLog(</span>
+<span class="nc" id="L185">                subprojectDir, mainBranch, remoteRef).size();</span>
+<span class="nc bnc" id="L186" title="All 2 branches missed.">        if (!preview) {</span>
+<span class="nc" id="L187">            autoResolveDiverged(subprojectDir, log, mainBranch, remoteRef);</span>
+        }
+<span class="nc" id="L189">        return new AutoResolved(component, localCommits, remoteCommits);</span>
+    }
+
+    /**
+     * Refresh local main across a list of subprojects, in the given
+     * order. Returns one outcome per subproject. The caller decides
+     * how to surface conflict outcomes &amp;mdash; typically by raising
+     * a {@link MojoException} that stops the orchestrating goal with
+     * a clear instruction.
+     *
+     * @param workspaceRoot workspace root directory
+     * @param components    subproject names to refresh, in order
+     * @param mainBranch    the conceptual main branch (e.g. {@code &quot;main&quot;})
+     * @param remote        remote name (e.g. {@code &quot;origin&quot;})
+     * @param log           Maven logger
+     * @param preview       when {@code true}, classify only (read-only) —
+     *                      see {@link #refresh}
+     * @return outcomes in the same order as {@code components}
+     * @throws MojoException if a git operation fails for an unexpected reason
+     */
+    static List&lt;Outcome&gt; refreshAll(File workspaceRoot,
+                                    List&lt;String&gt; components,
+                                    String mainBranch,
+                                    String remote,
+                                    Log log,
+                                    boolean preview) throws MojoException {
+<span class="fc" id="L215">        List&lt;Outcome&gt; results = new ArrayList&lt;&gt;(components.size());</span>
+<span class="fc bfc" id="L216" title="All 2 branches covered.">        for (String name : components) {</span>
+<span class="fc" id="L217">            File dir = new File(workspaceRoot, name);</span>
+<span class="fc" id="L218">            results.add(refresh(dir, name, mainBranch, remote, log, preview));</span>
+<span class="fc" id="L219">        }</span>
+<span class="fc" id="L220">        return results;</span>
+    }
+
+    /** Filter outcomes to just the {@link Conflicts} entries. */
+    static List&lt;Conflicts&gt; conflictsIn(List&lt;Outcome&gt; outcomes) {
+<span class="fc" id="L225">        List&lt;Conflicts&gt; result = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L226" title="All 2 branches covered.">        for (Outcome o : outcomes) {</span>
+<span class="pc bpc" id="L227" title="1 of 2 branches missed.">            if (o instanceof Conflicts c) result.add(c);</span>
+<span class="fc" id="L228">        }</span>
+<span class="fc" id="L229">        return result;</span>
+    }
+
+    /**
+     * Orchestrate the standard refresh-or-stop flow: log a header,
+     * call {@link #refreshAll}, log each per-subproject outcome,
+     * and throw a {@link MojoException} if any subproject produced a
+     * {@link Conflicts} outcome (the genuine &quot;two machines edited the
+     * same file on main without push/pull&quot; case). Returns the outcome
+     * list when the refresh is conflict-free, so callers can include
+     * it in their reports if desired.
+     *
+     * @param workspaceRoot workspace root directory
+     * @param components    subproject names to refresh, in order
+     * @param mainBranch    the conceptual main branch (e.g. {@code &quot;main&quot;})
+     * @param log           Maven logger
+     * @return outcomes (caller may inspect for non-conflict variants)
+     * @throws MojoException if any conflicts arise, with file-level detail
+     *                       and resolution instructions
+     */
+    static List&lt;Outcome&gt; refreshOrThrow(File workspaceRoot,
+                                        List&lt;String&gt; components,
+                                        String mainBranch,
+                                        Log log) throws MojoException {
+<span class="fc" id="L253">        log.info(&quot;  &quot; + Ansi.cyan(&quot;→ &quot;) + &quot;Refreshing local &quot; + mainBranch</span>
+                + &quot; from &quot; + DEFAULT_REMOTE + &quot;/&quot; + mainBranch + &quot;...&quot;);
+<span class="fc" id="L255">        List&lt;Outcome&gt; outcomes = refreshAll(workspaceRoot, components,</span>
+                mainBranch, DEFAULT_REMOTE, log, false);
+<span class="fc bfc" id="L257" title="All 2 branches covered.">        for (Outcome o : outcomes) {</span>
+<span class="fc" id="L258">            log.info(&quot;    &quot; + describe(o));</span>
+<span class="fc" id="L259">        }</span>
+<span class="fc" id="L260">        List&lt;Conflicts&gt; conflicts = conflictsIn(outcomes);</span>
+<span class="pc bpc" id="L261" title="1 of 2 branches missed.">        if (!conflicts.isEmpty()) {</span>
+<span class="nc" id="L262">            var sb = new StringBuilder();</span>
+<span class="nc" id="L263">            sb.append(&quot;Cannot proceed — refreshing local &quot;).append(mainBranch)</span>
+<span class="nc" id="L264">              .append(&quot; from &quot;).append(DEFAULT_REMOTE).append(&quot;/&quot;)</span>
+<span class="nc" id="L265">              .append(mainBranch).append(&quot; would conflict in:\n&quot;);</span>
+<span class="nc bnc" id="L266" title="All 2 branches missed.">            for (Conflicts c : conflicts) {</span>
+<span class="nc" id="L267">                sb.append(&quot;  &quot;).append(c.component()).append(&quot;:\n&quot;);</span>
+<span class="nc bnc" id="L268" title="All 2 branches missed.">                for (String f : c.files()) {</span>
+<span class="nc" id="L269">                    sb.append(&quot;    • &quot;).append(f).append(&quot;\n&quot;);</span>
+<span class="nc" id="L270">                }</span>
+<span class="nc" id="L271">            }</span>
+<span class="nc" id="L272">            sb.append(&quot;Resolve the divergence on &quot;).append(mainBranch)</span>
+<span class="nc" id="L273">              .append(&quot; first (e.g., open the affected subproject and &quot;)</span>
+<span class="nc" id="L274">              .append(&quot;merge &quot;).append(DEFAULT_REMOTE).append(&quot;/&quot;)</span>
+<span class="nc" id="L275">              .append(mainBranch).append(&quot; into &quot;).append(mainBranch)</span>
+<span class="nc" id="L276">              .append(&quot; by hand), then re-run.&quot;);</span>
+<span class="nc" id="L277">            throw new MojoException(sb.toString());</span>
+        }
+<span class="fc" id="L279">        log.info(&quot;&quot;);</span>
+<span class="fc" id="L280">        return outcomes;</span>
+    }
+
+    /**
+     * Read-only counterpart to {@link #refreshOrThrow}: fetch each
+     * subproject (updating remote-tracking refs only) and report how
+     * local {@code mainBranch} relates to {@code origin/mainBranch} —
+     * &quot;up to date&quot;, &quot;N behind, would fast-forward&quot;, &quot;diverged, would
+     * create a merge commit&quot;, etc. — &lt;em&gt;without&lt;/em&gt; mutating local main
+     * or the working tree. Use from {@code *-draft} goals so a preview
+     * never changes git state (#570).
+     *
+     * &lt;p&gt;Conflict outcomes are warned, not thrown: a draft reports the
+     * full picture and leaves the hard stop to the matching
+     * {@code *-publish} run.
+     *
+     * @param workspaceRoot workspace root directory
+     * @param components    subproject names to inspect, in order
+     * @param mainBranch    the conceptual main branch (e.g. {@code &quot;main&quot;})
+     * @param log           Maven logger
+     * @return outcomes in the same order as {@code components}
+     * @throws MojoException if a git operation fails for an unexpected reason
+     */
+    static List&lt;Outcome&gt; previewRefresh(File workspaceRoot,
+                                        List&lt;String&gt; components,
+                                        String mainBranch,
+                                        Log log) throws MojoException {
+<span class="fc" id="L307">        log.info(&quot;  &quot; + Ansi.cyan(&quot;→ &quot;) + &quot;Checking local &quot; + mainBranch</span>
+                + &quot; vs &quot; + DEFAULT_REMOTE + &quot;/&quot; + mainBranch
+                + &quot; (read-only — no changes)...&quot;);
+<span class="fc" id="L310">        List&lt;Outcome&gt; outcomes = refreshAll(workspaceRoot, components,</span>
+                mainBranch, DEFAULT_REMOTE, log, true);
+<span class="fc bfc" id="L312" title="All 2 branches covered.">        for (Outcome o : outcomes) {</span>
+<span class="fc" id="L313">            log.info(&quot;    &quot; + describe(o, true));</span>
+<span class="fc" id="L314">        }</span>
+<span class="fc" id="L315">        List&lt;Conflicts&gt; conflicts = conflictsIn(outcomes);</span>
+<span class="pc bpc" id="L316" title="1 of 2 branches missed.">        if (!conflicts.isEmpty()) {</span>
+<span class="nc" id="L317">            log.warn(&quot;  &quot; + Ansi.yellow(&quot;⚠ &quot;) + &quot;local &quot; + mainBranch</span>
+                    + &quot; has diverged from &quot; + DEFAULT_REMOTE + &quot;/&quot; + mainBranch
+<span class="nc" id="L319">                    + &quot; in &quot; + conflicts.size() + &quot; subproject(s); the publish run &quot;</span>
+                    + &quot;would need a manual merge there first.&quot;);
+        }
+<span class="fc" id="L322">        log.info(&quot;&quot;);</span>
+<span class="fc" id="L323">        return outcomes;</span>
+    }
+
+    /**
+     * Format a one-line user-facing summary of an outcome for log output
+     * (past tense, for a {@code *-publish} refresh that already ran).
+     */
+    static String describe(Outcome outcome) {
+<span class="fc" id="L331">        return describe(outcome, false);</span>
+    }
+
+    /**
+     * Format a one-line summary of an outcome. When {@code preview} is
+     * {@code true}, render in the future tense (&quot;would …&quot;), since a
+     * preview performs no local-main mutation (#570).
+     *
+     * @param outcome the outcome to describe
+     * @param preview render future tense (&quot;would …&quot;) rather than past
+     * @return a one-line, user-facing summary
+     */
+    static String describe(Outcome outcome, boolean preview) {
+<span class="pc bpc" id="L344" title="3 of 7 branches missed.">        return switch (outcome) {</span>
+<span class="fc" id="L345">            case Skipped(var c, var r) -&gt;</span>
+<span class="fc" id="L346">                    c + &quot; — skipped (&quot; + r + &quot;)&quot;;</span>
+<span class="fc" id="L347">            case UpToDate(var c) -&gt;</span>
+<span class="fc" id="L348">                    c + &quot; — main up to date&quot;;</span>
+<span class="pc bpc" id="L349" title="1 of 2 branches missed.">            case FastForwarded(var c, var n) -&gt;</span>
+<span class="fc bfc" id="L350" title="All 2 branches covered.">                    preview</span>
+                        ? c + &quot; — main is &quot; + n + &quot; behind &quot; + DEFAULT_REMOTE
+<span class="fc" id="L352">                                + &quot;/main; would fast-forward&quot;</span>
+                        : c + &quot; — main fast-forwarded (&quot; + n + &quot; commit&quot;
+<span class="pc bpc" id="L354" title="1 of 2 branches missed.">                                + (n == 1 ? &quot;&quot; : &quot;s&quot;) + &quot;)&quot;;</span>
+<span class="nc" id="L355">            case CreatedFromRemote(var c) -&gt;</span>
+<span class="nc bnc" id="L356" title="All 2 branches missed.">                    preview</span>
+                        ? c + &quot; — no local main; would create from &quot;
+<span class="nc" id="L358">                                + DEFAULT_REMOTE + &quot;/main&quot;</span>
+<span class="nc" id="L359">                        : c + &quot; — main created from origin/main&quot;;</span>
+<span class="pc bpc" id="L360" title="1 of 2 branches missed.">            case AheadOnly(var c, var n) -&gt;</span>
+<span class="fc" id="L361">                    c + &quot; — local main has &quot; + n + &quot; unpushed commit&quot;</span>
+<span class="pc bpc" id="L362" title="1 of 2 branches missed.">                            + (n == 1 ? &quot;&quot; : &quot;s&quot;)</span>
+<span class="pc bpc" id="L363" title="1 of 2 branches missed.">                            + (preview ? &quot;; would leave as-is&quot; : &quot;; left as-is&quot;);</span>
+<span class="nc bnc" id="L364" title="All 4 branches missed.">            case AutoResolved(var c, var local, var remote) -&gt;</span>
+<span class="nc bnc" id="L365" title="All 2 branches missed.">                    preview</span>
+                        ? c + &quot; — main and &quot; + DEFAULT_REMOTE + &quot;/main have &quot;
+                                + &quot;diverged; would create a merge commit (keep &quot;
+<span class="nc" id="L368">                                + local + &quot; local, merge &quot; + remote + &quot; from origin)&quot;</span>
+                        : c + &quot; — auto-resolved divergent main (kept &quot; + local
+<span class="nc" id="L370">                                + &quot; local, merged &quot; + remote + &quot; from origin)&quot;;</span>
+<span class="nc" id="L371">            case Conflicts(var c, var files) -&gt;</span>
+<span class="nc bnc" id="L372" title="All 2 branches missed.">                    preview</span>
+                        ? c + &quot; — divergent main; would conflict in &quot;
+<span class="nc" id="L374">                                + files.size() + &quot; file&quot;</span>
+<span class="nc bnc" id="L375" title="All 2 branches missed.">                                + (files.size() == 1 ? &quot;&quot; : &quot;s&quot;)</span>
+<span class="nc" id="L376">                        : c + &quot; — divergent main, &quot; + files.size() + &quot; file conflict&quot;</span>
+<span class="nc bnc" id="L377" title="All 2 branches missed.">                                + (files.size() == 1 ? &quot;&quot; : &quot;s&quot;);</span>
+        };
+    }
+
+    // ── Internal git mechanics ──────────────────────────────────
+
+    /**
+     * Fast-forward local main to {@code origin/main}. Handles both the
+     * case where the caller is on main (uses {@code git merge --ff-only})
+     * and the case where they are not (uses
+     * {@code git fetch origin main:main}, which fails on non-FF rather
+     * than discarding work).
+     */
+    private static void fastForwardLocalMain(File subprojectDir, Log log,
+                                              String mainBranch, String remote,
+                                              String remoteRef)
+            throws MojoException {
+<span class="fc" id="L394">        String currentBranch = VcsOperations.currentBranch(subprojectDir);</span>
+<span class="pc bpc" id="L395" title="1 of 2 branches missed.">        if (currentBranch.equals(mainBranch)) {</span>
+<span class="fc" id="L396">            VcsOperations.mergeFfOnly(subprojectDir, log, remoteRef);</span>
+        } else {
+<span class="nc" id="L398">            VcsOperations.fetchRef(subprojectDir, log, remote, mainBranch);</span>
+        }
+<span class="fc" id="L400">    }</span>
+
+    /**
+     * Merge {@code origin/main} into local main with a merge commit.
+     * If the caller is not already on main, switch to main, merge, and
+     * switch back. If the merge fails, abort it before propagating so
+     * the working tree is not left with conflict markers from a
+     * mispredicted merge.
+     */
+    private static void autoResolveDiverged(File subprojectDir, Log log,
+                                             String mainBranch, String remoteRef)
+            throws MojoException {
+<span class="nc" id="L412">        String originalBranch = VcsOperations.currentBranch(subprojectDir);</span>
+<span class="nc bnc" id="L413" title="All 2 branches missed.">        boolean switched = !originalBranch.equals(mainBranch);</span>
+<span class="nc bnc" id="L414" title="All 2 branches missed.">        if (switched) {</span>
+<span class="nc" id="L415">            VcsOperations.checkout(subprojectDir, log, mainBranch);</span>
+        }
+        try {
+<span class="nc" id="L418">            VcsOperations.mergeNoFf(subprojectDir, log, remoteRef,</span>
+                    &quot;refresh: merge &quot; + remoteRef + &quot; into &quot; + mainBranch);
+<span class="nc" id="L420">        } catch (MojoException e) {</span>
+<span class="nc" id="L421">            VcsOperations.mergeAbortQuiet(subprojectDir, log);</span>
+<span class="nc" id="L422">            throw e;</span>
+        } finally {
+<span class="nc bnc" id="L424" title="All 2 branches missed.">            if (switched) {</span>
+<span class="nc" id="L425">                VcsOperations.checkout(subprojectDir, log, originalBranch);</span>
+            }
+        }
+<span class="nc" id="L428">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

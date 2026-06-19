@@ -8,6 +8,19 @@ canonical_url: https://ike.network/ike-platform/cutting-a-release.html
 
 How to ship a release of an IKE Network repo or a full workspace cascade. Read this before your first release; skim before each subsequent one — the gotchas at the bottom are what bite returning operators.
 
+This page is the **public release how-to** — the goals, what they do, and how to verify. The **maintainer operations** layer — the TeamCity foundation cascade, the `op`/1Password credential flow, signing-agent provisioning, and hands-off monitoring — lives in `ike-infrastructure` (`release-operations.adoc`), because it carries internal URLs, agent names, and secret paths that do not belong on the public site.
+
+## [#run-modes--local-or-ci](#run-modes--local-or-ci)Run modes — local or CI
+
+Any release runs **two ways** behind the same engine (`ike:release-publish` / `ws:release-publish`) with the same irreversible outcome (tag + Nexus + Maven Central). Pick per situation:
+
+| Mode | When |
+| --- | --- |
+| **Local** — run the goal at the repo (or workspace) root | Hands-on, a single repo, or when CI is unavailable; you watch the console live. Deploy credentials are supplied at launch (one approval, then it runs unattended). |
+| **CI** — trigger the matching release build on the CI server | Hands-off, the full foundation cascade, or releasing without a local checkout. The cascade fans out to downstream repos automatically. See `ike-infrastructure` for the trigger mechanics. |
+
+**When asked to release, decide local-or-CI first** — both must work, and the choice changes nothing about the artifact, only where the build runs.
+
 ## [#three-flavors](#three-flavors)Three flavors
 
 | Flavor | When |
@@ -26,7 +39,47 @@ Always upstream-first. `ike-docs` consumes `ike-tooling’s `ike-maven-plugin`. 
 
 This cascade is **structural**, not driven by extension-realm timing. See [Design rationale](index.html#design_rationale)[1] on the overview page for why no plugin in this ecosystem uses `<extensions>true</extensions>`.
 
+## [#what-a-publish-does-to-your-version-pins-the-auto-](#what-a-publish-does-to-your-version-pins-the-auto-)What a publish does to your version pins (the auto-upgrade)
+
+`ike:release-publish` **rewrites your `*GA*` upstream version pins to the latest released upstream before it cuts the release** — the "align upstream cascade versions" step (B8). This is deliberate: it guarantees a single-repo release never ships against a stale foundation. You do not need to bump `network.ike.tooling*GA*ike-tooling__VERSION` (and friends) by hand before releasing — the publish does it, commits the bump with a message naming each upgrade (`release: align upstream cascade — ike-tooling 221→222, ike-docs 75→76`), and surfaces a **Foundation upgrades** section in the GitHub release notes so a cascade-only rebuild announces what it was rebuilt against rather than "no changes" (IKE-Network/ike-issues#706).
+
+The bump respects each upstream’s declared **policy**: `integrate` (the default) and `release` are auto-aligned; `notify`, `verify`, and `propose` are hand-gated and left for you to act on. `ike:release-draft` previews exactly which pins a publish would raise.
+
+The "latest released" lookup uses **fresh metadata** — a cache-less resolve — so a stale local cache (or a just-deployed upstream that Nexus hasn’t finished indexing) can’t silently leave a pin behind (IKE-Network/ike-issues#705).
+
+## [#the-coherence-gate](#the-coherence-gate)The coherence gate
+
+After the Nexus deploy and **before** the tag is pushed, `ike:release-publish` confirms its own just-published artifact actually resolves — cold, from a cache-less resolver — at the demanded **resolution scope** (`ike.resolutionScope`, default `nexus`):
+
+| Scope | Confirms the artifact in |
+| --- | --- |
+| `nexus` *(default)* | The shared, consumer-resolvable Nexus group — the source of truth a downstream’s "resolve latest" actually reads. The cross-repo cascade guarantee. |
+| `central` | Maven Central — the public-availability gate (a bounded, non-blocking poll, since Central is eventually consistent). |
+| `local` | The local cache only. Verifies nothing (the build’s own `install` put it there) — a draft/dev opt-out, **rejected for a publish**. |
+
+If the artifact does not resolve at the demanded scope, the build **fails before the tag is pushed** — so no tag, no GitHub release, and no downstream cascade fires. A coherence problem becomes a red build on the responsible repo, never a silently-wrong downstream. The gate also re-checks that this repo’s own auto-aligned upstream pins caught up to the latest released upstream (IKE-Network/ike-issues#705).
+
 The order above is not maintained by hand, and not maintained centrally. Each foundation repo version-controls its own `src/main/cascade/release-cascade.yaml` declaring only its own `upstream` and `downstream` edges; the full ordered graph is assembled by traversal (IKE-Network/ike-issues#420). `ike:release-draft` previews the downstream repos a release will make stale; `ike:release-publish` aligns upstream `${X.version}` pins and prints a footer naming the next cascade step; `ike:release-cascade` assembles the graph and walks it end to end. To change the cascade, edit the relevant repo’s own manifest.
+
+## [#before-a-cascade--scope-by-coherence-not-jar-linka](#before-a-cascade--scope-by-coherence-not-jar-linka)Before a cascade — scope by coherence, not jar-linkage
+
+A release ships a **coherent versioned state: code + standards  
+docs.** A change in `ike-build-standards` (the `claude`/`docs`/`scaffold` bundles — `IKE-WORKSPACE.md`, `MAVEN.md`, scaffold templates) is a real versioned change: `ike-parent` pins the **GA** build-standards version and unpacks it at `validate`, so a new standard reaches consumers **only after a tooling release bumps that pin down the cascade.** Do not scope a release by "does the code link against it?" — scope by coherence. Shipping platform code whose behavior its own embedded standard contradicts is an incomplete release.
+
+Before firing a cascade, check **every** foundation repo for unreleased changes since its last `vN` tag. A clean post-release repo shows only machinery commits (`post-release: bump…`, `merge: release…`, `release: restore source pom state`); anything else is a real change that must ship:
+
+```
+for repo in ike-base-parent ike-java-support ike-version-management-extension \
+            ike-workspace-extension ike-tooling ike-docs ike-platform; do
+  [ -d "$repo/.git" ] || continue
+  git -C "$repo" fetch -q origin --tags
+  tag=$(git -C "$repo" tag -l 'v*' | sort -V | tail -1)
+  echo "=== $repo (last $tag) ==="
+  git -C "$repo" log --oneline "$tag"..origin/main   # ignore machinery commits
+done
+```
+
+Then trigger the **lowest cascade node that covers every changed repo** — the finish-triggers carry it downstream so all consumers re-release and re-pin coherently. A `ike-build-standards` change ⇒ start at the `ike-tooling` release, not `ike-platform`. When in doubt, go one node lower.
 
 ## [#wall-clock-budget](#wall-clock-budget)Wall-clock budget
 
@@ -150,9 +203,16 @@ The release flow’s own commits already use explicit paths; the risk is in huma
 | GitHub Pages publishes but ike.network landing page didn’t update | Auto-register may have hit a transient git lock or network issue. From a checkout of the release tag, run `mvn ike:register-site-publish`. The release itself is complete; this is just the org-site sync. |
 | `git checkout main` fails after a release | Your worktree has uncommitted changes (likely something a tool wrote mid-flight). Commit or stash them, then push the release tag + main, then create the GitHub release manually: `gh release create v<N> --title <N> --generate-notes --verify-tag`. See feedback_release_roll_forward in the operator memory. |
 
+## [#tests-run-during-the-release--keep-sandboxes-herme](#tests-run-during-the-release--keep-sandboxes-herme)Tests run during the release — keep sandboxes hermetic
+
+The release verify (`mvn clean install`) runs the full suite. Any test that shells out to real `git` **must not inherit host git config** — a CI agent with a failing global `core.hooksPath` hook, `commit.gpgsign` without a key, or a different `core.excludesFile` will break the release verify on that agent but not on yours. Make the sandbox hermetic (`GIT_CONFIG_GLOBAL` → a checked-in test gitconfig, `GIT_CONFIG_NOSYSTEM=1`, per-repo empty `core.hooksPath`  
+`gpgsign=false`); mirror `TestWorkspaceHelper.configureHermetic`. Builds must be machine-independent (IKE-Network/ike-issues#560).
+
 ## [#see-also](#see-also)See also
 
-- [Workspace getting started](workspace-getting-started.html)[6] — setting up a `-ws` aggregator the first time.
-- [ike-maven-plugin docs](https://ike.network/ike-tooling/ike-maven-plugin/)[7] — single-repo release goal.
-- [Self-host bootstrap pattern](https://ike.network/ike-tooling/ike-maven-plugin/self-host-bootstrap.html)[8] — why `ike-tooling’s own release has the extra X-SNAPSHOT step.
-- [Issue tracker](https://github.com/IKE-Network/ike-issues)[9] — release-flow bugs and enhancement tracking.
+- The [release cascade model](https://ike.network/ike-tooling/ike-maven-plugin/release-cascade.html)[6] — the loosely-coupled, manifest-per-repo design behind the cascade order above (authored in `ike-tooling`).
+- **Maintainer operations** (in `ike-infrastructure`, `release-operations.adoc`) — the TeamCity foundation cascade, REST triggers, `op`/1Password credential flow, signing-agent provisioning, hands-off monitoring, and the Maven Central catch-up procedure.
+- [Workspace getting started](workspace-getting-started.html)[7] — setting up a `-ws` aggregator the first time.
+- [ike-maven-plugin docs](https://ike.network/ike-tooling/ike-maven-plugin/)[8] — single-repo release goal.
+- [Self-host bootstrap pattern](https://ike.network/ike-tooling/ike-maven-plugin/self-host-bootstrap.html)[9] — why `ike-tooling’s own release has the extra X-SNAPSHOT step.
+- [Issue tracker](https://github.com/IKE-Network/ike-issues)[10] — release-flow bugs and enhancement tracking.

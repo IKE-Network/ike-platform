@@ -84,13 +84,13 @@
 					<div class="header-title">IKE Platform</div>
 						<div class="header-subtitle">
 							<span class="version-prefix">Version</span>
-							<span class="version">111</span>
+							<span class="version">112</span>
 						</div>
 					</div>
 					<div class="navbar-brand header-xxs visible-xs">
 						<div class="header-title">IKE Platform</div>
 						<div class="header-subtitle">
-							Version <strong>111</strong>
+							Version <strong>112</strong>
 						</div>
 					</div>
 					<form class="navbar-form site-search site-search-xs visible-xs" ng-show="showSearchInput">
@@ -165,7 +165,7 @@
 
 					<div class="col-md-12">
 					<div class="page-header visible-print-block">
-							<h3><small>IKE Platform</small><br/>							IKE Platform 111
+							<h3><small>IKE Platform</small><br/>							IKE Platform 112
 							</h3>
 						</div>
 						<div class="parents hidden-xs">
@@ -192,6 +192,30 @@
 						</div>
 <h1 id="cutting-a-release">Cutting a release</h1>
 <p>How to ship a release of an IKE Network repo or a full workspace cascade. Read this before your first release; skim before each subsequent one — the gotchas at the bottom are what bite returning operators.</p>
+<p>This page is the <strong>public release how-to</strong> — the goals, what they do, and how to verify. The <strong>maintainer operations</strong> layer — the TeamCity foundation cascade, the <code>op</code>/1Password credential flow, signing-agent provisioning, and hands-off monitoring — lives in <code>ike-infrastructure</code> (<code>release-operations.adoc</code>), because it carries internal URLs, agent names, and secret paths that do not belong on the public site.</p>
+<div>
+ <h2 id="run-modes--local-or-ci"><a href="#run-modes--local-or-ci"></a><a id="run-modes-local-or-ci"></a>Run modes — local or CI</h2>
+ <p>Any release runs <strong>two ways</strong> behind the same engine (<code>ike:release-publish</code> / <code>ws:release-publish</code>) with the same irreversible outcome (tag + Nexus + Maven Central). Pick per situation:</p>
+ <table class="bodyTable table table-striped table-hover" style="background: #FFFFFF">
+  <thead>
+   <tr class="a">
+    <th>Mode</th>
+    <th>When</th>
+   </tr>
+  </thead>
+  <tbody>
+   <tr class="b">
+    <td style="text-align: left;"><strong>Local</strong> — run the goal at the repo (or workspace) root</td>
+    <td>Hands-on, a single repo, or when CI is unavailable; you watch the console live. Deploy credentials are supplied at launch (one approval, then it runs unattended).</td>
+   </tr>
+   <tr class="a">
+    <td style="text-align: left;"><strong>CI</strong> — trigger the matching release build on the CI server</td>
+    <td>Hands-off, the full foundation cascade, or releasing without a local checkout. The cascade fans out to downstream repos automatically. See <code>ike-infrastructure</code> for the trigger mechanics.</td>
+   </tr>
+  </tbody>
+ </table>
+ <p><strong>When asked to release, decide local-or-CI first</strong> — both must work, and the choice changes nothing about the artifact, only where the build runs.</p>
+</div>
 <div>
  <h2 id="three-flavors"><a href="#three-flavors"></a><a id="three-flavors"></a>Three flavors</h2>
  <table class="bodyTable table table-striped table-hover" style="background: #FFFFFF">
@@ -224,7 +248,57 @@
  </div>
  <p>Always upstream-first. <code>ike-docs</code> consumes <code>ike-tooling’s `ike-maven-plugin</code>. <code>ike-platform’s `ike-parent</code> consumes both. Downstream consumer repos (workspace aggregators, doc-only projects, ike-example-its) inherit from <code>ike-parent</code>. Every release of an upstream causes a property bump in everything downstream — that bump is what triggers a downstream release in the same cycle.</p>
  <p>This cascade is <strong>structural</strong>, not driven by extension-realm timing. See <a href="index.html#design_rationale">Design rationale</a><sup class="visible-print-inline">[1]</sup> on the overview page for why no plugin in this ecosystem uses <code>&lt;extensions&gt;true&lt;/extensions&gt;</code>.</p>
+</div>
+<div>
+ <h2 id="what-a-publish-does-to-your-version-pins-the-auto-"><a href="#what-a-publish-does-to-your-version-pins-the-auto-"></a><a id="what-a-publish-does-to-your-version-pins-the-auto-upgrade"></a>What a publish does to your version pins (the auto-upgrade)</h2>
+ <p><code>ike:release-publish</code> <strong>rewrites your <code><em>GA</em></code> upstream version pins to the latest released upstream before it cuts the release</strong> — the "align upstream cascade versions" step (B8). This is deliberate: it guarantees a single-repo release never ships against a stale foundation. You do not need to bump <code>network.ike.tooling<em>GA</em>ike-tooling__VERSION</code> (and friends) by hand before releasing — the publish does it, commits the bump with a message naming each upgrade (<code>release: align upstream cascade — ike-tooling 221→222, ike-docs 75→76</code>), and surfaces a <strong>Foundation upgrades</strong> section in the GitHub release notes so a cascade-only rebuild announces what it was rebuilt against rather than "no changes" (IKE-Network/ike-issues#706).</p>
+ <p>The bump respects each upstream’s declared <strong>policy</strong>: <code>integrate</code> (the default) and <code>release</code> are auto-aligned; <code>notify</code>, <code>verify</code>, and <code>propose</code> are hand-gated and left for you to act on. <code>ike:release-draft</code> previews exactly which pins a publish would raise.</p>
+ <p>The "latest released" lookup uses <strong>fresh metadata</strong> — a cache-less resolve — so a stale local cache (or a just-deployed upstream that Nexus hasn’t finished indexing) can’t silently leave a pin behind (IKE-Network/ike-issues#705).</p>
+</div>
+<div>
+ <h2 id="the-coherence-gate"><a href="#the-coherence-gate"></a><a id="the-coherence-gate"></a>The coherence gate</h2>
+ <p>After the Nexus deploy and <strong>before</strong> the tag is pushed, <code>ike:release-publish</code> confirms its own just-published artifact actually resolves — cold, from a cache-less resolver — at the demanded <strong>resolution scope</strong> (<code>ike.resolutionScope</code>, default <code>nexus</code>):</p>
+ <table class="bodyTable table table-striped table-hover" style="background: #FFFFFF">
+  <thead>
+   <tr class="a">
+    <th>Scope</th>
+    <th>Confirms the artifact in</th>
+   </tr>
+  </thead>
+  <tbody>
+   <tr class="b">
+    <td style="text-align: left;"><code>nexus</code> <em>(default)</em></td>
+    <td>The shared, consumer-resolvable Nexus group — the source of truth a downstream’s "resolve latest" actually reads. The cross-repo cascade guarantee.</td>
+   </tr>
+   <tr class="a">
+    <td style="text-align: left;"><code>central</code></td>
+    <td>Maven Central — the public-availability gate (a bounded, non-blocking poll, since Central is eventually consistent).</td>
+   </tr>
+   <tr class="b">
+    <td style="text-align: left;"><code>local</code></td>
+    <td>The local cache only. Verifies nothing (the build’s own <code>install</code> put it there) — a draft/dev opt-out, <strong>rejected for a publish</strong>.</td>
+   </tr>
+  </tbody>
+ </table>
+ <p>If the artifact does not resolve at the demanded scope, the build <strong>fails before the tag is pushed</strong> — so no tag, no GitHub release, and no downstream cascade fires. A coherence problem becomes a red build on the responsible repo, never a silently-wrong downstream. The gate also re-checks that this repo’s own auto-aligned upstream pins caught up to the latest released upstream (IKE-Network/ike-issues#705).</p>
  <p>The order above is not maintained by hand, and not maintained centrally. Each foundation repo version-controls its own <code>src/main/cascade/release-cascade.yaml</code> declaring only its own <code>upstream</code> and <code>downstream</code> edges; the full ordered graph is assembled by traversal (IKE-Network/ike-issues#420). <code>ike:release-draft</code> previews the downstream repos a release will make stale; <code>ike:release-publish</code> aligns upstream <code>${X.version}</code> pins and prints a footer naming the next cascade step; <code>ike:release-cascade</code> assembles the graph and walks it end to end. To change the cascade, edit the relevant repo’s own manifest.</p>
+</div>
+<div>
+ <h2 id="before-a-cascade--scope-by-coherence-not-jar-linka"><a href="#before-a-cascade--scope-by-coherence-not-jar-linka"></a><a id="before-a-cascade-scope-by-coherence-not-jar-linkage"></a>Before a cascade — scope by coherence, not jar-linkage</h2>
+ <p>A release ships a <strong>coherent versioned state: code + standards
+   <br> docs.</strong> A change in <code>ike-build-standards</code> (the <code>claude</code>/<code>docs</code>/<code>scaffold</code> bundles — <code>IKE-WORKSPACE.md</code>, <code>MAVEN.md</code>, scaffold templates) is a real versioned change: <code>ike-parent</code> pins the <strong>GA</strong> build-standards version and unpacks it at <code>validate</code>, so a new standard reaches consumers <strong>only after a tooling release bumps that pin down the cascade.</strong> Do not scope a release by "does the code link against it?" — scope by coherence. Shipping platform code whose behavior its own embedded standard contradicts is an incomplete release.</p>
+ <p>Before firing a cascade, check <strong>every</strong> foundation repo for unreleased changes since its last <code>vN</code> tag. A clean post-release repo shows only machinery commits (<code>post-release: bump…</code>, <code>merge: release…</code>, <code>release: restore source pom state</code>); anything else is a real change that must ship:</p>
+ <div class="source">
+  <pre class="prettyprint" copy-to-clipboard=""><code>for repo in ike-base-parent ike-java-support ike-version-management-extension \
+            ike-workspace-extension ike-tooling ike-docs ike-platform; do
+  [ -d "$repo/.git" ] || continue
+  git -C "$repo" fetch -q origin --tags
+  tag=$(git -C "$repo" tag -l 'v*' | sort -V | tail -1)
+  echo "=== $repo (last $tag) ==="
+  git -C "$repo" log --oneline "$tag"..origin/main   # ignore machinery commits
+done</code></pre>
+ </div>
+ <p>Then trigger the <strong>lowest cascade node that covers every changed repo</strong> — the finish-triggers carry it downstream so all consumers re-release and re-pin coherently. A <code>ike-build-standards</code> change ⇒ start at the <code>ike-tooling</code> release, not <code>ike-platform</code>. When in doubt, go one node lower.</p>
 </div>
 <div>
  <h2 id="wall-clock-budget"><a href="#wall-clock-budget"></a><a id="wall-clock-budget"></a>Wall-clock budget</h2>
@@ -390,12 +464,20 @@ git commit -m "chore: bump ike-parent N -&gt; N+1"</code></pre>
  </table>
 </div>
 <div>
+ <h2 id="tests-run-during-the-release--keep-sandboxes-herme"><a href="#tests-run-during-the-release--keep-sandboxes-herme"></a><a id="tests-run-during-the-release-keep-sandboxes-hermetic"></a>Tests run during the release — keep sandboxes hermetic</h2>
+ <p>The release verify (<code>mvn clean install</code>) runs the full suite. Any test that shells out to real <code>git</code> <strong>must not inherit host git config</strong> — a CI agent with a failing global <code>core.hooksPath</code> hook, <code>commit.gpgsign</code> without a key, or a different <code>core.excludesFile</code> will break the release verify on that agent but not on yours. Make the sandbox hermetic (<code>GIT_CONFIG_GLOBAL</code> → a checked-in test gitconfig, <code>GIT_CONFIG_NOSYSTEM=1</code>, per-repo empty <code>core.hooksPath</code>
+  <br>
+  <code>gpgsign=false</code>); mirror <code>TestWorkspaceHelper.configureHermetic</code>. Builds must be machine-independent (IKE-Network/ike-issues#560).</p>
+</div>
+<div>
  <h2 id="see-also"><a href="#see-also"></a><a id="see-also"></a>See also</h2>
  <ul>
-  <li><a href="workspace-getting-started.html">Workspace getting started</a><sup class="visible-print-inline">[6]</sup> — setting up a <code>-ws</code> aggregator the first time.</li>
-  <li><a href="https://ike.network/ike-tooling/ike-maven-plugin/">ike-maven-plugin docs</a><sup class="visible-print-inline">[7]</sup> — single-repo release goal.</li>
-  <li><a href="https://ike.network/ike-tooling/ike-maven-plugin/self-host-bootstrap.html">Self-host bootstrap pattern</a><sup class="visible-print-inline">[8]</sup> — why `ike-tooling’s own release has the extra X-SNAPSHOT step.</li>
-  <li><a href="https://github.com/IKE-Network/ike-issues" class="externalLink">Issue tracker</a><sup class="visible-print-inline">[9]</sup> — release-flow bugs and enhancement tracking.</li>
+  <li>The <a href="https://ike.network/ike-tooling/ike-maven-plugin/release-cascade.html">release cascade model</a><sup class="visible-print-inline">[6]</sup> — the loosely-coupled, manifest-per-repo design behind the cascade order above (authored in <code>ike-tooling</code>).</li>
+  <li><strong>Maintainer operations</strong> (in <code>ike-infrastructure</code>, <code>release-operations.adoc</code>) — the TeamCity foundation cascade, REST triggers, <code>op</code>/1Password credential flow, signing-agent provisioning, hands-off monitoring, and the Maven Central catch-up procedure.</li>
+  <li><a href="workspace-getting-started.html">Workspace getting started</a><sup class="visible-print-inline">[7]</sup> — setting up a <code>-ws</code> aggregator the first time.</li>
+  <li><a href="https://ike.network/ike-tooling/ike-maven-plugin/">ike-maven-plugin docs</a><sup class="visible-print-inline">[8]</sup> — single-repo release goal.</li>
+  <li><a href="https://ike.network/ike-tooling/ike-maven-plugin/self-host-bootstrap.html">Self-host bootstrap pattern</a><sup class="visible-print-inline">[9]</sup> — why `ike-tooling’s own release has the extra X-SNAPSHOT step.</li>
+  <li><a href="https://github.com/IKE-Network/ike-issues" class="externalLink">Issue tracker</a><sup class="visible-print-inline">[10]</sup> — release-flow bugs and enhancement tracking.</li>
  </ul>
 </div>
 
@@ -416,13 +498,14 @@ git commit -m "chore: bump ike-parent N -&gt; N+1"</code></pre>
 								<li>[3] https://ike.network/<repo>/</li>
 								<li>[4] https://ike.network/<repo>/<N>/</li>
 								<li>[5] https://ike.network/<repo>/latest/</li>
-								<li>[6] workspace-getting-started.html</li>
-								<li>[7] https://ike.network/ike-tooling/ike-maven-plugin/</li>
-								<li>[8] https://ike.network/ike-tooling/ike-maven-plugin/self-host-bootstrap.html</li>
-								<li>[9] https://github.com/IKE-Network/ike-issues</li>
+								<li>[6] https://ike.network/ike-tooling/ike-maven-plugin/release-cascade.html</li>
+								<li>[7] workspace-getting-started.html</li>
+								<li>[8] https://ike.network/ike-tooling/ike-maven-plugin/</li>
+								<li>[9] https://ike.network/ike-tooling/ike-maven-plugin/self-host-bootstrap.html</li>
+								<li>[10] https://github.com/IKE-Network/ike-issues</li>
 								</ul>
 							</div>
-<div class="date">Date: <strong>2026-06-18 18:46:41 -0700</strong></div>
+<div class="date">Date: <strong>2026-06-19 15:02:30 -0700</strong></div>
 						</div>
 						</div>
 					</div>
@@ -501,7 +584,7 @@ git commit -m "chore: bump ike-parent N -&gt; N+1"</code></pre>
 	<footer class="footer">
 
 		<p class="footer-title" ng-class="{'text-center': $matchMedia.size == 'xs'}">
-			<strong>IKE Platform 111</strong>
+			<strong>IKE Platform 112</strong>
 			<span class="hidden-xs">|</span><br class="hidden-sm hidden-md hidden-lg"/>
 			Documentation as of <strong><time datetime="2026-06-19">2026-06-19</time></strong>
 		</p>

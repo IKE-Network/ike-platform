@@ -1,0 +1,261 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>WsRemoveMojo.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">WsRemoveMojo.java</span></div><h1>WsRemoveMojo.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.workspace.WorkspaceGraph;
+import network.ike.plugin.ws.vcs.VcsOperations;
+
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+/**
+ * Remove a subproject from the workspace.
+ *
+ * &lt;p&gt;Given a subproject name, this goal:
+ * &lt;ol&gt;
+ *   &lt;li&gt;Loads the workspace graph and verifies the subproject exists&lt;/li&gt;
+ *   &lt;li&gt;Checks for downstream dependents — fails if any exist
+ *       (unless {@code -Dforce=true})&lt;/li&gt;
+ *   &lt;li&gt;Removes the subproject entry from workspace.yaml&lt;/li&gt;
+ *   &lt;li&gt;Removes the top-level {@code &lt;subprojects&gt;} entry (and any legacy
+ *       {@code with-*} profile) from the aggregator pom.xml
+ *       (IKE-Network/ike-issues#696)&lt;/li&gt;
+ *   &lt;li&gt;Removes the subproject from any group lists in workspace.yaml&lt;/li&gt;
+ *   &lt;li&gt;Optionally deletes the cloned directory&lt;/li&gt;
+ * &lt;/ol&gt;
+ *
+ * &lt;p&gt;Removal is branch-scoped (IKE-Network/ike-issues#575): it edits the
+ * &lt;em&gt;current branch's&lt;/em&gt; {@code workspace.yaml} / {@code pom.xml} and works
+ * on any branch, mirroring {@code ws:add}. With {@code -DdeleteDir=true} the
+ * clone is &lt;b&gt;parked&lt;/b&gt; (its branch pushed to origin, then removed), not
+ * {@code rm}-ed — uncommitted work is stashed first and the push is a
+ * precondition for removal, so no work is lost.
+ *
+ * &lt;pre&gt;{@code
+ * mvn ws:remove -Dsubproject=tinkar-core
+ * mvn ws:remove -Dsubproject=tinkar-core -Dforce=true
+ * mvn ws:remove -Dsubproject=tinkar-core -DdeleteDir=true
+ * }&lt;/pre&gt;
+ *
+ * @see WsAddMojo for adding a subproject
+ */
+@Mojo(name = &quot;remove&quot;, projectRequired = false, aggregator = true)
+public class WsRemoveMojo extends AbstractWorkspaceMojo {
+
+    /**
+     * Subproject name to remove (required).
+     */
+    @Parameter(property = &quot;subproject&quot;)
+    private String subproject;
+
+    /**
+     * Skip the downstream-dependent safety check.
+     */
+    @Parameter(property = &quot;force&quot;, defaultValue = &quot;false&quot;)
+    private boolean force;
+
+    /**
+     * Also remove the cloned subproject directory from disk. When set, the
+     * clone is &lt;b&gt;parked&lt;/b&gt; (its branch pushed to origin, then the clone
+     * removed), not {@code rm}-ed — see {@link ParkSupport#parkSubproject}.
+     */
+    @Parameter(property = &quot;deleteDir&quot;, defaultValue = &quot;false&quot;)
+    private boolean deleteDir;
+
+    /**
+     * Opt out of auto-stash when parking a clone with uncommitted work
+     * ({@code -DdeleteDir=true}). When {@code false} (default), uncommitted
+     * changes are stashed to {@code refs/ws-stash/&lt;user-slug&gt;/&lt;branch&gt;} on
+     * origin before the clone is parked so the work follows the developer;
+     * when {@code true}, no stash is taken (the work still survives on the
+     * pushed branch if committed, but uncommitted changes are discarded with
+     * the clone). Mirrors {@code ws:switch}'s {@code -DnoStash}.
+     */
+    @Parameter(property = &quot;noStash&quot;, defaultValue = &quot;false&quot;)
+    private boolean noStash;
+
+    /** Creates this goal instance. */
+<span class="fc" id="L86">    public WsRemoveMojo() {}</span>
+
+    @Override
+    protected WorkspaceReportSpec runGoal() throws MojoException {
+<span class="fc" id="L90">        subproject = requireParam(subproject, &quot;subproject&quot;,</span>
+                &quot;Subproject name to remove&quot;);
+<span class="fc" id="L92">        validateSubprojectName(subproject);</span>
+
+        // Resolve workspace root and paths
+<span class="fc" id="L95">        Path manifestPath = resolveManifest();</span>
+<span class="fc" id="L96">        Path wsDir = manifestPath.getParent();</span>
+<span class="fc" id="L97">        Path pomPath = wsDir.resolve(&quot;pom.xml&quot;);</span>
+
+        // Removal is branch-scoped (#575): it operates on the current branch's
+        // workspace.yaml / pom.xml and works on any branch, mirroring ws:add —
+        // no main-only guard. Uncommitted work is not refused either: in the
+        // default deleteDir=false path the clone is left untouched (its dirty
+        // state preserved), and under -DdeleteDir=true the park path below
+        // stashes WIP and pushes the branch before removing the clone, so
+        // nothing is lost.
+
+        // Load graph and validate subproject exists
+<span class="fc" id="L108">        WorkspaceGraph graph = loadGraph();</span>
+
+<span class="pc bpc" id="L110" title="1 of 2 branches missed.">        if (!graph.manifest().subprojects().containsKey(subproject)) {</span>
+<span class="nc" id="L111">            throw new MojoException(</span>
+                    &quot;Subproject '&quot; + subproject + &quot;' not found in workspace.yaml.&quot;);
+        }
+
+        // Check for downstream dependents
+<span class="fc" id="L116">        List&lt;String&gt; dependents = graph.cascade(subproject);</span>
+<span class="pc bpc" id="L117" title="3 of 4 branches missed.">        if (!dependents.isEmpty() &amp;&amp; !force) {</span>
+<span class="nc" id="L118">            throw new MojoException(</span>
+                    &quot;Cannot remove '&quot; + subproject + &quot;' — the following subprojects &quot;
+                    + &quot;depend on it: &quot; + dependents + &quot;\n&quot;
+                    + &quot;Use -Dforce=true to remove anyway.&quot;);
+        }
+
+<span class="fc" id="L124">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L125">        getLog().info(header(&quot;Remove Subproject&quot;));</span>
+<span class="fc" id="L126">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+<span class="fc" id="L127">        getLog().info(&quot;  Subproject: &quot; + subproject);</span>
+<span class="pc bpc" id="L128" title="1 of 2 branches missed.">        if (!dependents.isEmpty()) {</span>
+<span class="nc" id="L129">            getLog().warn(&quot;  Dependents (forced): &quot; + dependents);</span>
+        }
+<span class="fc" id="L131">        getLog().info(&quot;&quot;);</span>
+
+        try {
+            // Remove from workspace.yaml
+<span class="fc" id="L135">            removeSubprojectFromManifest(manifestPath);</span>
+<span class="fc" id="L136">            getLog().info(Ansi.green(&quot;  ✓ &quot;) + &quot;workspace.yaml updated — subproject entry removed&quot;);</span>
+
+            // Remove the reactor membership from pom.xml
+<span class="fc" id="L139">            removeSubprojectFromPom(pomPath);</span>
+<span class="fc" id="L140">            getLog().info(Ansi.green(&quot;  ✓ &quot;) + &quot;pom.xml updated — subproject &quot; + subproject + &quot; removed&quot;);</span>
+
+<span class="nc" id="L142">        } catch (IOException e) {</span>
+<span class="nc" id="L143">            throw new MojoException(</span>
+<span class="nc" id="L144">                    &quot;Failed to update workspace files: &quot; + e.getMessage(), e);</span>
+<span class="fc" id="L145">        }</span>
+
+        // Optionally remove the cloned directory — work-preserving (#575).
+        // A git clone is PARKED, not rm-ed: its branch is pushed to origin
+        // (and any uncommitted work stashed) first, and the push is a hard
+        // precondition for removal, so nothing is lost. A non-clone directory
+        // (nothing to preserve) is plain-deleted.
+<span class="fc" id="L152">        boolean parked = false;</span>
+<span class="fc bfc" id="L153" title="All 2 branches covered.">        if (deleteDir) {</span>
+<span class="fc" id="L154">            Path subprojectDir = wsDir.resolve(subproject);</span>
+<span class="fc" id="L155">            File subDir = subprojectDir.toFile();</span>
+<span class="pc bpc" id="L156" title="1 of 2 branches missed.">            if (new File(subDir, &quot;.git&quot;).exists()) {</span>
+<span class="fc" id="L157">                String compBranch = gitBranch(subDir);</span>
+                // Preserve uncommitted work before parking: a dirty clone is
+                // auto-stashed to refs/ws-stash/&lt;slug&gt;/&lt;branch&gt; on origin. The
+                // slug is derived exactly as ws:switch does — fail-loud on a
+                // missing git user.email — so WIP is never silently dropped;
+                // set user.email, or pass -DnoStash to discard it, then re-run.
+<span class="pc bpc" id="L163" title="1 of 4 branches missed.">                if (!noStash &amp;&amp; !gitStatus(subDir).isEmpty()) {</span>
+<span class="fc" id="L164">                    String slug = VcsOperations.userSlug(</span>
+<span class="fc" id="L165">                            VcsOperations.userEmail(wsDir.toFile()));</span>
+<span class="fc" id="L166">                    ParkSupport.stashLeave(subDir, getLog(), slug, compBranch);</span>
+                }
+<span class="fc" id="L168">                ParkSupport.parkSubproject(subDir, getLog(), subproject, compBranch);</span>
+<span class="fc" id="L169">                getLog().info(Ansi.green(&quot;  ✓ &quot;) + &quot;Parked clone: &quot;</span>
+                        + subprojectDir + &quot; (&quot; + compBranch + &quot; → origin, &quot;
+                        + &quot;clone removed)&quot;);
+<span class="fc" id="L172">                parked = true;</span>
+<span class="pc bnc" id="L173" title="All 2 branches missed.">            } else if (Files.isDirectory(subprojectDir)) {</span>
+                // Not a clone — nothing to preserve, plain delete.
+<span class="nc" id="L175">                ParkSupport.deleteDirectory(subprojectDir);</span>
+<span class="nc" id="L176">                getLog().info(Ansi.green(&quot;  ✓ &quot;) + &quot;Deleted directory: &quot; + subprojectDir);</span>
+            } else {
+<span class="nc" id="L178">                getLog().info(&quot;  - Directory not present: &quot; + subprojectDir);</span>
+            }
+        }
+
+<span class="fc" id="L182">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L183">        getLog().info(&quot;  Subproject '&quot; + subproject + &quot;' removed.&quot;);</span>
+<span class="fc" id="L184">        getLog().info(&quot;&quot;);</span>
+
+<span class="fc" id="L186">        WorkspaceReportSpec spec = new WorkspaceReportSpec(WsGoal.REMOVE,</span>
+                &quot;Removed subproject **&quot; + subproject + &quot;**.&quot;
+<span class="fc bfc" id="L188" title="All 2 branches covered.">                + (parked ? &quot; Clone parked (branch pushed to origin, clone &quot;</span>
+<span class="fc" id="L189">                        + &quot;removed).&quot; : &quot;&quot;) + &quot;\n&quot;);</span>
+
+<span class="fc" id="L191">        PostMutationSync.refresh(workspaceRoot(), getLog());</span>
+<span class="fc" id="L192">        return spec;</span>
+    }
+
+    // ── YAML removal ────────────────────────────────────────────
+
+    /**
+     * Remove a subproject block from workspace.yaml.
+     *
+     * &lt;p&gt;Matches the subproject header at 2-space indent under
+     * {@code subprojects:} and removes everything until the next
+     * subproject header or section header (a line at 0 or 2-space
+     * indent that is not a continuation of this block).
+     */
+    void removeSubprojectFromManifest(Path manifestPath) throws IOException {
+<span class="fc" id="L206">        String yaml = Files.readString(manifestPath, StandardCharsets.UTF_8);</span>
+
+        // Match:  &quot;  subproject-name:\n&quot; followed by lines at 4+ space indent
+        // (including multi-line description blocks) until the next 2-space key
+        // or top-level key or end of file.
+<span class="fc" id="L211">        String escaped = Pattern.quote(subproject);</span>
+<span class="fc" id="L212">        Pattern blockPattern = Pattern.compile(</span>
+                &quot;\\n  &quot; + escaped + &quot;:\\s*\\n(?:    .*\\n)*&quot;,
+                Pattern.MULTILINE);
+
+<span class="fc" id="L216">        Matcher m = blockPattern.matcher(yaml);</span>
+<span class="pc bpc" id="L217" title="1 of 2 branches missed.">        if (m.find()) {</span>
+<span class="fc" id="L218">            yaml = m.replaceFirst(&quot;\n&quot;);</span>
+        }
+
+<span class="fc" id="L221">        Files.writeString(manifestPath, yaml, StandardCharsets.UTF_8);</span>
+<span class="fc" id="L222">    }</span>
+
+    // ── POM removal ─────────────────────────────────────────────
+
+    /**
+     * Remove this subproject's reactor membership from the aggregator POM
+     * via the OpenRewrite-LST {@link ReactorPom} editor (no regex on POMs):
+     * drop its top-level {@code &lt;subprojects&gt;} entry and any legacy
+     * {@code with-&lt;subproject&gt;} profile.
+     *
+     * @param pomPath the aggregator POM path
+     * @throws IOException if the POM cannot be read or written
+     */
+    void removeSubprojectFromPom(Path pomPath) throws IOException {
+<span class="pc bpc" id="L236" title="1 of 2 branches missed.">        if (!Files.exists(pomPath)) {</span>
+<span class="nc" id="L237">            getLog().warn(&quot;  No pom.xml found at &quot; + pomPath);</span>
+<span class="nc" id="L238">            return;</span>
+        }
+
+<span class="fc" id="L241">        String pom = Files.readString(pomPath, StandardCharsets.UTF_8);</span>
+<span class="fc" id="L242">        String updated = pom;</span>
+
+<span class="fc" id="L244">        List&lt;String&gt; names = ReactorPom.listSubprojects(updated);</span>
+<span class="pc bpc" id="L245" title="1 of 2 branches missed.">        if (names.contains(subproject)) {</span>
+<span class="nc" id="L246">            updated = ReactorPom.setSubprojects(updated,</span>
+<span class="nc bnc" id="L247" title="All 2 branches missed.">                    names.stream().filter(n -&gt; !n.equals(subproject)).toList());</span>
+        }
+        // Drop any residual legacy file-activated profile too.
+<span class="fc" id="L250">        updated = ReactorPom.removeProfile(updated, &quot;with-&quot; + subproject);</span>
+
+<span class="pc bpc" id="L252" title="1 of 2 branches missed.">        if (updated.equals(pom)) {</span>
+<span class="nc" id="L253">            getLog().info(&quot;  - Subproject &quot; + subproject</span>
+                    + &quot; not found in pom.xml (already removed?)&quot;);
+<span class="nc" id="L255">            return;</span>
+        }
+<span class="fc" id="L257">        Files.writeString(pomPath, updated, StandardCharsets.UTF_8);</span>
+<span class="fc" id="L258">    }</span>
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

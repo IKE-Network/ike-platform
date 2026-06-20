@@ -130,6 +130,27 @@ class FeatureStartIntegrationTest {
     }
 
     @Test
+    void featureStart_qualifiesAggregatorPomVersion() throws Exception {
+        // feature-start branches the workspace ROOT, so it must branch-qualify the
+        // aggregator's own pom too (ike-issues#721). buildSiblingScenario is the
+        // fixture with a workspace-root pom+git for branchWorkspaceRepo to act on.
+        Path primary = new TestWorkspaceHelper(tempDir).buildSiblingScenario();
+
+        FeatureStartDraftMojo mojo = TestLog.createMojo(FeatureStartDraftMojo.class);
+        mojo.manifest = primary.resolve("workspace.yaml").toFile();
+        mojo.feature = "agg-test";
+        mojo.publish = true;
+        mojo.execute();
+
+        // The workspace root is on the branch AND its aggregator pom is qualified.
+        assertThat(execCapture(primary, "git", "rev-parse", "--abbrev-ref", "HEAD"))
+                .isEqualTo("feature/agg-test");
+        String rootPom = Files.readString(
+                primary.resolve("pom.xml"), StandardCharsets.UTF_8);
+        assertThat(rootPom).contains("1-agg-test-SNAPSHOT");
+    }
+
+    @Test
     void featureStart_skipVersion_branchOnlyNoVersionChange() throws Exception {
         // Record original POM versions
         String libAPom = Files.readString(

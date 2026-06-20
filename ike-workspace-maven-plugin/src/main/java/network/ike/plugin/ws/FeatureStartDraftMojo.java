@@ -351,9 +351,14 @@ public class FeatureStartDraftMojo extends AbstractWorkspaceMojo {
             }
         }
 
-        // Branch the workspace repo and update workspace.yaml on the feature branch
-        if (!created.isEmpty() && publish) {
-            branchWorkspaceRepo(branchName, created);
+        // Branch the workspace repo, update workspace.yaml, AND branch-qualify the
+        // aggregator's own pom — feature-start branches the top, so its version
+        // gets the same qualifier as every subproject (ike-issues#721). Runs for
+        // newly-created OR repaired branches; draft just previews.
+        if (!versioned.isEmpty() && publish) {
+            branchWorkspaceRepo(branchName, versioned);
+        } else if (!versioned.isEmpty() && !skipVersion) {
+            previewWorkspaceRootQualify(branchName);
         }
 
         getLog().info("");
@@ -509,18 +514,42 @@ public class FeatureStartDraftMojo extends AbstractWorkspaceMojo {
             File wsGit = new File(wsRoot, ".git");
             if (!wsGit.exists()) return;
 
-            // If workspace repo is on a different feature branch, switch to main first
+            // Create the branch only if the workspace repo isn't already on it.
+            // On a repair run (ike-issues#721) it already is — switch nothing.
             String wsBranch = VcsOperations.currentBranch(wsRoot);
-            if (wsBranch.startsWith("feature/") && !wsBranch.equals(branchName)) {
-                getLog().info("  Workspace repo: switching " + wsBranch + " → main");
-                VcsOperations.checkout(wsRoot, getLog(), "main");
+            if (!wsBranch.equals(branchName)) {
+                if (wsBranch.startsWith("feature/")) {
+                    getLog().info("  Workspace repo: switching " + wsBranch + " to main");
+                    VcsOperations.checkout(wsRoot, getLog(), "main");
+                }
+                getLog().info("  Branching workspace repo to " + branchName);
+                VcsOperations.checkoutNew(wsRoot, getLog(), branchName);
             }
 
-            // Branch the workspace repo
-            getLog().info("  Branching workspace repo → " + branchName);
-            VcsOperations.checkoutNew(wsRoot, getLog(), branchName);
+            // Branch-qualify the aggregator's own POM version too — feature-start
+            // branches the workspace root, so its version gets the same qualifier
+            // as every subproject (idempotent; ike-issues#721).
+            boolean wsPomQualified = false;
+            File wsPom = new File(wsRoot, "pom.xml");
+            if (!skipVersion && wsPom.exists()) {
+                try {
+                    String wsVersion = ReleaseSupport.readPomVersion(wsPom);
+                    String wsQualified = VersionSupport.branchQualifiedVersion(
+                            wsVersion, branchName);
+                    if (!wsQualified.equals(wsVersion)) {
+                        support.setPomVersion(wsRoot, wsVersion, wsQualified);
+                        ReleaseSupport.exec(wsRoot, getLog(), "git", "add", "pom.xml");
+                        getLog().info("  qualified workspace root: " + wsVersion
+                                + " -> " + wsQualified);
+                        wsPomQualified = true;
+                    }
+                } catch (MojoException e) {
+                    getLog().debug("Could not qualify workspace root version: "
+                            + e.getMessage());
+                }
+            }
 
-            // Update workspace.yaml on the feature branch
+            // Update workspace.yaml branch fields (idempotent on a repair run).
             Map<String, String> updates = new LinkedHashMap<>();
             for (String name : components) {
                 updates.put(name, branchName);
@@ -531,10 +560,11 @@ public class FeatureStartDraftMojo extends AbstractWorkspaceMojo {
 
             ReleaseSupport.exec(wsRoot, getLog(), "git", "add", "workspace.yaml");
             if (VcsOperations.hasStagedChanges(wsRoot)) {
-                VcsOperations.commit(wsRoot, getLog(),
-                        "workspace: update branches for " + branchName);
+                VcsOperations.commit(wsRoot, getLog(), wsPomQualified
+                        ? "feature: qualify workspace root + branches for " + branchName
+                        : "workspace: update branches for " + branchName);
             } else {
-                getLog().info("  workspace.yaml already up to date — nothing to commit");
+                getLog().info("  workspace repo already up to date - nothing to commit");
             }
 
             // Write VCS state (no push — branch stays local)
@@ -542,6 +572,29 @@ public class FeatureStartDraftMojo extends AbstractWorkspaceMojo {
 
         } catch (IOException e) {
             getLog().warn("  Could not update workspace.yaml: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Draft preview of the aggregator-pom branch-qualification — the publish-side
+     * work happens in {@link #branchWorkspaceRepo} (ike-issues#721).
+     */
+    private void previewWorkspaceRootQualify(String branchName) {
+        try {
+            File wsPom = new File(
+                    resolveManifest().getParent().toFile(), "pom.xml");
+            if (!wsPom.exists()) {
+                return;
+            }
+            String version = ReleaseSupport.readPomVersion(wsPom);
+            String qualified = VersionSupport.branchQualifiedVersion(version, branchName);
+            if (!qualified.equals(version)) {
+                getLog().info("  [draft] workspace root: would qualify "
+                        + version + " -> " + qualified);
+            }
+        } catch (MojoException e) {
+            getLog().debug("Could not preview workspace root version: "
+                    + e.getMessage());
         }
     }
 

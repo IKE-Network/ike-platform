@@ -181,6 +181,7 @@ public class FeatureStartDraftMojo extends AbstractWorkspaceMojo {
         }
 
         List<String> created = new ArrayList<>();
+        List<String> repaired = new ArrayList<>();
         List<String> skippedNotCloned = new ArrayList<>();
         List<String> skippedAlreadyOnBranch = new ArrayList<>();
         List<BranchRow> branchRows = new ArrayList<>();
@@ -199,6 +200,50 @@ public class FeatureStartDraftMojo extends AbstractWorkspaceMojo {
 
             String currentBranch = gitBranch(dir);
             if (currentBranch.equals(branchName)) {
+                // Already on the target branch. The branch may pre-date
+                // feature-start's version qualification (created outside
+                // feature-start, or a partial/aborted run), so the POM can still
+                // carry the base version. Self-heal: qualify it if it isn't
+                // already. branchQualifiedVersion is idempotent, so an
+                // already-qualified POM is a no-op that falls through to the plain
+                // "already on branch" skip below (ike-issues#720).
+                String alreadyPomVersion = null;
+                File alreadyPom = new File(dir, "pom.xml");
+                if (!skipVersion && alreadyPom.exists()) {
+                    try {
+                        alreadyPomVersion = ReleaseSupport.readPomVersion(alreadyPom);
+                    } catch (MojoException e) {
+                        getLog().debug("Could not read POM version for "
+                                + name + ": " + e.getMessage());
+                    }
+                }
+                String alreadyQualified = (alreadyPomVersion != null
+                        && !alreadyPomVersion.isEmpty())
+                        ? VersionSupport.branchQualifiedVersion(alreadyPomVersion, branchName)
+                        : null;
+                if (alreadyQualified != null
+                        && !alreadyQualified.equals(alreadyPomVersion)) {
+                    if (draft) {
+                        getLog().info("  [draft] " + name + " on " + branchName
+                                + ": would qualify " + alreadyPomVersion
+                                + " -> " + alreadyQualified);
+                        branchRows.add(new BranchRow(name, branchName,
+                                alreadyQualified, "would qualify (repair)"));
+                    } else {
+                        support.setPomVersion(dir, alreadyPomVersion, alreadyQualified);
+                        ReleaseSupport.exec(dir, getLog(), "git", "add", "pom.xml");
+                        ReleaseSupport.exec(dir, getLog(), "git", "commit", "-m",
+                                "feature: qualify version " + alreadyQualified
+                                        + " for " + branchName);
+                        getLog().info("  qualified " + name + ": "
+                                + alreadyPomVersion + " -> " + alreadyQualified
+                                + " (already on branch)");
+                        branchRows.add(new BranchRow(name, branchName,
+                                alreadyQualified, "qualified (repair)"));
+                    }
+                    repaired.add(name);
+                    continue;
+                }
                 skippedAlreadyOnBranch.add(name);
                 getLog().info("  \u2713 " + name + " \u2014 already on " + branchName);
                 branchRows.add(new BranchRow(
@@ -280,21 +325,27 @@ public class FeatureStartDraftMojo extends AbstractWorkspaceMojo {
                     name, branchName, newVersion, "✓ created"));
         }
 
+        // Newly-branched OR repaired (already on the branch, qualified now) — both
+        // need the version cascade, pin removal, and VCS-state writes; only
+        // newly-created branches need the workspace repo branched (ike-issues#720).
+        List<String> versioned = new ArrayList<>(created);
+        versioned.addAll(repaired);
+
         // Remove intra-reactor version pins (draft reports, publish removes)
-        if (!created.isEmpty()) {
-            support.removeIntraReactorPins(root, created, publish);
+        if (!versioned.isEmpty()) {
+            support.removeIntraReactorPins(root, versioned, publish);
         }
 
         // Cascade version-property updates to downstream components
-        if (!created.isEmpty() && publish && !skipVersion) {
+        if (!versioned.isEmpty() && publish && !skipVersion) {
             support.cascadeVersionProperties(graph, root, sorted, branchName);
             support.cascadeBomProperties(graph, root, sorted, branchName);
             support.cascadeBomImports(graph, root, sorted, branchName);
         }
 
         // Write VCS state for each branched subproject (no push — branches stay local)
-        if (!created.isEmpty() && publish) {
-            for (String name : created) {
+        if (!versioned.isEmpty() && publish) {
+            for (String name : versioned) {
                 File dir = new File(root, name);
                 VcsOperations.writeVcsState(dir, VcsState.Action.FEATURE_START);
             }
@@ -307,6 +358,7 @@ public class FeatureStartDraftMojo extends AbstractWorkspaceMojo {
 
         getLog().info("");
         getLog().info("  " + (draft ? "To create: " : "Created: ") + created.size()
+                + " | Qualified (repair): " + repaired.size()
                 + " | Already on branch: " + skippedAlreadyOnBranch.size()
                 + " | Not cloned: " + skippedNotCloned.size());
         getLog().info("");

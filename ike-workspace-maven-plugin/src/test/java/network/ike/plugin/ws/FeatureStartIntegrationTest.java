@@ -103,6 +103,33 @@ class FeatureStartIntegrationTest {
     }
 
     @Test
+    void featureStart_qualifiesVersionWhenAlreadyOnBranch() throws Exception {
+        // Reproduce the pre-existing-branch scenario (ike-issues#720): a subproject
+        // is already on the feature branch but its POM still carries the base
+        // version (the branch was created outside feature-start). feature-start
+        // must self-heal — qualify the version rather than skip it.
+        Path libA = tempDir.resolve("lib-a");
+        String before = Files.readString(
+                libA.resolve("pom.xml"), StandardCharsets.UTF_8);
+        assertThat(before).doesNotContain("repair-target");
+        execCapture(libA, "git", "checkout", "-b", "feature/repair-target");
+
+        FeatureStartDraftMojo mojo = TestLog.createMojo(FeatureStartDraftMojo.class);
+        mojo.manifest = helper.workspaceYaml().toFile();
+        mojo.feature = "repair-target";
+        mojo.publish = true;
+        mojo.execute();
+
+        // Still on the branch, and its version is now branch-qualified.
+        assertThat(execCapture(libA, "git", "rev-parse", "--abbrev-ref", "HEAD"))
+                .isEqualTo("feature/repair-target");
+        String after = Files.readString(
+                libA.resolve("pom.xml"), StandardCharsets.UTF_8);
+        assertThat(after).contains("repair-target");
+        assertThat(after).contains("SNAPSHOT");
+    }
+
+    @Test
     void featureStart_skipVersion_branchOnlyNoVersionChange() throws Exception {
         // Record original POM versions
         String libAPom = Files.readString(

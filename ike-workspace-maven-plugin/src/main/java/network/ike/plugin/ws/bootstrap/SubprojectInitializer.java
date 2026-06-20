@@ -634,6 +634,10 @@ public final class SubprojectInitializer {
                   write a proper Maven goal in `ike-maven-plugin` instead
                 - **Never embed shell commands inline in POM** — extract to a named script
                 - **Never use `git add -A` or `git add .`** — stage specific files
+                - **Never use raw git for workspace ops** (commit, push, checkout, merge, branch,
+                  stash) — use the `ws:` goals (`ws:commit-publish`, `ws:push`, `ws:switch-publish`, …).
+                  `workspace.yaml` `sha:` pins are checkpoint-managed — never hand-edit them. See
+                  `.claude/standards/IKE-WORKSPACE.md`
 
                 ## Project-Specific Notes
 

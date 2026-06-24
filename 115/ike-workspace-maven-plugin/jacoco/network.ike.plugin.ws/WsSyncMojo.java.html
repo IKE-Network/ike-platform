@@ -1,0 +1,256 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>WsSyncMojo.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">WsSyncMojo.java</span></div><h1>WsSyncMojo.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.workspace.WorkspaceGraph;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
+
+/**
+ * Pull then push across the workspace — the everyday &quot;sync&quot; operation:
+ * bring down what teammates have committed, then push up what I have
+ * committed. Replaces the daily two-step of {@code ws:pull} followed by
+ * {@code ws:push}.
+ *
+ * &lt;p&gt;Between the pull and the push, this goal also refreshes local
+ * {@code main} from {@code origin/main} across the workspace via
+ * {@link RefreshMainSupport}. This keeps local main coherent with the
+ * remote even when the user is working on a feature branch and never
+ * checks main out directly &amp;mdash; especially relevant in the
+ * Syncthing + independent-{@code .git} architecture where each machine
+ * evolves its local main ref independently. See ike-issues#284.
+ *
+ * &lt;p&gt;The push half runs in fail-fast mode: a non-fast-forward (or any
+ * other push failure) halts the goal with a clear error rather than
+ * reporting partial success and continuing. This keeps the workspace
+ * in a known state for the user to resolve, rather than leaving some
+ * subprojects pushed and others not.
+ *
+ * &lt;p&gt;Use {@code -DpullOnly} to run only the pull half (still refreshes
+ * main), or {@code -DpushOnly} to run only the push half (skips both
+ * pull and refresh-main). For the standalone operations, prefer
+ * {@link PullWorkspaceMojo ws:pull},
+ * {@link WsRefreshMainMojo ws:refresh-main}, or
+ * {@link PushMojo ws:push} directly.
+ *
+ * &lt;p&gt;&lt;strong&gt;Single repo (no {@code workspace.yaml})&lt;/strong&gt;: syncs the
+ * current repository only — a working set of one. The pull and push halves
+ * each resolve their own single-repo scope; the workspace-only
+ * refresh-main and {@link PostMutationSync} steps are skipped
+ * (IKE-Network/ike-issues#703).
+ *
+ * &lt;pre&gt;{@code
+ * mvn ws:sync                       # pull, refresh main, push
+ * mvn ws:sync -DpullOnly            # pull and refresh main only
+ * mvn ws:sync -DpushOnly            # push only (fail-fast)
+ * mvn ws:sync -Dremote=upstream     # push to a non-default remote
+ * }&lt;/pre&gt;
+ *
+ * &lt;p&gt;See issue #194 and the {@code dev-workspace-ops-completion} topic
+ * in {@code ike-lab-documents} for the design rationale.
+ */
+@Mojo(name = &quot;sync&quot;, projectRequired = false, aggregator = true)
+public class WsSyncMojo extends AbstractWorkspaceMojo {
+
+    /** Creates this goal instance. */
+<span class="fc" id="L64">    public WsSyncMojo() {}</span>
+
+    /**
+     * Remote name to push to. Forwarded to the push half.
+     */
+    @Parameter(property = &quot;remote&quot;, defaultValue = &quot;origin&quot;)
+    String remote;
+
+    /**
+     * Run the pull half only and skip the push. Mutually exclusive
+     * with {@link #pushOnly}.
+     */
+    @Parameter(property = &quot;pullOnly&quot;, defaultValue = &quot;false&quot;)
+    boolean pullOnly;
+
+    /**
+     * Run the push half only and skip the pull. Mutually exclusive
+     * with {@link #pullOnly}.
+     */
+    @Parameter(property = &quot;pushOnly&quot;, defaultValue = &quot;false&quot;)
+    boolean pushOnly;
+
+    @Override
+    protected WorkspaceReportSpec runGoal() throws MojoException {
+<span class="pc bpc" id="L88" title="1 of 4 branches missed.">        if (pullOnly &amp;&amp; pushOnly) {</span>
+<span class="nc" id="L89">            throw new MojoException(</span>
+                    &quot;-DpullOnly and -DpushOnly are mutually exclusive —&quot;
+<span class="nc" id="L91">                            + &quot; use &quot; + WsGoal.PULL.qualified() + &quot; or &quot;</span>
+<span class="nc" id="L92">                            + WsGoal.PUSH.qualified() + &quot; directly if you&quot;</span>
+                            + &quot; want only one half&quot;);
+        }
+
+<span class="fc" id="L96">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L97">        getLog().info(header(&quot;Sync&quot;));</span>
+<span class="fc" id="L98">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+<span class="fc" id="L99">        getLog().info(&quot;&quot;);</span>
+
+<span class="fc" id="L101">        String pullPhaseBody = null;</span>
+<span class="fc" id="L102">        String pushPhaseBody = null;</span>
+<span class="fc" id="L103">        boolean pushFailed = false;</span>
+<span class="fc" id="L104">        String pushFailureMessage = null;</span>
+
+<span class="pc bpc" id="L106" title="1 of 2 branches missed.">        if (!pushOnly) {</span>
+<span class="fc" id="L107">            PullWorkspaceMojo pull = new PullWorkspaceMojo();</span>
+<span class="fc" id="L108">            pull.setLog(getLog());</span>
+<span class="fc" id="L109">            pull.manifest = this.manifest;</span>
+<span class="fc" id="L110">            pull.execute();</span>
+            // The child mojo wrote its own ws:pull.md report — read it
+            // back so the sync report can inline the per-subproject
+            // detail (#542). Failing to read is non-fatal: the child
+            // report still exists on disk for the user to inspect.
+<span class="fc" id="L115">            pullPhaseBody = readChildReport(WsGoal.PULL);</span>
+
+            // Refresh local main from origin/main between pull and push,
+            // so a feature-branch sync also keeps main coherent. Skipped
+            // on push-only, where the user has explicitly opted out of
+            // any pull-side work. See ike-issues#284.
+<span class="fc bfc" id="L121" title="All 2 branches covered.">            if (isWorkspaceMode()) {</span>
+<span class="fc" id="L122">                WorkspaceGraph graph = loadGraph();</span>
+<span class="fc" id="L123">                File root = workspaceRoot();</span>
+<span class="fc" id="L124">                Set&lt;String&gt; targets = graph.manifest().subprojects().keySet();</span>
+<span class="fc" id="L125">                List&lt;String&gt; sorted = graph.topologicalSort(</span>
+                        new LinkedHashSet&lt;&gt;(targets));
+<span class="fc" id="L127">                RefreshMainSupport.refreshOrThrow(root, sorted, &quot;main&quot;, getLog());</span>
+            }
+        }
+
+<span class="fc bfc" id="L131" title="All 2 branches covered.">        if (!pullOnly) {</span>
+<span class="fc" id="L132">            PushMojo push = new PushMojo();</span>
+<span class="fc" id="L133">            push.setLog(getLog());</span>
+<span class="fc" id="L134">            push.manifest = this.manifest;</span>
+<span class="fc" id="L135">            push.remote = this.remote;</span>
+<span class="fc" id="L136">            push.failFast = true;</span>
+            try {
+<span class="fc" id="L138">                push.execute();</span>
+<span class="nc" id="L139">            } catch (MojoException e) {</span>
+                // failFast=true means the push half hard-fails on any
+                // subproject error. We still want to emit a sync report
+                // that surfaces what happened on the pull side and the
+                // push failure message, so we capture and rethrow after
+                // writing.
+<span class="nc" id="L145">                pushFailed = true;</span>
+<span class="nc" id="L146">                pushFailureMessage = e.getMessage();</span>
+<span class="fc" id="L147">            }</span>
+            // Try to read the push report even when the push failed —
+            // the child mojo writes its report before any throw.
+<span class="fc" id="L150">            pushPhaseBody = readChildReport(WsGoal.PUSH);</span>
+        }
+
+        // PostMutationSync refreshes workspace-derived state (IDE files,
+        // git-init scripts) and is workspace-only — a single-repo sync
+        // (working set of one, IKE-Network/ike-issues#703) has none.
+<span class="fc bfc" id="L156" title="All 2 branches covered.">        if (isWorkspaceMode()) {</span>
+<span class="fc" id="L157">            PostMutationSync.refresh(workspaceRoot(), getLog());</span>
+        }
+
+<span class="fc" id="L160">        String body = buildSyncReport(pullPhaseBody, pushPhaseBody,</span>
+                pushFailed, pushFailureMessage);
+
+<span class="pc bpc" id="L163" title="1 of 2 branches missed.">        if (pushFailed) {</span>
+            // Re-throw so the build reflects the failure — the report
+            // body is written by AbstractWorkspaceMojo.execute() only
+            // on success. Emit the sync report manually first so the
+            // user still has the combined audit trail.
+            try {
+<span class="nc" id="L169">                WorkspaceReport.write(resolveWorkingSet().root(),</span>
+<span class="nc" id="L170">                        WsGoal.SYNC.qualified(), body, getLog());</span>
+<span class="nc" id="L171">            } catch (MojoException writeException) {</span>
+<span class="nc" id="L172">                getLog().debug(&quot;Could not write sync report on failure: &quot;</span>
+<span class="nc" id="L173">                        + writeException.getMessage());</span>
+<span class="nc" id="L174">            }</span>
+<span class="nc" id="L175">            throw new MojoException(pushFailureMessage);</span>
+        }
+
+<span class="fc" id="L178">        return new WorkspaceReportSpec(WsGoal.SYNC, body);</span>
+    }
+
+    /**
+     * Read a child mojo's just-written report from disk so the sync
+     * report can inline its per-subproject detail. Returns {@code null}
+     * when the file is unreadable so the caller can degrade to a
+     * placeholder rather than throwing.
+     */
+    private String readChildReport(WsGoal childGoal) {
+        try {
+<span class="fc" id="L189">            Path reportFile = WorkspaceReport.reportPath(</span>
+<span class="fc" id="L190">                    resolveWorkingSet().root(), childGoal.qualified());</span>
+<span class="fc bfc" id="L191" title="All 2 branches covered.">            if (!Files.isRegularFile(reportFile)) return null;</span>
+<span class="fc" id="L192">            return Files.readString(reportFile, StandardCharsets.UTF_8);</span>
+<span class="nc" id="L193">        } catch (IOException | MojoException e) {</span>
+<span class="nc" id="L194">            getLog().debug(&quot;Could not read child report for &quot;</span>
+<span class="nc" id="L195">                    + childGoal + &quot;: &quot; + e.getMessage());</span>
+<span class="nc" id="L196">            return null;</span>
+        }
+    }
+
+    /**
+     * Compose the sync markdown report from the pull and push phase
+     * bodies. Each phase appears under an {@code H2} header so a
+     * reviewer can tell at a glance whether a subproject's state
+     * change happened on the pull or the push side (#542). Skipped
+     * phases get an explicit &quot;(skipped)&quot; note rather than being
+     * absorbed into a one-line summary.
+     */
+    private String buildSyncReport(String pullBody, String pushBody,
+                                    boolean pushFailed,
+                                    String pushFailureMessage) {
+<span class="fc" id="L211">        StringBuilder out = new StringBuilder();</span>
+
+<span class="pc bpc" id="L213" title="1 of 2 branches missed.">        if (pushOnly) {</span>
+<span class="nc" id="L214">            out.append(&quot;## Pull phase\n\n_skipped (`-DpushOnly`)_\n\n&quot;);</span>
+        } else {
+<span class="fc" id="L216">            out.append(&quot;## Pull phase\n\n&quot;);</span>
+<span class="fc" id="L217">            out.append(stripChildHeader(pullBody,</span>
+                    &quot;_ws:pull.md not available — see the workspace root for the child report._&quot;));
+<span class="fc" id="L219">            out.append(&quot;\n\n&quot;);</span>
+        }
+
+<span class="fc bfc" id="L222" title="All 2 branches covered.">        if (pullOnly) {</span>
+<span class="fc" id="L223">            out.append(&quot;## Push phase\n\n_skipped (`-DpullOnly`)_\n\n&quot;);</span>
+        } else {
+<span class="fc" id="L225">            out.append(&quot;## Push phase\n\n&quot;);</span>
+<span class="pc bpc" id="L226" title="1 of 2 branches missed.">            if (pushFailed) {</span>
+<span class="nc" id="L227">                out.append(&quot;**Push failed** — `&quot;)</span>
+<span class="nc" id="L228">                        .append(pushFailureMessage)</span>
+<span class="nc" id="L229">                        .append(&quot;`\n\n&quot;);</span>
+            }
+<span class="fc" id="L231">            out.append(stripChildHeader(pushBody,</span>
+                    &quot;_ws:push.md not available — see the workspace root for the child report._&quot;));
+<span class="fc" id="L233">            out.append(&quot;\n&quot;);</span>
+        }
+
+<span class="fc" id="L236">        return out.toString();</span>
+    }
+
+    /**
+     * Strip the goal-name {@code H1} that AbstractWorkspaceMojo's
+     * report header writes, so that the sync report's H1 stays
+     * authoritative and the child's H2 sections (Subprojects, Merged
+     * commits, Failures, etc.) nest cleanly under the phase H2.
+     * Returns the {@code fallback} text when {@code body} is null.
+     */
+    private static String stripChildHeader(String body, String fallback) {
+<span class="fc bfc" id="L247" title="All 2 branches covered.">        if (body == null) return fallback;</span>
+        // The child report starts with `# ws:pull\n_&lt;timestamp&gt;_\n\n`
+        // (or push). Drop the H1 + timestamp blank line so the body
+        // can nest under the sync report's phase header.
+<span class="fc" id="L251">        int firstBlank = body.indexOf(&quot;\n\n&quot;);</span>
+<span class="pc bpc" id="L252" title="1 of 2 branches missed.">        if (firstBlank &lt; 0) return body;</span>
+<span class="fc" id="L253">        return body.substring(firstBlank + 2);</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

@@ -144,6 +144,81 @@ class FeatureFinishIntegrationTest {
     }
 
     @Test
+    void merge_dequalifiesAggregator_rootPomAndWorkspaceYaml()
+            throws Exception {
+        // The default setUp qualifies the subprojects + workspace.yaml but
+        // leaves the workspace ROOT git-less. Build a coherent aggregator
+        // timeline — main holds the base state, feature/test-finish holds the
+        // qualified state, exactly what ws:feature-start produces — so finish
+        // must de-qualify the root pom AND the manifest version fields
+        // (ike-issues#768/#763), not just the subprojects.
+        Path wsYaml = helper.workspaceYaml();
+        // setUp left this qualified + branches=feature.
+        String qualifiedYaml = Files.readString(wsYaml, StandardCharsets.UTF_8);
+        String baseYaml = qualifiedYaml
+                .replace("-test-finish-SNAPSHOT", "-SNAPSHOT")
+                .replace("branch: " + BRANCH_NAME, "branch: main");
+        String basePom = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <project xmlns="http://maven.apache.org/POM/4.0.0">
+                    <modelVersion>4.0.0</modelVersion>
+                    <groupId>com.test</groupId>
+                    <artifactId>aggregator-root</artifactId>
+                    <version>9.9.9-SNAPSHOT</version>
+                    <packaging>pom</packaging>
+                </project>
+                """;
+
+        // main = base aggregator state. The subproject dirs are their own git
+        // repos, so the aggregator repo .gitignores them (as a real workspace
+        // does) — otherwise the finish precondition sees them as uncommitted
+        // changes.
+        Files.writeString(wsYaml, baseYaml, StandardCharsets.UTF_8);
+        Files.writeString(tempDir.resolve("pom.xml"), basePom, StandardCharsets.UTF_8);
+        Files.writeString(tempDir.resolve(".gitignore"),
+                "/lib-a/\n/lib-b/\n/app-c/\n*.md\n", StandardCharsets.UTF_8);
+        exec(tempDir, "git", "init", "-b", "main");
+        exec(tempDir, "git", "config", "commit.gpgsign", "false");
+        exec(tempDir, "git", "config", "user.email", "root@example.com");
+        exec(tempDir, "git", "config", "user.name", "Root");
+        exec(tempDir, "git", "add", "pom.xml", "workspace.yaml", ".gitignore");
+        exec(tempDir, "git", "commit", "-m", "base workspace root");
+
+        // feature/test-finish = qualified aggregator state.
+        exec(tempDir, "git", "checkout", "-b", BRANCH_NAME);
+        Files.writeString(wsYaml, qualifiedYaml, StandardCharsets.UTF_8);
+        Files.writeString(tempDir.resolve("pom.xml"),
+                basePom.replace("9.9.9-SNAPSHOT", "9.9.9-test-finish-SNAPSHOT"),
+                StandardCharsets.UTF_8);
+        exec(tempDir, "git", "add", "pom.xml", "workspace.yaml");
+        exec(tempDir, "git", "commit", "-m", "feature: qualify aggregator");
+
+        FeatureFinishMergeDraftMojo mojo =
+                TestLog.createMojo(FeatureFinishMergeDraftMojo.class);
+        mojo.manifest = wsYaml.toFile();
+        mojo.feature = FEATURE_NAME;
+        mojo.targetBranch = "main";
+        mojo.publish = true;
+        mojo.execute();
+
+        // The aggregator is back on main, fully de-qualified — the #763 fix.
+        assertThat(execCapture(tempDir, "git", "rev-parse", "--abbrev-ref", "HEAD"))
+                .isEqualTo("main");
+        String rootPom = Files.readString(tempDir.resolve("pom.xml"),
+                StandardCharsets.UTF_8);
+        assertThat(rootPom).contains("<version>9.9.9-SNAPSHOT</version>");
+        assertThat(rootPom).doesNotContain("test-finish");
+        assertThat(Files.readString(wsYaml, StandardCharsets.UTF_8))
+                .as("workspace.yaml version fields de-qualified (#763)")
+                .doesNotContain("-test-finish-SNAPSHOT");
+        // #768 acceptance: no qualifier anywhere in the working set.
+        for (String name : new String[]{"lib-a", "lib-b", "app-c"}) {
+            assertThat(Files.readString(tempDir.resolve(name).resolve("pom.xml"),
+                    StandardCharsets.UTF_8)).doesNotContain("test-finish");
+        }
+    }
+
+    @Test
     void inconsistentYamlBranch_skipsComponent() throws Exception {
         // Set workspace.yaml branches back to "main" while git is on feature
         Path wsYaml = helper.workspaceYaml();

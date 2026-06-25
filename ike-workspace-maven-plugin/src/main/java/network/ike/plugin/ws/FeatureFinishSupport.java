@@ -437,7 +437,12 @@ class FeatureFinishSupport {
     }
 
     /**
-     * Update workspace.yaml branch fields back to targetBranch and commit.
+     * Restore workspace.yaml branch AND version fields after a feature lands,
+     * and commit. Branches go back to {@code targetBranch}; every {@code
+     * version:} field carrying the feature qualifier is de-qualified to base
+     * (#768/#763) — otherwise the manifest is stranded on
+     * {@code X-<feature>-SNAPSHOT} while the poms it declares are already at
+     * base.
      */
     static void updateWorkspaceYaml(Path manifestPath, List<String> components,
                                       String targetBranch, String feature,
@@ -450,14 +455,23 @@ class FeatureFinishSupport {
             ManifestWriter.updateBranches(manifestPath, updates);
             log.info("  Updated workspace.yaml branches → " + targetBranch);
 
+            // De-qualify the version: fields too (#768/#763): the inverse of
+            // the qualification ws:feature-start applied. Without this the
+            // manifest is left inconsistent with the subprojects and the
+            // workspace root, whose poms are already de-qualified.
+            String qualifier = qualifierFromBranch("feature/" + feature);
+            ManifestWriter.stripVersionQualifiers(manifestPath, qualifier);
+            log.info("  Restored workspace.yaml versions (stripped '"
+                    + qualifier + "')");
+
             File wsRoot = manifestPath.getParent().toFile();
             File wsGit = new File(wsRoot, ".git");
             if (wsGit.exists()) {
                 ReleaseSupport.exec(wsRoot, log, "git", "add", "workspace.yaml");
                 if (VcsOperations.hasStagedChanges(wsRoot)) {
                     ReleaseSupport.exec(wsRoot, log, "git", "commit", "-m",
-                            "workspace: restore branches to " + targetBranch
-                                    + " after feature/" + feature);
+                            "workspace: restore branches + versions to "
+                                    + targetBranch + " after feature/" + feature);
                 }
             }
         } catch (IOException | MojoException e) {
@@ -485,6 +499,11 @@ class FeatureFinishSupport {
         }
 
         if (wsBranch != null && wsBranch.equals(branchName)) {
+            // merge-prep: de-qualify the aggregator's own pom on the feature
+            // branch — mirroring the per-subproject strip — so the no-ff merge
+            // carries the base version onto the target instead of stranding the
+            // workspace root on X-<feature>-SNAPSHOT (ike-issues#768/#763).
+            stripWorkspaceRootPom(wsRoot, branchName, log);
             log.info("  Merging workspace repo: " + branchName + " → " + targetBranch);
             VcsOperations.checkout(wsRoot, log, targetBranch);
             VcsOperations.mergeNoFf(wsRoot, log, branchName,
@@ -506,6 +525,37 @@ class FeatureFinishSupport {
         if (VcsState.isIkeManaged(wsRoot.toPath())) {
             VcsOperations.writeVcsState(wsRoot, VcsState.Action.FEATURE_FINISH);
         }
+    }
+
+    /**
+     * De-qualify the aggregator's own {@code pom.xml} version on the current
+     * (feature) branch, mirroring the per-subproject {@link #stripBranchVersion}
+     * so a subsequent no-ff merge carries the base version onto the target
+     * (ike-issues#768/#763).
+     *
+     * <p>Unlike {@code stripBranchVersion}, this touches ONLY the workspace
+     * root {@code pom.xml} — never the subproject poms beneath it, which are
+     * separate git repositories de-qualified individually. Idempotent: a no-op
+     * when the root is already at its base {@code -SNAPSHOT}.
+     *
+     * @param wsRoot     the workspace root directory (its own git repo)
+     * @param branchName the feature branch being finished
+     * @param log        Maven logger
+     * @throws MojoException if the pom cannot be rewritten or committed
+     */
+    private static void stripWorkspaceRootPom(File wsRoot, String branchName,
+                                              Log log) throws MojoException {
+        String qualifier = qualifierFromBranch(branchName);
+        String current = readCurrentVersion(wsRoot, log);
+        if (current == null || !containsBranchQualifier(current, qualifier)) {
+            return;
+        }
+        String base = stripQualifier(current, qualifier);
+        ReleaseSupport.setPomVersion(new File(wsRoot, "pom.xml"), current, base);
+        log.info("    workspace root version: " + current + " → " + base);
+        ReleaseSupport.exec(wsRoot, log, "git", "add", "pom.xml");
+        ReleaseSupport.exec(wsRoot, log, "git", "commit", "-m",
+                "merge-prep: strip branch qualifier from aggregator → " + base);
     }
 
     /**

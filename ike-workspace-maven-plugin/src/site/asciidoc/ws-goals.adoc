@@ -5,11 +5,13 @@
 :toclevels: 3
 
 The `ws:*` plugin goals are a typed console over a *working set of one or
-more* git repositories. With a `workspace.yaml` manifest they coordinate
-cross-repository operations — fanning out across every checked-out
-subproject in topological order so feature branches stay aligned, parent
-versions cascade in lockstep, and releases hold their own tag history even
-when seven repositories ship together.
+more* git repositories — the declared subproject members plus the
+workspace root (the aggregator), all co-located working trees. With a
+`workspace.yaml` manifest they coordinate cross-repository operations —
+fanning out across every member of the working set in topological order
+so feature branches stay aligned, parent versions cascade in lockstep,
+and releases hold their own tag history even when seven repositories ship
+together.
 
 Run from a single repository with no `workspace.yaml`, the working-tree and
 lifecycle goals — `ws:commit`, `ws:push`, `ws:pull`, `ws:sync`,
@@ -48,7 +50,7 @@ repository — a working set of one — while graph goals report that a
 workspace is required.
 
 Topological order::
-Subprojects are processed in dependency order. A change to an
+Working-set members are processed in dependency order. A change to an
 upstream component is visible to its downstream consumers in the
 same operation. Reverse-topological order is used for destructive
 operations (`feature-abandon`, `cleanup`) so downstream is removed
@@ -71,12 +73,12 @@ Use `ws:report` to list and open them.
 | <<align-draft,align>>            | alignment   | Sync inter-subproject dependency versions (preview)
 | <<align-publish>>                | alignment   | Apply the alignment changes
 | <<check-branch>>                 | hooks       | Defensive post-checkout hook — warn on out-of-band branch ops
-| <<checkpoint-draft,checkpoint>>  | release     | Tag every subproject at HEAD without releasing (preview)
+| <<checkpoint-draft,checkpoint>>  | release     | Tag every member at HEAD without releasing (preview)
 | <<checkpoint-publish>>           | release     | Apply the checkpoint tags
 | <<cleanup-draft,cleanup>>        | cleanup     | List merged feature branches across the workspace
 | <<cleanup-publish>>              | cleanup     | Delete merged feature branches interactively
-| <<commit-draft,commit>>          | sync        | Preview what would be committed across all subprojects (read-only)
-| <<commit-publish>>               | sync        | Stage + commit across all subprojects with VCS-bridge preamble
+| <<commit-draft,commit>>          | sync        | Preview what would be committed across the working set (read-only)
+| <<commit-publish>>               | sync        | Stage + commit across the working set with VCS-bridge preamble
 | <<feature-abandon-draft,feature-abandon>>            | feature     | Preview deletion of a feature branch workspace-wide
 | <<feature-abandon-publish>>                          | feature     | Delete a feature branch workspace-wide
 | <<feature-finish-merge-draft,feature-finish-merge>>  | feature     | Preview a no-fast-forward merge back to main
@@ -88,7 +90,7 @@ Use `ws:report` to list and open them.
 | <<graph>>                        | inspection  | Print or DOT-render the workspace dependency graph
 | <<lint>>                         | inspection  | Surface preflight hygiene conditions (report-only)
 | <<overview>>                     | inspection  | Consolidated manifest + graph + status + cascade
-| <<post-release>>                 | release     | Bump every subproject to the next development version
+| <<post-release>>                 | release     | Bump every member to the next development version
 | <<pull>>                         | sync        | `git pull --rebase` across the workspace
 | <<push>>                         | sync        | `git push` across the workspace
 | <<reconcile-branches-draft,reconcile-branches>>      | recovery    | Reconcile `workspace.yaml` branch fields with on-disk git
@@ -109,7 +111,7 @@ Use `ws:report` to list and open them.
 | <<sync>>                         | sync        | Pull, refresh-main, then push — the everyday daily-driver
 | <<update-feature-draft,update-feature>>              | feature     | Preview merging main into the current feature
 | <<update-feature-publish>>                           | feature     | Execute the main-into-feature merge
-| <<verify-convergence>>           | inspection  | Check transitive dependency convergence across subprojects
+| <<verify-convergence>>           | inspection  | Check transitive dependency convergence across the working set
 |===
 
 == Setup Goals
@@ -213,7 +215,7 @@ four sections:
 
 . *Manifest* — subproject count, consistency check.
 . *Graph* — dependency order with direct dependencies.
-. *Status* — branch, SHA, clean/uncommitted per subproject.
+. *Status* — branch, SHA, clean/uncommitted per member.
 . *Cascade* — downstream rebuild impact of components with
   uncommitted changes.
 
@@ -232,7 +234,7 @@ run it first to see what's there before mutating anything.
 [#graph]
 === ws:graph — dependency graph
 
-Print the workspace dependency graph. Displays subprojects in
+Print the workspace dependency graph. Displays the members in
 topological order with their direct dependencies. Optional DOT
 output for Graphviz rendering.
 
@@ -245,8 +247,8 @@ mvn ws:graph -Dformat=dot | dot -Tsvg > workspace-graph.svg
 [#verify-convergence]
 === ws:verify-convergence — transitive dependency convergence
 
-Check transitive dependency convergence across workspace subprojects.
-Runs `mvn dependency:tree` for each subproject in topological order,
+Check transitive dependency convergence across the working set.
+Runs `mvn dependency:tree` for each member in topological order,
 then compares resolved versions of shared dependencies. Divergences
 (the same artifact resolving to different versions in different
 components) are reported in the terminal and written to a markdown
@@ -293,10 +295,10 @@ mvn ws:report
 === ws:release-status — diagnose in-flight releases
 
 Read-only diagnostic for any in-flight or partial workspace release.
-Walks every checked-out subproject in `workspace.yaml`, collects git
+Walks every checked-out member of the working set, collects git
 artifacts that indicate an interrupted release (`release/*` branches
 and unpushed `v*` tags), and prints a punch list with one line per
-subproject. The footer recommends a next action — typically pointing
+member. The footer recommends a next action — typically pointing
 at `IKE-RELEASE-RECOVERY.md` for the matching state.
 
 Performs no mutations. Run this any time you suspect a release went
@@ -328,7 +330,7 @@ silently exits — nothing to check. Never blocks; always exits 0.
 == Sync Goals
 
 Daily git fan-out — pull, push, commit, and the combined `sync`.
-All operate in topological order across every checked-out subproject.
+All operate in topological order across every member of the working set.
 
 [#sync]
 === ws:sync — pull + refresh-main + push
@@ -368,7 +370,7 @@ mvn ws:pull
 === ws:push — git push across the workspace
 
 Push with a VCS-bridge catch-up preamble. When run from a workspace
-root, iterates all subproject repositories in topological order and
+root, iterates every member of the working set in topological order and
 pushes each. When run from a single repository, operates on the
 current directory only.
 
@@ -404,7 +406,7 @@ settings cleanup, generated configs) and a staged-only default
 silently dropped them. Pass `-DstagedOnly` to commit only what is
 already in the index.
 
-Each subproject's commit line includes a count of modified vs. new
+Each member's commit line includes a count of modified vs. new
 files, with the new file paths listed inline so the developer can see
 what was pulled in without running `git status` after the fact:
 
@@ -423,7 +425,7 @@ mvn ws:commit-publish -Dmessage="..." -DstagedOnly
 === ws:refresh-main — refresh local main from origin
 
 Refresh local `main` from `origin/main` across the workspace. For each
-subproject, fetches origin and reconciles local main with
+member, fetches origin and reconciles local main with
 `origin/main`:
 
 * Fast-forward when behind.
@@ -433,7 +435,7 @@ subproject, fetches origin and reconciles local main with
 
 Used internally by `ws:sync`, `ws:feature-start`, and
 `ws:feature-finish-*`. Available standalone for the case where you
-want to refresh main without pulling subproject branches.
+want to refresh main without pulling the members' branches.
 
 [source,bash]
 ----
@@ -442,7 +444,7 @@ mvn ws:refresh-main
 
 == Feature Flow Goals
 
-Coordinated feature branches across multiple subprojects. The flow:
+Coordinated feature branches across the working set. The flow:
 `feature-start` → `update-feature` (as needed) →
 `feature-finish-{merge,squash}` or `feature-abandon`.
 
@@ -450,8 +452,8 @@ Coordinated feature branches across multiple subprojects. The flow:
 [#feature-start-publish]
 === ws:feature-start — coordinated feature branch
 
-Create a feature branch with a consistent name across all
-workspace subprojects, optionally setting branch-qualified SNAPSHOT
+Create a feature branch with a consistent name across the whole
+working set, optionally setting branch-qualified SNAPSHOT
 versions in each POM.
 
 Before branching, the goal refreshes local `main` from `origin/main`
@@ -465,7 +467,7 @@ In workspace mode (workspace.yaml found):
 . Refreshes local main from origin/main.
 . Validates the working tree is clean.
 . Creates branch `feature/<name>` from the current HEAD.
-. If the subproject has a Maven version, sets a branch-qualified
+. If the member has a Maven version, sets a branch-qualified
   version (e.g., `1.2.0-my-feature-SNAPSHOT`).
 
 The publish variant additionally runs `ws:align-publish` so the
@@ -555,7 +557,7 @@ mvn ws:feature-finish-merge-publish -Dfeature=long-running
 [#feature-abandon-publish]
 === ws:feature-abandon — discard a feature branch
 
-Abandon a feature branch across all workspace subprojects. The
+Abandon a feature branch across the whole working set. The
 draft variant previews what would be abandoned — which components,
 how many unmerged commits, what would be lost. The publish variant
 prompts for confirmation then executes the deletion.
@@ -575,10 +577,10 @@ mvn ws:feature-abandon-publish -DdeleteRemote=true # also delete remote branches
 [#switch-publish]
 === ws:switch — coordinated branch checkout
 
-Switch all workspace subprojects to a different branch with optional
-auto-stash. Discovers all local feature branches across subprojects
+Switch the whole working set to a different branch with optional
+auto-stash. Discovers all local feature branches across the working set
 and presents an interactive menu. The selected branch is checked out
-in every subproject that has it locally; subprojects without the
+in every member that has it locally; members without the
 branch are skipped with a warning.
 
 Pass `-Dbranch=<name>` to skip the interactive menu.
@@ -602,7 +604,7 @@ puts daily-driver behavior in `align` and recovery behavior in
 === ws:align — sync inter-subproject dependency versions
 
 Align inter-subproject dependency versions in POM files. For each
-subproject on disk, scans POM dependency declarations. When a
+member on disk, scans POM dependency declarations. When a
 dependency's `groupId:artifactId` matches another workspace
 subproject, updates the version to match that subproject's current
 POM version.
@@ -613,7 +615,7 @@ changes to a report; the publish variant applies them.
 The alignment logic lives in `AlignmentReconciler` and is shared with
 `ws:scaffold-publish` (when `-DupdateAlignment` is left at its default
 `true`), `ws:feature-start-publish`, `ws:checkpoint-publish`, and the
-per-subproject catch-up step inside `ws:release-publish`. `ws:align`
+per-member catch-up step inside `ws:release-publish`. `ws:align`
 stays as the standalone shortcut for the alignment-only case.
 
 [source,bash]
@@ -652,11 +654,11 @@ at HEAD without changing POM versions or pushing artifacts.
 Workspace-level release — releases all release-pending checked-out
 components (those with unreleased commits since their last tag, or
 cascaded as transitive downstream of one) in topological order.
-Scans for commits since each subproject's last release tag. The
+Scans for commits since each member's last release tag. The
 release set is the union of:
 
-* *source-changed* — subprojects with unreleased commits.
-* *cascade-pulled* — subprojects whose upstream got released, even
+* *source-changed* — members with unreleased commits.
+* *cascade-pulled* — members whose upstream got released, even
   if they themselves had no commits.
 
 The draft variant writes the planned actions to
@@ -670,15 +672,15 @@ mvn ws:release-draft
 [#release-publish]
 === ws:release-publish — execute the coordinated release
 
-Execute a workspace release with per-subproject catch-up alignment.
-The release loop performs *per-subproject* catch-up alignment
-immediately before each subproject's release: every workspace-internal
+Execute a workspace release with per-member catch-up alignment.
+The release loop performs *per-member* catch-up alignment
+immediately before each member's release: every workspace-internal
 upstream version reference (parent and version properties) is bumped
 to the upstream's current target version. This means a downstream
 component released second sees the actual just-released upstream
 version, not the snapshot it had when the release started.
 
-Each subproject's release runs the single-repo `ike:release-publish`
+Each member's release runs the single-repo `ike:release-publish`
 under the hood, so site deploy, Nexus deploy, GitHub Release, and
 the workspace VCS state file all update in lockstep.
 
@@ -690,8 +692,8 @@ mvn ws:release-publish
 [#post-release]
 === ws:post-release — bump to next development version
 
-Post-release version bump across workspace subprojects. After a
-release, this goal bumps every checked-out subproject's POM version
+Post-release version bump across the working set. After a
+release, this goal bumps every checked-out member's POM version
 to the specified `nextVersion`, commits the change, pushes if a
 remote exists, then updates `workspace.yaml` to reflect the new
 development versions.
@@ -722,7 +724,7 @@ mvn ws:release-notes -Dmilestone="my-component v17"
 [#checkpoint-publish]
 === ws:checkpoint — tag without releasing
 
-Create a workspace checkpoint — tag every subproject at its current
+Create a workspace checkpoint — tag every member at its current
 HEAD and record the snapshot in a YAML manifest. A checkpoint records
 the current state of the workspace for reproduction. *It is not a
 build or a release* — no POM version changes, no compilation, no
@@ -832,7 +834,7 @@ the parent version):
 
 The AlignmentReconciler is also invoked from `ws:align-publish`
 (standalone alignment-only shortcut), `ws:feature-start-publish`,
-`ws:checkpoint-publish`, and the per-subproject catch-up step inside
+`ws:checkpoint-publish`, and the per-member catch-up step inside
 `ws:release-publish`. Logic is shared; entry points differ.
 
 [source,bash]
@@ -848,8 +850,8 @@ mvn ws:scaffold-publish -DupdateFields=false -DupdateParent=false  # alignment-o
 [#cleanup-draft]
 === ws:cleanup-draft — list merged feature branches
 
-Scan all workspace subprojects for merged feature branches and report
-them. Lists feature branches across all subprojects, classifies each
+Scan the whole working set for merged feature branches and report
+them. Lists feature branches across every member, classifies each
 as merged (into the target branch) or active, and displays
 last-commit timestamps. Read-only; the publish variant does the
 deletion.

@@ -44,6 +44,25 @@ class WorkingSetReportTableTest {
     }
 
     @Test
+    void render_readOnlyGoalNamesFinalColumnStatus() {
+        WorkingSet.Member agg =
+                WorkingSet.Member.aggregator("ike-komet-wsr", Path.of("."));
+        List<WorkingSetReportTable.Row> rows = List.of(
+                new WorkingSetReportTable.Row(
+                        agg, "1-view-options-popup-SNAPSHOT", "main", "def5678",
+                        "clean"));
+
+        String md = WorkingSetReportTable.render(
+                new GoalReportBuilder(), "Status", "Status", rows).build();
+
+        // Read-only goals label the final column Status, not Effect.
+        assertThat(md).contains("Status").doesNotContain("Effect");
+        // The aggregator's stale version is now visible (the #763 case).
+        assertThat(md).contains("1-view-options-popup-SNAPSHOT");
+        assertThat(md).contains("aggregator");
+    }
+
+    @Test
     void render_blankCellsBecomeDash() {
         WorkingSet.Member sub =
                 WorkingSet.Member.subproject("lib-b", Path.of("lib-b"));

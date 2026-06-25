@@ -55,7 +55,8 @@ public final class WorkingSetReportTable {
                       String sha, String effect) {}
 
     /**
-     * Render {@code rows} as the working-set table within a section.
+     * Render {@code rows} as the working-set table within a section, with the
+     * default {@code Effect} final column (for a mutating goal).
      *
      * @param report  the report builder to append to
      * @param section the section title (e.g. {@code "Working set"})
@@ -64,6 +65,33 @@ public final class WorkingSetReportTable {
      */
     public static GoalReportBuilder render(GoalReportBuilder report,
                                            String section, List<Row> rows) {
+        return renderWithHeaders(report, section, HEADERS, rows);
+    }
+
+    /**
+     * Render {@code rows} as the working-set table, naming the final column —
+     * {@code "Effect"} for a mutating goal, {@code "Status"} for a read-only
+     * goal (e.g. {@code overview}, {@code release-status}). The aggregator is
+     * included as a row either way.
+     *
+     * @param report     the report builder to append to
+     * @param section    the section title (e.g. {@code "Working set"})
+     * @param lastColumn the header for the final column
+     * @param rows       one row per member, aggregator included
+     * @return {@code report}, for chaining
+     */
+    public static GoalReportBuilder render(GoalReportBuilder report,
+                                           String section, String lastColumn,
+                                           List<Row> rows) {
+        List<String> headers = List.of("Member", "Kind", "Version", "Branch",
+                "SHA", lastColumn);
+        return renderWithHeaders(report, section, headers, rows);
+    }
+
+    private static GoalReportBuilder renderWithHeaders(GoalReportBuilder report,
+                                                       String section,
+                                                       List<String> headers,
+                                                       List<Row> rows) {
         List<String[]> tableRows = new ArrayList<>();
         for (Row row : rows) {
             tableRows.add(new String[]{
@@ -75,7 +103,7 @@ public final class WorkingSetReportTable {
                     orNone(row.effect())
             });
         }
-        return report.section(section).table(HEADERS, tableRows);
+        return report.section(section).table(headers, tableRows);
     }
 
     /**

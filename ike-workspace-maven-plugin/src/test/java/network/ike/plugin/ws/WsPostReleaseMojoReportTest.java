@@ -69,12 +69,14 @@ class WsPostReleaseMojoReportTest {
                 .contains(aggregatorName)
                 .contains("aggregator");
 
-        // And the root POM's version string is gathered the same way as a
-        // subproject's — the staleness a subprojects-only report hid is now
-        // visible. The root stays at 1-SNAPSHOT (its own bump is #768).
-        assertThat(report)
-                .as("the aggregator row carries the root POM version (#763)")
-                .contains("1-SNAPSHOT");
+        // #768: the aggregator's own pom is now bumped to nextVersion, like
+        // every subproject — not stranded at its development version.
+        String rootPomContent = Files.readString(tempDir.resolve("pom.xml"),
+                StandardCharsets.UTF_8);
+        assertThat(rootPomContent)
+                .as("aggregator root pom bumped to nextVersion (#768)")
+                .contains("<version>4-SNAPSHOT</version>")
+                .doesNotContain("1-SNAPSHOT");
     }
 
     // ── Helpers ──────────────────────────────────────────────────────
@@ -130,9 +132,9 @@ class WsPostReleaseMojoReportTest {
      * Make the workspace root ({@code tempDir}) a real committed git repo with
      * an aggregator {@code pom.xml}, so the working set's aggregator member has
      * a version, branch, and SHA to gather — exactly the member post-release
-     * previously omitted. The version (1-SNAPSHOT) is deliberately left as the
-     * development version: post-release commits the rewritten workspace.yaml on
-     * the root but does not bump the root POM (#768).
+     * previously omitted. The version (1-SNAPSHOT) is the starting development
+     * version; post-release commits the rewritten workspace.yaml on the root
+     * and bumps the root POM to nextVersion (#768).
      */
     private void initAggregatorRepo() throws Exception {
         Files.writeString(tempDir.resolve("pom.xml"), """

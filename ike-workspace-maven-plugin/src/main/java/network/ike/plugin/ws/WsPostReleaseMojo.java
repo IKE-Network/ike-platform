@@ -186,40 +186,62 @@ public class WsPostReleaseMojo extends AbstractWorkspaceMojo {
             bumped++;
         }
 
-        // Update workspace.yaml versions. The aggregator's effect for the
-        // working-set report is whatever this block does to the workspace
-        // root — committing the rewritten workspace.yaml. The aggregator's
-        // own POM version is intentionally *not* bumped here (that is the
-        // aggregator-bump lifecycle, child D / #768); the report states so.
-        String aggregatorEffect = "no-op (workspace.yaml unchanged)";
-        if (!versionUpdates.isEmpty()) {
+        // The aggregator (workspace root) is a first-class member, so
+        // post-release advances its own pom version like every subproject
+        // (#768). Root-pom only — the subproject repos beneath it were bumped
+        // in the loop above. Idempotent: a no-op when already at nextVersion.
+        File wsRoot = manifestPath.getParent().toFile();
+        File rootPom = new File(wsRoot, "pom.xml");
+        boolean rootBumped = false;
+        if (rootPom.exists()) {
             try {
-                ManifestWriter.updateMavenVersions(manifestPath, versionUpdates);
-                getLog().info("");
-                getLog().info("  Updated workspace.yaml versions for "
-                        + versionUpdates.size() + " components");
-            } catch (IOException e) {
-                throw new MojoException(
-                        "Failed to update workspace.yaml: " + e.getMessage(), e);
+                String rootCurrent = ReleaseSupport.readPomVersion(rootPom);
+                if (!nextVersion.equals(rootCurrent)) {
+                    getLog().info("  → aggregator pom — " + rootCurrent
+                            + " → " + nextVersion);
+                    ReleaseSupport.setPomVersion(rootPom, rootCurrent, nextVersion);
+                    rootBumped = true;
+                }
+            } catch (MojoException e) {
+                getLog().warn("  ⚠ aggregator — could not bump root pom: "
+                        + e.getMessage());
+            }
+        }
+
+        // Update workspace.yaml subproject versions, then commit the
+        // aggregator (root pom + manifest) together.
+        String aggregatorEffect = rootBumped
+                ? "pom bumped → " + nextVersion : "no-op (unchanged)";
+        if (!versionUpdates.isEmpty() || rootBumped) {
+            if (!versionUpdates.isEmpty()) {
+                try {
+                    ManifestWriter.updateMavenVersions(manifestPath, versionUpdates);
+                    getLog().info("");
+                    getLog().info("  Updated workspace.yaml versions for "
+                            + versionUpdates.size() + " components");
+                } catch (IOException e) {
+                    throw new MojoException(
+                            "Failed to update workspace.yaml: " + e.getMessage(), e);
+                }
             }
 
-            // Commit workspace.yaml on aggregator
-            File wsRoot = manifestPath.getParent().toFile();
             File wsGit = new File(wsRoot, ".git");
             if (wsGit.exists()) {
+                if (rootBumped) {
+                    ReleaseSupport.exec(wsRoot, getLog(), "git", "add", "pom.xml");
+                }
                 ReleaseSupport.exec(wsRoot, getLog(), "git", "add", "workspace.yaml");
                 VcsOperations.commitStaged(wsRoot, getLog(),
-                        "post-release: bump workspace versions to " + nextVersion);
+                        "post-release: bump aggregator + workspace versions to "
+                                + nextVersion);
                 VcsOperations.pushIfRemoteExists(wsRoot, getLog(), "origin",
                         gitBranch(wsRoot));
-                aggregatorEffect = "workspace.yaml bumped for "
-                        + versionUpdates.size() + " component"
-                        + (versionUpdates.size() == 1 ? "" : "s")
+                aggregatorEffect = (rootBumped ? "pom + " : "")
+                        + "workspace.yaml bumped → " + nextVersion
                         + " + committed";
             } else {
-                aggregatorEffect = "workspace.yaml bumped for "
-                        + versionUpdates.size() + " component"
-                        + (versionUpdates.size() == 1 ? "" : "s")
+                aggregatorEffect = (rootBumped ? "pom + " : "")
+                        + "workspace.yaml bumped → " + nextVersion
                         + " (not committed — no .git)";
             }
         }

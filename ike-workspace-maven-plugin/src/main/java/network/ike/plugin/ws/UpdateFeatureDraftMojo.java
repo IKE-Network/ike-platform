@@ -2,6 +2,7 @@ package network.ike.plugin.ws;
 
 import network.ike.workspace.WorkingSet;
 import network.ike.workspace.WorkspaceGraph;
+import network.ike.plugin.ReleaseSupport;
 import network.ike.plugin.support.GoalReportBuilder;
 import network.ike.plugin.ws.vcs.VcsOperations;
 import network.ike.plugin.ws.vcs.VcsState;
@@ -11,8 +12,10 @@ import org.apache.maven.api.plugin.annotations.Parameter;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Update the current feature branch by incorporating changes from main.
@@ -141,21 +144,27 @@ public class UpdateFeatureDraftMojo extends AbstractWorkspaceMojo {
         if (draft) getLog().info("  Mode:      DRAFT");
         getLog().info("");
 
-        // Validate clean working trees and collect eligible components
+        // Validate clean working trees and collect eligible components.
+        // Per-member effect keyed by member name, so the working-set report
+        // can name every member's planned/applied effect — the aggregator
+        // included (the #763 gap), via WorkingSetReportTable below.
         List<String> eligible = new ArrayList<>();
         List<String> uncommitted = new ArrayList<>();
         List<String> skipped = new ArrayList<>();
+        Map<String, String> effects = new LinkedHashMap<>();
 
         for (String name : sorted) {
             File dir = new File(root, name);
             if (!new File(dir, ".git").exists()) {
                 skipped.add(name);
+                effects.put(name, "skipped (no git repo)");
                 continue;
             }
 
             String currentBranch = gitBranch(dir);
             if (!currentBranch.equals(branchName)) {
                 skipped.add(name);
+                effects.put(name, "skipped (not on `" + branchName + "`)");
                 getLog().info("  " + Ansi.yellow("· ") + name
                         + " — not on " + branchName + ", skipping");
                 continue;
@@ -164,6 +173,7 @@ public class UpdateFeatureDraftMojo extends AbstractWorkspaceMojo {
             String status = gitStatus(dir);
             if (!status.isEmpty()) {
                 uncommitted.add(name);
+                effects.put(name, "uncommitted changes");
                 continue;
             }
 
@@ -204,8 +214,9 @@ public class UpdateFeatureDraftMojo extends AbstractWorkspaceMojo {
             RefreshMainSupport.previewRefresh(root, eligible, targetBranch, getLog());
         }
 
-        // Show how far behind each subproject is + collect report data
-        List<String[]> reportRows = new ArrayList<>();
+        // Show how far behind each subproject is + record its effect. The
+        // working-set report (below) reads these effects per member; the
+        // -draft variant phrases them as PLANNED, -publish as APPLIED.
         for (String name : eligible) {
             File dir = new File(root, name);
             try {
@@ -217,7 +228,7 @@ public class UpdateFeatureDraftMojo extends AbstractWorkspaceMojo {
                 if (behind.isEmpty()) {
                     getLog().info("  " + Ansi.green("✓ ") + name
                             + " — up to date with " + targetBranch);
-                    reportRows.add(new String[]{name, "0", "0", "", "up to date"});
+                    effects.put(name, "up to date with `" + targetBranch + "`");
                 } else if (draft) {
                     // Predict conflicts without touching working tree
                     List<String> predicted = VcsOperations.predictConflicts(
@@ -228,9 +239,9 @@ public class UpdateFeatureDraftMojo extends AbstractWorkspaceMojo {
                                 + behind.size() + " commit(s) behind "
                                 + targetBranch + ", " + ahead.size()
                                 + " ahead — clean update expected");
-                        reportRows.add(new String[]{name,
-                                String.valueOf(behind.size()),
-                                String.valueOf(ahead.size()), "", "clean"});
+                        effects.put(name, "clean update expected ("
+                                + behind.size() + " behind, " + ahead.size()
+                                + " ahead)");
                     } else {
                         getLog().warn("  " + Ansi.red("⚠ ") + name + " — "
                                 + behind.size() + " commit(s) behind "
@@ -242,11 +253,9 @@ public class UpdateFeatureDraftMojo extends AbstractWorkspaceMojo {
                         }
                         getLog().warn("      Resolve in IntelliJ after running"
                                 + " " + WsGoal.UPDATE_FEATURE_PUBLISH.qualified());
-                        reportRows.add(new String[]{name,
-                                String.valueOf(behind.size()),
-                                String.valueOf(ahead.size()),
-                                String.join(", ", predicted),
-                                predicted.size() + " conflict(s)"});
+                        effects.put(name, predicted.size()
+                                + " conflict(s) expected: "
+                                + String.join(", ", predicted));
                     }
                 } else {
                     getLog().info("  " + Ansi.cyan("→ ") + name + " — "
@@ -258,9 +267,9 @@ public class UpdateFeatureDraftMojo extends AbstractWorkspaceMojo {
                                     + " into " + branchName);
 
                     getLog().info("    " + Ansi.green("✓ ") + "updated");
-                    reportRows.add(new String[]{name,
-                            String.valueOf(behind.size()),
-                            String.valueOf(ahead.size()), "", "merged"});
+                    effects.put(name, "merged `" + targetBranch + "` ("
+                            + behind.size() + " behind, " + ahead.size()
+                            + " ahead)");
                 }
             } catch (MojoException e) {
                 List<String> conflicts = VcsOperations.conflictingFiles(dir);
@@ -309,18 +318,64 @@ public class UpdateFeatureDraftMojo extends AbstractWorkspaceMojo {
         }
         getLog().info("");
 
-        // Write report
+        // Write report. One WorkingSetReportTable.Row per working-set member —
+        // the aggregator (workspace root) included — so the table shows the
+        // root's version/branch/SHA that a subproject-only table hid (#763).
+        // Each member's Effect comes from the eligibility/merge loops above;
+        // a member with no recorded effect (e.g. the aggregator, which this
+        // goal does not merge) is reported as skipped.
         GoalReportBuilder report = new GoalReportBuilder();
         report.paragraph("**Branch:** `" + branchName
                 + "` ← `" + targetBranch + "`");
-        report.table(
-                List.of("Subproject", "Behind", "Ahead", "Conflicts", "Status"),
-                reportRows);
+
+        List<WorkingSetReportTable.Row> rows = new ArrayList<>();
+        for (WorkingSet.Member member : resolveWorkingSet().members()) {
+            File dir = member.directory().toFile();
+            String version = readPomVersion(dir);   // the aggregator too (#763)
+            String branch = gitBranch(dir);
+            String sha = gitShortSha(dir);
+            String effect = effects.get(member.name());
+            if (effect == null) {
+                // No effect recorded for this member. The aggregator is not on
+                // the feature branch (this goal merges only the subprojects),
+                // so it is skipped; same for any member outside the eligible
+                // loop.
+                effect = member.isAggregator()
+                        ? "skipped (aggregator)"
+                        : "skipped (not on `" + branchName + "`)";
+            }
+            rows.add(new WorkingSetReportTable.Row(
+                    member, version, branch, sha, effect));
+        }
+        WorkingSetReportTable.render(report, "Working set", rows);
+
         report.paragraph("**" + eligible.size() + "** subproject(s)"
                 + (draft ? " to update" : " updated")
                 + ", **" + skipped.size() + "** skipped.");
         return new WorkspaceReportSpec(
                 publish ? WsGoal.UPDATE_FEATURE_PUBLISH : WsGoal.UPDATE_FEATURE_DRAFT,
                 report.build());
+    }
+
+    /**
+     * Read a member's POM {@code <version>}, returning the
+     * {@link WorkingSetReportTable#NONE} placeholder when the POM is absent or
+     * unreadable. Applied uniformly to every working-set member — the
+     * aggregator (workspace root) included — which is the #763 fix: a
+     * subproject-only table never surfaced the root's version.
+     *
+     * @param dir the member's working-tree directory
+     * @return the POM version, or {@link WorkingSetReportTable#NONE}
+     */
+    private String readPomVersion(File dir) {
+        File pom = new File(dir, "pom.xml");
+        if (!pom.isFile()) {
+            return WorkingSetReportTable.NONE;
+        }
+        try {
+            return ReleaseSupport.readPomVersion(pom);
+        } catch (MojoException e) {
+            return WorkingSetReportTable.NONE;
+        }
     }
 }

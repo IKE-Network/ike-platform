@@ -338,7 +338,7 @@ class WorkspaceMojoIntegrationTest {
                 .contains("- **Name:** draft-cp")
                 .contains("- **Tag:** `checkpoint/draft-cp`")
                 .contains("- **Mode:** DRAFT")
-                .contains("## Subprojects")
+                .contains("## Working set")
                 .contains("lib-a")
                 .contains("lib-b")
                 .contains("app-c")
@@ -346,6 +346,18 @@ class WorkspaceMojoIntegrationTest {
                 .contains("would be written")
                 .contains("## Checkpoint YAML (preview)")
                 .contains("```yaml");
+
+        // #766: the working-set table includes the aggregator (workspace
+        // root) as a labeled row — the subproject-only table this replaced
+        // hid the root entirely (the #763 staleness gap). The Effect column
+        // states the planned effect for a draft.
+        assertThat(body)
+                .as("the aggregator row must be present and labeled")
+                .contains("aggregator")
+                .contains("subproject")
+                .contains("Member")
+                .contains("Effect")
+                .contains(tempDir.getFileName().toString());
 
         // Publish-only outputs must not leak into the draft report.
         assertThat(body)
@@ -372,10 +384,21 @@ class WorkspaceMojoIntegrationTest {
                 .contains("- **Name:** publish-cp")
                 .contains("- **Tag:** `checkpoint/publish-cp`")
                 .contains("- **Mode:** PUBLISH")
-                .contains("## Subprojects")
+                .contains("## Working set")
                 .contains("## Outputs")
                 .contains("Checkpoint file written:")
                 .contains("checkpoints/checkpoint-publish-cp.yaml");
+
+        // #766: the aggregator (workspace root) appears as a labeled row in
+        // the working-set table even when the goal previously listed only
+        // subprojects — closing the #763 gap.
+        assertThat(body)
+                .as("the aggregator row must be present and labeled")
+                .contains("aggregator")
+                .contains("subproject")
+                .contains("Member")
+                .contains("Effect")
+                .contains(tempDir.getFileName().toString());
 
         // Draft-only sections must not leak into the publish report.
         assertThat(body)

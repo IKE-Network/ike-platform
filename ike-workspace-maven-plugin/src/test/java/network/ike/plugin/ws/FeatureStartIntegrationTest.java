@@ -130,6 +130,65 @@ class FeatureStartIntegrationTest {
     }
 
     @Test
+    void featureStart_draftReport_includesAggregatorRow_withRootVersion()
+            throws Exception {
+        // The working-set report table lists one row per member — the
+        // aggregator (workspace root) included (#766/#767, epic #764). The
+        // sibling fixture is the one with a workspace-root pom (1-SNAPSHOT) for
+        // the aggregator row to read, so the staleness a subproject-only table
+        // hid (#763) is visible in the report.
+        Path primary = new TestWorkspaceHelper(tempDir).buildSiblingScenario();
+
+        FeatureStartDraftMojo mojo = TestLog.createMojo(FeatureStartDraftMojo.class);
+        mojo.manifest = primary.resolve("workspace.yaml").toFile();
+        mojo.feature = "agg-report";
+        mojo.publish = false; // draft
+
+        WorkspaceReportSpec spec = mojo.runGoal();
+        String report = spec.content();
+
+        // The working-set table headers are present.
+        assertThat(report)
+                .contains("Member").contains("Kind").contains("Effect");
+        // The aggregator is a row, labeled — not just the subprojects.
+        assertThat(report)
+                .contains("primary").contains("aggregator");
+        // Its version is read the same way as a subproject's — the #763 fix
+        // surfaces the root version (here still 1-SNAPSHOT) and a planned
+        // qualify effect.
+        assertThat(report)
+                .contains("1-SNAPSHOT")
+                .contains("would qualify")
+                .contains("1-agg-report-SNAPSHOT");
+        // Subprojects remain rows too.
+        assertThat(report)
+                .contains("lib-a").contains("subproject");
+    }
+
+    @Test
+    void featureStart_publishReport_showsQualifiedAggregatorRootVersion()
+            throws Exception {
+        // After a publish run the aggregator row reports the APPLIED effect:
+        // the workspace root's pom is branch-qualified, and the report shows
+        // the qualified version on the aggregator row (the #763 fix, applied).
+        Path primary = new TestWorkspaceHelper(tempDir).buildSiblingScenario();
+
+        FeatureStartDraftMojo mojo = TestLog.createMojo(FeatureStartDraftMojo.class);
+        mojo.manifest = primary.resolve("workspace.yaml").toFile();
+        mojo.feature = "agg-applied";
+        mojo.publish = true;
+        mojo.execute();
+
+        String report = readReport(primary, "feature-start");
+
+        assertThat(report)
+                .contains("Member").contains("aggregator").contains("Effect");
+        // The aggregator row carries the qualified root version, proving the
+        // root was branch-qualified and reported alongside the subprojects.
+        assertThat(report).contains("1-agg-applied-SNAPSHOT");
+    }
+
+    @Test
     void featureStart_qualifiesAggregatorPomVersion() throws Exception {
         // feature-start branches the workspace ROOT, so it must branch-qualify the
         // aggregator's own pom too (ike-issues#721). buildSiblingScenario is the
@@ -467,6 +526,25 @@ class FeatureStartIntegrationTest {
     }
 
     // ── Helpers ──────────────────────────────────────────────────────
+
+    /**
+     * Read the goal's markdown report from a workspace root. The report file
+     * is named {@code ws꞉<goal>.md}; matching by substring tolerates the
+     * colon-substitution character without hard-coding it.
+     */
+    private String readReport(Path workspaceRoot, String goalStem)
+            throws Exception {
+        try (var stream = Files.list(workspaceRoot)) {
+            Path reportFile = stream
+                    .filter(p -> p.getFileName().toString().endsWith(".md"))
+                    .filter(p -> p.getFileName().toString().contains(goalStem))
+                    .findFirst()
+                    .orElseThrow(() -> new AssertionError(
+                            "No report file matching '" + goalStem
+                                    + "' in " + workspaceRoot));
+            return Files.readString(reportFile, StandardCharsets.UTF_8);
+        }
+    }
 
     private void exec(Path workDir, String... command) throws Exception {
         Process process = new ProcessBuilder(command)

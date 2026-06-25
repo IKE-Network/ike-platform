@@ -258,13 +258,18 @@ class FeatureFinishIntegrationTest {
 
         String report = readReport("feature-finish-squash-publish");
 
-        // New column heading: target branch HEAD per subproject.
+        // #764: the report now renders through the shared
+        // WorkingSetReportTable — uniform Member/Kind/Version/Branch/SHA/
+        // Effect columns rather than the old Subproject/Status/<target> HEAD.
         assertThat(report)
-                .as("table must carry the resulting target-branch HEAD")
-                .contains("main HEAD");
+                .as("table must use the shared working-set columns")
+                .contains("Member")
+                .contains("Kind")
+                .contains("Version")
+                .contains("Effect");
 
         // lib-a's row is the version-only no-op (after we removed
-        // its feature-work commit). The status text now exposes this
+        // its feature-work commit). The Effect text now exposes this
         // explicitly rather than collapsing it into the count.
         assertThat(report)
                 .as("version-only row must be marked, not silently absorbed")
@@ -283,6 +288,66 @@ class FeatureFinishIntegrationTest {
                 .as("real-content subprojects expose their target SHA")
                 .contains(libBHead)
                 .contains(appCHead);
+
+        // #763/#764: the workspace-root aggregator now has its own row,
+        // labelled "aggregator" — it was previously absent from the table
+        // even though the workspace repo is squash-merged like a subproject.
+        assertThat(report)
+                .as("the workspace-root aggregator must appear as a row")
+                .contains("aggregator")
+                .contains(tempDir.getFileName().toString());
+    }
+
+    // ── #763/#764: aggregator row carries the root POM version ──
+
+    @Test
+    void squash_report_includesAggregatorRowWithRootVersion()
+            throws Exception {
+        // Give the workspace root a real git repo + aggregator POM so the
+        // aggregator row can carry a concrete version (the #763 fix: the
+        // root's readPomVersion is now gathered like a subproject's). The
+        // default helper scaffold leaves the root pom-less and git-less.
+        String rootVersion = "9.9.9-aggregator-SNAPSHOT";
+        Files.writeString(tempDir.resolve("pom.xml"), """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <project xmlns="http://maven.apache.org/POM/4.0.0">
+                    <modelVersion>4.0.0</modelVersion>
+                    <groupId>com.test</groupId>
+                    <artifactId>aggregator-root</artifactId>
+                    <version>%s</version>
+                    <packaging>pom</packaging>
+                </project>
+                """.formatted(rootVersion), StandardCharsets.UTF_8);
+        exec(tempDir, "git", "init", "-b", "main");
+        exec(tempDir, "git", "config", "commit.gpgsign", "false");
+        exec(tempDir, "git", "config", "user.email", "root@example.com");
+        exec(tempDir, "git", "config", "user.name", "Root");
+        exec(tempDir, "git", "add", "pom.xml", "workspace.yaml");
+        exec(tempDir, "git", "commit", "-m", "Initial workspace root");
+
+        FeatureFinishSquashDraftMojo mojo = TestLog.createMojo(
+                FeatureFinishSquashDraftMojo.class);
+        mojo.manifest = helper.workspaceYaml().toFile();
+        mojo.feature = FEATURE_NAME;
+        mojo.targetBranch = "main";
+        mojo.message = "aggregator-row report";
+        mojo.publish = false; // draft — read-only, leaves the tree intact
+        mojo.execute();
+
+        String report = readReport("feature-finish-squash-draft");
+
+        // The aggregator row is present, labelled "aggregator", named for
+        // the workspace-root directory, and — the #763 fix — carries the
+        // root POM's version that a subproject-only table would have hidden.
+        assertThat(report)
+                .as("aggregator row must appear with its kind label")
+                .contains("aggregator");
+        assertThat(report)
+                .as("aggregator row must be named for the workspace-root dir")
+                .contains(tempDir.getFileName().toString());
+        assertThat(report)
+                .as("#763 fix: the root POM version must surface in the table")
+                .contains(rootVersion);
     }
 
     // ── #569: draft report quality (preview effects + remediation) ──

@@ -8,6 +8,7 @@ import network.ike.workspace.Subproject;
 import network.ike.workspace.ManifestWriter;
 import network.ike.workspace.PublishedArtifactSet;
 import network.ike.workspace.VersionSupport;
+import network.ike.workspace.WorkingSet;
 import network.ike.workspace.WorkspaceGraph;
 import network.ike.plugin.ws.vcs.VcsOperations;
 import network.ike.plugin.ws.vcs.VcsState;
@@ -377,19 +378,36 @@ public class FeatureStartDraftMojo extends AbstractWorkspaceMojo {
     private String buildMarkdownReport(String branchName,
                                         List<BranchRow> branchRows,
                                         List<CascadeGapRow> cascadeGaps) {
+        boolean draft = !publish;
         GoalReportBuilder report = new GoalReportBuilder();
         report.paragraph("**Branch:** `" + branchName + "`");
 
-        List<String[]> rows = new ArrayList<>();
+        // Index the per-subproject effects recorded during the branch loop so
+        // each working-set member can be looked up by name.
+        Map<String, BranchRow> byName = new LinkedHashMap<>();
         for (BranchRow row : branchRows) {
-            rows.add(new String[]{row.subproject(), row.branch(),
-                    row.snapshotVersion(), row.status()});
+            byName.put(row.subproject(), row);
         }
-        report.table(
-                List.of("Subproject", "Branch", "Snapshot Version", "Status"),
-                rows);
 
-        boolean draft = !publish;
+        // One row per working-set member — the aggregator (workspace root)
+        // included. A subproject-only table hid the root left on its base
+        // version (#763); iterating resolveWorkingSet().members() and gathering
+        // the aggregator's version the same way as a subproject closes that gap
+        // (#766/#767, epic #764). The Effect column states what feature-start
+        // did or will do to that member: planned for -draft, applied for
+        // -publish.
+        List<WorkingSetReportTable.Row> rows = new ArrayList<>();
+        for (WorkingSet.Member member : resolveWorkingSet().members()) {
+            File dir = member.directory().toFile();
+            if (member.isAggregator()) {
+                rows.add(aggregatorRow(member, dir, branchName, draft));
+            } else {
+                rows.add(subprojectRow(member, dir, branchName,
+                        byName.get(member.name())));
+            }
+        }
+        WorkingSetReportTable.render(report, "Working set", rows);
+
         report.paragraph("**" + branchRows.size() + "** subproject(s) "
                 + (draft ? "would be branched" : "branched") + " onto `"
                 + branchName + "`.");
@@ -405,6 +423,77 @@ public class FeatureStartDraftMojo extends AbstractWorkspaceMojo {
         }
 
         return report.build();
+    }
+
+    /**
+     * Build the working-set row for a subproject. When the subproject was
+     * processed this run, its effect/version/branch come from the recorded
+     * {@link BranchRow}; otherwise (e.g. excluded by {@code --affected}) the
+     * member's current on-disk state is reported with a "not in scope" effect.
+     */
+    private WorkingSetReportTable.Row subprojectRow(WorkingSet.Member member,
+                                                     File dir, String branchName,
+                                                     BranchRow recorded) {
+        if (recorded != null) {
+            String version = WorkingSetReportTable.NONE.equals(
+                    recorded.snapshotVersion()) ? null : recorded.snapshotVersion();
+            return new WorkingSetReportTable.Row(member, version,
+                    recorded.branch(), gitShortSha(dir), recorded.status());
+        }
+        // Member exists in the working set but was outside this run's scope
+        // (e.g. --affected): report its current state, not a fabricated effect.
+        return new WorkingSetReportTable.Row(member, currentVersion(dir),
+                gitBranch(dir), gitShortSha(dir), "skipped (not in --affected scope)");
+    }
+
+    /**
+     * Build the working-set row for the aggregator (workspace root). Reads the
+     * root's version the same way a subproject's is read — the #763 fix that
+     * makes a stale workspace-root version visible. The effect mirrors the
+     * branch-qualification {@link #branchWorkspaceRepo}/
+     * {@link #previewWorkspaceRootQualify} perform on the root pom.
+     */
+    private WorkingSetReportTable.Row aggregatorRow(WorkingSet.Member member,
+                                                     File dir, String branchName,
+                                                     boolean draft) {
+        String version = currentVersion(dir);
+        String effect;
+        if (skipVersion) {
+            effect = draft ? "would branch root (version unchanged)"
+                    : "branched root (version unchanged)";
+        } else if (version != null) {
+            String qualified = VersionSupport.branchQualifiedVersion(
+                    version, branchName);
+            if (qualified.equals(version)) {
+                effect = "already qualified";
+            } else {
+                effect = (draft ? "would qualify " : "qualified ")
+                        + version + " → " + qualified;
+            }
+        } else {
+            effect = draft ? "would branch root" : "branched root";
+        }
+        return new WorkingSetReportTable.Row(
+                member, version, gitBranch(dir), gitShortSha(dir), effect);
+    }
+
+    /**
+     * Read the POM version for a member directory, or {@code null} when there
+     * is no readable POM. Shared by the aggregator and out-of-scope-subproject
+     * rows so both report version the same way (the #763 fix).
+     */
+    private String currentVersion(File dir) {
+        File pom = new File(dir, "pom.xml");
+        if (!pom.exists()) {
+            return null;
+        }
+        try {
+            return ReleaseSupport.readPomVersion(pom);
+        } catch (MojoException e) {
+            getLog().debug("Could not read POM version for "
+                    + dir.getName() + ": " + e.getMessage());
+            return null;
+        }
     }
 
     /**

@@ -124,6 +124,48 @@ class SiblingCreateIntegrationTest {
     }
 
     @Test
+    void siblingCreate_report_includesAggregatorRowWithRootVersion()
+            throws Exception {
+        SiblingCreateMojo mojo = TestLog.createMojo(SiblingCreateMojo.class);
+        mojo.manifest = primary.resolve("workspace.yaml").toFile();
+        mojo.feature = "jira-456";
+
+        mojo.execute();
+
+        // The report lands as ws꞉sibling-create.md at the workspace root.
+        String report = readReport("sibling-create");
+
+        // Migrated to the shared working-set table: a Member · Kind grid with
+        // an Effect final column (mutating goal).
+        assertThat(report)
+                .as("working-set table headers")
+                .contains("Member").contains("Kind").contains("Effect");
+
+        // Every subproject is a row, labeled subproject.
+        for (String name : COMPONENTS) {
+            assertThat(report)
+                    .as("subproject row for " + name)
+                    .contains(name);
+        }
+        assertThat(report).contains("subproject");
+
+        // The aggregator (workspace root) is a row — the #763 gap closed: the
+        // sibling root's clone is no longer invisible. The root dir is named
+        // "primary"; its declared aggregator version is 1-SNAPSHOT, and that
+        // string must now appear (the #763 fix — gathering the root's
+        // readPomVersion the same way as a subproject).
+        assertThat(report)
+                .as("aggregator row present and labeled")
+                .contains("primary").contains("aggregator");
+        assertThat(report)
+                .as("the aggregator (root) version is surfaced — the #763 fix")
+                .contains("1-SNAPSHOT");
+
+        // The effect states what was applied to each cloned member.
+        assertThat(report).contains("cloned + branched feature/jira-456");
+    }
+
+    @Test
     void siblingCreate_skipVersion_branchesWithoutQualifyingVersions()
             throws Exception {
         SiblingCreateMojo mojo = TestLog.createMojo(SiblingCreateMojo.class);
@@ -147,6 +189,24 @@ class SiblingCreateIntegrationTest {
 
     private String branch(Path repo) throws Exception {
         return execCapture(repo, "git", "rev-parse", "--abbrev-ref", "HEAD");
+    }
+
+    /**
+     * Read the {@code ws꞉<goalStem>.md} report the goal wrote at the primary
+     * workspace root. Matches on the goal stem so the test tolerates the
+     * colon-substitution char without hard-coding it.
+     */
+    private String readReport(String goalStem) throws Exception {
+        try (var stream = Files.list(primary)) {
+            Path reportFile = stream
+                    .filter(p -> p.getFileName().toString().endsWith(".md"))
+                    .filter(p -> p.getFileName().toString().contains(goalStem))
+                    .findFirst()
+                    .orElseThrow(() -> new AssertionError(
+                            "No report file matching '" + goalStem
+                                    + "' in " + primary));
+            return Files.readString(reportFile, StandardCharsets.UTF_8);
+        }
     }
 
     private String execCapture(Path workDir, String... command) throws Exception {

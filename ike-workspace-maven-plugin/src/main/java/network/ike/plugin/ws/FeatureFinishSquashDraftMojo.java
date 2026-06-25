@@ -1,7 +1,9 @@
 package network.ike.plugin.ws;
 
 import network.ike.workspace.Subproject;
+import network.ike.workspace.WorkingSet;
 import network.ike.workspace.WorkspaceGraph;
+import network.ike.plugin.ReleaseSupport;
 import network.ike.plugin.support.GoalReportBuilder;
 import network.ike.plugin.ws.vcs.VcsOperations;
 import network.ike.plugin.ws.vcs.VcsState;
@@ -428,6 +430,26 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
     }
 
     /**
+     * Read a working-set member's POM version (the {@code <version>} of
+     * {@code <dir>/pom.xml}), returning {@link WorkingSetReportTable#NONE}
+     * when no POM is present or it cannot be parsed. Applied uniformly to
+     * subprojects and the workspace-root aggregator — the aggregator's
+     * version is part of the #763 fix (its row was previously absent).
+     *
+     * @param dir the member directory
+     * @return the POM version, or {@code "—"} when unavailable
+     */
+    private String readPomVersion(File dir) {
+        File pom = new File(dir, "pom.xml");
+        if (!pom.isFile()) return WorkingSetReportTable.NONE;
+        try {
+            return ReleaseSupport.readPomVersion(pom);
+        } catch (MojoException e) {
+            return WorkingSetReportTable.NONE;
+        }
+    }
+
+    /**
      * Outcome kind for a per-subproject squash row in the report (#544).
      * {@code CONTENT_SQUASHED} is the normal path; {@code VERSION_ONLY_NOOP}
      * captures the case the goal already detected internally ("no
@@ -468,40 +490,70 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
         report.paragraph("**Branch:** `" + branch + "` → `" + target + "`  \n"
                 + "**Strategy:** squash-merge");
 
-        // #544: rows include the squash kind (real content vs version-
-        // only no-op) and the resulting target-branch HEAD SHA so the
-        // reviewer can audit exactly which subprojects shipped code
-        // without running git log by hand.
-        List<String[]> rows = new ArrayList<>();
-        for (String name : components) {
-            SquashKind kind = squashKind.get(name);
-            String status;
-            if (isDraft) {
-                status = kind == SquashKind.VERSION_ONLY_NOOP
-                        ? "would squash (version-only — no commit expected)"
-                        : "would squash";
-            } else if (kind == SquashKind.VERSION_ONLY_NOOP) {
-                status = "squashed (version-only — no commit)";
+        // #764/#763: one row per working-set member — every subproject AND
+        // the workspace-root aggregator — rendered through the shared
+        // WorkingSetReportTable. The aggregator's version/branch/SHA are
+        // gathered the same way as a subproject (the #763 fix); previously
+        // the workspace repo was squash-merged but never shown in the table.
+        // The Effect column carries the per-member squash outcome (#544: real
+        // content vs version-only no-op) and the resulting target-branch HEAD
+        // SHA lands in the SHA column so the reviewer can audit which members
+        // shipped code without running git log by hand.
+        WorkingSet workingSet = resolveWorkingSet();
+        List<String> eligibleNames = components;
+        List<WorkingSetReportTable.Row> rows = new ArrayList<>();
+        for (WorkingSet.Member member : workingSet.members()) {
+            File dir = member.directory().toFile();
+            String version = readPomVersion(dir);
+            String memberBranch = gitBranch(dir);
+            String memberSha;
+            String effect;
+
+            if (member.isAggregator()) {
+                // The workspace repo is squash-merged by mergeWorkspaceRepo
+                // only when at least one subproject was squashed and we're
+                // publishing; the draft previews the same intent (#763 fix:
+                // the aggregator now appears in the table either way).
+                memberSha = isDraft ? "—" : gitShortSha(dir);
+                if (merged > 0) {
+                    effect = isDraft
+                            ? "would squash-merge `" + branch + "` → `" + target + "`"
+                            : "squash-merged `" + branch + "` → `" + target + "`";
+                } else {
+                    effect = "no-op (no subprojects squashed)";
+                }
+            } else if (eligibleNames.contains(member.name())) {
+                SquashKind kind = squashKind.get(member.name());
+                if (isDraft) {
+                    effect = kind == SquashKind.VERSION_ONLY_NOOP
+                            ? "would squash (version-only — no commit expected)"
+                            : "would squash-merge `" + branch + "` → `" + target + "`";
+                } else if (kind == SquashKind.VERSION_ONLY_NOOP) {
+                    effect = "squashed (version-only — no commit)";
+                } else {
+                    effect = "squash-merged `" + branch + "` → `" + target + "`";
+                }
+                String sha = targetSha.getOrDefault(member.name(), "—");
+                memberSha = "—".equals(sha) ? "—" : shorten(sha);
+            } else if (alreadyDone.contains(member.name())) {
+                // #535: NOT being squashed again; only workspace.yaml is
+                // being brought into line from a prior partial run.
+                effect = isDraft
+                        ? "would reconcile workspace.yaml only"
+                        : "reconciled workspace.yaml only (already on "
+                                + target + " from a prior run)";
+                String sha = targetSha.getOrDefault(member.name(), "—");
+                memberSha = "—".equals(sha) ? "—" : shorten(sha);
             } else {
-                status = "squashed";
+                // A subproject not on the feature branch — skipped this run.
+                effect = "skipped (not on `" + branch + "`)";
+                memberSha = "—";
             }
-            String sha = targetSha.getOrDefault(name, "—");
-            rows.add(new String[]{name, status,
-                    "—".equals(sha) ? "—" : "`" + shorten(sha) + "`"});
+
+            rows.add(new WorkingSetReportTable.Row(
+                    member, version, memberBranch, memberSha, effect));
         }
-        for (String name : alreadyDone) {
-            // #535: surface these explicitly so the report makes the
-            // partial-recovery state obvious. They are NOT being squashed
-            // again; only workspace.yaml is being brought into line.
-            String status = isDraft
-                    ? "would reconcile workspace.yaml only"
-                    : "reconciled workspace.yaml only (already on "
-                            + target + " from a prior run)";
-            String sha = targetSha.getOrDefault(name, "—");
-            rows.add(new String[]{name, status,
-                    "—".equals(sha) ? "—" : "`" + shorten(sha) + "`"});
-        }
-        report.table(List.of("Subproject", "Status", target + " HEAD"), rows);
+        WorkingSetReportTable.render(report, "Subprojects", rows);
 
         report.paragraph("**" + merged + " subproject(s)** "
                 + (isDraft ? "would be squash-merged" : "squash-merged")

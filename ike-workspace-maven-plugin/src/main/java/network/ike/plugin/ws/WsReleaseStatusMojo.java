@@ -3,7 +3,7 @@ package network.ike.plugin.ws;
 import network.ike.plugin.ReleaseSupport;
 import network.ike.plugin.support.GoalReportBuilder;
 import network.ike.plugin.ws.vcs.VcsOperations;
-import network.ike.workspace.WorkspaceGraph;
+import network.ike.workspace.WorkingSet;
 
 import org.apache.maven.api.plugin.MojoException;
 import org.apache.maven.api.plugin.annotations.Mojo;
@@ -57,30 +57,48 @@ public class WsReleaseStatusMojo extends AbstractWorkspaceMojo {
 
     @Override
     protected WorkspaceReportSpec runGoal() throws MojoException {
-        WorkspaceGraph graph = loadGraph();
-        File root = workspaceRoot();
-
         getLog().info("");
         getLog().info(header("Release status"));
         getLog().info("══════════════════════════════════════════════════════════════");
         getLog().info("");
 
-        List<String> order = graph.topologicalSort();
+        // Iterate the resolved working set — subprojects THEN the
+        // aggregator (workspace root). The aggregator is observed the
+        // same way as a subproject, so its release state and (the #763
+        // fix) its POM version land in the report instead of being
+        // hidden by the old subprojects-only topological walk.
+        List<MemberFinding> results = new ArrayList<>();
         List<ReleaseStatusInspector.Finding> findings = new ArrayList<>();
-        for (String name : order) {
-            File subDir = new File(root, name);
-            ReleaseStatusInspector.Observation obs = observe(name, subDir);
+        for (WorkingSet.Member member : resolveWorkingSet().members()) {
+            File dir = member.directory().toFile();
+            ReleaseStatusInspector.Observation obs = observe(member.name(), dir);
             ReleaseStatusInspector.Finding finding =
                     ReleaseStatusInspector.classify(obs);
             findings.add(finding);
+            results.add(new MemberFinding(member, finding,
+                    obs.checkedOut() ? gitShortSha(dir) : null));
             renderFinding(finding);
         }
 
         getLog().info("");
         renderFooter(findings);
         return new WorkspaceReportSpec(WsGoal.RELEASE_STATUS,
-                buildMarkdownReport(findings));
+                buildMarkdownReport(results));
     }
+
+    /**
+     * Pairs a working-set member with its release-state finding and the
+     * short SHA observed for its checkout, so the report table can render
+     * one row per member (the aggregator included).
+     *
+     * @param member  the working-set member
+     * @param finding the release-state verdict for that member
+     * @param sha     the member checkout's short HEAD SHA, or {@code null}
+     *                when the member is not checked out
+     */
+    private record MemberFinding(WorkingSet.Member member,
+                                 ReleaseStatusInspector.Finding finding,
+                                 String sha) {}
 
     // ── Observation: real git interaction ────────────────────────────
 
@@ -249,20 +267,25 @@ public class WsReleaseStatusMojo extends AbstractWorkspaceMojo {
                 + " git steps in IKE-RELEASE-RECOVERY.md until they ship.");
     }
 
-    private String buildMarkdownReport(
-            List<ReleaseStatusInspector.Finding> findings) {
-        List<String[]> rows = new ArrayList<>();
-        for (ReleaseStatusInspector.Finding f : findings) {
-            rows.add(new String[]{
-                    f.subprojectName(),
-                    f.status().badge() + " " + f.status().label(),
+    private String buildMarkdownReport(List<MemberFinding> results) {
+        List<WorkingSetReportTable.Row> rows = new ArrayList<>();
+        for (MemberFinding mf : results) {
+            ReleaseStatusInspector.Finding f = mf.finding();
+            // Read-only goal: the final "Status" column folds the verdict
+            // and any per-member notes (interrupted-release detail).
+            String status = f.status().badge() + " " + f.status().label();
+            if (!f.details().isEmpty()) {
+                status += " — " + String.join("; ", f.details());
+            }
+            rows.add(new WorkingSetReportTable.Row(
+                    mf.member(),
                     f.currentVersion(),
                     f.currentBranch(),
-                    String.join("<br>", f.details())});
+                    mf.sha(),
+                    status));
         }
         GoalReportBuilder report = new GoalReportBuilder();
-        report.table(List.of("Subproject", "Status", "Version", "Branch",
-                "Notes"), rows);
+        WorkingSetReportTable.render(report, "Release status", "Status", rows);
         return report.build();
     }
 }

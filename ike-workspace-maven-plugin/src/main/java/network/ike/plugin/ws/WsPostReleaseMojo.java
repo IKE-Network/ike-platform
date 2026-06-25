@@ -1,9 +1,11 @@
 package network.ike.plugin.ws;
 
 import network.ike.plugin.ReleaseSupport;
+import network.ike.plugin.support.GoalReportBuilder;
 
 import network.ike.workspace.Subproject;
 import network.ike.workspace.ManifestWriter;
+import network.ike.workspace.WorkingSet;
 import network.ike.workspace.WorkspaceGraph;
 import network.ike.plugin.ws.vcs.VcsOperations;
 import network.ike.plugin.ws.vcs.VcsState;
@@ -14,6 +16,7 @@ import org.apache.maven.api.plugin.annotations.Parameter;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -71,6 +74,12 @@ public class WsPostReleaseMojo extends AbstractWorkspaceMojo {
         getLog().info("");
 
         Map<String, String> versionUpdates = new LinkedHashMap<>();
+        // Per-subproject Effect for the working-set report (#763/#767): keyed
+        // by subproject name, valued by what post-release did to that member
+        // (bumped X \u2192 Y, skipped (already at Y), skipped (not cloned), \u2026). The
+        // aggregator's effect is derived separately, after the workspace.yaml
+        // write, so the report can carry one row per working-set member.
+        Map<String, String> effects = new LinkedHashMap<>();
         int bumped = 0;
         int skipped = 0;
 
@@ -82,12 +91,14 @@ public class WsPostReleaseMojo extends AbstractWorkspaceMojo {
 
             if (!gitDir.exists()) {
                 getLog().info("  \u26A0 " + name + " \u2014 not cloned, skipping");
+                effects.put(name, "skipped (not cloned)");
                 skipped++;
                 continue;
             }
 
             if (!pomFile.exists()) {
                 getLog().info("  \u26A0 " + name + " \u2014 no pom.xml, skipping");
+                effects.put(name, "skipped (no pom.xml)");
                 skipped++;
                 continue;
             }
@@ -99,6 +110,7 @@ public class WsPostReleaseMojo extends AbstractWorkspaceMojo {
             } catch (MojoException e) {
                 getLog().warn("  \u26A0 " + name + " \u2014 could not read version: "
                         + e.getMessage());
+                effects.put(name, "skipped (could not read version)");
                 skipped++;
                 continue;
             }
@@ -110,6 +122,7 @@ public class WsPostReleaseMojo extends AbstractWorkspaceMojo {
             if (nextVersion.equals(currentVersion)) {
                 getLog().info("  \u2713 " + name + " \u2014 already at "
                         + nextVersion);
+                effects.put(name, "skipped (already at " + nextVersion + ")");
                 skipped++;
                 continue;
             }
@@ -169,10 +182,16 @@ public class WsPostReleaseMojo extends AbstractWorkspaceMojo {
                     gitBranch(dir));
 
             versionUpdates.put(name, nextVersion);
+            effects.put(name, "bumped " + currentVersion + " → " + nextVersion);
             bumped++;
         }
 
-        // Update workspace.yaml versions
+        // Update workspace.yaml versions. The aggregator's effect for the
+        // working-set report is whatever this block does to the workspace
+        // root — committing the rewritten workspace.yaml. The aggregator's
+        // own POM version is intentionally *not* bumped here (that is the
+        // aggregator-bump lifecycle, child D / #768); the report states so.
+        String aggregatorEffect = "no-op (workspace.yaml unchanged)";
         if (!versionUpdates.isEmpty()) {
             try {
                 ManifestWriter.updateMavenVersions(manifestPath, versionUpdates);
@@ -193,6 +212,15 @@ public class WsPostReleaseMojo extends AbstractWorkspaceMojo {
                         "post-release: bump workspace versions to " + nextVersion);
                 VcsOperations.pushIfRemoteExists(wsRoot, getLog(), "origin",
                         gitBranch(wsRoot));
+                aggregatorEffect = "workspace.yaml bumped for "
+                        + versionUpdates.size() + " component"
+                        + (versionUpdates.size() == 1 ? "" : "s")
+                        + " + committed";
+            } else {
+                aggregatorEffect = "workspace.yaml bumped for "
+                        + versionUpdates.size() + " component"
+                        + (versionUpdates.size() == 1 ? "" : "s")
+                        + " (not committed — no .git)";
             }
         }
 
@@ -201,7 +229,71 @@ public class WsPostReleaseMojo extends AbstractWorkspaceMojo {
         getLog().info("");
 
         return new WorkspaceReportSpec(WsGoal.POST_RELEASE,
-                "**" + bumped + "** bumped, **"
-                + skipped + "** skipped.\n");
+                buildReport(bumped, skipped, effects, aggregatorEffect));
+    }
+
+    /**
+     * Build the post-release markdown report — the shared working-set table
+     * (#766/#767), one row per {@link WorkingSet.Member} including the
+     * aggregator. The aggregator row is now present (the #763 fix): its
+     * version, branch, and short SHA are gathered the same way as a
+     * subproject's, so a workspace root left stale is visible rather than
+     * silently absent from a subprojects-only table. The {@code Effect}
+     * column states what post-release applied to each member.
+     *
+     * @param bumped           count of subprojects whose version was bumped
+     * @param skipped          count of subprojects skipped (no-op / not cloned)
+     * @param effects          per-subproject Effect text, keyed by name
+     * @param aggregatorEffect what post-release applied to the workspace root
+     * @return the rendered markdown report body
+     */
+    private String buildReport(int bumped, int skipped,
+                               Map<String, String> effects,
+                               String aggregatorEffect) {
+        GoalReportBuilder report = new GoalReportBuilder();
+        report.paragraph("**" + bumped + "** bumped, **" + skipped
+                + "** skipped.");
+
+        List<WorkingSetReportTable.Row> rows = new ArrayList<>();
+        for (WorkingSet.Member member : resolveWorkingSet().members()) {
+            File dir = member.directory().toFile();
+            String version = readMemberVersion(dir);
+            String branch = new File(dir, ".git").exists()
+                    ? gitBranch(dir) : null;
+            String sha = new File(dir, ".git").exists()
+                    ? gitShortSha(dir) : null;
+            String effect = member.isAggregator()
+                    ? aggregatorEffect
+                    : effects.getOrDefault(member.name(), "—");
+            rows.add(new WorkingSetReportTable.Row(
+                    member, version, branch, sha, effect));
+        }
+        WorkingSetReportTable.render(report, "Working set", rows);
+
+        return report.build();
+    }
+
+    /**
+     * Read a working-set member's POM version, gathered uniformly for
+     * subprojects and the aggregator (the workspace root) alike — gathering
+     * the root's version is the #763 fix, surfacing the staleness a
+     * subprojects-only report hid. A missing or unreadable POM yields
+     * {@code null}, rendered as the report's blank-cell placeholder.
+     *
+     * @param dir the member's directory
+     * @return the POM version, or {@code null} when no readable POM exists
+     */
+    private String readMemberVersion(File dir) {
+        File pomFile = new File(dir, "pom.xml");
+        if (!pomFile.exists()) {
+            return null;
+        }
+        try {
+            return ReleaseSupport.readPomVersion(pomFile);
+        } catch (MojoException e) {
+            getLog().debug("Could not read POM version for " + dir + ": "
+                    + e.getMessage());
+            return null;
+        }
     }
 }

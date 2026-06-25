@@ -8,6 +8,7 @@ import network.ike.workspace.FeatureName;
 import network.ike.workspace.ManifestWriter;
 import network.ike.workspace.Subproject;
 import network.ike.workspace.VersionSupport;
+import network.ike.workspace.WorkingSet;
 import network.ike.workspace.WorkspaceGraph;
 import org.apache.maven.api.plugin.MojoException;
 import org.apache.maven.api.plugin.annotations.Mojo;
@@ -98,10 +99,6 @@ public class SiblingCreateMojo extends AbstractWorkspaceMojo {
 
     /** Creates this goal instance. */
     public SiblingCreateMojo() {}
-
-    /** A row in the sibling-create summary table. */
-    private record ComponentRow(String subproject, String branch,
-                                 String version, String status) {}
 
     @Override
     protected WorkspaceReportSpec runGoal() throws MojoException {
@@ -238,15 +235,39 @@ public class SiblingCreateMojo extends AbstractWorkspaceMojo {
                 + "rm -rf to discard");
         getLog().info("");
 
-        // Build the report rows in topological order.
-        List<ComponentRow> rows = new ArrayList<>();
-        for (String name : sorted) {
-            if (branched.contains(name)) {
-                rows.add(new ComponentRow(name, branchName,
-                        versionByName.getOrDefault(name, "—"), "✓ cloned"));
+        // Build the report rows over the whole working set — every
+        // subproject AND the aggregator (workspace root). The aggregator
+        // row makes the sibling root's own clone + branch + qualified
+        // version visible, the staleness a subproject-only table hid (#763).
+        // Identity and kind come from the resolved working set; each row's
+        // version/branch/sha are read from the corresponding SIBLING dir,
+        // since the goal's effect lives in the sibling, not the primary.
+        List<WorkingSetReportTable.Row> rows = new ArrayList<>();
+        for (WorkingSet.Member member : resolveWorkingSet().members()) {
+            File dir = member.isAggregator()
+                    ? siblingRoot
+                    : new File(siblingRoot, member.name());
+            String effect;
+            if (member.isAggregator()) {
+                // The aggregator is always cloned + branched, then its
+                // workspace.yaml is rewritten and committed.
+                effect = "cloned + branched " + branchName;
+            } else if (branched.contains(member.name())) {
+                String qualified = versionByName.get(member.name());
+                effect = (qualified != null)
+                        ? "cloned + branched " + branchName
+                                + " → " + qualified
+                        : "cloned + branched " + branchName;
             } else {
-                rows.add(new ComponentRow(name, "—", "—", "skipped (no repo URL)"));
+                effect = "skipped (no repo URL)";
+                rows.add(new WorkingSetReportTable.Row(member,
+                        WorkingSetReportTable.NONE, WorkingSetReportTable.NONE,
+                        WorkingSetReportTable.NONE, effect));
+                continue;
             }
+            rows.add(new WorkingSetReportTable.Row(member,
+                    siblingVersion(dir), gitBranch(dir), gitShortSha(dir),
+                    effect));
         }
 
         return new WorkspaceReportSpec(WsGoal.SIBLING_CREATE,
@@ -346,8 +367,17 @@ public class SiblingCreateMojo extends AbstractWorkspaceMojo {
                 + "rm -rf to discard");
         getLog().info("");
 
-        List<ComponentRow> rows = List.of(
-                new ComponentRow(repo.getName(), branchName, qualified, "✓ cloned"));
+        // Single-repo working set: one member (the repo, resolved as the
+        // aggregator), mapped to its sibling clone. The aggregator is a row
+        // here too, so a bare-mode report is shaped identically to the
+        // workspace one (#763/#766).
+        WorkingSet.Member member = resolveWorkingSet().members().getFirst();
+        String effect = !"—".equals(qualified)
+                ? "cloned + branched " + branchName + " → " + qualified
+                : "cloned + branched " + branchName;
+        List<WorkingSetReportTable.Row> rows = List.of(
+                new WorkingSetReportTable.Row(member, siblingVersion(siblingRoot),
+                        gitBranch(siblingRoot), gitShortSha(siblingRoot), effect));
         return new WorkspaceReportSpec(WsGoal.SIBLING_CREATE,
                 buildReport(siblingName, siblingRoot, branchName, rows));
     }
@@ -440,28 +470,54 @@ public class SiblingCreateMojo extends AbstractWorkspaceMojo {
     }
 
     /**
+     * Read a sibling directory's POM {@code <version>}: the #763 fix when
+     * applied to the aggregator's own clone, whose staleness a
+     * subproject-only table hid.
+     *
+     * @param dir the sibling directory (a clone) to read
+     * @return the POM version, or {@link WorkingSetReportTable#NONE} if there
+     *         is no readable {@code pom.xml}
+     */
+    private String siblingVersion(File dir) {
+        File pom = new File(dir, "pom.xml");
+        if (!pom.exists()) {
+            return WorkingSetReportTable.NONE;
+        }
+        try {
+            String version = ReleaseSupport.readPomVersion(pom);
+            return (version == null || version.isEmpty())
+                    ? WorkingSetReportTable.NONE : version;
+        } catch (MojoException e) {
+            getLog().debug("Could not read sibling POM version for " + dir
+                    + ": " + e.getMessage());
+            return WorkingSetReportTable.NONE;
+        }
+    }
+
+    /**
      * Render the sibling-create result as the goal's Markdown report.
+     *
+     * <p>The working-set table carries one row per member, the aggregator
+     * (workspace root) included, so the sibling root's own clone, branch and
+     * qualified version are visible (#763/#766). The final column is
+     * {@code Effect} — this is a mutating goal and the clones are made on the
+     * spot, so each effect is stated as <em>applied</em>.
      *
      * @param siblingName the sibling directory name
      * @param siblingRoot the sibling directory
      * @param branchName  the feature branch created in each clone
-     * @param rows        per-component summary rows
+     * @param rows        one working-set row per member, aggregator included
      * @return the Markdown report body
      */
     private String buildReport(String siblingName, File siblingRoot,
-                               String branchName, List<ComponentRow> rows) {
+                               String branchName,
+                               List<WorkingSetReportTable.Row> rows) {
         GoalReportBuilder report = new GoalReportBuilder();
         report.paragraph("**Sibling:** `" + siblingName + "`")
                 .paragraph("**Branch:** `" + branchName + "`")
                 .paragraph("**Location:** `" + siblingRoot.getAbsolutePath() + "`");
 
-        List<String[]> tableRows = new ArrayList<>();
-        for (ComponentRow row : rows) {
-            tableRows.add(new String[]{row.subproject(), row.branch(),
-                    row.version(), row.status()});
-        }
-        report.table(List.of("Subproject", "Branch", "Version", "Status"),
-                tableRows);
+        WorkingSetReportTable.render(report, "Working set", rows);
 
         report.paragraph("Each component is a self-contained clone on `"
                 + branchName + "`, created with `--reference --dissociate`"

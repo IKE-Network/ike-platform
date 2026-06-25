@@ -141,7 +141,81 @@ class UpdateFeatureIntegrationTest {
                 .hasMessageContaining("uncommitted changes");
     }
 
+    /**
+     * The working-set report includes the aggregator (workspace root) as a
+     * row, labeled {@code aggregator}, with its POM version — the #763 fix.
+     * A subproject-only table never surfaced the root's version; the shared
+     * {@link WorkingSetReportTable} renders one row per working-set member,
+     * the aggregator included (#766/#767, epic #764).
+     */
+    @Test
+    void updateFeature_report_includesAggregatorRowWithRootVersion()
+            throws Exception {
+        // Give the workspace root a distinctively-versioned POM so the
+        // aggregator row can show a version (TestWorkspaceHelper's
+        // buildWorkspace() creates only the subprojects). The root is left a
+        // plain directory (no .git): readPomVersion still surfaces its
+        // version — the #763 fix — while gitBranch/gitShortSha degrade
+        // gracefully, and the goal's "uncommitted workspace root" guard
+        // (which only fires when the root IS a git repo) stays inert.
+        Files.writeString(tempDir.resolve("pom.xml"), """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <project xmlns="http://maven.apache.org/POM/4.0.0">
+                    <modelVersion>4.0.0</modelVersion>
+                    <groupId>com.test</groupId>
+                    <artifactId>update-feature-ws-root</artifactId>
+                    <version>9-update-feature-SNAPSHOT</version>
+                    <packaging>pom</packaging>
+                </project>
+                """, StandardCharsets.UTF_8);
+
+        UpdateFeatureDraftMojo mojo =
+                TestLog.createMojo(UpdateFeatureDraftMojo.class);
+        mojo.manifest = helper.workspaceYaml().toFile();
+        mojo.feature = "long-lived";
+        mojo.targetBranch = "main";
+        mojo.publish = true;
+        mojo.execute();
+
+        String report = readReport("update-feature");
+
+        // The shared working-set table headers are present.
+        assertThat(report)
+                .as("working-set table headers")
+                .contains("Member").contains("Kind").contains("Effect");
+        // The aggregator (workspace root) is a row, labeled — the staleness a
+        // subproject-only table hid (#763) is now visible.
+        assertThat(report)
+                .as("aggregator row is present and labeled")
+                .contains("aggregator");
+        // The root's POM version appears — the #763 fix (the goal gathers the
+        // aggregator's version the same way as a subproject's).
+        assertThat(report)
+                .as("the aggregator's root POM version is surfaced (#763)")
+                .contains("9-update-feature-SNAPSHOT");
+        // Subprojects still appear, with their merged effect.
+        assertThat(report)
+                .as("subprojects appear with their effect")
+                .contains("lib-a").contains("subproject").contains("merged");
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────
+
+    private String readReport(String goalStem) throws Exception {
+        // WorkspaceReport names files "ws<COLON>update-feature-*.md" — find the
+        // first matching .md report in the workspace root so this tolerates
+        // the colon-substitution char without hard-coding it.
+        try (var stream = Files.list(tempDir)) {
+            Path reportFile = stream
+                    .filter(p -> p.getFileName().toString().endsWith(".md"))
+                    .filter(p -> p.getFileName().toString().contains(goalStem))
+                    .findFirst()
+                    .orElseThrow(() -> new AssertionError(
+                            "No report file matching '" + goalStem
+                                    + "' in " + tempDir));
+            return Files.readString(reportFile, StandardCharsets.UTF_8);
+        }
+    }
 
     private void exec(Path workDir, String... command) throws Exception {
         Process process = new ProcessBuilder(command)

@@ -9,6 +9,7 @@ import network.ike.plugin.ws.preflight.PreflightContext;
 import network.ike.plugin.ws.preflight.PreflightResult;
 
 import network.ike.workspace.ManifestWriter;
+import network.ike.workspace.WorkingSet;
 import network.ike.workspace.WorkspaceGraph;
 import network.ike.plugin.ws.vcs.VcsOperations;
 import network.ike.plugin.ws.vcs.VcsState;
@@ -325,11 +326,24 @@ public class WsCheckpointDraftMojo extends AbstractWorkspaceMojo {
             getLog().info("");
         }
 
+        // Resolve the working set so the report renders one row per member
+        // INCLUDING the aggregator (workspace root). The per-subproject
+        // snapshots above (which drive the YAML) never carried the
+        // aggregator, so a subproject-only table hid the root's state — the
+        // #763 gap this checkpoint report (#766) exists to close. Gather the
+        // aggregator's own version/branch the same way as a subproject; its
+        // root directory always exists, so reading its POM version is the
+        // #763 fix.
+        WorkingSet workingSet = resolveWorkingSet();
+        String aggregatorVersion = readVersionOrNull(root);
+        String aggregatorBranch = workspaceHasGit ? gitBranch(root) : null;
+
         var reportContext = new CheckpointReportContext(
                 name, wsTagName, timestamp, author, draft,
                 snapshots, absentComponents, yamlContent,
                 checkpointFile, workspaceHasGit, manifestUpdated, tagPushed,
-                testingContext, issuesSinceLastRelease);
+                testingContext, issuesSinceLastRelease,
+                workingSet, aggregatorVersion, aggregatorBranch);
         return new WorkspaceReportSpec(
                 publish ? WsGoal.CHECKPOINT_PUBLISH : WsGoal.CHECKPOINT_DRAFT,
                 buildCheckpointMarkdownReport(reportContext));
@@ -368,6 +382,11 @@ public class WsCheckpointDraftMojo extends AbstractWorkspaceMojo {
      * @param manifestUpdated     whether the workspace.yaml SHA write succeeded (publish only)
      * @param tagPushed           whether the workspace tag was pushed to {@code origin} (publish only)
      * @param testingContext      milestone snapshot for testing context, or {@code null} when unavailable
+     * @param workingSet          the resolved working set — its {@code members()} are the subprojects
+     *                            then the aggregator (workspace root), so the report table can render
+     *                            the aggregator row the per-subproject snapshots omit (#763/#766)
+     * @param aggregatorVersion   the workspace root's POM version (the #763 fix — always gathered)
+     * @param aggregatorBranch    the workspace root's current branch, or {@code null} when it has no git
      */
     private record CheckpointReportContext(
             String name,
@@ -383,7 +402,10 @@ public class WsCheckpointDraftMojo extends AbstractWorkspaceMojo {
             boolean manifestUpdated,
             boolean tagPushed,
             ReleaseNotesSupport.TestingContext testingContext,
-            Map<String, List<ReleaseNotesSupport.IssueRef>> issuesSinceLastRelease) {}
+            Map<String, List<ReleaseNotesSupport.IssueRef>> issuesSinceLastRelease,
+            WorkingSet workingSet,
+            String aggregatorVersion,
+            String aggregatorBranch) {}
 
     private String buildCheckpointMarkdownReport(CheckpointReportContext ctx) {
         GoalReportBuilder report = new GoalReportBuilder();
@@ -404,19 +426,7 @@ public class WsCheckpointDraftMojo extends AbstractWorkspaceMojo {
                 .bullet("**Mode:** " + (ctx.draft()
                         ? "DRAFT — no tags, no files written" : "PUBLISH"));
 
-        List<String[]> subprojectRows = new ArrayList<>();
-        for (var snap : ctx.snapshots()) {
-            subprojectRows.add(new String[]{
-                    snap.name(), snap.version(),
-                    "`" + snap.shortSha() + "`", snap.branch(), "✓"});
-        }
-        for (String absentName : ctx.absentComponents()) {
-            subprojectRows.add(new String[]{
-                    absentName, "—", "—", "—", "not cloned"});
-        }
-        report.section("Subprojects")
-                .table(List.of("Subproject", "Version", "SHA", "Branch",
-                        "Status"), subprojectRows);
+        renderWorkingSetTable(report, ctx);
 
         report.section("Outputs");
         String checkpointPath = "checkpoints/" + checkpointFileName(ctx.name());
@@ -484,6 +494,103 @@ public class WsCheckpointDraftMojo extends AbstractWorkspaceMojo {
         }
 
         return report.build();
+    }
+
+    /**
+     * Render the shared working-set table for the checkpoint report —
+     * one {@link WorkingSetReportTable.Row} per working-set member, the
+     * aggregator (workspace root) INCLUDED.
+     *
+     * <p>The per-subproject {@link SubprojectSnapshot snapshots} that drive
+     * the checkpoint YAML never carried the aggregator, so the table this
+     * replaces hid the workspace root entirely — the staleness #763 describes.
+     * Iterating {@link WorkingSet#members()} (subprojects then the aggregator)
+     * makes the root a first-class row, and gathering its POM version from the
+     * always-present root directory is the #763 fix (#766).
+     *
+     * <p>The {@code Effect} column states what the checkpoint did or will do to
+     * each member — phrased as <em>planned</em> in a draft, <em>applied</em> in
+     * a publish. Subprojects are tagged at their current HEAD; the aggregator is
+     * committed (recording the set) and tagged, so it cannot cite its own
+     * not-yet-made SHA and uses the {@link WorkingSetReportTable#SELF_COMMIT}
+     * sentinel.
+     *
+     * @param report the report builder to append the table to
+     * @param ctx    the gathered checkpoint report context
+     */
+    private void renderWorkingSetTable(GoalReportBuilder report,
+                                       CheckpointReportContext ctx) {
+        Map<String, SubprojectSnapshot> byName = new LinkedHashMap<>();
+        for (SubprojectSnapshot snap : ctx.snapshots()) {
+            byName.put(snap.name(), snap);
+        }
+        Set<String> absent = new LinkedHashSet<>(ctx.absentComponents());
+
+        List<WorkingSetReportTable.Row> rows = new ArrayList<>();
+        for (WorkingSet.Member member : ctx.workingSet().members()) {
+            if (member.isAggregator()) {
+                rows.add(new WorkingSetReportTable.Row(
+                        member,
+                        ctx.aggregatorVersion(),
+                        ctx.aggregatorBranch(),
+                        WorkingSetReportTable.SELF_COMMIT,
+                        aggregatorEffect(ctx)));
+                continue;
+            }
+            String memberName = member.name();
+            if (absent.contains(memberName)) {
+                rows.add(new WorkingSetReportTable.Row(
+                        member, null, null, null,
+                        "skipped (not cloned)"));
+                continue;
+            }
+            SubprojectSnapshot snap = byName.get(memberName);
+            if (snap == null) {
+                // A declared member with neither a snapshot nor an absent
+                // marker — render what we know rather than dropping the row.
+                rows.add(new WorkingSetReportTable.Row(
+                        member, null, null, null, "skipped (no-op)"));
+                continue;
+            }
+            rows.add(new WorkingSetReportTable.Row(
+                    member, snap.version(), snap.branch(), snap.shortSha(),
+                    subprojectEffect(ctx)));
+        }
+
+        WorkingSetReportTable.render(report, "Working set", rows);
+    }
+
+    /**
+     * The {@code Effect} cell for a tagged subproject — planned in a draft,
+     * applied in a publish.
+     *
+     * @param ctx the checkpoint report context
+     * @return the effect phrase, e.g. {@code "tag checkpoint/<name> (planned)"}
+     */
+    private static String subprojectEffect(CheckpointReportContext ctx) {
+        return ctx.draft()
+                ? "tag `" + ctx.wsTagName() + "` (planned)"
+                : "tagged `" + ctx.wsTagName() + "`";
+    }
+
+    /**
+     * The {@code Effect} cell for the aggregator (workspace root) — it is
+     * committed (recording the set) and tagged, with the outcome reflecting
+     * draft vs. publish and whether the root has git / an {@code origin}.
+     *
+     * @param ctx the checkpoint report context
+     * @return the effect phrase for the aggregator row
+     */
+    private static String aggregatorEffect(CheckpointReportContext ctx) {
+        if (!ctx.workspaceHasGit()) {
+            return "skipped (no `.git` at root)";
+        }
+        if (ctx.draft()) {
+            return "commit + tag `" + ctx.wsTagName() + "` (planned)";
+        }
+        return ctx.tagPushed()
+                ? "committed + tagged + pushed"
+                : "committed + tagged (no `origin`)";
     }
 
     // ── YAML generation (pure, static, testable) ──────────────────────
@@ -566,6 +673,25 @@ public class WsCheckpointDraftMojo extends AbstractWorkspaceMojo {
 
     private String readVersion(File dir) throws MojoException {
         return ReleaseSupport.readPomVersion(new File(dir, "pom.xml"));
+    }
+
+    /**
+     * Read a directory's POM version for the report's working-set table,
+     * returning {@code null} instead of throwing when the POM is absent or
+     * unreadable. Used to gather the aggregator (workspace root) version —
+     * the #763 fix surfaces the root as a table row, so a root without a
+     * readable POM must render an empty version cell rather than aborting
+     * the whole checkpoint.
+     *
+     * @param dir the directory whose {@code pom.xml} version to read
+     * @return the POM version, or {@code null} when it cannot be read
+     */
+    private String readVersionOrNull(File dir) {
+        try {
+            return readVersion(dir);
+        } catch (MojoException e) {
+            return null;
+        }
     }
 
     /**

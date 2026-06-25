@@ -4,6 +4,7 @@ import network.ike.plugin.ReleaseSupport;
 import network.ike.plugin.support.GoalReportBuilder;
 import network.ike.workspace.ManifestWriter;
 import network.ike.workspace.Subproject;
+import network.ike.workspace.WorkingSet;
 import network.ike.workspace.WorkspaceGraph;
 import org.apache.maven.api.plugin.MojoException;
 import org.apache.maven.api.plugin.annotations.Mojo;
@@ -144,6 +145,14 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
         report.paragraph("**Mode:** " + describeFromMode()
                 + (draft ? "  _(draft — no changes made)_" : ""));
 
+        // Working-set table — one row per member, the aggregator
+        // (workspace root) included, so the staleness a subproject-only
+        // list hid (IKE-Network/ike-issues#763, #764) is visible. The
+        // Effect column phrases the branch reconcile as PLANNED in draft
+        // mode, APPLIED in publish mode.
+        WorkingSetReportTable.render(report, "Working set",
+                workingSetRows(result.effects()));
+
         if (totalChanges == 0 && result.skipped().isEmpty()) {
             getLog().info("  Nothing to reconcile  ✓");
             report.paragraph("Nothing to reconcile — branches already coherent.");
@@ -182,12 +191,29 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
     /**
      * Per-branch reconcile outcome carried into the report: one
      * human-readable line per branch that differs, plus any subprojects
-     * skipped for uncommitted changes (no {@code -Dforce}).
+     * skipped for uncommitted changes (no {@code -Dforce}), plus the
+     * per-member {@code Effect} cell for the working-set table.
+     *
+     * <p>{@code effects} is keyed by working-set member name (subproject
+     * name, or the aggregator's directory name) and holds what the goal
+     * did or will do to that member — {@code "branch field → main"},
+     * {@code "checkout → develop"}, {@code "skipped (uncommitted)"}, etc.
+     * Members absent from the map were untouched and render as
+     * {@code "unchanged"}.
      *
      * @param changes one line per branch change (markdown)
      * @param skipped one line per subproject skipped (uncommitted)
+     * @param effects per-member {@code Effect} cell (member name → effect)
      */
-    private record BranchChanges(List<String> changes, List<String> skipped) {}
+    private record BranchChanges(List<String> changes, List<String> skipped,
+                                 Map<String, String> effects) {
+
+        /** Empty outcome — nothing changed and no per-member effects. */
+        static BranchChanges empty() {
+            return new BranchChanges(List.of(), List.of(),
+                    new LinkedHashMap<>());
+        }
+    }
 
     /**
      * Dispatch on {@code -Dfrom=...} to the right branch-reconcile
@@ -230,6 +256,7 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
             throws MojoException {
         Map<String, String> updates = new LinkedHashMap<>();
         List<String> changes = new ArrayList<>();
+        Map<String, String> effects = new LinkedHashMap<>();
 
         for (Map.Entry<String, Subproject> entry
                 : graph.manifest().subprojects().entrySet()) {
@@ -245,13 +272,15 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
             updates.put(name, actual);
             changes.add("`" + name + "` (yaml): `" + declared
                     + "` → `" + actual + "`");
+            effects.put(name, (draft ? "yaml branch → `" : "yaml branch set → `")
+                    + actual + "`");
             getLog().info("  branch: " + name + ": " + declared
                     + " → " + actual + (draft ? " (draft)" : ""));
         }
 
         if (updates.isEmpty()) {
             getLog().info("  Branches: yaml already matches repos  ✓");
-            return new BranchChanges(List.of(), List.of());
+            return BranchChanges.empty();
         }
 
         if (!draft) {
@@ -273,7 +302,7 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
             }
         }
 
-        return new BranchChanges(changes, List.of());
+        return new BranchChanges(changes, List.of(), effects);
     }
 
     /**
@@ -330,6 +359,11 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
         Map<String, String> yamlUpdates = new LinkedHashMap<>();
         List<String> changes = new ArrayList<>();
         List<String> skipped = new ArrayList<>();
+        Map<String, String> effects = new LinkedHashMap<>();
+        // The workspace repo (aggregator) is the authority in this mode —
+        // record that so its working-set row reads as the branch source,
+        // not a no-op.
+        effects.put(aggregatorName(root), "authority — HEAD `" + wsBranch + "`");
         int checkoutsPlanned = 0;
         int checkoutsApplied = 0;
         int skippedDirty = 0;
@@ -347,6 +381,8 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
                 changes.add("`" + name + "` (yaml): `"
                         + (declared == null ? "(unset)" : declared)
                         + "` → `" + wsBranch + "`");
+                effects.put(name, (draft ? "yaml branch → `" : "yaml branch set → `")
+                        + wsBranch + "`");
                 getLog().info("  branch: " + name + " (yaml): "
                         + (declared == null ? "(unset)" : declared)
                         + " → " + wsBranch + (draft ? " (draft)" : ""));
@@ -362,6 +398,7 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
                 getLog().warn("  ⚠ " + name + ": uncommitted changes — skipping"
                         + " checkout (pass -Dforce=true to override)");
                 skipped.add("`" + name + "` — uncommitted (use -Dforce=true)");
+                effects.put(name, "skipped (uncommitted)");
                 skippedDirty++;
                 continue;
             }
@@ -369,6 +406,9 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
             checkoutsPlanned++;
             changes.add("`" + name + "` (repo): `" + actual
                     + "` → `" + wsBranch + "`");
+            effects.merge(name,
+                    (draft ? "checkout → `" : "checked out → `") + wsBranch + "`",
+                    (yaml, checkout) -> yaml + ", " + checkout);
             getLog().info("  branch: " + name + " (repo): " + actual
                     + " → " + wsBranch + (draft ? " (draft)" : ""));
 
@@ -390,7 +430,7 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
 
         if (yamlUpdates.isEmpty() && checkoutsPlanned == 0 && skippedDirty == 0) {
             getLog().info("  Branches: workspace, manifest, and repos all agree  ✓");
-            return new BranchChanges(List.of(), List.of());
+            return new BranchChanges(List.of(), List.of(), effects);
         }
 
         if (!draft && !yamlUpdates.isEmpty()) {
@@ -415,12 +455,12 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
                     + (skippedDirty > 0
                             ? " (" + skippedDirty + " skipped — uncommitted)"
                             : ""));
-            return new BranchChanges(changes, skipped);
+            return new BranchChanges(changes, skipped, effects);
         }
         getLog().info("  Branches: " + yamlUpdates.size()
                 + " yaml update(s), " + checkoutsApplied + " checkout(s), "
                 + skippedDirty + " skipped (uncommitted)");
-        return new BranchChanges(changes, skipped);
+        return new BranchChanges(changes, skipped, effects);
     }
 
     /**
@@ -465,6 +505,7 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
         int planned = 0;
         List<String> changes = new ArrayList<>();
         List<String> skipped = new ArrayList<>();
+        Map<String, String> effects = new LinkedHashMap<>();
 
         for (Map.Entry<String, Subproject> entry
                 : graph.manifest().subprojects().entrySet()) {
@@ -483,6 +524,7 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
                 getLog().warn("  ⚠ " + name + ": uncommitted changes — skipping"
                         + " (pass -Dforce=true to override)");
                 skipped.add("`" + name + "` — uncommitted (use -Dforce=true)");
+                effects.put(name, "skipped (uncommitted)");
                 skippedDirty++;
                 continue;
             }
@@ -490,6 +532,8 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
             planned++;
             changes.add("`" + name + "` (checkout): `" + actual
                     + "` → `" + declared + "`");
+            effects.put(name, (draft ? "checkout → `" : "checked out → `")
+                    + declared + "`");
             getLog().info("  branch: " + name + ": " + actual
                     + " → " + declared + (draft ? " (draft)" : ""));
 
@@ -510,6 +554,65 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
                     + ", skipped " + skippedDirty + " (uncommitted)");
         }
 
-        return new BranchChanges(changes, skipped);
+        return new BranchChanges(changes, skipped, effects);
+    }
+
+    /**
+     * The working-set aggregator's member name — the workspace-root
+     * directory name, matching what {@link #resolveWorkingSet()} reports
+     * for the aggregator. Used as the {@code effects} map key for the
+     * workspace repo in {@code from=workspace-head} mode.
+     *
+     * @param root the workspace root directory
+     * @return the aggregator member name
+     */
+    private static String aggregatorName(File root) {
+        return root.getName();
+    }
+
+    /**
+     * Read the POM {@code <version>} for a working-set member directory,
+     * the aggregator included — surfacing the workspace-root version a
+     * subproject-only table hid (IKE-Network/ike-issues#763). Missing or
+     * unreadable POMs render as {@link WorkingSetReportTable#NONE}.
+     *
+     * @param dir the member directory
+     * @return the POM version, or {@link WorkingSetReportTable#NONE}
+     */
+    private String readPomVersion(File dir) {
+        File pom = new File(dir, "pom.xml");
+        if (!pom.isFile()) return WorkingSetReportTable.NONE;
+        try {
+            return ReleaseSupport.readPomVersion(pom);
+        } catch (MojoException e) {
+            return WorkingSetReportTable.NONE;
+        }
+    }
+
+    /**
+     * Build the working-set table rows — one per
+     * {@link WorkingSet.Member}, the aggregator (workspace root)
+     * included — gathering each member's version, branch, and short SHA
+     * the same way (the root's {@code readPomVersion} is the #763 fix),
+     * and pairing it with the {@code Effect} this reconcile computed for
+     * that member (defaulting to {@code "unchanged"}).
+     *
+     * @param effects per-member effect cells, keyed by member name
+     * @return the rows for {@link WorkingSetReportTable#render}
+     */
+    private List<WorkingSetReportTable.Row> workingSetRows(
+            Map<String, String> effects) {
+        List<WorkingSetReportTable.Row> rows = new ArrayList<>();
+        for (WorkingSet.Member member : resolveWorkingSet().members()) {
+            File dir = member.directory().toFile();
+            boolean isRepo = new File(dir, ".git").exists();
+            String version = readPomVersion(dir);
+            String branch = isRepo ? gitBranch(dir) : WorkingSetReportTable.NONE;
+            String sha = isRepo ? gitShortSha(dir) : WorkingSetReportTable.NONE;
+            String effect = effects.getOrDefault(member.name(), "unchanged");
+            rows.add(new WorkingSetReportTable.Row(
+                    member, version, branch, sha, effect));
+        }
+        return rows;
     }
 }

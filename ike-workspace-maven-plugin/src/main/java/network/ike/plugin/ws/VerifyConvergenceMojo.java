@@ -204,6 +204,8 @@ public class VerifyConvergenceMojo extends AbstractWorkspaceMojo {
                                 boolean failed) {
         GoalReportBuilder report = new GoalReportBuilder();
         report.section("Dependency Convergence — " + wsName)
+                .paragraph("_Working set: subprojects only — the aggregator "
+                        + "is not a dependency-convergence node._")
                 .paragraph("**Components resolved:** " + componentsResolved)
                 .table(List.of("Check", "Result"), List.of(
                         new String[]{"Parent version skew",

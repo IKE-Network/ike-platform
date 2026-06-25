@@ -3,6 +3,7 @@ package network.ike.plugin.ws;
 import network.ike.plugin.ReleaseSupport;
 import network.ike.workspace.Subproject;
 import network.ike.workspace.Dependency;
+import network.ike.workspace.WorkingSet;
 import network.ike.workspace.WorkspaceGraph;
 import network.ike.plugin.support.GoalReportBuilder;
 import network.ike.plugin.ws.vcs.VcsOperations;
@@ -114,9 +115,13 @@ public class OverviewWorkspaceMojo extends AbstractWorkspaceMojo {
             graphRows.add(new String[]{String.valueOf(i + 1), name, deps});
         }
 
-        // ── Section 3: Subproject Status ─────────────────────────────
-        Set<String> targets = graph.manifest().subprojects().keySet();
-
+        // ── Section 3: Working-Set Status ────────────────────────────
+        // #763/#767: iterate the resolved working set — the declared
+        // subprojects PLUS the workspace root (aggregator) — so the
+        // aggregator's own pom version, branch, and tree state surface
+        // in the report. A subproject-only loop hid the root left on a
+        // stale {@code 1-<feature>-SNAPSHOT}; the aggregator is now a
+        // first-class member row.
         getLog().info("");
         getLog().info("  Status");
         getLog().info("  ──────────────────────────────────────────────────────");
@@ -124,19 +129,24 @@ public class OverviewWorkspaceMojo extends AbstractWorkspaceMojo {
                 "COMPONENT", "VERSION", "BRANCH", "SHA", ""));
 
         List<String> modifiedComponents = new ArrayList<>();
-        List<String[]> statusRows = new ArrayList<>();
+        List<WorkingSetReportTable.Row> statusRows = new ArrayList<>();
         int cloned = 0;
         int notCloned = 0;
 
-        for (String name : targets) {
+        for (WorkingSet.Member member : resolveWorkingSet().members()) {
+            String name = member.name();
+            File dir = member.directory().toFile();
+            // A subproject may not be cloned yet; the aggregator's root
+            // directory always exists. The manifest entry is present for
+            // subprojects only — the aggregator has none.
             Subproject sub = graph.manifest().subprojects().get(name);
-            File dir = new File(root, name);
 
             if (!dir.exists()) {
                 notCloned++;
                 getLog().info(String.format("  %-24s %-16s %-24s %-8s %s",
                         name, "—", "—", "—", "not cloned"));
-                statusRows.add(new String[]{name, "—", "—", "—", "not cloned"});
+                statusRows.add(new WorkingSetReportTable.Row(
+                        member, "—", "—", "—", "not cloned"));
                 continue;
             }
 
@@ -145,7 +155,8 @@ public class OverviewWorkspaceMojo extends AbstractWorkspaceMojo {
             String sha = gitShortSha(dir);
             String status = gitStatus(dir);
             // #533: POM version surfaces stale -SNAPSHOTs, missed
-            // version-reset on a feature branch, etc.
+            // version-reset on a feature branch, etc. For the aggregator
+            // this is the #763 fix — the root pom version is surfaced.
             String version = readPomVersion(dir);
 
             // #533: also surface ahead/behind against the upstream
@@ -164,7 +175,13 @@ public class OverviewWorkspaceMojo extends AbstractWorkspaceMojo {
                 long count = status.lines().count();
                 marker = Ansi.red("✗") + " " + count + " changed";
                 statusText = "uncommitted (" + count + " files)";
-                modifiedComponents.add(name);
+                // Cascade impact is graph-driven; only declared
+                // subprojects have downstream rebuild edges. The
+                // aggregator is not a graph node, so it never seeds
+                // the cascade even when its tree is dirty.
+                if (!member.isAggregator()) {
+                    modifiedComponents.add(name);
+                }
             }
             if (aheadBehind.isPresent()) {
                 int ahead = aheadBehind.get()[0];
@@ -194,13 +211,15 @@ public class OverviewWorkspaceMojo extends AbstractWorkspaceMojo {
             }
 
             String branchCol = branch;
-            if (sub.branch() != null && !branch.equals(sub.branch())) {
+            if (sub != null && sub.branch() != null
+                    && !branch.equals(sub.branch())) {
                 branchCol = branch + Ansi.yellow(" ⚠");
             }
 
             getLog().info(String.format("  %-24s %-16s %-24s %-8s %s",
                     name, version, branchCol, sha, marker));
-            statusRows.add(new String[]{name, version, branch, sha, statusText});
+            statusRows.add(new WorkingSetReportTable.Row(
+                    member, version, branch, sha, statusText));
         }
 
         getLog().info("");
@@ -210,7 +229,10 @@ public class OverviewWorkspaceMojo extends AbstractWorkspaceMojo {
         // ── Section 4: Feature Branch Divergence ────────────────────
         // If any subproject is on a feature branch, show how far it has
         // diverged from main — helps developers keep long-lived branches
-        // up to date.
+        // up to date. This stays subproject-scoped: divergence-from-main
+        // is a per-subproject concern, distinct from the working-set
+        // Status table above.
+        Set<String> targets = graph.manifest().subprojects().keySet();
         List<String[]> divergenceRows = new ArrayList<>();
         boolean anyOnFeature = false;
         int warnThreshold = 20;
@@ -332,7 +354,7 @@ public class OverviewWorkspaceMojo extends AbstractWorkspaceMojo {
 
     private String buildMarkdownReport(List<String> manifestErrors,
                                         List<String[]> graphRows,
-                                        List<String[]> statusRows,
+                                        List<WorkingSetReportTable.Row> statusRows,
                                         List<String[]> divergenceRows,
                                         List<String[]> cascadeRows,
                                         int cloned, int notCloned,
@@ -353,11 +375,13 @@ public class OverviewWorkspaceMojo extends AbstractWorkspaceMojo {
                 .table(List.of("#", "Subproject", "Dependencies"), graphRows)
                 .raw(DotGraphSupport.buildDotReportSection(graph, krokiUrl));
 
-        report.section("Status")
-                .paragraph(cloned + " cloned, " + notCloned + " not cloned, "
-                        + modified + " with uncommitted changes.")
-                .table(List.of("Subproject", "Version", "Branch", "SHA",
-                        "Status"), statusRows);
+        // #763/#767: the working-set Status table — one row per member,
+        // the workspace-root aggregator included, so its (possibly stale)
+        // pom version is visible. Read-only goal ⇒ final column "Status".
+        // The summary lead-in precedes the section that render() opens.
+        report.paragraph(cloned + " cloned, " + notCloned + " not cloned, "
+                + modified + " with uncommitted changes.");
+        WorkingSetReportTable.render(report, "Status", "Status", statusRows);
 
         if (!divergenceRows.isEmpty()) {
             report.section("Feature Branch Divergence")

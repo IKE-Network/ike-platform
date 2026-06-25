@@ -51,6 +51,40 @@ class WsAlignPublishReportTest {
                 .contains("app-c")
                 .contains("lib-b")
                 .contains("→");
+
+        // epic #764/#767: the align goals are by-nature subproject-scoped
+        // (the aggregator is not a dependency-convergence node), so they
+        // carry no aggregator row. The omission must be stated explicitly,
+        // never silent — the report must say "subprojects only" and name
+        // the reason.
+        assertThat(report)
+                .as("the by-nature subproject-scope must be stated, "
+                        + "not silently implied")
+                .contains("subprojects only")
+                .contains("dependency-convergence node");
+    }
+
+    @Test
+    void draft_reportStatesSubprojectsOnlyScopeNote() throws Exception {
+        TestWorkspaceHelper helper = new TestWorkspaceHelper(tempDir);
+        helper.buildWorkspace();
+
+        // The draft goal previews alignment without writing POMs, but its
+        // report carries the same by-nature subproject-scope note as
+        // publish (epic #764/#767). No aggregator row is expected.
+        WsAlignDraftMojo mojo = TestLog.createMojo(WsAlignDraftMojo.class);
+        mojo.manifest = tempDir.resolve("workspace.yaml").toFile();
+        mojo.scope = "poms";
+        mojo.publish = false;
+        mojo.execute();
+
+        String report = readReport("align-draft");
+
+        assertThat(report)
+                .as("the draft report must also state the subproject-only "
+                        + "scope, never silently omit the aggregator")
+                .contains("subprojects only")
+                .contains("dependency-convergence node");
     }
 
     @Test

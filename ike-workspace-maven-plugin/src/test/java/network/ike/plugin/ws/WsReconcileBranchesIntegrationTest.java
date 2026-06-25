@@ -148,6 +148,59 @@ class WsReconcileBranchesIntegrationTest {
                 .contains("feature/test")
                 .contains("would be applied")
                 .contains("mvn " + WsGoal.RECONCILE_BRANCHES_PUBLISH.qualified());
+
+        // The shared working-set table is rendered with the aggregator
+        // (workspace root) as its own row, labeled "aggregator" — the
+        // staleness a subproject-only list hid (#763, epic #764). lib-a's
+        // planned branch-field update shows in the Effect column.
+        assertThat(spec.content())
+                .contains("Working set")
+                .contains("Member").contains("Kind").contains("Effect")
+                .contains("aggregator")
+                .contains(tempDir.getFileName().toString())
+                .contains("yaml branch");
+    }
+
+    @Test
+    void fromRepos_draft_workingSetTable_showsAggregatorRowAndRootVersion()
+            throws Exception {
+        // Give the workspace root (aggregator) its own POM so the #763
+        // fix — gathering the root's version the same way as a subproject
+        // — has a version string to surface in the table.
+        Files.writeString(tempDir.resolve("pom.xml"), """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <project xmlns="http://maven.apache.org/POM/4.0.0">
+                    <modelVersion>4.0.0</modelVersion>
+                    <groupId>com.test</groupId>
+                    <artifactId>%s</artifactId>
+                    <version>9-aggregator-SNAPSHOT</version>
+                    <packaging>pom</packaging>
+                </project>
+                """.formatted(tempDir.getFileName().toString()),
+                StandardCharsets.UTF_8);
+
+        // A change to report: switch lib-a to a feature branch.
+        exec(tempDir.resolve("lib-a"), "git", "checkout", "-b", "feature/ws");
+
+        WsReconcileBranchesDraftMojo mojo = TestLog.createMojo(
+                WsReconcileBranchesDraftMojo.class);
+        mojo.manifest = helper.workspaceYaml().toFile();
+        mojo.scope = "branches";
+        mojo.from = "repos";
+        mojo.publish = false; // draft
+
+        WorkspaceReportSpec spec = mojo.runGoal();
+
+        // The aggregator is a first-class working-set row, labeled, so
+        // its directory name and POM version are both visible (#763).
+        assertThat(spec.content())
+                .contains("aggregator")
+                .contains(tempDir.getFileName().toString())
+                .contains("9-aggregator-SNAPSHOT");
+        // Every subproject also appears, alongside the aggregator.
+        assertThat(spec.content())
+                .contains("lib-a").contains("lib-b").contains("app-c")
+                .contains("subproject");
     }
 
     // ── from=manifest (manifest → repos) ─────────────────────────────

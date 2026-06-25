@@ -9,6 +9,7 @@ import network.ike.plugin.ws.preflight.PreflightResult;
 
 import network.ike.workspace.Subproject;
 import network.ike.workspace.ManifestWriter;
+import network.ike.workspace.WorkingSet;
 import network.ike.workspace.WorkspaceGraph;
 import network.ike.plugin.ws.vcs.VcsOperations;
 import network.ike.plugin.ws.vcs.VcsState;
@@ -112,6 +113,13 @@ public class FeatureAbandonDraftMojo extends AbstractWorkspaceMojo {
         validateFeatureName(feature);
         String branchName = "feature/" + feature;
 
+        // Capture the aggregator's (workspace root) branch BEFORE any mutation
+        // so its report Effect is accurate in publish mode too, where the root
+        // has already been switched to the target branch by the time the report
+        // is built (#763, under epic #764).
+        String aggregatorBranchBefore = new File(root, ".git").exists()
+                ? gitBranch(root) : null;
+
         // Collect eligible components and show preview
         getLog().info("");
         getLog().info(header("Feature Abandon"));
@@ -124,7 +132,10 @@ public class FeatureAbandonDraftMojo extends AbstractWorkspaceMojo {
 
         List<String> eligible = new ArrayList<>();
         List<String> skipped = new ArrayList<>();
-        List<String[]> reportRows = new ArrayList<>();
+        // Per-member effect, keyed by member name, used to build the shared
+        // working-set report table (#767, under epic #764). The aggregator's
+        // effect is computed separately, after the subproject loop.
+        Map<String, String> effects = new LinkedHashMap<>();
         int totalUnmerged = 0;
 
         for (String name : reversed) {
@@ -134,7 +145,7 @@ public class FeatureAbandonDraftMojo extends AbstractWorkspaceMojo {
             if (!gitDir.exists()) {
                 getLog().info(Ansi.yellow("  · ") + name + " — not cloned");
                 skipped.add(name);
-                reportRows.add(new String[]{name, "not cloned", "0"});
+                effects.put(name, "skipped (not cloned)");
                 continue;
             }
 
@@ -143,7 +154,7 @@ public class FeatureAbandonDraftMojo extends AbstractWorkspaceMojo {
                 getLog().info(Ansi.yellow("  · ") + name + " — on "
                         + currentBranch + ", not on feature");
                 skipped.add(name);
-                reportRows.add(new String[]{name, "not on feature", "0"});
+                effects.put(name, "skipped (not on " + branchName + ")");
                 continue;
             }
 
@@ -178,17 +189,18 @@ public class FeatureAbandonDraftMojo extends AbstractWorkspaceMojo {
                 getLog().info(Ansi.cyan("  → ") + name + " — " + label);
             }
             eligible.add(name);
-            reportRows.add(new String[]{name,
-                    draft ? "would abandon" : "abandoned",
-                    String.valueOf(unmergedCount)});
+            effects.put(name, abandonEffect(draft, branchName, targetBranch,
+                    unmergedCount));
         }
 
         if (eligible.isEmpty()) {
             getLog().info("  No components on " + branchName + " — nothing to abandon.");
             getLog().info("");
-            return new WorkspaceReportSpec(
-                    publish ? WsGoal.FEATURE_ABANDON_PUBLISH : WsGoal.FEATURE_ABANDON_DRAFT,
-                    "No components on `" + branchName + "` — nothing to abandon.\n");
+            // Still render the working-set table so the report shows every
+            // member (the aggregator included) and why each was skipped (#763).
+            return writeAbandonReport(branchName, targetBranch, aggregatorBranchBefore,
+                    effects,
+                    eligible, skipped, draft);
         }
 
         getLog().info("");
@@ -203,7 +215,9 @@ public class FeatureAbandonDraftMojo extends AbstractWorkspaceMojo {
                     + WsGoal.FEATURE_ABANDON_PUBLISH.qualified()
                     + (force ? "" : " (will prompt for confirmation)"));
             getLog().info("");
-            return writeAbandonReport(branchName, reportRows, eligible, skipped, draft);
+            return writeAbandonReport(branchName, targetBranch, aggregatorBranchBefore,
+                    effects,
+                    eligible, skipped, draft);
         }
 
         // Publish mode — prompt for confirmation
@@ -247,21 +261,121 @@ public class FeatureAbandonDraftMojo extends AbstractWorkspaceMojo {
         }
         getLog().info("");
 
-        return writeAbandonReport(branchName, reportRows, eligible, skipped, draft);
+        return writeAbandonReport(branchName, targetBranch, aggregatorBranchBefore,
+                    effects,
+                eligible, skipped, draft);
     }
 
-    private WorkspaceReportSpec writeAbandonReport(String branchName, List<String[]> rows,
+    private WorkspaceReportSpec writeAbandonReport(String branchName,
+                                     String targetBranch, String aggregatorBranchBefore,
+                                     Map<String, String> effects,
                                      List<String> eligible, List<String> skipped,
                                      boolean isDraft) {
         GoalReportBuilder report = new GoalReportBuilder();
         report.paragraph("**Branch:** `" + branchName + "`");
-        report.table(List.of("Subproject", "Status", "Unmerged Commits"), rows);
+
+        // One row per working-set member — the aggregator (workspace root)
+        // included — so the staleness a subproject-only table hid is visible
+        // (#763, under epic #764). The Effect column states what the goal did
+        // (publish) or would do (draft) to each member.
+        List<WorkingSetReportTable.Row> rows = new ArrayList<>();
+        for (WorkingSet.Member member : resolveWorkingSet().members()) {
+            File dir = member.directory().toFile();
+            String version = readMemberVersion(dir);
+            String branch = gitBranch(dir);
+            String sha = gitShortSha(dir);
+            String effect = member.isAggregator()
+                    ? aggregatorEffect(member, aggregatorBranchBefore, branchName,
+                            targetBranch, isDraft)
+                    : effects.getOrDefault(member.name(), "skipped (no-op)");
+            rows.add(new WorkingSetReportTable.Row(member, version, branch, sha,
+                    effect));
+        }
+        WorkingSetReportTable.render(report, "Working set", rows);
+
         report.paragraph("**" + eligible.size() + "** "
                 + (isDraft ? "would be abandoned" : "abandoned")
                 + ", **" + skipped.size() + "** skipped.");
         return new WorkspaceReportSpec(
                 publish ? WsGoal.FEATURE_ABANDON_PUBLISH : WsGoal.FEATURE_ABANDON_DRAFT,
                 report.build());
+    }
+
+    /**
+     * Read a working-set member's POM version for the report, returning
+     * {@code null} (rendered as the table's {@code —} placeholder) when the
+     * member has no readable {@code pom.xml}. This gathers the aggregator's
+     * version the same way as a subproject — the {@code #763} fix that surfaces
+     * a workspace root left on a stale branch-qualified version — without
+     * letting a non-Maven member fail the whole report.
+     *
+     * @param dir the member's directory
+     * @return the POM version, or {@code null} if none can be read
+     */
+    private String readMemberVersion(File dir) {
+        File pom = new File(dir, "pom.xml");
+        if (!pom.isFile()) {
+            return null;
+        }
+        try {
+            return ReleaseSupport.readPomVersion(pom);
+        } catch (MojoException e) {
+            return null;
+        }
+    }
+
+    /**
+     * The Effect cell for an eligible subproject — phrased as planned for a
+     * draft goal, applied for publish.
+     *
+     * @param draft         whether this is the draft (preview) variant
+     * @param branchName    the feature branch being abandoned
+     * @param targetBranch  the branch switched to after abandoning
+     * @param unmergedCount unmerged commits that would be lost
+     * @return the Effect cell text
+     */
+    private static String abandonEffect(boolean draft, String branchName,
+                                        String targetBranch, int unmergedCount) {
+        String verb = draft ? "would abandon" : "abandoned";
+        String tail = " " + branchName + " → " + targetBranch;
+        if (unmergedCount > 0) {
+            return verb + tail + " (" + unmergedCount + " unmerged lost)";
+        }
+        return verb + tail;
+    }
+
+    /**
+     * The Effect cell for the aggregator (workspace root). Mirrors
+     * {@link #abandonWorkspaceRepo}: when the workspace repo is itself on the
+     * feature branch it is reverted and switched to the target branch;
+     * otherwise its branches are reconciled but it stays put. Phrased as
+     * planned for a draft goal, applied for publish. Uses the pre-execution
+     * branch ({@code branchBefore}) so the cell is accurate even in publish
+     * mode, where the report is built after the root has been switched.
+     *
+     * @param member       the aggregator member
+     * @param branchBefore the aggregator's branch before any mutation, or
+     *                     {@code null} if the root is not a git working tree
+     * @param branchName   the feature branch being abandoned
+     * @param targetBranch the branch switched to after abandoning
+     * @param draft        whether this is the draft (preview) variant
+     * @return the Effect cell text
+     */
+    private String aggregatorEffect(WorkingSet.Member member, String branchBefore,
+                                    String branchName, String targetBranch,
+                                    boolean draft) {
+        if (branchBefore == null
+                || !new File(member.directory().toFile(), ".git").exists()) {
+            return "skipped (not cloned)";
+        }
+        if (branchBefore.equals(branchName)) {
+            return draft
+                    ? "would revert workspace.yaml + switch → " + targetBranch
+                    : "reverted workspace.yaml + switched → " + targetBranch;
+        }
+        return draft
+                ? "would reconcile workspace.yaml branches"
+                : "reconciled workspace.yaml branches";
     }
 
     // ── Auto-detect ─────────────────────────────────────────────────

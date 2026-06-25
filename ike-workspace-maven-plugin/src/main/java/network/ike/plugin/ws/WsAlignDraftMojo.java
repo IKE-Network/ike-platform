@@ -57,6 +57,20 @@ import java.util.Map;
 public class WsAlignDraftMojo extends AbstractWorkspaceMojo {
 
     /**
+     * Scope note prepended to the align report. The align goals are
+     * by-nature subproject-scoped: they reconcile inter-subproject
+     * dependency, plugin, and parent versions, and the aggregator
+     * (workspace root) is not a convergence node — it has no inbound
+     * inter-subproject coordinate to align. Stating this explicitly
+     * (rather than silently omitting the aggregator row that mutating
+     * working-set reports carry per epic #764/#767) keeps the omission
+     * visible to a reader of the report.
+     */
+    static final String WORKING_SET_NOTE =
+            "_Working set: subprojects only — the aggregator is not a "
+                    + "dependency-convergence node._\n\n";
+
+    /**
      * When true, apply changes; when false (default), preview only.
      * Package-private so {@link WsAlignPublishMojo} can flip it.
      */
@@ -140,7 +154,7 @@ public class WsAlignDraftMojo extends AbstractWorkspaceMojo {
         if (draft) {
             DriftReport report = reconciler.detect(ctx);
             printDriftReport(report);
-            content = report.toMarkdown();
+            content = WORKING_SET_NOTE + report.toMarkdown();
         } else {
             // #543: capture the drift plan BEFORE applying so the
             // publish report can list per-POM version changes (and
@@ -151,7 +165,7 @@ public class WsAlignDraftMojo extends AbstractWorkspaceMojo {
             // bigger refactor of AlignmentReconciler.
             DriftReport report = reconciler.detect(ctx);
             reconciler.apply(ctx);
-            content = report.toAppliedMarkdown();
+            content = WORKING_SET_NOTE + report.toAppliedMarkdown();
         }
         getLog().info("");
         return new WorkspaceReportSpec(

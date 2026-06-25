@@ -1,7 +1,9 @@
 package network.ike.plugin.ws;
 
 import network.ike.workspace.Subproject;
+import network.ike.workspace.WorkingSet;
 import network.ike.workspace.WorkspaceGraph;
+import network.ike.plugin.ReleaseSupport;
 import network.ike.plugin.support.GoalReportBuilder;
 import network.ike.plugin.ws.vcs.VcsOperations;
 import network.ike.plugin.ws.vcs.VcsState;
@@ -372,23 +374,58 @@ public class FeatureFinishMergeDraftMojo extends AbstractWorkspaceMojo {
         report.paragraph("**Branch:** `" + branch + "` → `" + target + "`  \n"
                 + "**Strategy:** no-fast-forward merge");
 
-        // #544: resulting target-branch HEAD column.
-        List<String[]> rows = new ArrayList<>();
-        for (String name : components) {
-            String sha = targetSha.getOrDefault(name, "—");
-            rows.add(new String[]{name, isDraft ? "would merge" : "merged",
-                    "—".equals(sha) ? "—" : "`" + shorten(sha) + "`"});
+        // #764/#763: one row per working-set member — every subproject AND
+        // the workspace-root aggregator — rendered through the shared
+        // WorkingSetReportTable. The aggregator's version/branch/SHA are
+        // gathered the same way as a subproject (the #763 fix); previously
+        // the workspace repo was no-ff merged but never shown in the table.
+        // The Effect column carries the per-member merge outcome and the
+        // resulting target-branch HEAD SHA lands in the SHA column (#544).
+        WorkingSet workingSet = resolveWorkingSet();
+        List<WorkingSetReportTable.Row> rows = new ArrayList<>();
+        for (WorkingSet.Member member : workingSet.members()) {
+            File dir = member.directory().toFile();
+            String version = readPomVersion(dir);
+            String memberBranch = gitBranch(dir);
+            String memberSha;
+            String effect;
+
+            if (member.isAggregator()) {
+                // The workspace repo is no-ff merged by mergeWorkspaceRepo
+                // only when at least one subproject merged and we're
+                // publishing; the draft previews the same intent (#763 fix:
+                // the aggregator now appears in the table either way).
+                memberSha = isDraft ? "—" : gitShortSha(dir);
+                if (merged > 0) {
+                    effect = isDraft
+                            ? "would merge `" + branch + "` → `" + target + "`"
+                            : "merged `" + branch + "` → `" + target + "`";
+                } else {
+                    effect = "no-op (no subprojects merged)";
+                }
+            } else if (components.contains(member.name())) {
+                String sha = targetSha.getOrDefault(member.name(), "—");
+                effect = isDraft
+                        ? "would merge `" + branch + "` → `" + target + "`"
+                        : "merged `" + branch + "` → `" + target + "`";
+                memberSha = "—".equals(sha) ? "—" : shorten(sha);
+            } else if (alreadyDone.contains(member.name())) {
+                String sha = targetSha.getOrDefault(member.name(), "—");
+                effect = isDraft
+                        ? "would reconcile workspace.yaml only"
+                        : "reconciled workspace.yaml only (already on "
+                                + target + " from a prior run)";
+                memberSha = "—".equals(sha) ? "—" : shorten(sha);
+            } else {
+                // A subproject not on the feature branch — skipped this run.
+                effect = "skipped (not on `" + branch + "`)";
+                memberSha = "—";
+            }
+
+            rows.add(new WorkingSetReportTable.Row(
+                    member, version, memberBranch, memberSha, effect));
         }
-        for (String name : alreadyDone) {
-            String sha = targetSha.getOrDefault(name, "—");
-            String status = isDraft
-                    ? "would reconcile workspace.yaml only"
-                    : "reconciled workspace.yaml only (already on "
-                            + target + " from a prior run)";
-            rows.add(new String[]{name, status,
-                    "—".equals(sha) ? "—" : "`" + shorten(sha) + "`"});
-        }
-        report.table(List.of("Subproject", "Status", target + " HEAD"), rows);
+        WorkingSetReportTable.render(report, "Subprojects", rows);
 
         report.paragraph("**" + merged + " subproject(s)** "
                 + (isDraft ? "would be merged" : "merged")
@@ -523,5 +560,25 @@ public class FeatureFinishMergeDraftMojo extends AbstractWorkspaceMojo {
     private static String shorten(String sha) {
         if (sha == null || sha.length() <= 7) return sha;
         return sha.substring(0, 7);
+    }
+
+    /**
+     * Read a working-set member's POM version (the {@code <version>} of
+     * {@code <dir>/pom.xml}), returning {@link WorkingSetReportTable#NONE}
+     * when no POM is present or it cannot be parsed. Applied uniformly to
+     * subprojects and the workspace-root aggregator — the aggregator's
+     * version is part of the #763 fix (its row was previously absent).
+     *
+     * @param dir the member directory
+     * @return the POM version, or {@code "—"} when unavailable
+     */
+    private String readPomVersion(File dir) {
+        File pom = new File(dir, "pom.xml");
+        if (!pom.isFile()) return WorkingSetReportTable.NONE;
+        try {
+            return ReleaseSupport.readPomVersion(pom);
+        } catch (MojoException e) {
+            return WorkingSetReportTable.NONE;
+        }
     }
 }

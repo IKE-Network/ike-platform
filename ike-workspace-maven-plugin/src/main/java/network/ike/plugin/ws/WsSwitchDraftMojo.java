@@ -2,6 +2,7 @@ package network.ike.plugin.ws;
 
 import network.ike.workspace.Manifest;
 import network.ike.workspace.ManifestReader;
+import network.ike.workspace.WorkingSet;
 import network.ike.workspace.WorkspaceGraph;
 import network.ike.plugin.ws.preflight.Preflight;
 import network.ike.plugin.ws.preflight.PreflightCondition;
@@ -196,6 +197,9 @@ public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
         List<String> wouldStash = new ArrayList<>();
         List<String> wouldRestore = new ArrayList<>();
         List<String> wouldPark = new ArrayList<>();
+        // Per-member effect for the working-set table (#764/#767): keyed by
+        // subproject name; the aggregator's effect is recorded after the loop.
+        Map<String, String> effects = new java.util.LinkedHashMap<>();
 
         // Subprojects declared on the target branch (#573). A current
         // subproject absent here is parked rather than force-switched; null
@@ -205,6 +209,7 @@ public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
         for (String name : sorted) {
             File dir = new File(root, name);
             if (!new File(dir, ".git").exists()) {
+                effects.put(name, "skipped (not cloned)");
                 skipped++;
                 continue;
             }
@@ -224,6 +229,8 @@ public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
                     getLog().info("  [draft] " + name + " — would PARK (not a "
                             + "member of " + branch + ")"
                             + (willStash ? " (stash first)" : ""));
+                    effects.put(name, "would park (not on `" + branch + "`)"
+                            + (willStash ? " — stash first" : ""));
                     parked++;
                     continue;
                 }
@@ -232,12 +239,15 @@ public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
                     stashed++;
                 }
                 parkSubproject(dir, name, compBranch);
+                effects.put(name, "parked — branch pushed to " + STASH_REMOTE
+                        + ", clone removed");
                 parked++;
                 continue;
             }
 
             if (compBranch.equals(branch)) {
                 getLog().info("  " + Ansi.green("✓ ") + name + " — already on " + branch);
+                effects.put(name, "already on `" + branch + "`");
                 switched++;
                 continue;
             }
@@ -249,6 +259,8 @@ public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
                 if (!localBranches.contains(branch)) {
                     getLog().info("  " + Ansi.yellow("⚠ ") + name
                             + " — branch " + branch + " does not exist locally, skipping");
+                    effects.put(name, "skipped (branch `" + branch
+                            + "` absent locally)");
                     skipped++;
                     continue;
                 }
@@ -269,14 +281,18 @@ public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
                         : "";
                 getLog().info("  [draft] " + name + " — would switch "
                         + compBranch + " → " + branch + note);
+                effects.put(name, "would switch `" + compBranch + "` → `"
+                        + branch + "`" + note);
                 switched++;
                 continue;
             }
 
             // ── Leave flow: stash work on source branch ──────────
+            boolean didStash = false;
             if (!noStash && !VcsOperations.isClean(dir)) {
                 ParkSupport.stashLeave(dir, getLog(), slug, compBranch);
                 stashed++;
+                didStash = true;
             }
 
             // ── Checkout target ──────────────────────────────────
@@ -285,11 +301,19 @@ public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
             switched++;
 
             // ── Arrive flow: apply stash on target branch if any ─
+            boolean didApply = false;
             if (!noStash) {
                 if (ParkSupport.stashArrive(dir, getLog(), slug, branch)) {
                     applied++;
+                    didApply = true;
                 }
             }
+            String note = didStash && didApply ? " (stashed + applied)"
+                    : didStash ? " (stashed)"
+                    : didApply ? " (applied)"
+                    : "";
+            effects.put(name, "switched `" + compBranch + "` → `" + branch
+                    + "`" + note);
         }
 
         // ── Switch the workspace root, then restore target-only members ──
@@ -300,6 +324,27 @@ public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
         if (!draft && (switched > 0 || parked > 0)) {
             switchWorkspaceRepo(branch);
             restored = restoreMembers(root, slug);
+        }
+
+        // ── Aggregator (workspace root) effect for the working-set table ──
+        // The root is a first-class member (#764); record what the switch did
+        // (or would do) to it so the table never hides a stale aggregator left
+        // on the source branch (#763). The root's directory always exists.
+        String rootName = root.getName();
+        if (draft) {
+            effects.put(rootName, currentBranch.equals(branch)
+                    ? "would stay on `" + currentBranch + "`"
+                    : "would switch `" + currentBranch + "` → `" + branch + "`");
+        } else {
+            String rootBranch = gitBranch(root);
+            String rootEffect = rootBranch.equals(branch)
+                    ? "switched to `" + branch + "`"
+                    : "stayed on `" + rootBranch + "`";
+            if (restored > 0) {
+                rootEffect += "; restored " + restored + " parked member"
+                        + (restored == 1 ? "" : "s");
+            }
+            effects.put(rootName, rootEffect);
         }
 
         // ── Console summary ──────────────────────────────────────
@@ -332,6 +377,13 @@ public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
         GoalReportBuilder report = new GoalReportBuilder();
         report.paragraph("**From:** `" + currentBranch + "` **To:** `" + branch
                 + "`" + (draft ? "  _(draft — no changes made)_" : ""));
+
+        // Working-set table: one row per member, the aggregator included
+        // (#764/#767). The Effect column states what the switch did (publish)
+        // or would do (draft) to each member. The aggregator row makes a stale
+        // workspace root visible (#763) rather than hiding it as a
+        // subproject-only table did.
+        renderWorkingSet(report, root, sorted, effects);
 
         if (draft) {
             report.paragraph("**" + switched + "** to switch, **"
@@ -387,6 +439,64 @@ public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
         return new WorkspaceReportSpec(
                 publish ? WsGoal.SWITCH_PUBLISH : WsGoal.SWITCH_DRAFT,
                 report.build());
+    }
+
+    // ── Working-set table (#764/#767) ────────────────────────────────
+
+    /**
+     * Render the switch's effect on the working set as the shared table —
+     * one {@link WorkingSetReportTable.Row} per member, the aggregator
+     * (workspace root) included. The members are the subprojects the goal
+     * processed (in topological order) followed by the workspace root, each
+     * with its current version/branch/SHA gathered the same way; the root's
+     * version is read too (the #763 fix — a stale aggregator is no longer
+     * hidden). The {@code Effect} cell comes from the per-member map built
+     * during the switch loop; a member parked (clone removed) shows
+     * {@code "—"} for branch/SHA since its tree is gone.
+     *
+     * @param report  the report builder to append the table to
+     * @param root    the workspace root directory
+     * @param sorted  the subprojects in topological order (loop order)
+     * @param effects per-member effect, keyed by member name
+     */
+    private void renderWorkingSet(GoalReportBuilder report, File root,
+                                  List<String> sorted,
+                                  Map<String, String> effects) {
+        List<WorkingSetReportTable.Row> rows = new ArrayList<>();
+        for (String name : sorted) {
+            File dir = new File(root, name);
+            boolean cloned = new File(dir, ".git").exists();
+            String version = cloned ? readPomVersion(dir) : null;
+            String branchName = cloned ? gitBranch(dir) : null;
+            String sha = cloned ? gitShortSha(dir) : null;
+            rows.add(new WorkingSetReportTable.Row(
+                    WorkingSet.Member.subproject(name, dir.toPath()),
+                    version, branchName, sha, effects.get(name)));
+        }
+        // The aggregator (workspace root) — its tree always exists, so its
+        // version is gathered the same way (the #763 fix).
+        rows.add(new WorkingSetReportTable.Row(
+                WorkingSet.Member.aggregator(root.getName(), root.toPath()),
+                readPomVersion(root), gitBranch(root), gitShortSha(root),
+                effects.get(root.getName())));
+        WorkingSetReportTable.render(report, "Working set", rows);
+    }
+
+    /**
+     * Read a member's POM {@code <version>}, or {@code null} when there is no
+     * {@code pom.xml} (a POM-less aggregator root) or it cannot be parsed.
+     *
+     * @param dir the member directory
+     * @return the POM version, or {@code null} when unavailable
+     */
+    private String readPomVersion(File dir) {
+        File pom = new File(dir, "pom.xml");
+        if (!pom.isFile()) return null;
+        try {
+            return network.ike.plugin.ReleaseSupport.readPomVersion(pom);
+        } catch (MojoException e) {
+            return null;
+        }
     }
 
     // ── #573 park / restore: branch-scoped membership ────────────────

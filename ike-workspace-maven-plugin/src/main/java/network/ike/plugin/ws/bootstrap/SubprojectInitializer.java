@@ -803,7 +803,8 @@ public final class SubprojectInitializer {
                 | `ws:feature-finish-squash-publish` | Squash merge (single commit) |
                 | `ws:feature-abandon-draft` | Preview abandoning a feature branch |
                 | `ws:feature-abandon-publish` | Delete feature branch across components |
-                | `ws:sibling-create` | Clone the workspace into a sibling dir on a feature branch (isolated, Syncthing-safe) |
+                | `ws:feature-start-sibling-draft` | Preview a sibling-clone feature start (no clone) |
+                | `ws:feature-start-sibling-publish` | Start a feature in a sibling clone beside the primary (isolated, Syncthing-safe) |
 
                 ## Release & Checkpoint
 
@@ -927,7 +928,7 @@ public final class SubprojectInitializer {
 
                 Delete a feature branch without merging.
 
-                ### Sibling clone: `ws:sibling-create`
+                ### Sibling clone: `ws:feature-start-sibling-draft` / `-publish`
 
                 Clone the whole workspace into a sibling directory
                 (`<workspace>-<feature>`) on `feature/<name>` from inception,
@@ -937,11 +938,14 @@ public final class SubprojectInitializer {
                 its branch; the sibling is disposable (`rm -rf`) after merge.
                 Isolates concurrent work — same-machine or across Syncthing
                 machines — so two streams never stage each other's edits.
+                Run `-draft` first for a plan + preflight (no clone), then
+                `-publish` to create the sibling.
 
                 | Parameter | Default | Description |
                 |-----------|---------|-------------|
                 | `feature` | prompted | Feature name (branch: `feature/<name>`) |
                 | `skipVersion` | `false` | Skip version qualification |
+                | `from` | current branch | Base branch to cut the sibling from; required to override when the primary is off the manifest base |
 
                 Branches and clones stay local (no auto-push).
 

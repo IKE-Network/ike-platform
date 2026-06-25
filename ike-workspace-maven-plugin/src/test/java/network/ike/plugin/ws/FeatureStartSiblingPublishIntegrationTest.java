@@ -16,14 +16,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Integration tests for {@link SiblingCreateMojo} (ike-issues#207) using real
- * temp workspaces with bare {@code file://} upstreams.
+ * Integration tests for {@link FeatureStartSiblingPublishMojo}
+ * (IKE-Network/ike-issues#207, reshaped in #770) using real temp workspaces
+ * with bare {@code file://} upstreams.
  *
  * <p>{@link TestWorkspaceHelper#buildSiblingScenario()} lays out a primary
  * workspace at {@code <tempDir>/primary} (cloned root + components); the goal
  * produces the sibling at {@code <tempDir>/primary-<feature>}.
  */
-class SiblingCreateIntegrationTest {
+class FeatureStartSiblingPublishIntegrationTest {
 
     private static final List<String> COMPONENTS = List.of("lib-a", "lib-b", "app-c");
 
@@ -39,7 +40,8 @@ class SiblingCreateIntegrationTest {
 
     @Test
     void siblingCreate_producesIsolatedCloneOnFeatureBranch() throws Exception {
-        SiblingCreateMojo mojo = TestLog.createMojo(SiblingCreateMojo.class);
+        FeatureStartSiblingPublishMojo mojo =
+                TestLog.createMojo(FeatureStartSiblingPublishMojo.class);
         mojo.manifest = primary.resolve("workspace.yaml").toFile();
         mojo.feature = "jira-456";
 
@@ -97,7 +99,8 @@ class SiblingCreateIntegrationTest {
     void siblingCreate_refusesWhenSiblingDirectoryAlreadyExists() throws Exception {
         Files.createDirectories(tempDir.resolve("primary-dup"));
 
-        SiblingCreateMojo mojo = TestLog.createMojo(SiblingCreateMojo.class);
+        FeatureStartSiblingPublishMojo mojo =
+                TestLog.createMojo(FeatureStartSiblingPublishMojo.class);
         mojo.manifest = primary.resolve("workspace.yaml").toFile();
         mojo.feature = "dup";
 
@@ -112,7 +115,8 @@ class SiblingCreateIntegrationTest {
 
     @Test
     void siblingCreate_rejectsFilesystemUnsafeFeatureName() throws Exception {
-        SiblingCreateMojo mojo = TestLog.createMojo(SiblingCreateMojo.class);
+        FeatureStartSiblingPublishMojo mojo =
+                TestLog.createMojo(FeatureStartSiblingPublishMojo.class);
         mojo.manifest = primary.resolve("workspace.yaml").toFile();
         mojo.feature = "bad/name";
 
@@ -127,14 +131,15 @@ class SiblingCreateIntegrationTest {
     @Test
     void siblingCreate_report_includesAggregatorRowWithRootVersion()
             throws Exception {
-        SiblingCreateMojo mojo = TestLog.createMojo(SiblingCreateMojo.class);
+        FeatureStartSiblingPublishMojo mojo =
+                TestLog.createMojo(FeatureStartSiblingPublishMojo.class);
         mojo.manifest = primary.resolve("workspace.yaml").toFile();
         mojo.feature = "jira-456";
 
         mojo.execute();
 
-        // The report lands as ws꞉sibling-create.md at the workspace root.
-        String report = readReport("sibling-create");
+        // The report lands as ws꞉feature-start-sibling-publish.md at the root.
+        String report = readReport("feature-start-sibling-publish");
 
         // Migrated to the shared working-set table: a Member · Kind grid with
         // an Effect final column (mutating goal).
@@ -164,12 +169,16 @@ class SiblingCreateIntegrationTest {
 
         // The effect states what was applied to each cloned member.
         assertThat(report).contains("cloned + branched feature/jira-456");
+
+        // The base branch the sibling was cut from is surfaced.
+        assertThat(report).as("base branch in report").contains("main");
     }
 
     @Test
     void siblingCreate_skipVersion_branchesWithoutQualifyingVersions()
             throws Exception {
-        SiblingCreateMojo mojo = TestLog.createMojo(SiblingCreateMojo.class);
+        FeatureStartSiblingPublishMojo mojo =
+                TestLog.createMojo(FeatureStartSiblingPublishMojo.class);
         mojo.manifest = primary.resolve("workspace.yaml").toFile();
         mojo.feature = "docs";
         mojo.skipVersion = true;
@@ -184,6 +193,57 @@ class SiblingCreateIntegrationTest {
         String libAPom = Files.readString(
                 sibling.resolve("lib-a").resolve("pom.xml"), StandardCharsets.UTF_8);
         assertThat(libAPom).contains("1.0.0-SNAPSHOT").doesNotContain("docs");
+    }
+
+    @Test
+    void siblingCreate_onFeatureBranch_withoutFrom_refusesWithGuard()
+            throws Exception {
+        // Put the primary workspace root on a feature branch, off the
+        // manifest base (main). Without -Dfrom the guard must refuse.
+        execCapture(primary, "git", "checkout", "-b", "feature/already-here");
+
+        FeatureStartSiblingPublishMojo mojo =
+                TestLog.createMojo(FeatureStartSiblingPublishMojo.class);
+        mojo.manifest = primary.resolve("workspace.yaml").toFile();
+        mojo.feature = "jira-789";
+
+        assertThatThrownBy(mojo::execute)
+                .isInstanceOf(MojoException.class)
+                .hasMessageContaining("not the base branch")
+                .hasMessageContaining("-Dfrom=feature/already-here");
+
+        // Nothing was cloned.
+        assertThat(tempDir.resolve("primary-jira-789")).doesNotExist();
+    }
+
+    @Test
+    void siblingCreate_onFeatureBranch_withFrom_proceeds() throws Exception {
+        // Primary on a feature branch; -Dfrom opts in to that base. The base
+        // branch must exist upstream for the sibling clone (`git clone -b`) to
+        // resolve it, so push it on the root and every component first.
+        execCapture(primary, "git", "checkout", "-b", "feature/already-here");
+        execCapture(primary, "git", "push", "-u", "origin", "feature/already-here");
+        for (String name : COMPONENTS) {
+            execCapture(primary.resolve(name),
+                    "git", "checkout", "-b", "feature/already-here");
+            execCapture(primary.resolve(name),
+                    "git", "push", "-u", "origin", "feature/already-here");
+        }
+
+        FeatureStartSiblingPublishMojo mojo =
+                TestLog.createMojo(FeatureStartSiblingPublishMojo.class);
+        mojo.manifest = primary.resolve("workspace.yaml").toFile();
+        mojo.feature = "jira-789";
+        mojo.from = "feature/already-here";
+
+        mojo.execute();
+
+        Path sibling = tempDir.resolve("primary-jira-789");
+        assertThat(sibling.resolve(".git")).isDirectory();
+        assertThat(branch(sibling)).isEqualTo("feature/jira-789");
+        for (String name : COMPONENTS) {
+            assertThat(branch(sibling.resolve(name))).isEqualTo("feature/jira-789");
+        }
     }
 
     // ── Helpers ──────────────────────────────────────────────────────

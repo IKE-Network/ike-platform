@@ -14,15 +14,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Integration tests for {@link SiblingCreateMojo} bare mode — forking a
- * single repo with no workspace.yaml (ike-issues#603, first slice of #601).
+ * Integration tests for {@link FeatureStartSiblingPublishMojo} bare mode —
+ * forking a single repo with no workspace.yaml (ike-issues#603, first slice
+ * of #601; reshaped in #770).
  *
  * <p>Like {@link FeatureStartBareModeTest}, uses
  * {@code System.setProperty("user.dir", ...)} to simulate running Maven from
  * inside the repo. The repo is a clone of a bare upstream so the goal's
  * {@code git clone <origin>} has a real remote to fork from.
  */
-class SiblingCreateBareModeTest {
+class FeatureStartSiblingPublishBareModeTest {
 
     @TempDir
     Path tempDir;
@@ -66,7 +67,8 @@ class SiblingCreateBareModeTest {
 
     @Test
     void bareMode_forksSingleRepoOnFeatureBranch() throws Exception {
-        SiblingCreateMojo mojo = TestLog.createMojo(SiblingCreateMojo.class);
+        FeatureStartSiblingPublishMojo mojo =
+                TestLog.createMojo(FeatureStartSiblingPublishMojo.class);
         mojo.feature = "solo";
 
         mojo.execute();
@@ -93,7 +95,8 @@ class SiblingCreateBareModeTest {
 
     @Test
     void bareMode_skipVersion_branchesWithoutQualifying() throws Exception {
-        SiblingCreateMojo mojo = TestLog.createMojo(SiblingCreateMojo.class);
+        FeatureStartSiblingPublishMojo mojo =
+                TestLog.createMojo(FeatureStartSiblingPublishMojo.class);
         mojo.feature = "docs";
         mojo.skipVersion = true;
 
@@ -108,7 +111,8 @@ class SiblingCreateBareModeTest {
     @Test
     void bareMode_refusesWhenSiblingExists() throws Exception {
         Files.createDirectories(tempDir.resolve("app-dup"));
-        SiblingCreateMojo mojo = TestLog.createMojo(SiblingCreateMojo.class);
+        FeatureStartSiblingPublishMojo mojo =
+                TestLog.createMojo(FeatureStartSiblingPublishMojo.class);
         mojo.feature = "dup";
 
         assertThatThrownBy(mojo::execute)
@@ -130,7 +134,8 @@ class SiblingCreateBareModeTest {
         String saved = System.getProperty("user.dir");
         System.setProperty("user.dir", noRemote.toAbsolutePath().toString());
         try {
-            SiblingCreateMojo mojo = TestLog.createMojo(SiblingCreateMojo.class);
+            FeatureStartSiblingPublishMojo mojo =
+                    TestLog.createMojo(FeatureStartSiblingPublishMojo.class);
             mojo.feature = "x";
             assertThatThrownBy(mojo::execute)
                     .isInstanceOf(MojoException.class)
@@ -138,6 +143,42 @@ class SiblingCreateBareModeTest {
         } finally {
             System.setProperty("user.dir", saved);
         }
+    }
+
+    @Test
+    void bareMode_onFeatureBranch_withoutFrom_refusesWithGuard() throws Exception {
+        // Move the primary repo off main onto a feature branch — without
+        // -Dfrom the guard must refuse (manifest base is main in bare mode).
+        exec(repo, "git", "checkout", "-b", "feature/wip");
+
+        FeatureStartSiblingPublishMojo mojo =
+                TestLog.createMojo(FeatureStartSiblingPublishMojo.class);
+        mojo.feature = "solo";
+
+        assertThatThrownBy(mojo::execute)
+                .isInstanceOf(MojoException.class)
+                .hasMessageContaining("not the base branch")
+                .hasMessageContaining("-Dfrom=feature/wip");
+
+        assertThat(tempDir.resolve("app-solo")).doesNotExist();
+    }
+
+    @Test
+    void bareMode_onFeatureBranch_withFrom_proceeds() throws Exception {
+        // The base branch must exist upstream for `git clone -b` to resolve.
+        exec(repo, "git", "checkout", "-b", "feature/wip");
+        exec(repo, "git", "push", "-u", "origin", "feature/wip");
+
+        FeatureStartSiblingPublishMojo mojo =
+                TestLog.createMojo(FeatureStartSiblingPublishMojo.class);
+        mojo.feature = "solo";
+        mojo.from = "feature/wip";
+
+        mojo.execute();
+
+        Path sibling = tempDir.resolve("app-solo");
+        assertThat(sibling.resolve(".git")).isDirectory();
+        assertThat(branch(sibling)).isEqualTo("feature/solo");
     }
 
     // ── Helpers ──────────────────────────────────────────────────────

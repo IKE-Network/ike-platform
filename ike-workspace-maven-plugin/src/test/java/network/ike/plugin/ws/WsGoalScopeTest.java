@@ -22,11 +22,13 @@ class WsGoalScopeTest {
                 WsGoal.UPDATE_FEATURE_DRAFT, WsGoal.UPDATE_FEATURE_PUBLISH,
                 WsGoal.RELEASE_DRAFT, WsGoal.RELEASE_PUBLISH,
                 WsGoal.FEATURE_START_PUBLISH,
+                WsGoal.FEATURE_START_SIBLING_DRAFT,
+                WsGoal.FEATURE_START_SIBLING_PUBLISH,
                 WsGoal.FEATURE_FINISH_MERGE_PUBLISH,
                 WsGoal.FEATURE_FINISH_SQUASH_PUBLISH,
                 WsGoal.FEATURE_ABANDON_PUBLISH,
                 WsGoal.SCAFFOLD_DRAFT, WsGoal.SCAFFOLD_PUBLISH,
-                WsGoal.SCAFFOLD_INIT, WsGoal.SIBLING_CREATE,
+                WsGoal.SCAFFOLD_INIT,
                 WsGoal.REPORT, WsGoal.HELP,
         };
         for (WsGoal g : bare) {

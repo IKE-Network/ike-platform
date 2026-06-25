@@ -24,13 +24,15 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Create a <em>sibling workspace clone</em> on a feature branch
- * (IKE-Network/ike-issues#201 epic, first slice #207).
+ * Start a feature in a <em>sibling workspace clone</em> beside the primary
+ * (IKE-Network/ike-issues#201 epic, #207, reshaped into the feature-start
+ * 2×2 in #770).
  *
- * <p>Instead of switching branches in the primary workspace — which under
- * Syncthing rewrites the working tree while the other machine's
- * {@code .git/HEAD} stays on {@code main}, the failure mode that motivates
- * this goal — {@code ws:sibling-create} makes a second clone of the whole
+ * <p>This is the <em>sibling</em> column of {@code ws:feature-start}: where
+ * {@code ws:feature-start-publish} branches the primary in place — which
+ * under Syncthing rewrites the working tree while the other machine's
+ * {@code .git/HEAD} stays put, the failure mode that motivates this goal —
+ * {@code ws:feature-start-sibling-publish} makes a second clone of the whole
  * workspace alongside the primary, checked out on {@code feature/<name>}
  * from inception. The primary never leaves its current branch; the feature
  * lives in its own directory and is disposable ({@code rm -rf}) after merge.
@@ -38,16 +40,21 @@ import java.util.Map;
  * has its own working tree, so two lines of work never stage each other's
  * edits.
  *
- * <p><strong>What it does</strong> (workspace mode only):
+ * <p><strong>What it does</strong> (workspace mode):
  * <ol>
  *   <li>Validates {@code feature} through {@link FeatureName} and computes
- *       the sibling directory {@code <parent>/<primary-name>-<feature>/};
+ *       the sibling directory {@code <parent>/<baseName>-<feature>/} from the
+ *       resolved working set's {@link WorkingSet#baseName() baseName};
  *       refuses if it already exists.</li>
+ *   <li>Resolves the <em>base branch</em> to clone from: {@code -Dfrom} when
+ *       given, else the primary's current branch — guarded so a sibling is
+ *       not silently cut from an unexpected branch (see
+ *       {@link SiblingBaseResolution}).</li>
  *   <li>Clones the workspace root, then each subproject in topological
  *       order, into the sibling with
- *       {@code git clone --reference <primary>/<component> --dissociate
- *       <remote> <sibling>/<component>}. {@code --reference} borrows the
- *       object database from the primary's local clone (the
+ *       {@code git clone --reference <primary>/<component> --dissociate -b
+ *       <base> <remote> <sibling>/<component>}. {@code --reference} borrows
+ *       the object database from the primary's local clone (the
  *       order-of-magnitude win for large histories like tinkar-core's
  *       492 MB); {@code --dissociate} then copies the borrowed objects so
  *       the sibling is fully self-contained.</li>
@@ -64,26 +71,19 @@ import java.util.Map;
  * version commits, and {@code workspace.yaml} update are all recoverable
  * local effects and happen by default; pushing to origin is not.
  *
- * <p><strong>Cross-machine caveat.</strong> On a Syncthing-paired machine,
- * the sibling's <em>files</em> arrive automatically — opening it in IntelliJ
- * or running a Maven build there works with no manual git step, because
- * those read the working tree on disk. Only <em>git</em> operations on the
- * other machine (commit, pull against the feature branch) need the per-repo
- * {@code .git} initialised there; run {@code ws:push} from inside the
- * sibling once so origin carries the branch, then the other machine's
- * watcher can initialise it.
- *
  * <pre>{@code
- * mvn ws:sibling-create -Dfeature=jira-456
+ * mvn ws:feature-start-sibling-publish -Dfeature=jira-456
  * #   creates ../<workspace>-jira-456/ with every component on
  * #   feature/jira-456, then: cd ../<workspace>-jira-456 && work.
  * }</pre>
  *
  * @see FeatureName for the sibling-directory naming rule
  * @see FeatureStartSupport for the shared version/cascade logic
+ * @see SiblingBaseResolution for the base-branch resolution + guard
+ * @see FeatureStartSiblingDraftMojo for the read-only preview
  */
-@Mojo(name = "sibling-create", projectRequired = false, aggregator = true)
-public class SiblingCreateMojo extends AbstractWorkspaceMojo {
+@Mojo(name = "feature-start-sibling-publish", projectRequired = false, aggregator = true)
+public class FeatureStartSiblingPublishMojo extends AbstractWorkspaceMojo {
 
     /** Feature name. Branch will be {@code feature/<name>}. Prompted if omitted. */
     @Parameter(property = "feature")
@@ -97,8 +97,18 @@ public class SiblingCreateMojo extends AbstractWorkspaceMojo {
     @Parameter(property = "skipVersion", defaultValue = "false")
     boolean skipVersion;
 
+    /**
+     * Explicit base branch to cut the sibling from. When unset, the sibling
+     * is based on the primary's current branch — guarded so a sibling is
+     * never silently cut from a non-base branch (see
+     * {@link SiblingBaseResolution}). Pass {@code -Dfrom=<branch>} to base
+     * the sibling on a branch other than the manifest's base deliberately.
+     */
+    @Parameter(property = "from")
+    String from;
+
     /** Creates this goal instance. */
-    public SiblingCreateMojo() {}
+    public FeatureStartSiblingPublishMojo() {}
 
     @Override
     protected WorkspaceReportSpec runGoal() throws MojoException {
@@ -114,18 +124,25 @@ public class SiblingCreateMojo extends AbstractWorkspaceMojo {
         WorkspaceGraph graph = loadGraph();
         File primaryRoot = workspaceRoot();
         Defaults defaults = graph.manifest().defaults();
-        String mainBranch = (defaults != null && defaults.branch() != null)
+        String manifestBase = (defaults != null && defaults.branch() != null)
                 ? defaults.branch() : "main";
 
-        // Compute the sibling directory alongside the primary workspace.
-        String primaryName = primaryRoot.getName();
+        // Resolve the base branch to clone from, guarding against an
+        // unexpected primary branch (#770).
+        String base = SiblingBaseResolution.resolveAndGuard(
+                from, gitBranch(primaryRoot), manifestBase);
+
+        // Compute the sibling directory alongside the primary workspace,
+        // based on the working set's baseName (the workspace-root
+        // artifactId, else the dir name) rather than the raw dir name.
+        String baseName = resolveWorkingSet().baseName();
         File parent = primaryRoot.getParentFile();
         if (parent == null) {
             throw new MojoException(
                     "Cannot resolve the parent of the workspace root " + primaryRoot
                     + "; sibling clones live alongside the primary.");
         }
-        String siblingName = featureName.siblingDirectoryName(primaryName);
+        String siblingName = featureName.siblingDirectoryName(baseName);
         File siblingRoot = new File(parent, siblingName);
         if (siblingRoot.exists()) {
             throw new MojoException(
@@ -139,26 +156,28 @@ public class SiblingCreateMojo extends AbstractWorkspaceMojo {
         String rootRemote = gitOriginUrl(primaryRoot);
         if (rootRemote == null) {
             throw new MojoException(
-                    "Workspace root '" + primaryName + "' has no git 'origin' remote; "
-                    + "ws:sibling-create clones the root from its upstream. Add one "
-                    + "(git remote add origin <url>) and try again.");
+                    "Workspace root '" + baseName + "' has no git 'origin' remote; "
+                    + "ws:feature-start-sibling clones the root from its upstream. "
+                    + "Add one (git remote add origin <url>) and try again.");
         }
 
         getLog().info("");
-        getLog().info(header("Sibling Create"));
+        getLog().info(header("Feature Start (sibling)"));
         getLog().info("══════════════════════════════════════════════════════════════");
         getLog().info("  Feature: " + feature);
         getLog().info("  Branch:  " + branchName);
+        getLog().info("  Base:    " + base);
         getLog().info("  Sibling: " + siblingRoot.getAbsolutePath());
         getLog().info("");
 
         List<String> sorted = graph.topologicalSort();
 
         // 1. Clone the workspace root into the sibling directory. Cloning the
-        //    root first materializes the sibling directory itself.
+        //    root first materializes the sibling directory itself. Every clone
+        //    is cut from the same resolved base branch.
         getLog().info("  Cloning workspace root → " + siblingName);
         cloneOnFeatureBranch(parent, siblingName, primaryRoot, rootRemote,
-                mainBranch, branchName);
+                base, branchName);
 
         // 2. Clone each subproject into <sibling>/<name>, in topological order.
         List<String> branched = new ArrayList<>();
@@ -170,7 +189,6 @@ public class SiblingCreateMojo extends AbstractWorkspaceMojo {
                         + " — no repo URL in workspace.yaml, skipping");
                 continue;
             }
-            String base = sub.branch() != null ? sub.branch() : mainBranch;
             File primaryComp = new File(primaryRoot, name);
             getLog().info("  Cloning " + name + " → " + siblingName + "/" + name);
             cloneOnFeatureBranch(siblingRoot, name, primaryComp, remote,
@@ -270,8 +288,8 @@ public class SiblingCreateMojo extends AbstractWorkspaceMojo {
                     effect));
         }
 
-        return new WorkspaceReportSpec(WsGoal.SIBLING_CREATE,
-                buildReport(siblingName, siblingRoot, branchName, rows));
+        return new WorkspaceReportSpec(WsGoal.FEATURE_START_SIBLING_PUBLISH,
+                buildReport(siblingName, siblingRoot, branchName, base, rows));
     }
 
     /**
@@ -279,7 +297,10 @@ public class SiblingCreateMojo extends AbstractWorkspaceMojo {
      * into {@code <parent>/<repo>-<feature>/} on the feature branch. The
      * single-repo case of the same operation — a working set of one
      * (ike-issues#601). No manifest to rewrite and no cascade; otherwise
-     * identical to one component of the workspace flow.
+     * identical to one component of the workspace flow. The sibling-dir base
+     * is the repo's {@code baseName} (its dir name), and the base branch is
+     * resolved + guarded the same way (manifest base is {@code main}, there
+     * being no manifest).
      *
      * @param featureName the validated feature name
      * @param branchName  the {@code feature/<name>} branch to create
@@ -292,19 +313,20 @@ public class SiblingCreateMojo extends AbstractWorkspaceMojo {
             throws MojoException {
         // The single repo to fork is a working set of one (ike-issues#611) —
         // resolve it through the shared resolver, not user.dir directly.
-        File repo = resolveWorkingSet().members().getFirst().directory().toFile();
+        WorkingSet workingSet = resolveWorkingSet();
+        File repo = workingSet.members().getFirst().directory().toFile();
         if (!new File(repo, ".git").exists()) {
             throw new MojoException(
-                    "ws:sibling-create: " + repo + " is not a git repository and "
-                    + "no workspace.yaml was found — run it inside a repo or a "
+                    "ws:feature-start-sibling: " + repo + " is not a git repository "
+                    + "and no workspace.yaml was found — run it inside a repo or a "
                     + "workspace.");
         }
         String remote = gitOriginUrl(repo);
         if (remote == null) {
             throw new MojoException(
                     "Repository '" + repo.getName() + "' has no git 'origin' "
-                    + "remote; ws:sibling-create clones from the upstream. Add one "
-                    + "(git remote add origin <url>) and try again.");
+                    + "remote; ws:feature-start-sibling clones from the upstream. "
+                    + "Add one (git remote add origin <url>) and try again.");
         }
         File parent = repo.getParentFile();
         if (parent == null) {
@@ -312,7 +334,11 @@ public class SiblingCreateMojo extends AbstractWorkspaceMojo {
                     "Cannot resolve the parent of " + repo
                     + "; the sibling clone lives alongside it.");
         }
-        String siblingName = featureName.siblingDirectoryName(repo.getName());
+        // Base resolution + guard. With no manifest, the base branch is main.
+        String base = SiblingBaseResolution.resolveAndGuard(
+                from, gitBranch(repo), "main");
+
+        String siblingName = featureName.siblingDirectoryName(workingSet.baseName());
         File siblingRoot = new File(parent, siblingName);
         if (siblingRoot.exists()) {
             throw new MojoException(
@@ -320,13 +346,13 @@ public class SiblingCreateMojo extends AbstractWorkspaceMojo {
                     + siblingRoot.getAbsolutePath()
                     + ". Remove it (rm -rf) or pick a different feature name.");
         }
-        String base = gitBranch(repo);
 
         getLog().info("");
-        getLog().info(header("Sibling Create"));
+        getLog().info(header("Feature Start (sibling)"));
         getLog().info("══════════════════════════════════════════════════════════════");
         getLog().info("  Feature: " + feature);
         getLog().info("  Branch:  " + branchName);
+        getLog().info("  Base:    " + base);
         getLog().info("  Sibling: " + siblingRoot.getAbsolutePath());
         getLog().info("  Mode:    single repo (no workspace.yaml)");
         getLog().info("");
@@ -371,15 +397,15 @@ public class SiblingCreateMojo extends AbstractWorkspaceMojo {
         // aggregator), mapped to its sibling clone. The aggregator is a row
         // here too, so a bare-mode report is shaped identically to the
         // workspace one (#763/#766).
-        WorkingSet.Member member = resolveWorkingSet().members().getFirst();
+        WorkingSet.Member member = workingSet.members().getFirst();
         String effect = !"—".equals(qualified)
                 ? "cloned + branched " + branchName + " → " + qualified
                 : "cloned + branched " + branchName;
         List<WorkingSetReportTable.Row> rows = List.of(
                 new WorkingSetReportTable.Row(member, siblingVersion(siblingRoot),
                         gitBranch(siblingRoot), gitShortSha(siblingRoot), effect));
-        return new WorkspaceReportSpec(WsGoal.SIBLING_CREATE,
-                buildReport(siblingName, siblingRoot, branchName, rows));
+        return new WorkspaceReportSpec(WsGoal.FEATURE_START_SIBLING_PUBLISH,
+                buildReport(siblingName, siblingRoot, branchName, base, rows));
     }
 
     /**
@@ -495,7 +521,7 @@ public class SiblingCreateMojo extends AbstractWorkspaceMojo {
     }
 
     /**
-     * Render the sibling-create result as the goal's Markdown report.
+     * Render the sibling feature-start result as the goal's Markdown report.
      *
      * <p>The working-set table carries one row per member, the aggregator
      * (workspace root) included, so the sibling root's own clone, branch and
@@ -506,23 +532,25 @@ public class SiblingCreateMojo extends AbstractWorkspaceMojo {
      * @param siblingName the sibling directory name
      * @param siblingRoot the sibling directory
      * @param branchName  the feature branch created in each clone
+     * @param base        the base branch each clone was cut from
      * @param rows        one working-set row per member, aggregator included
      * @return the Markdown report body
      */
     private String buildReport(String siblingName, File siblingRoot,
-                               String branchName,
+                               String branchName, String base,
                                List<WorkingSetReportTable.Row> rows) {
         GoalReportBuilder report = new GoalReportBuilder();
         report.paragraph("**Sibling:** `" + siblingName + "`")
                 .paragraph("**Branch:** `" + branchName + "`")
+                .paragraph("**Base:** `" + base + "`")
                 .paragraph("**Location:** `" + siblingRoot.getAbsolutePath() + "`");
 
         WorkingSetReportTable.render(report, "Working set", rows);
 
         report.paragraph("Each component is a self-contained clone on `"
-                + branchName + "`, created with `--reference --dissociate`"
-                + " against the primary. The primary stays on its"
-                + " current branch.");
+                + branchName + "`, cut from `" + base
+                + "` with `--reference --dissociate` against the primary."
+                + " The primary stays on its current branch.");
         report.paragraph("**No push** — clones and branches stay local."
                 + " Next steps:");
         report.paragraph("```bash\ncd " + siblingRoot.getAbsolutePath()

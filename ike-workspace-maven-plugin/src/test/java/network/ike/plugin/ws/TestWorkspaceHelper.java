@@ -67,8 +67,9 @@ public class TestWorkspaceHelper {
      * (IKE-Network/ike-issues#207): bare upstreams for the workspace root and
      * every component, the root cloned into {@code <tempDir>/primary} (so it
      * has an {@code origin} to clone from), and each component cloned under it
-     * (so {@code ws:sibling-create}'s {@code --reference} borrow has a local
-     * source). {@code ws:sibling-create -Dfeature=foo} run against the
+     * (so {@code ws:feature-start-sibling-publish}'s {@code --reference} borrow
+     * has a local source). {@code ws:feature-start-sibling-publish -Dfeature=foo}
+     * run against the
      * returned root produces a sibling at {@code <tempDir>/primary-foo}.
      *
      * @return the primary workspace root directory

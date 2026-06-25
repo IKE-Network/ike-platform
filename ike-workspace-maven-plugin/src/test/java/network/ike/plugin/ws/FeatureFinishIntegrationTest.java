@@ -219,6 +219,94 @@ class FeatureFinishIntegrationTest {
     }
 
     @Test
+    void merge_dequalifiesWorkspaceRootVersion_schema11Manifest()
+            throws Exception {
+        // Schema-1.1 sibling of merge_dequalifiesAggregator_*: the manifest
+        // now carries a `workspace-root:` block whose `version:` is itself
+        // qualified on the feature branch. finish must de-qualify that
+        // workspace-root version too — the ManifestWriter.stripVersionQualifiers
+        // path applied to the workspace-root field, end-to-end (#769/#768/#763).
+        Path wsYaml = helper.workspaceYaml();
+        // setUp left this qualified (subproject versions + branches=feature).
+        // Promote it to schema 1.1 and prepend a qualified workspace-root block.
+        String qualifiedSubprojectYaml =
+                Files.readString(wsYaml, StandardCharsets.UTF_8)
+                        .replace("schema-version: \"1.0\"",
+                                 "schema-version: \"1.1\"");
+        String qualifiedYaml = qualifiedSubprojectYaml.replace(
+                "subprojects:",
+                """
+                workspace-root:
+                  groupId: com.test
+                  artifactId: aggregator-root
+                  version: "1-test-finish-SNAPSHOT"
+
+                subprojects:""");
+        // The de-qualified (main) counterpart: workspace-root + subproject
+        // versions back to base, branches back to main.
+        String baseYaml = qualifiedYaml
+                .replace("-test-finish-SNAPSHOT", "-SNAPSHOT")
+                .replace("branch: " + BRANCH_NAME, "branch: main");
+        String basePom = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <project xmlns="http://maven.apache.org/POM/4.0.0">
+                    <modelVersion>4.0.0</modelVersion>
+                    <groupId>com.test</groupId>
+                    <artifactId>aggregator-root</artifactId>
+                    <version>1-SNAPSHOT</version>
+                    <packaging>pom</packaging>
+                </project>
+                """;
+
+        // main = base aggregator state. The subproject dirs are their own git
+        // repos, so the aggregator repo .gitignores them (as a real workspace
+        // does) — otherwise the finish precondition sees them as uncommitted
+        // changes.
+        Files.writeString(wsYaml, baseYaml, StandardCharsets.UTF_8);
+        Files.writeString(tempDir.resolve("pom.xml"), basePom, StandardCharsets.UTF_8);
+        Files.writeString(tempDir.resolve(".gitignore"),
+                "/lib-a/\n/lib-b/\n/app-c/\n*.md\n", StandardCharsets.UTF_8);
+        exec(tempDir, "git", "init", "-b", "main");
+        exec(tempDir, "git", "config", "commit.gpgsign", "false");
+        exec(tempDir, "git", "config", "user.email", "root@example.com");
+        exec(tempDir, "git", "config", "user.name", "Root");
+        exec(tempDir, "git", "add", "pom.xml", "workspace.yaml", ".gitignore");
+        exec(tempDir, "git", "commit", "-m", "base workspace root");
+
+        // feature/test-finish = qualified aggregator state, including the
+        // qualified workspace-root version.
+        exec(tempDir, "git", "checkout", "-b", BRANCH_NAME);
+        Files.writeString(wsYaml, qualifiedYaml, StandardCharsets.UTF_8);
+        Files.writeString(tempDir.resolve("pom.xml"),
+                basePom.replace("1-SNAPSHOT", "1-test-finish-SNAPSHOT"),
+                StandardCharsets.UTF_8);
+        exec(tempDir, "git", "add", "pom.xml", "workspace.yaml");
+        exec(tempDir, "git", "commit", "-m", "feature: qualify aggregator");
+
+        FeatureFinishMergeDraftMojo mojo =
+                TestLog.createMojo(FeatureFinishMergeDraftMojo.class);
+        mojo.manifest = wsYaml.toFile();
+        mojo.feature = FEATURE_NAME;
+        mojo.targetBranch = "main";
+        mojo.publish = true;
+        mojo.execute();
+
+        // The aggregator is back on main, and the schema-1.1 workspace-root
+        // version field is de-qualified to its base — the #769 acceptance.
+        assertThat(execCapture(tempDir, "git", "rev-parse", "--abbrev-ref", "HEAD"))
+                .isEqualTo("main");
+        String yamlAfter = Files.readString(wsYaml, StandardCharsets.UTF_8);
+        assertThat(yamlAfter)
+                .as("workspace-root version de-qualified to base (#769)")
+                .contains("version: \"1-SNAPSHOT\"")
+                .doesNotContain("1-test-finish-SNAPSHOT");
+        // No qualifier survives anywhere in the manifest's version fields.
+        assertThat(yamlAfter)
+                .as("no branch qualifier left in any manifest version field")
+                .doesNotContain("-test-finish-SNAPSHOT");
+    }
+
+    @Test
     void inconsistentYamlBranch_skipsComponent() throws Exception {
         // Set workspace.yaml branches back to "main" while git is on feature
         Path wsYaml = helper.workspaceYaml();

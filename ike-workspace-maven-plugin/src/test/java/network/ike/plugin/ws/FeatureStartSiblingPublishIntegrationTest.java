@@ -246,6 +246,49 @@ class FeatureStartSiblingPublishIntegrationTest {
         }
     }
 
+    @Test
+    void siblingCreate_namesSiblingFromWorkspaceRootArtifactId_notDirName()
+            throws Exception {
+        // The on-disk workspace dir is "primary", but the manifest's
+        // workspace-root: artifactId is "renamed-aggregator". WorkingSet
+        // .baseName() prefers the workspace-root artifactId over the dir
+        // name, so the sibling directory must be derived from the artifactId
+        // (<artifactId>-<feature>), NOT from the dir name (<dirname>-<feature>).
+        String yaml = Files.readString(
+                primary.resolve("workspace.yaml"), StandardCharsets.UTF_8);
+        // Prepend a workspace-root: block whose artifactId diverges from the
+        // "primary" on-disk directory name. Other top-level keys are untouched.
+        String withRoot = """
+                workspace-root:
+                  groupId: com.test
+                  artifactId: renamed-aggregator
+                  version: 1-SNAPSHOT
+
+                """ + yaml;
+        Files.writeString(primary.resolve("workspace.yaml"), withRoot,
+                StandardCharsets.UTF_8);
+
+        FeatureStartSiblingPublishMojo mojo =
+                TestLog.createMojo(FeatureStartSiblingPublishMojo.class);
+        mojo.manifest = primary.resolve("workspace.yaml").toFile();
+        mojo.feature = "jira-456";
+
+        mojo.execute();
+
+        // The sibling is named from the baseName (workspace-root artifactId).
+        Path baseNameSibling = tempDir.resolve("renamed-aggregator-jira-456");
+        assertThat(baseNameSibling)
+                .as("sibling named from workspace-root artifactId (baseName)")
+                .isDirectory();
+        assertThat(baseNameSibling.resolve(".git")).isDirectory();
+        assertThat(branch(baseNameSibling)).isEqualTo("feature/jira-456");
+
+        // NOT named from the on-disk directory name.
+        assertThat(tempDir.resolve("primary-jira-456"))
+                .as("sibling NOT named from the on-disk dir name")
+                .doesNotExist();
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────
 
     private String branch(Path repo) throws Exception {

@@ -147,7 +147,57 @@ class WsReconcileBranchesWorkspaceHeadIntegrationTest {
                 .hasMessageContaining("repos|manifest|workspace-head");
     }
 
+    @Test
+    void workspaceHead_reportIncludesAggregatorRowWithHeadEffect()
+            throws Exception {
+        // Workspace flips onto a feature branch — the from=workspace-head
+        // aggregator-effect path (child C #767) must surface the workspace
+        // root as the authority row in the working-set table, not omit it
+        // the way a subproject-only list did (#768 review gap).
+        exec(tempDir, "git", "checkout", "-b", "feature/Z");
+
+        WsReconcileBranchesDraftMojo mojo = TestLog.createMojo(WsReconcileBranchesDraftMojo.class);
+        mojo.manifest = helper.workspaceYaml().toFile();
+        mojo.scope = "branches";
+        mojo.from = "workspace-head";
+        mojo.publish = true;
+
+        mojo.execute();
+
+        String report = readReport("reconcile-branches-publish");
+
+        // The aggregator is the workspace-root directory; its row carries
+        // the "aggregator" kind label and its name is that dir's name.
+        String aggregatorName = tempDir.getFileName().toString();
+        assertThat(report)
+                .as("the working-set table must carry the aggregator row")
+                .contains("aggregator")
+                .contains(aggregatorName);
+
+        // The aggregator's Effect cell states it is the from=workspace-head
+        // branch authority — "authority — HEAD `feature/Z`".
+        assertThat(report)
+                .as("the aggregator's from=workspace-head effect must read "
+                        + "as the HEAD branch authority")
+                .contains("authority")
+                .contains("HEAD")
+                .contains("feature/Z");
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────
+
+    private String readReport(String goalStem) throws Exception {
+        try (Stream<Path> stream = Files.list(tempDir)) {
+            Path reportFile = stream
+                    .filter(p -> p.getFileName().toString().endsWith(".md"))
+                    .filter(p -> p.getFileName().toString().contains(goalStem))
+                    .findFirst()
+                    .orElseThrow(() -> new AssertionError(
+                            "No report file matching '" + goalStem
+                                    + "' in " + tempDir));
+            return Files.readString(reportFile, StandardCharsets.UTF_8);
+        }
+    }
 
     private void exec(Path workDir, String... command) throws Exception {
         Process p = new ProcessBuilder(command)

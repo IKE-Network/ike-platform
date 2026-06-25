@@ -103,17 +103,17 @@ public class WsRefreshMainMojo extends AbstractWorkspaceMojo {
 
     private static String outcomeLabel(RefreshMainSupport.Outcome o) {
         return switch (o) {
-            case RefreshMainSupport.Skipped(var c, var r) -> "skipped (" + r + ")";
-            case RefreshMainSupport.UpToDate(var c) -> "up to date";
-            case RefreshMainSupport.FastForwarded(var c, var n) ->
+            case RefreshMainSupport.Skipped(String c, String r) -> "skipped (" + r + ")";
+            case RefreshMainSupport.UpToDate(String c) -> "up to date";
+            case RefreshMainSupport.FastForwarded(String c, int n) ->
                     "fast-forwarded " + n + " commit" + (n == 1 ? "" : "s");
-            case RefreshMainSupport.CreatedFromRemote(var c) -> "created from remote";
-            case RefreshMainSupport.AheadOnly(var c, var n) ->
+            case RefreshMainSupport.CreatedFromRemote(String c) -> "created from remote";
+            case RefreshMainSupport.AheadOnly(String c, int n) ->
                     n + " unpushed commit" + (n == 1 ? "" : "s") + ", left as-is";
-            case RefreshMainSupport.AutoResolved(var c, var local, var remoteCount) ->
+            case RefreshMainSupport.AutoResolved(String c, int local, int remoteCount) ->
                     "auto-resolved (kept " + local + " local, merged "
                             + remoteCount + " from remote)";
-            case RefreshMainSupport.Conflicts(var c, var files) ->
+            case RefreshMainSupport.Conflicts(String c, List<String> files) ->
                     files.size() + " conflict(s)";
         };
     }

@@ -189,7 +189,7 @@ public class UpdateFeatureDraftMojo extends AbstractWorkspaceMojo {
         }
 
         if (!uncommitted.isEmpty()) {
-            var sb = new StringBuilder();
+            StringBuilder sb = new StringBuilder();
             sb.append("Cannot update — uncommitted changes in:\n");
             for (String name : uncommitted) {
                 sb.append("  ").append(name).append("\n");

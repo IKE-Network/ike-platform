@@ -767,10 +767,10 @@ public class FeatureStartDraftMojo extends AbstractWorkspaceMojo {
 
         // Collect structured gap rows for the report
         List<CascadeGapRow> gaps = new ArrayList<>();
-        for (var issue : issues) {
+        for (BomAnalysis.CascadeIssue issue : issues) {
             String issueDesc = "no version-property or BOM import";
             if (!issue.externalBomPins().isEmpty()) {
-                var bom = issue.externalBomPins().getFirst();
+                BomAnalysis.BomImport bom = issue.externalBomPins().getFirst();
                 issueDesc = "pinned by " + bom.groupId()
                         + ":" + bom.artifactId() + ":" + bom.version();
             }
@@ -789,9 +789,9 @@ public class FeatureStartDraftMojo extends AbstractWorkspaceMojo {
         getLog().warn("  version changes for these automatically:");
         getLog().warn("");
 
-        for (var issue : issues) {
+        for (BomAnalysis.CascadeIssue issue : issues) {
             getLog().warn("    " + issue.subprojectName() + " → " + issue.dependsOn());
-            for (var bom : issue.externalBomPins()) {
+            for (BomAnalysis.BomImport bom : issue.externalBomPins()) {
                 getLog().warn("      external BOM: " + bom.groupId()
                         + ":" + bom.artifactId() + ":" + bom.version());
             }

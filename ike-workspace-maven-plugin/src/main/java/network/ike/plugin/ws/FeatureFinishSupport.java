@@ -10,6 +10,8 @@ import network.ike.workspace.VersionSupport;
 import network.ike.workspace.WorkspaceGraph;
 import network.ike.plugin.ws.vcs.VcsOperations;
 import network.ike.plugin.ws.vcs.VcsState;
+import org.apache.maven.api.model.Dependency;
+import org.apache.maven.api.model.Parent;
 import org.apache.maven.api.plugin.MojoException;
 import org.apache.maven.api.plugin.Log;
 
@@ -176,7 +178,7 @@ class FeatureFinishSupport {
     static String generateFeatureMessage(File root, List<String> components,
                                           String branchName, String targetBranch,
                                           String userMessage, Log log) {
-        var sb = new StringBuilder();
+        StringBuilder sb = new StringBuilder();
         if (userMessage != null && !userMessage.isBlank()) {
             sb.append(userMessage).append("\n\n");
         }
@@ -555,7 +557,7 @@ class FeatureFinishSupport {
         for (String branch : uniqueBranches) {
             // Get date from first subproject that has it
             String date = "unknown";
-            for (var entry : staleBranches.entrySet()) {
+            for (Map.Entry<String, List<String>> entry : staleBranches.entrySet()) {
                 if (entry.getValue().contains(branch)) {
                     date = VcsOperations.branchLastCommitDate(
                             new File(root, entry.getKey()), branch);
@@ -579,7 +581,7 @@ class FeatureFinishSupport {
         boolean delete = prompter != null && prompter.confirm(prompt, false);
 
         if (delete) {
-            for (var entry : staleBranches.entrySet()) {
+            for (Map.Entry<String, List<String>> entry : staleBranches.entrySet()) {
                 File dir = new File(root, entry.getKey());
                 for (String branch : entry.getValue()) {
                     try {
@@ -802,7 +804,7 @@ class FeatureFinishSupport {
                 String updated = content;
 
                 // Strip qualified properties
-                for (var entry : model.properties().entrySet()) {
+                for (Map.Entry<String, String> entry : model.properties().entrySet()) {
                     String value = entry.getValue();
                     if (containsBranchQualifier(value, qualifier)) {
                         String base = stripQualifier(value, qualifier);
@@ -815,7 +817,7 @@ class FeatureFinishSupport {
                 }
 
                 // Strip qualified dependencies (including BOM imports)
-                for (var dep : model.allDependencies()) {
+                for (Dependency dep : model.allDependencies()) {
                     String version = dep.getVersion();
                     if (containsBranchQualifier(version, qualifier)) {
                         String base = stripQualifier(version, qualifier);
@@ -830,7 +832,7 @@ class FeatureFinishSupport {
                 }
 
                 // Strip qualified parent version (#241: match full GA)
-                var parent = model.parent();
+                Parent parent = model.parent();
                 if (parent != null
                         && containsBranchQualifier(parent.getVersion(), qualifier)) {
                     String base = stripQualifier(parent.getVersion(), qualifier);

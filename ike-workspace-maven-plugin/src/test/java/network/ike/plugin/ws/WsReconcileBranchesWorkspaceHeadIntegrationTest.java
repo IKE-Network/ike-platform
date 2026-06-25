@@ -8,6 +8,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -176,7 +177,7 @@ class WsReconcileBranchesWorkspaceHeadIntegrationTest {
 
     private static void deleteRecursive(Path path) throws Exception {
         if (!Files.exists(path)) return;
-        try (var stream = Files.walk(path)) {
+        try (Stream<Path> stream = Files.walk(path)) {
             stream.sorted((a, b) -> b.compareTo(a))  // children first
                     .forEach(p -> {
                         try { Files.deleteIfExists(p); }

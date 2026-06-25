@@ -19,7 +19,7 @@ class WsReleaseNotesFormattingTest {
 
     @Test
     void categorizes_bugs_as_fixes() {
-        var issues = List.of(
+        List<Issue> issues = List.of(
                 new Issue(1, "Fix null pointer in init", List.of("bug", "tooling")));
 
         String notes = ReleaseNotesSupport.formatNotes("test v1", issues);
@@ -32,7 +32,7 @@ class WsReleaseNotesFormattingTest {
 
     @Test
     void categorizes_enhancements() {
-        var issues = List.of(
+        List<Issue> issues = List.of(
                 new Issue(2, "Add ws:release-notes goal", List.of("enhancement", "tooling")));
 
         String notes = ReleaseNotesSupport.formatNotes("test v1", issues);
@@ -43,7 +43,7 @@ class WsReleaseNotesFormattingTest {
 
     @Test
     void categorizes_unlabeled_as_internal() {
-        var issues = List.of(
+        List<Issue> issues = List.of(
                 new Issue(3, "Update docs", List.of("documentation")));
 
         String notes = ReleaseNotesSupport.formatNotes("test v1", issues);
@@ -54,7 +54,7 @@ class WsReleaseNotesFormattingTest {
 
     @Test
     void mixed_categories_produce_all_sections() {
-        var issues = List.of(
+        List<Issue> issues = List.of(
                 new Issue(1, "Fix crash", List.of("bug")),
                 new Issue(2, "New feature", List.of("enhancement")),
                 new Issue(3, "Cleanup", List.of("tech-debt")));
@@ -70,7 +70,7 @@ class WsReleaseNotesFormattingTest {
 
     @Test
     void release_notes_labeled_issues_sort_first() {
-        var issues = List.of(
+        List<Issue> issues = List.of(
                 new Issue(10, "Minor fix", List.of("bug")),
                 new Issue(5, "Important fix", List.of("bug", "release-notes")));
 

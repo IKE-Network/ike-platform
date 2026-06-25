@@ -10,6 +10,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
+import java.util.stream.Stream;
 
 /**
  * Work-preserving park and per-user auto-stash primitives shared by the
@@ -148,7 +149,7 @@ final class ParkSupport {
      * @throws MojoException if deletion fails
      */
     static void deleteDirectory(Path dir) throws MojoException {
-        try (var paths = Files.walk(dir)) {
+        try (Stream<Path> paths = Files.walk(dir)) {
             paths.sorted(Comparator.reverseOrder())
                     .forEach(p -> {
                         try {

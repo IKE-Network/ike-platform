@@ -21,6 +21,7 @@ import org.apache.maven.api.plugin.annotations.Parameter;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
@@ -408,9 +409,9 @@ public class WsScaffoldInitMojo implements Mojo {
      * pin the ike-parent version stamped into the generated POM.
      */
     private String loadBuildProperty(String key) {
-        try (var is = getClass().getResourceAsStream("ws-plugin.properties")) {
+        try (InputStream is = getClass().getResourceAsStream("ws-plugin.properties")) {
             if (is != null) {
-                var props = new java.util.Properties();
+                java.util.Properties props = new java.util.Properties();
                 props.load(is);
                 String value = props.getProperty(key);
                 if (value != null && !value.isBlank() && !value.startsWith("${")) {

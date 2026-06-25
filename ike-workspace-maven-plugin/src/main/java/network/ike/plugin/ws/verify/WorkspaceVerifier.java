@@ -292,7 +292,7 @@ public final class WorkspaceVerifier {
         }
 
         try {
-            var issues = BomAnalysis.analyzeCascadeIssues(
+            List<BomAnalysis.CascadeIssue> issues = BomAnalysis.analyzeCascadeIssues(
                     root.toPath(), graph.manifest(), workspaceArtifacts);
 
             if (issues.isEmpty()) {
@@ -304,12 +304,12 @@ public final class WorkspaceVerifier {
                 log.warn("  BOM cascade: " + issues.size() + " gap(s) detected");
                 rows.add(new String[]{"BOM cascade",
                         issues.size() + " gap(s)"});
-                for (var issue : issues) {
+                for (BomAnalysis.CascadeIssue issue : issues) {
                     log.warn("    " + issue.subprojectName() + " → "
                             + issue.dependsOn()
                             + ": no version-property or workspace BOM import");
                     if (!issue.externalBomPins().isEmpty()) {
-                        for (var bom : issue.externalBomPins()) {
+                        for (BomAnalysis.BomImport bom : issue.externalBomPins()) {
                             log.warn("      external BOM: "
                                     + bom.groupId() + ":" + bom.artifactId()
                                     + ":" + bom.version()
@@ -385,7 +385,7 @@ public final class WorkspaceVerifier {
 
             for (Divergence d : divergences) {
                 log.info("    " + d.coordinate());
-                for (var vEntry : d.versionToSubprojects().entrySet()) {
+                for (Map.Entry<String, List<String>> vEntry : d.versionToSubprojects().entrySet()) {
                     log.info("      " + vEntry.getKey() + " ← "
                             + String.join(", ", vEntry.getValue()));
                 }
@@ -405,7 +405,7 @@ public final class WorkspaceVerifier {
         }
 
         // Each subproject
-        for (var entry : graph.manifest().subprojects().entrySet()) {
+        for (Map.Entry<String, Subproject> entry : graph.manifest().subprojects().entrySet()) {
             String name = entry.getKey();
             File dir = new File(root, name);
 

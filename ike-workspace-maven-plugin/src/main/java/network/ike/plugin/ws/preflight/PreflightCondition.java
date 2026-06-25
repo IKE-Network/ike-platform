@@ -61,7 +61,7 @@ public enum PreflightCondition {
 
             if (uncommitted.isEmpty()) return Optional.empty();
 
-            var sb = new StringBuilder();
+            StringBuilder sb = new StringBuilder();
             sb.append(uncommitted.size())
                     .append(" subproject(s) have uncommitted changes:\n");
             boolean anyGhPagesLeak = false;
@@ -170,7 +170,7 @@ public enum PreflightCondition {
 
             if (violations.isEmpty()) return Optional.empty();
 
-            var sb = new StringBuilder();
+            StringBuilder sb = new StringBuilder();
             sb.append(violations.size())
                     .append(" .mvn/jvm.config file(s) contain # comment lines:\n");
             for (String v : violations) {
@@ -224,7 +224,7 @@ public enum PreflightCondition {
 
             if (violations.isEmpty()) return Optional.empty();
 
-            var sb = new StringBuilder();
+            StringBuilder sb = new StringBuilder();
             sb.append(violations.size())
                     .append(" subproject(s) missing <distributionManagement>:\n");
             for (String v : violations) {
@@ -285,7 +285,7 @@ public enum PreflightCondition {
 
             if (violations.isEmpty()) return Optional.empty();
 
-            var sb = new StringBuilder();
+            StringBuilder sb = new StringBuilder();
             sb.append(violations.size())
                     .append(" IKE-foundation property shadow(s):\n");
             for (String v : violations) {
@@ -370,7 +370,7 @@ public enum PreflightCondition {
 
             if (leaks.isEmpty()) return Optional.empty();
 
-            var sb = new StringBuilder();
+            StringBuilder sb = new StringBuilder();
             sb.append(leaks.size())
                     .append(" on-disk gh-pages leak director")
                     .append(leaks.size() == 1 ? "y" : "ies")
@@ -455,7 +455,7 @@ public enum PreflightCondition {
 
             if (violations.isEmpty()) return Optional.empty();
 
-            var sb = new StringBuilder();
+            StringBuilder sb = new StringBuilder();
             sb.append(violations.size())
                     .append(" POM(s) declare a scpexe:// <site><url>:\n");
             for (String v : violations) {
@@ -532,7 +532,7 @@ public enum PreflightCondition {
 
             if (violations.isEmpty()) return Optional.empty();
 
-            var sb = new StringBuilder();
+            StringBuilder sb = new StringBuilder();
             sb.append(violations.size())
                     .append(" parent-coherence violation(s):\n");
             for (String v : violations) {
@@ -633,7 +633,7 @@ public enum PreflightCondition {
      */
     static List<String> collectCascadeArtifactIds(PreflightContext ctx) {
         File root = ctx.workspaceRoot();
-        var seen = new java.util.LinkedHashSet<String>();
+        java.util.LinkedHashSet<String> seen = new java.util.LinkedHashSet<String>();
         addArtifactIdIfPresent(new File(root, "pom.xml"), seen);
         for (String name : ctx.subprojects()) {
             addArtifactIdIfPresent(new File(new File(root, name), "pom.xml"),
@@ -848,7 +848,7 @@ public enum PreflightCondition {
         // Scope to <properties>...</properties> at top level — a
         // <properties> nested inside a plugin <configuration> isn't
         // a shadowing site.
-        var matcher = TOP_LEVEL_PROPERTIES_BLOCK.matcher(pomContent);
+        java.util.regex.Matcher matcher = TOP_LEVEL_PROPERTIES_BLOCK.matcher(pomContent);
         while (matcher.find()) {
             String block = matcher.group(1);
             if (java.util.regex.Pattern
@@ -874,13 +874,13 @@ public enum PreflightCondition {
      */
     static String extractParentGa(String pomContent) {
         if (pomContent == null) return null;
-        var parentMatcher = java.util.regex.Pattern.compile(
+        java.util.regex.Matcher parentMatcher = java.util.regex.Pattern.compile(
                 "(?s)<parent\\b[^>]*>(.*?)</parent>").matcher(pomContent);
         if (!parentMatcher.find()) return null;
         String block = parentMatcher.group(1);
-        var gMatch = java.util.regex.Pattern.compile(
+        java.util.regex.Matcher gMatch = java.util.regex.Pattern.compile(
                 "<groupId>\\s*([^<]+?)\\s*</groupId>").matcher(block);
-        var aMatch = java.util.regex.Pattern.compile(
+        java.util.regex.Matcher aMatch = java.util.regex.Pattern.compile(
                 "<artifactId>\\s*([^<]+?)\\s*</artifactId>").matcher(block);
         if (!gMatch.find() || !aMatch.find()) return null;
         return gMatch.group(1).trim() + ":" + aMatch.group(1).trim();
@@ -896,11 +896,11 @@ public enum PreflightCondition {
      */
     static String extractParentVersion(String pomContent) {
         if (pomContent == null) return null;
-        var parentMatcher = java.util.regex.Pattern.compile(
+        java.util.regex.Matcher parentMatcher = java.util.regex.Pattern.compile(
                 "(?s)<parent\\b[^>]*>(.*?)</parent>").matcher(pomContent);
         if (!parentMatcher.find()) return null;
         String block = parentMatcher.group(1);
-        var vMatch = java.util.regex.Pattern.compile(
+        java.util.regex.Matcher vMatch = java.util.regex.Pattern.compile(
                 "<version>\\s*([^<]+?)\\s*</version>").matcher(block);
         if (!vMatch.find()) return null;
         return vMatch.group(1).trim();

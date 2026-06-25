@@ -362,7 +362,7 @@ public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
             }
             getLog().info("  " + s);
         } else {
-            var summaryParts = new StringBuilder();
+            StringBuilder summaryParts = new StringBuilder();
             summaryParts.append("Switched: ").append(switched)
                     .append(" | Skipped: ").append(skipped);
             if (parked > 0) summaryParts.append(" | Parked: ").append(parked);

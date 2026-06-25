@@ -447,7 +447,7 @@ final class FeatureStartSupport {
                     String content = model.content();
                     String updated = content;
 
-                    for (var dep : model.allDependencies()) {
+                    for (org.apache.maven.api.model.Dependency dep : model.allDependencies()) {
                         String version = dep.getVersion();
                         if (version == null) continue;
 

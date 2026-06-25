@@ -9,6 +9,7 @@ import network.ike.plugin.ws.preflight.PreflightContext;
 import network.ike.plugin.ws.preflight.PreflightResult;
 
 import network.ike.workspace.ManifestWriter;
+import network.ike.workspace.Subproject;
 import network.ike.workspace.WorkingSet;
 import network.ike.workspace.WorkspaceGraph;
 import network.ike.plugin.ws.vcs.VcsOperations;
@@ -308,7 +309,7 @@ public class WsCheckpointDraftMojo extends AbstractWorkspaceMojo {
             }
 
             // VCS bridge: write state file after checkpoint
-            for (var entry : graph.manifest().subprojects().entrySet()) {
+            for (Map.Entry<String, Subproject> entry : graph.manifest().subprojects().entrySet()) {
                 File subDir = new File(root, entry.getKey());
                 if (new File(subDir, ".git").exists()
                         && VcsState.isIkeManaged(subDir.toPath())) {
@@ -338,7 +339,7 @@ public class WsCheckpointDraftMojo extends AbstractWorkspaceMojo {
         String aggregatorVersion = readVersionOrNull(root);
         String aggregatorBranch = workspaceHasGit ? gitBranch(root) : null;
 
-        var reportContext = new CheckpointReportContext(
+        CheckpointReportContext reportContext = new CheckpointReportContext(
                 name, wsTagName, timestamp, author, draft,
                 snapshots, absentComponents, yamlContent,
                 checkpointFile, workspaceHasGit, manifestUpdated, tagPushed,
@@ -480,7 +481,7 @@ public class WsCheckpointDraftMojo extends AbstractWorkspaceMojo {
                     + "checkpoint does not close any of these issues** — they "
                     + "remain in their current state until an actual release "
                     + "ships.");
-            for (var entry : ctx.issuesSinceLastRelease().entrySet()) {
+            for (Map.Entry<String, List<ReleaseNotesSupport.IssueRef>> entry : ctx.issuesSinceLastRelease().entrySet()) {
                 report.section(entry.getKey());
                 for (ReleaseNotesSupport.IssueRef ref : entry.getValue()) {
                     report.bullet(ref.repo() + "#" + ref.number());
@@ -747,9 +748,9 @@ public class WsCheckpointDraftMojo extends AbstractWorkspaceMojo {
         String milestoneName = milestone;
 
         if (milestoneName == null || milestoneName.isBlank()) {
-            var components = graph.manifest().subprojects();
+            Map<String, Subproject> components = graph.manifest().subprojects();
             if (!components.isEmpty()) {
-                var first = components.entrySet().iterator().next();
+                Map.Entry<String, Subproject> first = components.entrySet().iterator().next();
                 String subName = first.getKey();
                 String version = first.getValue().version();
                 if (version != null) {
@@ -762,7 +763,7 @@ public class WsCheckpointDraftMojo extends AbstractWorkspaceMojo {
         if (milestoneName == null || milestoneName.isBlank()) return null;
 
         getLog().info("  Querying milestone: " + milestoneName);
-        var context = ReleaseNotesSupport.snapshotMilestone(
+        ReleaseNotesSupport.TestingContext context = ReleaseNotesSupport.snapshotMilestone(
                 issueRepo, milestoneName, getLog());
 
         if (context == null) {

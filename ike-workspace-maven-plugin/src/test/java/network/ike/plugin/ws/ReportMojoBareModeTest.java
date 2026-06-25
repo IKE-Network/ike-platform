@@ -65,7 +65,7 @@ class ReportMojoBareModeTest {
 
     private static void setField(Object target, String name, Object value)
             throws Exception {
-        var f = target.getClass().getDeclaredField(name);
+        java.lang.reflect.Field f = target.getClass().getDeclaredField(name);
         f.setAccessible(true);
         f.set(target, value);
     }

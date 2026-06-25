@@ -104,7 +104,7 @@ class FeatureFinishCrashRecoveryTest {
      */
     @Test
     void mergeCrash_leavesCompilableWorkspace_andEmitsResumeGuidance() {
-        try (var _ = FaultableExec.install()
+        try (FaultableExec _ = FaultableExec.install()
                 .failWhenCommandContains("merge").inDirNamed("lib-b")) {
 
             FeatureFinishMergeDraftMojo mojo = newMergeMojo();
@@ -177,7 +177,7 @@ class FeatureFinishCrashRecoveryTest {
     @Test
     void mergeResume_afterCrash_completesAndSkipsAlreadyMerged() {
         // First run: crash at lib-b.
-        try (var _ = FaultableExec.install()
+        try (FaultableExec _ = FaultableExec.install()
                 .failWhenCommandContains("merge").inDirNamed("lib-b")) {
             FeatureFinishMergeDraftMojo mojo = newMergeMojo();
             assertThatThrownBy(mojo::execute).isInstanceOf(MojoException.class);
@@ -216,7 +216,7 @@ class FeatureFinishCrashRecoveryTest {
      */
     @Test
     void squashCrash_leavesCompilableWorkspace_andEmitsResumeGuidance() {
-        try (var _ = FaultableExec.install()
+        try (FaultableExec _ = FaultableExec.install()
                 .failWhenCommandContains("merge").inDirNamed("lib-b")) {
 
             FeatureFinishSquashDraftMojo mojo = newSquashMojo();

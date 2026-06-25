@@ -124,7 +124,7 @@ class WsAddDependencyDerivationTest {
         // The new subproject's real parent is the EXTERNAL
         // network.ike.platform:ike-parent — not a workspace member; it
         // only shares the groupId with ike-commonmark-attributes.
-        var externalParent = new PomParentSupport.ParentInfo(
+        PomParentSupport.ParentInfo externalParent = new PomParentSupport.ParentInfo(
                 "network.ike.platform", "ike-parent", "98");
 
         String detected = WsAddMojo.detectWorkspaceParent(
@@ -144,7 +144,7 @@ class WsAddDependencyDerivationTest {
         createSubprojectDir("ike-parent", "network.ike.platform", null, null);
         addToManifest("ike-parent", "network.ike.platform");
 
-        var parent = new PomParentSupport.ParentInfo(
+        PomParentSupport.ParentInfo parent = new PomParentSupport.ParentInfo(
                 "network.ike.platform", "ike-parent", "98");
 
         String detected = WsAddMojo.detectWorkspaceParent(
@@ -590,10 +590,10 @@ class WsAddDependencyDerivationTest {
                                         Path subprojectDir, String subprojectName)
             throws Exception {
         WsAddMojo mojo = TestLog.createMojo(WsAddMojo.class);
-        var method = WsAddMojo.class.getDeclaredMethod(
+        java.lang.reflect.Method method = WsAddMojo.class.getDeclaredMethod(
                 "deriveDependencies", Path.class, Path.class, Path.class, String.class);
         method.setAccessible(true);
-        var result = (java.util.List<WsAddMojo.DerivedDep>) method.invoke(
+        java.util.List<WsAddMojo.DerivedDep> result = (java.util.List<WsAddMojo.DerivedDep>) method.invoke(
                 mojo, wsDir, manifestPath, subprojectDir, subprojectName);
         if (result == null || result.isEmpty()) return null;
         return result.stream()

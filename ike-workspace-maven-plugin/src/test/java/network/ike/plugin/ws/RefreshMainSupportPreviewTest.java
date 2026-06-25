@@ -62,7 +62,7 @@ class RefreshMainSupportPreviewTest {
         assertThat(outcomes).hasSize(1);
         assertThat(outcomes.get(0))
                 .isInstanceOf(RefreshMainSupport.FastForwarded.class);
-        var ff = (RefreshMainSupport.FastForwarded) outcomes.get(0);
+        RefreshMainSupport.FastForwarded ff = (RefreshMainSupport.FastForwarded) outcomes.get(0);
         assertThat(ff.commits()).isEqualTo(1);
         assertThat(RefreshMainSupport.describe(ff, true))
                 .contains("would fast-forward");

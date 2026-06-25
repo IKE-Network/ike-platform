@@ -154,7 +154,7 @@ class PullSyncBareModeTest {
 
     private static void setField(Object target, String fieldName, Object value)
             throws Exception {
-        var f = target.getClass().getDeclaredField(fieldName);
+        java.lang.reflect.Field f = target.getClass().getDeclaredField(fieldName);
         f.setAccessible(true);
         f.set(target, value);
     }

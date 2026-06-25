@@ -8,6 +8,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -101,7 +102,7 @@ public final class PomParentSupport {
         if (pomContent == null) return false;
         // Find the <parent>...</parent> block first; an empty
         // <relativePath/> outside <parent> isn't relevant.
-        var parentMatcher = PARENT_BLOCK.matcher(pomContent);
+        Matcher parentMatcher = PARENT_BLOCK.matcher(pomContent);
         if (!parentMatcher.find()) return false;
         String parentBlock = parentMatcher.group(1);
         return EMPTY_RELATIVE_PATH.matcher(parentBlock).find();

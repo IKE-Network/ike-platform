@@ -186,7 +186,7 @@ final class DotGraphSupport {
         dot.append("\n");
 
         // Edges
-        for (var entry : edges.entrySet()) {
+        for (Map.Entry<String, List<String[]>> entry : edges.entrySet()) {
             String source = entry.getKey();
             for (String[] edge : entry.getValue()) {
                 String target = edge[0];

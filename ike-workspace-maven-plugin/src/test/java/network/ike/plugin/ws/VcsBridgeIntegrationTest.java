@@ -173,7 +173,7 @@ class VcsBridgeIntegrationTest {
         // VerifyWorkspaceMojo retired (#393); exercise WorkspaceVerifier
         // in bare mode directly — graph + manifestPath are unused on
         // that path.
-        var verifier = new network.ike.plugin.ws.verify.WorkspaceVerifier(
+        network.ike.plugin.ws.verify.WorkspaceVerifier verifier = new network.ike.plugin.ws.verify.WorkspaceVerifier(
                 new TestLog(), null, machineBDir.toFile(), null,
                 false, false);
         // Should not throw — just reports state
@@ -194,7 +194,7 @@ class VcsBridgeIntegrationTest {
                 machineBDir.resolve(".ike/vcs-state"));
 
         System.setProperty("user.dir", machineBDir.toAbsolutePath().toString());
-        var verifier = new network.ike.plugin.ws.verify.WorkspaceVerifier(
+        network.ike.plugin.ws.verify.WorkspaceVerifier verifier = new network.ike.plugin.ws.verify.WorkspaceVerifier(
                 new TestLog(), null, machineBDir.toFile(), null,
                 false, false);
         // Should not throw — reports "behind" state

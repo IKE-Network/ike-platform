@@ -12,6 +12,7 @@ import java.io.File;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Defensive git hook — warns when a branch is created or switched
@@ -184,7 +185,7 @@ public class CheckBranchMojo extends AbstractWorkspaceMojo {
 
         List<DriftRow> rows = new ArrayList<>();
         int driftCount = 0;
-        for (var entry : graph.manifest().subprojects().entrySet()) {
+        for (Map.Entry<String, Subproject> entry : graph.manifest().subprojects().entrySet()) {
             String name = entry.getKey();
             Subproject subproject = entry.getValue();
             File dir = new File(wsRoot, name);

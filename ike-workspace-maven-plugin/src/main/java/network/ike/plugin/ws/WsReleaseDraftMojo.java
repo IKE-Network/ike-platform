@@ -40,6 +40,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * Workspace-level release — release all release-pending checked-out
@@ -524,7 +525,7 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
         getLog().info("════════════════════════════════════════════════════");
         getLog().info("  WORKSPACE RELEASE COMPLETE");
         getLog().info("════════════════════════════════════════════════════");
-        for (var entry : releasedVersions.entrySet()) {
+        for (Map.Entry<String, String> entry : releasedVersions.entrySet()) {
             getLog().info("  " + entry.getKey() + " → " + entry.getValue());
         }
         getLog().info("");
@@ -621,7 +622,7 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
     private void createGitHubReleases(File root,
                                         Map<String, String> releasedVersions)
             throws MojoException {
-        for (var entry : releasedVersions.entrySet()) {
+        for (Map.Entry<String, String> entry : releasedVersions.entrySet()) {
             String name = entry.getKey();
             String version = entry.getValue();
             String tag = "v" + version;
@@ -635,7 +636,7 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
                     java.nio.file.PathMatcher matcher =
                             targetDir.getFileSystem().getPathMatcher(
                                     "glob:" + installerGlob);
-                    try (var walk = java.nio.file.Files.walk(targetDir, 3)) {
+                    try (Stream<Path> walk = java.nio.file.Files.walk(targetDir, 3)) {
                         walk.filter(java.nio.file.Files::isRegularFile)
                             .filter(p -> matcher.matches(
                                     targetDir.relativize(p)))
@@ -713,7 +714,7 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
     private String buildReleaseMarkdownReport(
             Map<String, String> releasedVersions) {
         List<String[]> rows = new ArrayList<>();
-        for (var entry : releasedVersions.entrySet()) {
+        for (Map.Entry<String, String> entry : releasedVersions.entrySet()) {
             rows.add(new String[] {
                     entry.getKey(), entry.getValue(), "✓" });
         }
@@ -881,7 +882,7 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
 
         // Build groupId → latest released version once.
         Map<String, String> groupIdToLatest = new LinkedHashMap<>();
-        for (var entry : FOUNDATION_GROUP_TO_DIR.entrySet()) {
+        for (Map.Entry<String, String> entry : FOUNDATION_GROUP_TO_DIR.entrySet()) {
             File siblingDir = new File(foundationsDir, entry.getValue());
             if (!siblingDir.isDirectory()) continue;
             String tag = latestReleaseTag(siblingDir);
@@ -1007,7 +1008,7 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
      */
     private static void deleteRecursively(java.nio.file.Path path) throws IOException {
         if (!Files.exists(path)) return;
-        try (var stream = Files.walk(path)) {
+        try (Stream<Path> stream = Files.walk(path)) {
             stream.sorted(java.util.Comparator.reverseOrder())
                     .forEach(p -> {
                         try { Files.delete(p); }
@@ -1057,7 +1058,7 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
         }
 
         // Align <X.version> properties.
-        for (var entry : PROPERTY_TO_GROUP.entrySet()) {
+        for (Map.Entry<String, String> entry : PROPERTY_TO_GROUP.entrySet()) {
             String propertyName = entry.getKey();
             String groupId = entry.getValue();
             String target = groupIdToLatest.get(groupId);
@@ -1261,7 +1262,7 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
         // Strip <parent>...</parent> so its <version> doesn't match.
         String stripped = pomContent.replaceAll(
                 "(?s)<parent>.*?</parent>", "");
-        var matcher = java.util.regex.Pattern.compile(
+        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile(
                 "<version>([^<]+)</version>").matcher(stripped);
         if (matcher.find()) return matcher.group(1);
         return "unknown";

@@ -7,6 +7,7 @@ import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -135,7 +136,7 @@ class PullWorkspaceMojoReportTest {
 
     private static void deleteRecursively(Path dir) throws java.io.IOException {
         if (!Files.exists(dir)) return;
-        try (var walk = Files.walk(dir)) {
+        try (Stream<Path> walk = Files.walk(dir)) {
             walk.sorted(java.util.Comparator.reverseOrder())
                     .forEach(p -> {
                         try { Files.delete(p); }
@@ -145,7 +146,7 @@ class PullWorkspaceMojoReportTest {
     }
 
     private String readReport(String goalStem) throws Exception {
-        try (var stream = Files.list(tempDir)) {
+        try (Stream<Path> stream = Files.list(tempDir)) {
             Path reportFile = stream
                     .filter(p -> p.getFileName().toString().endsWith(".md"))
                     .filter(p -> p.getFileName().toString().contains(goalStem))

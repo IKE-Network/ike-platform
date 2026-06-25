@@ -17,6 +17,8 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * Squash-merge a feature branch back to the target branch.
@@ -136,7 +138,7 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
         File root = workspaceRoot();
         Path manifestPath = resolveManifest();
 
-        var targets = graph.manifest().subprojects().keySet();
+        Set<String> targets = graph.manifest().subprojects().keySet();
         List<String> sorted = graph.topologicalSort(new LinkedHashSet<>(targets));
         List<String> reversed = new ArrayList<>(sorted);
         Collections.reverse(reversed);
@@ -186,7 +188,7 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
         }
 
         if (!uncommitted.isEmpty()) {
-            var sb = new StringBuilder();
+            StringBuilder sb = new StringBuilder();
             sb.append("Cannot finish feature — uncommitted changes in:\n");
             for (String name : uncommitted) {
                 sb.append("  ").append(name).append("\n");
@@ -401,7 +403,7 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
             getLog().warn("  " + undeletedRemote.size()
                     + " remote feature branch(es) could not be deleted "
                     + "(soft-fail per #532):");
-            for (var entry : undeletedRemote.entrySet()) {
+            for (Map.Entry<String, String> entry : undeletedRemote.entrySet()) {
                 getLog().warn("    • " + entry.getKey()
                         + " — " + entry.getValue());
             }
@@ -585,7 +587,7 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
                     + " remote feature branch(es) — typically because "
                     + "branch protection forbids deletion. The goal "
                     + "soft-failed and continued; clean these up manually:");
-            for (var entry : undeletedRemote.entrySet()) {
+            for (Map.Entry<String, String> entry : undeletedRemote.entrySet()) {
                 report.bullet("**" + entry.getKey() + "** — `"
                         + entry.getValue() + "`");
             }

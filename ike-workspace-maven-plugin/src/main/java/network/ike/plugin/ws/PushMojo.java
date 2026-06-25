@@ -80,7 +80,7 @@ public class PushMojo extends AbstractWorkspaceMojo {
         int uncommitted = (int) rows.stream().filter(r -> r.uncommittedWorkLeft).count();
 
         getLog().info("");
-        var summary = new StringBuilder();
+        StringBuilder summary = new StringBuilder();
         summary.append(pushed).append(" pushed");
         if (upToDate > 0) summary.append(", ").append(upToDate).append(" up-to-date");
         if (skipped > 0) summary.append(", ").append(skipped).append(" skipped");

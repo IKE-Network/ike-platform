@@ -1,5 +1,6 @@
 package network.ike.plugin.ws;
 
+import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -167,7 +168,7 @@ public final class MavenWrapper {
             return null;
         }
         Properties props = new Properties();
-        try (var reader = Files.newBufferedReader(propsFile, StandardCharsets.UTF_8)) {
+        try (BufferedReader reader = Files.newBufferedReader(propsFile, StandardCharsets.UTF_8)) {
             props.load(reader);
         }
         String url = props.getProperty("distributionUrl");

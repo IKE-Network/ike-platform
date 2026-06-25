@@ -5,6 +5,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
@@ -122,7 +123,7 @@ class WsAddBranchResolutionTest {
     }
 
     private static void setBranch(WsAddMojo mojo, String branch) throws Exception {
-        var field = WsAddMojo.class.getDeclaredField("branch");
+        Field field = WsAddMojo.class.getDeclaredField("branch");
         field.setAccessible(true);
         field.set(mojo, branch);
     }

@@ -8,6 +8,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -205,7 +206,7 @@ class UpdateFeatureIntegrationTest {
         // WorkspaceReport names files "ws<COLON>update-feature-*.md" — find the
         // first matching .md report in the workspace root so this tolerates
         // the colon-substitution char without hard-coding it.
-        try (var stream = Files.list(tempDir)) {
+        try (Stream<Path> stream = Files.list(tempDir)) {
             Path reportFile = stream
                     .filter(p -> p.getFileName().toString().endsWith(".md"))
                     .filter(p -> p.getFileName().toString().contains(goalStem))

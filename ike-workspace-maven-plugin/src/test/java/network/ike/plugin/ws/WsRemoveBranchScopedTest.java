@@ -5,9 +5,11 @@ import network.ike.plugin.ws.vcs.VcsOperations;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -218,7 +220,7 @@ class WsRemoveBranchScopedTest {
 
     private static void set(WsRemoveMojo mojo, String field, Object value)
             throws Exception {
-        var f = WsRemoveMojo.class.getDeclaredField(field);
+        Field f = WsRemoveMojo.class.getDeclaredField(field);
         f.setAccessible(true);
         f.set(mojo, value);
     }
@@ -340,7 +342,7 @@ class WsRemoveBranchScopedTest {
 
     private void deleteDir(Path dir) throws Exception {
         if (!Files.exists(dir)) return;
-        try (var paths = Files.walk(dir)) {
+        try (Stream<Path> paths = Files.walk(dir)) {
             paths.sorted(java.util.Comparator.reverseOrder())
                     .forEach(p -> {
                         try {

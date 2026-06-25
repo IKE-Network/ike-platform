@@ -47,7 +47,7 @@ class WorkspaceMojoIntegrationTest {
                 network.ike.workspace.ManifestReader.read(manifestPath);
         network.ike.workspace.WorkspaceGraph graph =
                 new network.ike.workspace.WorkspaceGraph(m);
-        var verifier = new network.ike.plugin.ws.verify.WorkspaceVerifier(
+        network.ike.plugin.ws.verify.WorkspaceVerifier verifier = new network.ike.plugin.ws.verify.WorkspaceVerifier(
                 new TestLog(), graph,
                 manifestPath.getParent().toFile(), manifestPath,
                 false, true);
@@ -264,7 +264,7 @@ class WorkspaceMojoIntegrationTest {
      * annotated tag at the current HEAD so the mojo can read its SHA.
      */
     private static WsCheckpointDraftMojo checkpointMojoWithSimulatedBuild() {
-        var mojo = new WsCheckpointDraftMojo() {
+        WsCheckpointDraftMojo mojo = new WsCheckpointDraftMojo() {
             @Override
             protected void checkpointComponent(File dir, String checkpointLabel)
                     throws MojoException {

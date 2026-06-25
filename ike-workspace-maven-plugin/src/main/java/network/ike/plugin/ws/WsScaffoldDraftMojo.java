@@ -115,7 +115,7 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
         // so the call shape is identical. Parent alignment was dropped
         // from this extraction because ParentVersionReconciler.detect()
         // (below) already covers it.
-        var verifier = new WorkspaceVerifier(getLog(), graph, root,
+        WorkspaceVerifier verifier = new WorkspaceVerifier(getLog(), graph, root,
                 resolveManifest(), false /* checkConvergence */,
                 isWorkspaceMode());
         verifier.runAllChecks();

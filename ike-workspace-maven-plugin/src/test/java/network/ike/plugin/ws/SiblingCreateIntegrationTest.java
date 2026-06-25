@@ -10,6 +10,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -197,7 +198,7 @@ class SiblingCreateIntegrationTest {
      * colon-substitution char without hard-coding it.
      */
     private String readReport(String goalStem) throws Exception {
-        try (var stream = Files.list(primary)) {
+        try (Stream<Path> stream = Files.list(primary)) {
             Path reportFile = stream
                     .filter(p -> p.getFileName().toString().endsWith(".md"))
                     .filter(p -> p.getFileName().toString().contains(goalStem))

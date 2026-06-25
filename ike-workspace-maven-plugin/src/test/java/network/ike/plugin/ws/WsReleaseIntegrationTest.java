@@ -3,6 +3,7 @@ package network.ike.plugin.ws;
 import network.ike.plugin.PomRewriter;
 
 import network.ike.plugin.ReleaseSupport;
+import network.ike.workspace.WorkspaceGraph;
 import org.apache.maven.api.plugin.MojoException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -113,7 +114,7 @@ class WsReleaseIntegrationTest {
 
         // The workspace graph has lib-a -> lib-b -> app-c
         // Topological sort should put lib-a first, then lib-b, then app-c
-        var graph = mojo.loadGraph();
+        WorkspaceGraph graph = mojo.loadGraph();
         List<String> order = graph.topologicalSort();
         int libAIdx = order.indexOf("lib-a");
         int libBIdx = order.indexOf("lib-b");

@@ -99,7 +99,7 @@ public class CleanupWorkspaceMojo extends AbstractWorkspaceMojo {
                         .count();
                 // Get last commit date from first subproject
                 String date = "unknown";
-                for (var entry : mergedBySubproject.entrySet()) {
+                for (Map.Entry<String, List<String>> entry : mergedBySubproject.entrySet()) {
                     if (entry.getValue().contains(branch)) {
                         date = VcsOperations.branchLastCommitDate(
                                 new File(root, entry.getKey()), branch);
@@ -121,7 +121,7 @@ public class CleanupWorkspaceMojo extends AbstractWorkspaceMojo {
                         .filter(list -> list.contains(branch))
                         .count();
                 String date = "unknown";
-                for (var entry : activeBySubproject.entrySet()) {
+                for (Map.Entry<String, List<String>> entry : activeBySubproject.entrySet()) {
                     if (entry.getValue().contains(branch)) {
                         date = VcsOperations.branchLastCommitDate(
                                 new File(root, entry.getKey()), branch);
@@ -142,7 +142,7 @@ public class CleanupWorkspaceMojo extends AbstractWorkspaceMojo {
         if (publish && !allMerged.isEmpty()) {
             getLog().info("");
             int deleted = 0;
-            for (var entry : mergedBySubproject.entrySet()) {
+            for (Map.Entry<String, List<String>> entry : mergedBySubproject.entrySet()) {
                 File dir = new File(root, entry.getKey());
                 for (String branch : entry.getValue()) {
                     try {
@@ -189,7 +189,7 @@ public class CleanupWorkspaceMojo extends AbstractWorkspaceMojo {
                         .filter(list -> list.contains(branch))
                         .count();
                 String date = "unknown";
-                for (var entry : mergedBySubproject.entrySet()) {
+                for (Map.Entry<String, List<String>> entry : mergedBySubproject.entrySet()) {
                     if (entry.getValue().contains(branch)) {
                         date = VcsOperations.branchLastCommitDate(
                                 new File(root, entry.getKey()), branch);

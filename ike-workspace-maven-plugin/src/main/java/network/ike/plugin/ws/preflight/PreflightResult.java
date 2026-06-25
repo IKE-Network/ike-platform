@@ -35,7 +35,7 @@ public record PreflightResult(List<Failure> failures) {
      */
     public void requirePassed(WsGoal goal) throws MojoException {
         if (passed()) return;
-        var sb = new StringBuilder();
+        StringBuilder sb = new StringBuilder();
         sb.append(goal.qualified()).append(" preflight failed:\n\n");
         for (Failure f : failures) {
             sb.append("[").append(f.condition().description()).append("]\n");

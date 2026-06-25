@@ -229,8 +229,8 @@ public class WsReleaseStatusMojo extends AbstractWorkspaceMojo {
     private void renderFooter(List<ReleaseStatusInspector.Finding> findings) {
         Map<ReleaseStatusInspector.Status, Integer> counts =
                 new LinkedHashMap<>();
-        for (var s : ReleaseStatusInspector.Status.values()) counts.put(s, 0);
-        for (var f : findings) counts.merge(f.status(), 1, Integer::sum);
+        for (ReleaseStatusInspector.Status s : ReleaseStatusInspector.Status.values()) counts.put(s, 0);
+        for (ReleaseStatusInspector.Finding f : findings) counts.merge(f.status(), 1, Integer::sum);
 
         int inFlight = counts.get(ReleaseStatusInspector.Status.IN_FLIGHT);
         int diverged = counts.get(ReleaseStatusInspector.Status.DIVERGED);

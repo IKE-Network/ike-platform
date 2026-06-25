@@ -1,5 +1,6 @@
 package network.ike.plugin.ws;
 
+import network.ike.workspace.Dependency;
 import network.ike.workspace.Manifest;
 import network.ike.workspace.ManifestException;
 import network.ike.workspace.ManifestReader;
@@ -139,7 +140,7 @@ final class YamlDepsSync {
     private static Set<String> currentDependsOnNames(Subproject sub) {
         if (sub.dependsOn() == null) return Set.of();
         Set<String> names = new HashSet<>();
-        for (var dep : sub.dependsOn()) {
+        for (Dependency dep : sub.dependsOn()) {
             names.add(dep.subproject());
         }
         return names;

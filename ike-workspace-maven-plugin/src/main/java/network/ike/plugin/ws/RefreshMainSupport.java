@@ -259,7 +259,7 @@ final class RefreshMainSupport {
         }
         List<Conflicts> conflicts = conflictsIn(outcomes);
         if (!conflicts.isEmpty()) {
-            var sb = new StringBuilder();
+            StringBuilder sb = new StringBuilder();
             sb.append("Cannot proceed — refreshing local ").append(mainBranch)
               .append(" from ").append(DEFAULT_REMOTE).append("/")
               .append(mainBranch).append(" would conflict in:\n");
@@ -342,33 +342,33 @@ final class RefreshMainSupport {
      */
     static String describe(Outcome outcome, boolean preview) {
         return switch (outcome) {
-            case Skipped(var c, var r) ->
+            case Skipped(String c, String r) ->
                     c + " — skipped (" + r + ")";
-            case UpToDate(var c) ->
+            case UpToDate(String c) ->
                     c + " — main up to date";
-            case FastForwarded(var c, var n) ->
+            case FastForwarded(String c, int n) ->
                     preview
                         ? c + " — main is " + n + " behind " + DEFAULT_REMOTE
                                 + "/main; would fast-forward"
                         : c + " — main fast-forwarded (" + n + " commit"
                                 + (n == 1 ? "" : "s") + ")";
-            case CreatedFromRemote(var c) ->
+            case CreatedFromRemote(String c) ->
                     preview
                         ? c + " — no local main; would create from "
                                 + DEFAULT_REMOTE + "/main"
                         : c + " — main created from origin/main";
-            case AheadOnly(var c, var n) ->
+            case AheadOnly(String c, int n) ->
                     c + " — local main has " + n + " unpushed commit"
                             + (n == 1 ? "" : "s")
                             + (preview ? "; would leave as-is" : "; left as-is");
-            case AutoResolved(var c, var local, var remote) ->
+            case AutoResolved(String c, int local, int remote) ->
                     preview
                         ? c + " — main and " + DEFAULT_REMOTE + "/main have "
                                 + "diverged; would create a merge commit (keep "
                                 + local + " local, merge " + remote + " from origin)"
                         : c + " — auto-resolved divergent main (kept " + local
                                 + " local, merged " + remote + " from origin)";
-            case Conflicts(var c, var files) ->
+            case Conflicts(String c, List<String> files) ->
                     preview
                         ? c + " — divergent main; would conflict in "
                                 + files.size() + " file"

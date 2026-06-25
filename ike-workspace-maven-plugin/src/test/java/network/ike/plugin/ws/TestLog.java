@@ -1,6 +1,7 @@
 package network.ike.plugin.ws;
 
 import org.apache.maven.api.plugin.Log;
+import java.lang.reflect.Field;
 import java.util.function.Supplier;
 
 /**
@@ -38,7 +39,7 @@ public class TestLog implements Log {
             Class<?> cls = mojo.getClass();
             while (cls != null) {
                 try {
-                    var field = cls.getDeclaredField("log");
+                    Field field = cls.getDeclaredField("log");
                     if (field.getType().isAssignableFrom(Log.class)) {
                         field.setAccessible(true);
                         field.set(mojo, new TestLog());

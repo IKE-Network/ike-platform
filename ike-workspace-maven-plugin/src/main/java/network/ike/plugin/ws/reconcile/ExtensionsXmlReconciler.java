@@ -3,6 +3,7 @@ package network.ike.plugin.ws.reconcile;
 import network.ike.plugin.ws.bootstrap.WorkspaceBootstrap;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -106,7 +107,7 @@ public class ExtensionsXmlReconciler implements Reconciler {
     }
 
     private static String resolveExtensionVersion() {
-        try (var is = ExtensionsXmlReconciler.class
+        try (InputStream is = ExtensionsXmlReconciler.class
                 .getResourceAsStream(PROPERTIES_RESOURCE)) {
             if (is != null) {
                 Properties props = new Properties();

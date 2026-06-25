@@ -142,7 +142,7 @@ public class WsCommitPublishMojo extends AbstractWorkspaceMojo {
         }
 
         getLog().info("");
-        var summary = new StringBuilder();
+        StringBuilder summary = new StringBuilder();
         summary.append(committed).append(" committed");
         if (skippedClean > 0) {
             summary.append(", ").append(skippedClean).append(" clean");

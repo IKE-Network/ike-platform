@@ -34,6 +34,7 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * Add a subproject repository to an existing workspace.
@@ -1386,7 +1387,7 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
      * Find all pom.xml files in a subproject directory (root + submodules).
      */
     private List<Path> findAllPomFiles(Path subprojectDir) throws IOException {
-        try (var stream = Files.walk(subprojectDir)) {
+        try (Stream<Path> stream = Files.walk(subprojectDir)) {
             return stream
                     .filter(p -> p.getFileName().toString().equals("pom.xml"))
                     .filter(p -> !p.toString().contains("/target/"))

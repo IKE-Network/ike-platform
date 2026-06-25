@@ -138,7 +138,7 @@ public class VerifyConvergenceMojo extends AbstractWorkspaceMojo {
 
             for (Divergence d : divergences) {
                 getLog().info("    " + d.coordinate());
-                for (var vEntry : d.versionToSubprojects().entrySet()) {
+                for (Map.Entry<String, List<String>> vEntry : d.versionToSubprojects().entrySet()) {
                     getLog().info("      " + vEntry.getKey() + " ← "
                             + String.join(", ", vEntry.getValue()));
                 }
@@ -223,7 +223,7 @@ public class VerifyConvergenceMojo extends AbstractWorkspaceMojo {
             for (Divergence d : divergences) {
                 StringBuilder item = new StringBuilder();
                 item.append("`").append(d.coordinate()).append("`");
-                for (var vEntry : d.versionToSubprojects().entrySet()) {
+                for (Map.Entry<String, List<String>> vEntry : d.versionToSubprojects().entrySet()) {
                     item.append("\n  - `").append(vEntry.getKey()).append("` ← ")
                         .append(String.join(", ", vEntry.getValue()));
                 }

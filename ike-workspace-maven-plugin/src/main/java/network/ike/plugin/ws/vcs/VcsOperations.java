@@ -7,6 +7,7 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
@@ -1167,7 +1168,7 @@ public class VcsOperations {
                 pb.environment().putAll(env);
             }
             Process proc = pb.start();
-            try (var reader = new BufferedReader(
+            try (BufferedReader reader = new BufferedReader(
                     new InputStreamReader(proc.getInputStream(),
                             StandardCharsets.UTF_8))) {
                 String line;
@@ -1223,14 +1224,14 @@ public class VcsOperations {
             Process proc = pb.start();
 
             // Write message to stdin, then close to signal EOF
-            try (var out = proc.getOutputStream()) {
+            try (OutputStream out = proc.getOutputStream()) {
                 out.write(message.getBytes(StandardCharsets.UTF_8));
                 out.flush();
             }
 
             // Consume stdout/stderr
             String output;
-            try (var reader = new BufferedReader(
+            try (BufferedReader reader = new BufferedReader(
                     new InputStreamReader(proc.getInputStream(),
                             StandardCharsets.UTF_8))) {
                 output = reader.lines().collect(Collectors.joining("\n"));

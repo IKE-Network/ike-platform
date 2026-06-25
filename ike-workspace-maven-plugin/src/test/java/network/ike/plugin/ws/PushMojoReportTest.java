@@ -176,7 +176,7 @@ class PushMojoReportTest {
         // WorkspaceReport names files "ws<COLON>push.md" — find the
         // first .md report file in the workspace root so this test
         // tolerates the colon-substitution char without hard-coding it.
-        try (var stream = Files.list(tempDir)) {
+        try (java.util.stream.Stream<Path> stream = Files.list(tempDir)) {
             Path reportFile = stream
                     .filter(p -> p.getFileName().toString().endsWith(".md"))
                     .filter(p -> p.getFileName().toString().contains(goalStem))

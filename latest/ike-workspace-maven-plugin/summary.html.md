@@ -1,6 +1,6 @@
 ---
-date_published: 2026-06-23
-date_modified: 2026-06-23
+date_published: 2026-06-25
+date_modified: 2026-06-25
 canonical_url: https://ike.network/ike-platform/ike-workspace-maven-plugin/summary.html
 ---
 
@@ -27,6 +27,6 @@ canonical_url: https://ike.network/ike-platform/ike-workspace-maven-plugin/summa
 | --- | --- |
 | GroupId | network.ike.platform |
 | ArtifactId | ike-workspace-maven-plugin |
-| Version | 115 |
+| Version | 116 |
 | Type | maven-plugin |
 | Java Version | 25 |

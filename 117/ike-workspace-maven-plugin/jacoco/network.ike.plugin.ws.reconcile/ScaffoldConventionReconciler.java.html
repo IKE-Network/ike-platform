@@ -1,0 +1,880 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ScaffoldConventionReconciler.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws.reconcile</a> &gt; <span class="el_source">ScaffoldConventionReconciler.java</span></div><h1>ScaffoldConventionReconciler.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws.reconcile;
+
+import network.ike.plugin.ws.MavenWrapper;
+import network.ike.plugin.ws.WsGoal;
+import network.ike.workspace.IdeSettings;
+import network.ike.workspace.Manifest;
+import network.ike.workspace.ManifestException;
+import network.ike.workspace.ManifestReader;
+import org.apache.maven.api.plugin.Log;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+/**
+ * Reconciler that upgrades workspace scaffold conventions to the
+ * current plugin version (IKE-Network/ike-issues#393). Subsumes the
+ * retired {@code ws:scaffold-upgrade-{draft,publish}} goals.
+ *
+ * &lt;p&gt;This reconciler owns the cross-cutting &quot;scaffold layer&quot; of a
+ * workspace: gitignore, gitattributes, Syncthing ignore flags, Maven
+ * wrapper, IntelliJ language level, POM {@code root=&quot;true&quot;},
+ * {@code .mvn/maven.config}, and the {@code ike-tooling.version}
+ * property. It does not touch Maven dependency versions or workspace
+ * alignment state.
+ *
+ * &lt;p&gt;Each upgrade step is idempotent — running the reconciler twice
+ * produces the same result. {@code detect} reports the steps that
+ * would change state; {@code apply} performs the mutations.
+ *
+ * &lt;h2&gt;Upgrade steps&lt;/h2&gt;
+ * &lt;ol&gt;
+ *   &lt;li&gt;&lt;b&gt;global-gitignore&lt;/b&gt; — ensure {@code .ike/vcs-state} and
+ *       {@code _git-init*} are in the user's global gitignore.&lt;/li&gt;
+ *   &lt;li&gt;&lt;b&gt;workspace-gitignore&lt;/b&gt; — sectioned whitelist enforcement
+ *       for the workspace {@code .gitignore}.&lt;/li&gt;
+ *   &lt;li&gt;&lt;b&gt;stignore-shared&lt;/b&gt; — {@code (?d)} prefix on directory
+ *       ignore patterns in Syncthing's {@code stignore-shared}.&lt;/li&gt;
+ *   &lt;li&gt;&lt;b&gt;pom-root&lt;/b&gt; — Maven 4.1.0 {@code root=&quot;true&quot;} on the
+ *       workspace POM.&lt;/li&gt;
+ *   &lt;li&gt;&lt;b&gt;maven-config&lt;/b&gt; — ensure {@code .mvn/maven.config} exists
+ *       with {@code -T 1C}, and strip the retired {@code ws:ide-sync}
+ *       {@code -P?with-*} block (IKE-Network/ike-issues#460).&lt;/li&gt;
+ *   &lt;li&gt;&lt;b&gt;gitattributes&lt;/b&gt; — line-ending policy at workspace root
+ *       (ike-issues#189: Windows {@code mvnw.cmd} must be CRLF).&lt;/li&gt;
+ *   &lt;li&gt;&lt;b&gt;mvnw&lt;/b&gt; — regenerate missing Maven wrapper files, and
+ *       replace the legacy custom wrapper with the standard
+ *       {@code only-script} Apache wrapper (ike-issues#405).&lt;/li&gt;
+ *   &lt;li&gt;&lt;b&gt;ide-language-level&lt;/b&gt; — apply the {@code ide:} section
+ *       from {@code workspace.yaml} to {@code .idea/misc.xml}.&lt;/li&gt;
+ *   &lt;li&gt;&lt;b&gt;plugin-version&lt;/b&gt; — bump {@code ike-tooling.version} in
+ *       the workspace POM (and migrate the legacy
+ *       {@code ike-maven-plugin.version} property name).&lt;/li&gt;
+ * &lt;/ol&gt;
+ *
+ * &lt;p&gt;Opt out with {@code -DupdateScaffold=false}.
+ */
+<span class="fc" id="L65">public class ScaffoldConventionReconciler implements Reconciler {</span>
+
+    @Override
+    public String dimension() {
+<span class="nc" id="L69">        return &quot;Scaffold conventions&quot;;</span>
+    }
+
+    @Override
+    public String optOutFlag() {
+<span class="nc" id="L74">        return &quot;updateScaffold&quot;;</span>
+    }
+
+    @Override
+    public DriftReport detect(WorkspaceContext ctx) {
+<span class="nc" id="L79">        Run run = compute(ctx, false);</span>
+<span class="nc bnc" id="L80" title="All 2 branches missed.">        if (run.drift.isEmpty()) {</span>
+<span class="nc" id="L81">            return DriftReport.noDrift(dimension());</span>
+        }
+<span class="nc" id="L83">        List&lt;String&gt; detail = new ArrayList&lt;&gt;(run.drift);</span>
+<span class="nc" id="L84">        String summary = run.drift.size() + &quot; scaffold convention(s) drift&quot;;</span>
+<span class="nc" id="L85">        String action = &quot;apply scaffold upgrades on scaffold-publish&quot;;</span>
+<span class="nc" id="L86">        String optOut = &quot;mvn &quot; + WsGoal.SCAFFOLD_PUBLISH.qualified()</span>
+<span class="nc" id="L87">                + &quot; -D&quot; + optOutFlag() + &quot;=false&quot;;</span>
+<span class="nc" id="L88">        return new DriftReport(dimension(), true, summary, detail, action, optOut);</span>
+    }
+
+    @Override
+    public void apply(WorkspaceContext ctx) {
+<span class="nc bnc" id="L93" title="All 2 branches missed.">        if (ctx.options().isOptedOut(optOutFlag())) {</span>
+<span class="nc" id="L94">            ctx.log().info(&quot;  &quot; + dimension() + &quot;: skipped (opted out via -D&quot;</span>
+<span class="nc" id="L95">                    + optOutFlag() + &quot;=false)&quot;);</span>
+<span class="nc" id="L96">            return;</span>
+        }
+<span class="nc" id="L98">        Run run = compute(ctx, true);</span>
+<span class="nc bnc" id="L99" title="All 2 branches missed.">        if (run.applied == 0) {</span>
+<span class="nc" id="L100">            return;</span>
+        }
+<span class="nc" id="L102">        ctx.log().info(&quot;  &quot; + dimension() + &quot;: applied &quot;</span>
+                + run.applied + &quot; upgrade(s)&quot;);
+<span class="nc" id="L104">    }</span>
+
+    // ── Drift run (shared by detect and apply) ──────────────────────
+
+    /**
+     * Mutable accumulator for one reconciliation pass. {@code drift}
+     * collects human-readable summaries of steps that would change
+     * state (used by {@link #detect}); {@code applied} counts the
+     * steps that actually wrote to disk (used by {@link #apply}).
+     */
+<span class="nc" id="L114">    private static final class Run {</span>
+<span class="nc" id="L115">        final List&lt;String&gt; drift = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L116">        int applied = 0;</span>
+    }
+
+    /**
+     * Resolve the plugin's own version from manifest metadata. Falls
+     * back to a non-zero default when the manifest entry is missing
+     * (which happens in test classpath setups). Matches the original
+     * Mojo's fallback to &quot;49&quot;.
+     */
+    private static String resolvePluginVersion() {
+<span class="nc" id="L126">        String v = ScaffoldConventionReconciler.class.getPackage()</span>
+<span class="nc" id="L127">                .getImplementationVersion();</span>
+<span class="nc bnc" id="L128" title="All 2 branches missed.">        return v != null ? v : &quot;49&quot;;</span>
+    }
+
+    private Run compute(WorkspaceContext ctx, boolean publish) {
+<span class="nc" id="L132">        Run run = new Run();</span>
+<span class="nc" id="L133">        Path root = ctx.workspaceRoot().toPath();</span>
+<span class="nc" id="L134">        String pluginVersion = resolvePluginVersion();</span>
+<span class="nc" id="L135">        Log log = ctx.log();</span>
+
+<span class="nc" id="L137">        upgradeGlobalGitignore(run, publish, log);</span>
+<span class="nc" id="L138">        upgradeWorkspaceGitignore(ctx, root, run, publish, log);</span>
+<span class="nc" id="L139">        upgradeStignoreShared(root, run, publish, log);</span>
+<span class="nc" id="L140">        upgradePomRoot(root, run, publish, log);</span>
+<span class="nc" id="L141">        upgradeMavenConfig(root, run, publish, log);</span>
+<span class="nc" id="L142">        upgradeGitattributes(root, run, publish, log);</span>
+<span class="nc" id="L143">        upgradeMvnw(ctx, root, run, publish, log);</span>
+<span class="nc" id="L144">        upgradeIdeLanguageLevel(ctx, root, run, publish, log);</span>
+<span class="nc" id="L145">        upgradePluginVersion(root, pluginVersion, run, publish, log);</span>
+
+<span class="nc" id="L147">        return run;</span>
+    }
+
+    // ── 1. Global gitignore ────────────────────────────────────────
+
+    private static void upgradeGlobalGitignore(Run run, boolean publish, Log log) {
+<span class="nc" id="L153">        Path globalIgnore = Path.of(System.getProperty(&quot;user.home&quot;),</span>
+                &quot;.gitignore_global&quot;);
+        try {
+<span class="nc bnc" id="L156" title="All 2 branches missed.">            String content = Files.exists(globalIgnore)</span>
+<span class="nc" id="L157">                    ? Files.readString(globalIgnore, StandardCharsets.UTF_8)</span>
+<span class="nc" id="L158">                    : &quot;&quot;;</span>
+
+<span class="nc bnc" id="L160" title="All 2 branches missed.">            boolean needsVcsState = !content.contains(&quot;vcs-state&quot;);</span>
+<span class="nc bnc" id="L161" title="All 2 branches missed.">            boolean needsGitInit = !content.contains(&quot;_git-init&quot;);</span>
+
+<span class="nc bnc" id="L163" title="All 4 branches missed.">            if (!needsVcsState &amp;&amp; !needsGitInit) {</span>
+<span class="nc" id="L164">                return;</span>
+            }
+
+<span class="nc" id="L167">            StringBuilder additions = new StringBuilder();</span>
+<span class="nc bnc" id="L168" title="All 2 branches missed.">            if (needsGitInit) additions.append(&quot;_git-init*\n&quot;);</span>
+<span class="nc bnc" id="L169" title="All 2 branches missed.">            if (needsVcsState) additions.append(&quot;.ike/vcs-state\n&quot;);</span>
+
+<span class="nc" id="L171">            run.drift.add(&quot;global-gitignore: add &quot;</span>
+<span class="nc bnc" id="L172" title="All 2 branches missed.">                    + (needsVcsState ? &quot;.ike/vcs-state &quot; : &quot;&quot;)</span>
+<span class="nc bnc" id="L173" title="All 2 branches missed.">                    + (needsGitInit ? &quot;_git-init*&quot; : &quot;&quot;).trim());</span>
+
+<span class="nc bnc" id="L175" title="All 2 branches missed.">            if (publish) {</span>
+<span class="nc" id="L176">                Files.writeString(globalIgnore,</span>
+<span class="nc bnc" id="L177" title="All 2 branches missed.">                        content + (content.endsWith(&quot;\n&quot;) ? &quot;&quot; : &quot;\n&quot;)</span>
+                                + additions,
+                        StandardCharsets.UTF_8);
+<span class="nc" id="L180">                run.applied++;</span>
+            }
+<span class="nc" id="L182">        } catch (IOException e) {</span>
+<span class="nc" id="L183">            log.warn(&quot;  Could not update global gitignore: &quot; + e.getMessage());</span>
+<span class="nc" id="L184">        }</span>
+<span class="nc" id="L185">    }</span>
+
+    // ── 2. Workspace .gitignore whitelist ──────────────────────────
+
+    /**
+     * Required {@code .gitignore} entries grouped into named sections.
+     * Order mirrors what {@code WorkspaceBootstrap#generateGitignore()}
+     * emits so that output from {@code ws:scaffold-init} and this
+     * reconciler stays visually consistent.
+     */
+<span class="fc" id="L195">    static final List&lt;GitignoreSection&gt; GITIGNORE_SECTIONS = List.of(</span>
+            new GitignoreSection(
+                    &quot;# ── Whitelist workspace-level files ──────────────────────────────&quot;,
+                    &quot;!.gitignore&quot;, &quot;!.gitattributes&quot;, &quot;!pom.xml&quot;, &quot;!workspace.yaml&quot;
+            ),
+            new GitignoreSection(
+                    &quot;# ── Whitelist workspace-owned directories ────────────────────────&quot;,
+                    &quot;!.mvn/&quot;, &quot;!.mvn/**&quot;, &quot;!checkpoints/&quot;, &quot;!checkpoints/**&quot;
+            ),
+            new GitignoreSection(
+                    &quot;# ── IntelliJ project config (curated slice) ──────────────────────\n&quot;
+                            + &quot;# Small, stable project-wide settings shared across collaborators.\n&quot;
+                            + &quot;# compiler.xml and vcs.xml are excluded — they regenerate per\n&quot;
+                            + &quot;# Maven reload or per workspace membership. misc.xml is excluded\n&quot;
+                            + &quot;# by default (per-machine Maven profile selection); opt in with\n&quot;
+                            + &quot;# `ide.track-misc-xml: true` in workspace.yaml (ike-issues#571).&quot;,
+                    &quot;!.idea/&quot;, &quot;!.idea/.gitignore&quot;,
+                    &quot;!.idea/kotlinc.xml&quot;, &quot;!.idea/encodings.xml&quot;,
+                    &quot;!.idea/jarRepositories.xml&quot;
+            )
+    );
+
+    /**
+     * A named group of {@code .gitignore} entries sharing a section
+     * header comment. The reconciler emits the full header when no
+     * entries from this section are present; otherwise appends only
+     * the missing entries individually.
+     *
+     * @param header  the section header comment block
+     * @param entries the required entries for this section
+     */
+<span class="fc" id="L226">    record GitignoreSection(String header, List&lt;String&gt; entries) {</span>
+        GitignoreSection(String header, String... entries) {
+<span class="fc" id="L228">            this(header, List.of(entries));</span>
+<span class="fc" id="L229">        }</span>
+    }
+
+    /**
+     * Compute the additions needed to bring an existing {@code .gitignore}
+     * up to spec. Package-private for test access.
+     *
+     * @param content the current {@code .gitignore} content
+     * @return the text to append (empty string if already current)
+     */
+    public static String computeGitignoreAdditions(String content) {
+<span class="fc" id="L240">        Set&lt;String&gt; existingLines = new LinkedHashSet&lt;&gt;();</span>
+<span class="fc bfc" id="L241" title="All 2 branches covered.">        for (String line : content.split(&quot;\n&quot;)) {</span>
+<span class="fc" id="L242">            existingLines.add(line.trim());</span>
+        }
+
+<span class="fc" id="L245">        StringBuilder additions = new StringBuilder();</span>
+<span class="fc bfc" id="L246" title="All 2 branches covered.">        for (GitignoreSection section : GITIGNORE_SECTIONS) {</span>
+<span class="fc" id="L247">            List&lt;String&gt; missing = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L248" title="All 2 branches covered.">            for (String entry : section.entries()) {</span>
+<span class="fc bfc" id="L249" title="All 2 branches covered.">                if (!existingLines.contains(entry)) {</span>
+<span class="fc" id="L250">                    missing.add(entry);</span>
+                }
+<span class="fc" id="L252">            }</span>
+<span class="fc bfc" id="L253" title="All 2 branches covered.">            if (missing.isEmpty()) {</span>
+<span class="fc" id="L254">                continue;</span>
+            }
+<span class="fc bfc" id="L256" title="All 2 branches covered.">            boolean fullSection = missing.size() == section.entries().size();</span>
+<span class="fc bfc" id="L257" title="All 2 branches covered.">            if (fullSection) {</span>
+<span class="fc" id="L258">                additions.append(&quot;\n&quot;).append(section.header()).append(&quot;\n&quot;);</span>
+            }
+<span class="fc bfc" id="L260" title="All 2 branches covered.">            for (String entry : missing) {</span>
+<span class="fc" id="L261">                additions.append(entry).append(&quot;\n&quot;);</span>
+<span class="fc" id="L262">            }</span>
+<span class="fc" id="L263">        }</span>
+<span class="fc" id="L264">        return additions.toString();</span>
+    }
+
+    private static void upgradeWorkspaceGitignore(WorkspaceContext ctx, Path root,
+                                                   Run run, boolean publish,
+                                                   Log log) {
+<span class="nc" id="L270">        Path gitignore = root.resolve(&quot;.gitignore&quot;);</span>
+        try {
+<span class="nc bnc" id="L272" title="All 2 branches missed.">            if (!Files.exists(gitignore)) {</span>
+<span class="nc" id="L273">                return;</span>
+            }
+
+<span class="nc" id="L276">            String content = Files.readString(gitignore, StandardCharsets.UTF_8);</span>
+
+            // Additive base sections (never removes user-authored lines).
+<span class="nc" id="L279">            String additions = computeGitignoreAdditions(content);</span>
+<span class="nc bnc" id="L280" title="All 2 branches missed.">            String withBase = additions.isEmpty()</span>
+<span class="nc" id="L281">                    ? content</span>
+<span class="nc bnc" id="L282" title="All 2 branches missed.">                    : content + (content.endsWith(&quot;\n&quot;) ? &quot;&quot; : &quot;\n&quot;) + additions;</span>
+
+            // misc.xml tracking is opt-in via `ide.track-misc-xml`
+            // (ike-issues#571): it co-mingles per-machine Maven profile
+            // selection, so by default it stays ignored. Keep the
+            // `!.idea/misc.xml` whitelist line in sync with the setting,
+            // self-healing a rogue line left by older plugin versions.
+<span class="nc" id="L289">            boolean track = tracksMiscXml(ctx, log);</span>
+<span class="nc" id="L290">            String updated = reconcileMiscXmlWhitelist(withBase, track);</span>
+
+<span class="nc bnc" id="L292" title="All 2 branches missed.">            if (updated.equals(content)) {</span>
+<span class="nc" id="L293">                return;</span>
+            }
+
+<span class="nc bnc" id="L296" title="All 2 branches missed.">            if (!additions.isEmpty()) {</span>
+<span class="nc" id="L297">                run.drift.add(&quot;workspace-gitignore: add missing whitelist entries&quot;);</span>
+            }
+<span class="nc bnc" id="L299" title="All 2 branches missed.">            if (!updated.equals(withBase)) {</span>
+<span class="nc bnc" id="L300" title="All 2 branches missed.">                run.drift.add(track</span>
+<span class="nc" id="L301">                        ? &quot;workspace-gitignore: whitelist .idea/misc.xml&quot;</span>
+                                + &quot; (ide.track-misc-xml)&quot;
+<span class="nc" id="L303">                        : &quot;workspace-gitignore: stop tracking .idea/misc.xml&quot;</span>
+                                + &quot; (per-machine; opt in via ide.track-misc-xml)&quot;);
+            }
+
+<span class="nc bnc" id="L307" title="All 2 branches missed.">            if (publish) {</span>
+<span class="nc" id="L308">                Files.writeString(gitignore, updated, StandardCharsets.UTF_8);</span>
+<span class="nc" id="L309">                run.applied++;</span>
+            }
+<span class="nc" id="L311">        } catch (IOException e) {</span>
+<span class="nc" id="L312">            log.warn(&quot;  Could not update .gitignore: &quot; + e.getMessage());</span>
+<span class="nc" id="L313">        }</span>
+<span class="nc" id="L314">    }</span>
+
+    /**
+     * Read {@code ide.track-misc-xml} from {@code workspace.yaml},
+     * defaulting to {@code false} (ignore misc.xml) when the manifest
+     * is absent or unreadable.
+     *
+     * @param ctx the workspace context (provides the manifest path)
+     * @param log the plugin log for debug diagnostics
+     * @return whether the workspace opts in to tracking misc.xml
+     */
+    private static boolean tracksMiscXml(WorkspaceContext ctx, Log log) {
+        try {
+<span class="nc" id="L327">            return ManifestReader.read(ctx.manifestPath()).ide().trackMiscXml();</span>
+<span class="nc" id="L328">        } catch (ManifestException e) {</span>
+<span class="nc" id="L329">            log.debug(&quot;Could not read workspace.yaml for ide.track-misc-xml: &quot;</span>
+<span class="nc" id="L330">                    + e.getMessage());</span>
+<span class="nc" id="L331">            return false;</span>
+        }
+    }
+
+    /**
+     * Keep the {@code !.idea/misc.xml} whitelist line in sync with the
+     * workspace's opt-in choice. When {@code track} is {@code true} the
+     * line is ensured present (appended if missing); otherwise every
+     * occurrence is removed so misc.xml falls back under the catch-all
+     * ignore. misc.xml co-mingles per-machine Maven profile selection,
+     * so tracking is opt-in (IKE-Network/ike-issues#571).
+     * Visible for tests.
+     *
+     * @param content the current {@code .gitignore} content
+     * @param track   whether the workspace opts in to tracking misc.xml
+     * @return the reconciled content
+     */
+    public static String reconcileMiscXmlWhitelist(String content, boolean track) {
+<span class="fc" id="L349">        String entry = &quot;!.idea/misc.xml&quot;;</span>
+<span class="fc" id="L350">        String[] lines = content.split(&quot;\n&quot;, -1);</span>
+<span class="fc" id="L351">        boolean present = false;</span>
+<span class="fc bfc" id="L352" title="All 2 branches covered.">        for (String line : lines) {</span>
+<span class="fc bfc" id="L353" title="All 2 branches covered.">            if (line.trim().equals(entry)) {</span>
+<span class="fc" id="L354">                present = true;</span>
+<span class="fc" id="L355">                break;</span>
+            }
+        }
+<span class="fc bfc" id="L358" title="All 2 branches covered.">        if (track) {</span>
+<span class="fc bfc" id="L359" title="All 2 branches covered.">            if (present) {</span>
+<span class="fc" id="L360">                return content;</span>
+            }
+<span class="fc" id="L362">            return content</span>
+<span class="pc bpc" id="L363" title="2 of 4 branches missed.">                    + (content.isEmpty() || content.endsWith(&quot;\n&quot;) ? &quot;&quot; : &quot;\n&quot;)</span>
+                    + entry + &quot;\n&quot;;
+        }
+<span class="fc bfc" id="L366" title="All 2 branches covered.">        if (!present) {</span>
+<span class="fc" id="L367">            return content;</span>
+        }
+<span class="fc" id="L369">        List&lt;String&gt; kept = new ArrayList&lt;&gt;(lines.length);</span>
+<span class="fc bfc" id="L370" title="All 2 branches covered.">        for (String line : lines) {</span>
+<span class="fc bfc" id="L371" title="All 2 branches covered.">            if (!line.trim().equals(entry)) {</span>
+<span class="fc" id="L372">                kept.add(line);</span>
+            }
+        }
+<span class="fc" id="L375">        return String.join(&quot;\n&quot;, kept);</span>
+    }
+
+    // ── 3. stignore-shared (?d) flags ──────────────────────────────
+
+    private static void upgradeStignoreShared(Path root, Run run,
+                                               boolean publish, Log log) {
+<span class="nc bnc" id="L382" title="All 2 branches missed.">        Path stignore = root.getParent() != null</span>
+<span class="nc" id="L383">                ? root.getParent().resolve(&quot;stignore-shared&quot;)</span>
+<span class="nc" id="L384">                : null;</span>
+<span class="nc bnc" id="L385" title="All 4 branches missed.">        if (stignore == null || !Files.exists(stignore)) {</span>
+<span class="nc" id="L386">            return;</span>
+        }
+
+        try {
+<span class="nc" id="L390">            String content = Files.readString(stignore, StandardCharsets.UTF_8);</span>
+<span class="nc" id="L391">            boolean changed = false;</span>
+<span class="nc" id="L392">            String updated = content;</span>
+
+<span class="nc" id="L394">            String[][] upgrades = {</span>
+                    {&quot;\n.git/&quot;, &quot;\n(?d).git/&quot;},
+                    {&quot;\ntarget/&quot;, &quot;\n(?d)target/&quot;},
+                    {&quot;\nout/&quot;, &quot;\n(?d)out/&quot;},
+                    {&quot;\n.gradle/&quot;, &quot;\n(?d).gradle/&quot;},
+                    {&quot;\nbuild/&quot;, &quot;\n(?d)build/&quot;},
+            };
+<span class="nc bnc" id="L401" title="All 2 branches missed.">            for (String[] pair : upgrades) {</span>
+<span class="nc bnc" id="L402" title="All 4 branches missed.">                if (updated.contains(pair[0]) &amp;&amp; !updated.contains(pair[1])) {</span>
+<span class="nc" id="L403">                    updated = updated.replace(pair[0], pair[1]);</span>
+<span class="nc" id="L404">                    changed = true;</span>
+                }
+            }
+<span class="nc bnc" id="L407" title="All 4 branches missed.">            if (updated.startsWith(&quot;.git/&quot;) &amp;&amp; !updated.startsWith(&quot;(?d).git/&quot;)) {</span>
+<span class="nc" id="L408">                updated = &quot;(?d)&quot; + updated;</span>
+<span class="nc" id="L409">                changed = true;</span>
+            }
+
+<span class="nc bnc" id="L412" title="All 2 branches missed.">            if (!changed) {</span>
+<span class="nc" id="L413">                return;</span>
+            }
+
+<span class="nc" id="L416">            run.drift.add(&quot;stignore-shared: add (?d) prefix to directory patterns&quot;);</span>
+
+<span class="nc bnc" id="L418" title="All 2 branches missed.">            if (publish) {</span>
+<span class="nc" id="L419">                Files.writeString(stignore, updated, StandardCharsets.UTF_8);</span>
+<span class="nc" id="L420">                run.applied++;</span>
+            }
+<span class="nc" id="L422">        } catch (IOException e) {</span>
+<span class="nc" id="L423">            log.warn(&quot;  Could not update stignore-shared: &quot; + e.getMessage());</span>
+<span class="nc" id="L424">        }</span>
+<span class="nc" id="L425">    }</span>
+
+    // ── 4. POM root=&quot;true&quot; ────────────────────────────────────────
+
+    private static void upgradePomRoot(Path root, Run run,
+                                        boolean publish, Log log) {
+<span class="nc" id="L431">        Path pom = root.resolve(&quot;pom.xml&quot;);</span>
+        try {
+<span class="nc bnc" id="L433" title="All 2 branches missed.">            if (!Files.exists(pom)) {</span>
+<span class="nc" id="L434">                return;</span>
+            }
+
+<span class="nc" id="L437">            String content = Files.readString(pom, StandardCharsets.UTF_8);</span>
+<span class="nc bnc" id="L438" title="All 2 branches missed.">            if (content.contains(&quot;root=\&quot;true\&quot;&quot;)) {</span>
+<span class="nc" id="L439">                return;</span>
+            }
+
+<span class="nc" id="L442">            String updated = content.replaceFirst(</span>
+                    &quot;(&lt;project\\s[^&gt;]*?)(&gt;)&quot;,
+                    &quot;$1\n         root=\&quot;true\&quot;$2&quot;);
+
+<span class="nc" id="L446">            run.drift.add(&quot;pom-root: add root=\&quot;true\&quot; to &lt;project&gt;&quot;);</span>
+
+<span class="nc bnc" id="L448" title="All 2 branches missed.">            if (publish) {</span>
+<span class="nc" id="L449">                Files.writeString(pom, updated, StandardCharsets.UTF_8);</span>
+<span class="nc" id="L450">                run.applied++;</span>
+            }
+<span class="nc" id="L452">        } catch (IOException e) {</span>
+<span class="nc" id="L453">            log.warn(&quot;  Could not update pom.xml: &quot; + e.getMessage());</span>
+<span class="nc" id="L454">        }</span>
+<span class="nc" id="L455">    }</span>
+
+    // ── 5. .mvn/maven.config ──────────────────────────────────────
+
+    private static void upgradeMavenConfig(Path root, Run run,
+                                            boolean publish, Log log) {
+<span class="nc" id="L461">        Path config = root.resolve(&quot;.mvn/maven.config&quot;);</span>
+        try {
+<span class="nc bnc" id="L463" title="All 2 branches missed.">            if (!Files.exists(config)) {</span>
+<span class="nc" id="L464">                run.drift.add(&quot;maven-config: create .mvn/maven.config with -T 1C&quot;);</span>
+<span class="nc bnc" id="L465" title="All 2 branches missed.">                if (publish) {</span>
+<span class="nc" id="L466">                    Files.createDirectories(config.getParent());</span>
+<span class="nc" id="L467">                    Files.writeString(config, &quot;-T 1C\n&quot;, StandardCharsets.UTF_8);</span>
+<span class="nc" id="L468">                    run.applied++;</span>
+                }
+<span class="nc" id="L470">                return;</span>
+            }
+
+            // Strip the retired ws:ide-sync managed -P?with-* block: it
+            // force-activated the legacy with-* subproject profiles, which
+            // the #460 migration to top-level &lt;subprojects&gt; retires
+            // (IKE-Network/ike-issues#696). The block references profiles
+            // that no longer exist; the leading '?' kept it non-fatal, but
+            // it is dead config.
+<span class="nc" id="L479">            String content = Files.readString(config, StandardCharsets.UTF_8);</span>
+<span class="nc" id="L480">            String stripped = stripIdeSyncBlock(content);</span>
+<span class="nc bnc" id="L481" title="All 2 branches missed.">            if (stripped.equals(content)) {</span>
+<span class="nc" id="L482">                return;</span>
+            }
+<span class="nc" id="L484">            run.drift.add(&quot;maven-config: remove retired ws:ide-sync &quot;</span>
+                    + &quot;-P?with-* block (#460)&quot;);
+<span class="nc bnc" id="L486" title="All 2 branches missed.">            if (publish) {</span>
+<span class="nc" id="L487">                Files.writeString(config, stripped, StandardCharsets.UTF_8);</span>
+<span class="nc" id="L488">                run.applied++;</span>
+            }
+<span class="nc" id="L490">        } catch (IOException e) {</span>
+<span class="nc" id="L491">            log.warn(&quot;  Could not update .mvn/maven.config: &quot; + e.getMessage());</span>
+<span class="nc" id="L492">        }</span>
+<span class="nc" id="L493">    }</span>
+
+    /**
+     * Remove the {@code ws:ide-sync} managed block — the
+     * {@code -P?with-*} profile-activation lines IntelliJ once needed —
+     * from {@code .mvn/maven.config} content. The block is delimited by
+     * the {@code # &gt;&gt;&gt; ws:ide-sync managed &gt;&gt;&gt;} /
+     * {@code # &lt;&lt;&lt; ws:ide-sync managed &lt;&lt;&lt;} sentinels. Returns the input
+     * unchanged when the block is absent or its sentinels are malformed.
+     * Visible for tests.
+     *
+     * @param content the current {@code .mvn/maven.config} content
+     * @return the content with the managed block removed
+     */
+    public static String stripIdeSyncBlock(String content) {
+<span class="fc" id="L508">        final String begin = &quot;# &gt;&gt;&gt; ws:ide-sync managed &gt;&gt;&gt;&quot;;</span>
+<span class="fc" id="L509">        final String end = &quot;# &lt;&lt;&lt; ws:ide-sync managed &lt;&lt;&lt;&quot;;</span>
+<span class="fc" id="L510">        int b = content.indexOf(begin);</span>
+<span class="fc bfc" id="L511" title="All 2 branches covered.">        if (b &lt; 0) {</span>
+<span class="fc" id="L512">            return content;</span>
+        }
+<span class="fc" id="L514">        int e = content.indexOf(end, b);</span>
+<span class="pc bpc" id="L515" title="1 of 2 branches missed.">        if (e &lt; 0) {</span>
+<span class="nc" id="L516">            return content;            // malformed — leave it untouched</span>
+        }
+<span class="fc" id="L518">        e += end.length();</span>
+<span class="pc bpc" id="L519" title="2 of 4 branches missed.">        if (e &lt; content.length() &amp;&amp; content.charAt(e) == '\n') {</span>
+<span class="fc" id="L520">            e++;</span>
+        }
+<span class="fc" id="L522">        String result = content.substring(0, b) + content.substring(e);</span>
+<span class="pc bpc" id="L523" title="1 of 2 branches missed.">        return result.isBlank() ? result : result.stripTrailing() + &quot;\n&quot;;</span>
+    }
+
+    // ── 6. .gitattributes ─────────────────────────────────────────
+
+    /**
+     * Header comment block emitted when {@code .gitattributes} is
+     * created from scratch.
+     */
+<span class="fc" id="L532">    static final String GITATTRIBUTES_HEADER =</span>
+            &quot;# Line-ending policy — managed by &quot;
+<span class="fc" id="L534">            + WsGoal.SCAFFOLD_PUBLISH.qualified() + &quot;\n&quot;</span>
+            + &quot;&quot;&quot;
+            # ──────────────────────────────────────────────────────
+            #
+            # Windows batch files MUST be CRLF or cmd.exe chokes — symptoms range
+            # from &quot;The system cannot find the path specified&quot; to silent failure.
+            # Without this file, mvnw.cmd checked out under core.autocrlf=false
+            # (or input) is broken on Windows.
+            #
+            # Tracked in IKE-Network/ike-issues#189.
+            &quot;&quot;&quot;;
+
+    /**
+     * Required {@code .gitattributes} rules, in the order they should
+     * appear when the file is created from scratch.
+     */
+<span class="fc" id="L550">    static final List&lt;String&gt; GITATTRIBUTES_RULES = List.of(</span>
+            &quot;*.cmd  text eol=crlf&quot;,
+            &quot;*.bat  text eol=crlf&quot;,
+            &quot;*.sh   text eol=lf&quot;,
+            &quot;mvnw   text eol=lf&quot;,
+            &quot;* text=auto&quot;
+    );
+
+    /**
+     * Compute additions needed to bring an existing {@code .gitattributes}
+     * up to spec. Detects each required rule by its leading whitespace-
+     * separated pattern token. Returns the empty string when the file
+     * is already current. Package-private for test access.
+     *
+     * @param content the current {@code .gitattributes} content (empty
+     *                string when the file does not exist)
+     * @return the text to append (empty when already current)
+     */
+    public static String computeGitattributesAdditions(String content) {
+<span class="fc" id="L569">        Set&lt;String&gt; presentPatterns = new LinkedHashSet&lt;&gt;();</span>
+<span class="fc bfc" id="L570" title="All 2 branches covered.">        for (String line : content.split(&quot;\n&quot;)) {</span>
+<span class="fc" id="L571">            String trimmed = line.trim();</span>
+<span class="fc bfc" id="L572" title="All 4 branches covered.">            if (trimmed.isEmpty() || trimmed.startsWith(&quot;#&quot;)) {</span>
+<span class="fc" id="L573">                continue;</span>
+            }
+<span class="fc" id="L575">            String[] tokens = trimmed.split(&quot;\\s+&quot;, 2);</span>
+<span class="pc bpc" id="L576" title="1 of 2 branches missed.">            if (tokens.length &gt; 0) {</span>
+<span class="fc" id="L577">                presentPatterns.add(tokens[0]);</span>
+            }
+        }
+
+<span class="fc" id="L581">        List&lt;String&gt; missing = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L582" title="All 2 branches covered.">        for (String rule : GITATTRIBUTES_RULES) {</span>
+<span class="fc" id="L583">            String pattern = rule.split(&quot;\\s+&quot;, 2)[0];</span>
+<span class="fc bfc" id="L584" title="All 2 branches covered.">            if (!presentPatterns.contains(pattern)) {</span>
+<span class="fc" id="L585">                missing.add(rule);</span>
+            }
+<span class="fc" id="L587">        }</span>
+
+<span class="fc bfc" id="L589" title="All 2 branches covered.">        if (missing.isEmpty()) {</span>
+<span class="fc" id="L590">            return &quot;&quot;;</span>
+        }
+
+<span class="fc" id="L593">        StringBuilder additions = new StringBuilder();</span>
+<span class="fc" id="L594">        boolean creating = content.isEmpty();</span>
+<span class="fc bfc" id="L595" title="All 2 branches covered.">        if (creating) {</span>
+<span class="fc" id="L596">            additions.append(GITATTRIBUTES_HEADER);</span>
+<span class="fc" id="L597">            additions.append('\n');</span>
+        }
+<span class="fc bfc" id="L599" title="All 2 branches covered.">        for (String rule : missing) {</span>
+<span class="fc" id="L600">            additions.append(rule).append('\n');</span>
+<span class="fc" id="L601">        }</span>
+<span class="fc" id="L602">        return additions.toString();</span>
+    }
+
+    private static void upgradeGitattributes(Path root, Run run,
+                                              boolean publish, Log log) {
+<span class="nc" id="L607">        Path gitattributes = root.resolve(&quot;.gitattributes&quot;);</span>
+        try {
+<span class="nc bnc" id="L609" title="All 2 branches missed.">            String content = Files.exists(gitattributes)</span>
+<span class="nc" id="L610">                    ? Files.readString(gitattributes, StandardCharsets.UTF_8)</span>
+<span class="nc" id="L611">                    : &quot;&quot;;</span>
+
+<span class="nc" id="L613">            String additions = computeGitattributesAdditions(content);</span>
+<span class="nc bnc" id="L614" title="All 2 branches missed.">            if (additions.isEmpty()) {</span>
+<span class="nc" id="L615">                return;</span>
+            }
+
+<span class="nc" id="L618">            boolean creating = content.isEmpty();</span>
+<span class="nc" id="L619">            run.drift.add(&quot;gitattributes: &quot;</span>
+<span class="nc bnc" id="L620" title="All 2 branches missed.">                    + (creating ? &quot;create with canonical rules&quot;</span>
+<span class="nc" id="L621">                                : &quot;add missing rules&quot;));</span>
+
+<span class="nc bnc" id="L623" title="All 2 branches missed.">            if (publish) {</span>
+<span class="nc bnc" id="L624" title="All 2 branches missed.">                String updated = creating</span>
+<span class="nc" id="L625">                        ? additions</span>
+<span class="nc bnc" id="L626" title="All 2 branches missed.">                        : content + (content.endsWith(&quot;\n&quot;) ? &quot;&quot; : &quot;\n&quot;)</span>
+<span class="nc" id="L627">                                + additions;</span>
+<span class="nc" id="L628">                Files.writeString(gitattributes, updated, StandardCharsets.UTF_8);</span>
+<span class="nc" id="L629">                run.applied++;</span>
+            }
+<span class="nc" id="L631">        } catch (IOException e) {</span>
+<span class="nc" id="L632">            log.warn(&quot;  Could not update .gitattributes: &quot; + e.getMessage());</span>
+<span class="nc" id="L633">        }</span>
+<span class="nc" id="L634">    }</span>
+
+    // ── 7. Maven wrapper ───────────────────────────────────────────
+
+    private static void upgradeMvnw(WorkspaceContext ctx, Path root, Run run,
+                                     boolean publish, Log log) {
+<span class="nc" id="L640">        Path propsFile = root.resolve(&quot;.mvn&quot;).resolve(&quot;wrapper&quot;)</span>
+<span class="nc" id="L641">                .resolve(&quot;maven-wrapper.properties&quot;);</span>
+<span class="nc" id="L642">        Path mvnw = root.resolve(&quot;mvnw&quot;);</span>
+<span class="nc" id="L643">        Path mvnwCmd = root.resolve(&quot;mvnw.cmd&quot;);</span>
+
+<span class="nc bnc" id="L645" title="All 2 branches missed.">        boolean propsMissing = !Files.exists(propsFile);</span>
+<span class="nc bnc" id="L646" title="All 2 branches missed.">        boolean mvnwMissing = !Files.exists(mvnw);</span>
+<span class="nc bnc" id="L647" title="All 2 branches missed.">        boolean mvnwCmdMissing = !Files.exists(mvnwCmd);</span>
+
+        boolean legacy;
+        try {
+<span class="nc" id="L651">            legacy = MavenWrapper.isLegacyWrapper(root);</span>
+<span class="nc" id="L652">        } catch (IOException e) {</span>
+<span class="nc" id="L653">            log.warn(&quot;  Could not inspect Maven wrapper: &quot; + e.getMessage());</span>
+<span class="nc" id="L654">            return;</span>
+<span class="nc" id="L655">        }</span>
+
+<span class="nc bnc" id="L657" title="All 8 branches missed.">        if (!propsMissing &amp;&amp; !mvnwMissing &amp;&amp; !mvnwCmdMissing &amp;&amp; !legacy) {</span>
+<span class="nc" id="L658">            return;</span>
+        }
+
+<span class="nc" id="L661">        String mavenVersion = resolveMavenVersionForUpgrade(ctx, root, log);</span>
+<span class="nc bnc" id="L662" title="All 2 branches missed.">        if (mavenVersion == null) {</span>
+            // No version configured — skip cleanly.
+<span class="nc" id="L664">            return;</span>
+        }
+
+<span class="nc bnc" id="L667" title="All 2 branches missed.">        if (legacy) {</span>
+<span class="nc" id="L668">            run.drift.add(&quot;mvnw: replace legacy custom wrapper with standard &quot;</span>
+                    + &quot;only-script wrapper (Maven &quot; + mavenVersion + &quot;)&quot;);
+<span class="nc bnc" id="L670" title="All 2 branches missed.">            if (publish) {</span>
+                try {
+<span class="nc" id="L672">                    MavenWrapper.writeAll(root, mavenVersion);</span>
+<span class="nc" id="L673">                    run.applied++;</span>
+<span class="nc" id="L674">                } catch (IOException e) {</span>
+<span class="nc" id="L675">                    log.warn(&quot;  Could not replace Maven wrapper: &quot; + e.getMessage());</span>
+<span class="nc" id="L676">                }</span>
+            }
+<span class="nc" id="L678">            return;</span>
+        }
+
+<span class="nc" id="L681">        List&lt;String&gt; created = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L682" title="All 2 branches missed.">        if (propsMissing) created.add(&quot;.mvn/wrapper/maven-wrapper.properties&quot;);</span>
+<span class="nc bnc" id="L683" title="All 2 branches missed.">        if (mvnwMissing) created.add(&quot;mvnw&quot;);</span>
+<span class="nc bnc" id="L684" title="All 2 branches missed.">        if (mvnwCmdMissing) created.add(&quot;mvnw.cmd&quot;);</span>
+
+<span class="nc" id="L686">        run.drift.add(&quot;mvnw: create &quot; + String.join(&quot;, &quot;, created)</span>
+                + &quot; (Maven &quot; + mavenVersion + &quot;)&quot;);
+
+<span class="nc bnc" id="L689" title="All 2 branches missed.">        if (publish) {</span>
+            try {
+<span class="nc" id="L691">                MavenWrapper.writeMissingFiles(root, mavenVersion);</span>
+<span class="nc" id="L692">                run.applied++;</span>
+<span class="nc" id="L693">            } catch (IOException e) {</span>
+<span class="nc" id="L694">                log.warn(&quot;  Could not install Maven wrapper: &quot; + e.getMessage());</span>
+<span class="nc" id="L695">            }</span>
+        }
+<span class="nc" id="L697">    }</span>
+
+    /**
+     * Resolve the Maven version to write into a regenerated wrapper.
+     * Prefers an existing {@code maven.version} in the wrapper
+     * properties file; falls back to {@code defaults.maven-version}
+     * from {@code workspace.yaml}.
+     */
+    private static String resolveMavenVersionForUpgrade(WorkspaceContext ctx,
+                                                         Path root, Log log) {
+        try {
+<span class="nc" id="L708">            String pinned = MavenWrapper.readPinnedVersion(root);</span>
+<span class="nc bnc" id="L709" title="All 4 branches missed.">            if (pinned != null &amp;&amp; !pinned.isBlank()) {</span>
+<span class="nc" id="L710">                return pinned;</span>
+            }
+<span class="nc" id="L712">        } catch (IOException e) {</span>
+<span class="nc" id="L713">            log.warn(&quot;  Could not read maven-wrapper.properties: &quot;</span>
+<span class="nc" id="L714">                    + e.getMessage());</span>
+<span class="nc" id="L715">        }</span>
+        try {
+<span class="nc" id="L717">            Manifest m = ManifestReader.read(ctx.manifestPath());</span>
+<span class="nc bnc" id="L718" title="All 4 branches missed.">            if (m.defaults() != null &amp;&amp; m.defaults().mavenVersion() != null</span>
+<span class="nc bnc" id="L719" title="All 2 branches missed.">                    &amp;&amp; !m.defaults().mavenVersion().isBlank()) {</span>
+<span class="nc" id="L720">                return m.defaults().mavenVersion();</span>
+            }
+<span class="nc" id="L722">        } catch (ManifestException e) {</span>
+<span class="nc" id="L723">            log.debug(&quot;Could not read workspace.yaml for maven-version: &quot;</span>
+<span class="nc" id="L724">                    + e.getMessage());</span>
+<span class="nc" id="L725">        }</span>
+<span class="nc" id="L726">        return null;</span>
+    }
+
+    // ── 8. IntelliJ language level ────────────────────────────────
+
+    private static void upgradeIdeLanguageLevel(WorkspaceContext ctx, Path root,
+                                                 Run run, boolean publish,
+                                                 Log log) {
+<span class="nc" id="L734">        Path misc = root.resolve(&quot;.idea&quot;).resolve(&quot;misc.xml&quot;);</span>
+<span class="nc bnc" id="L735" title="All 2 branches missed.">        if (!Files.exists(misc)) {</span>
+<span class="nc" id="L736">            return;</span>
+        }
+
+        IdeSettings ide;
+        try {
+<span class="nc" id="L741">            Manifest m = ManifestReader.read(ctx.manifestPath());</span>
+<span class="nc" id="L742">            ide = m.ide();</span>
+<span class="nc" id="L743">        } catch (ManifestException e) {</span>
+<span class="nc" id="L744">            log.warn(&quot;  IDE language level: could not read workspace.yaml: &quot;</span>
+<span class="nc" id="L745">                    + e.getMessage());</span>
+<span class="nc" id="L746">            return;</span>
+<span class="nc" id="L747">        }</span>
+
+<span class="nc bnc" id="L749" title="All 2 branches missed.">        if (!ide.hasAnyValue()) {</span>
+<span class="nc" id="L750">            return;</span>
+        }
+
+        try {
+<span class="nc" id="L754">            String content = Files.readString(misc, StandardCharsets.UTF_8);</span>
+<span class="nc" id="L755">            String updated = applyIdeSettings(content, ide);</span>
+<span class="nc bnc" id="L756" title="All 2 branches missed.">            if (updated.equals(content)) {</span>
+<span class="nc" id="L757">                return;</span>
+            }
+
+<span class="nc" id="L760">            run.drift.add(&quot;ide-language-level: set to &quot;</span>
+<span class="nc bnc" id="L761" title="All 2 branches missed.">                    + (ide.languageLevel() != null</span>
+<span class="nc" id="L762">                            ? ide.languageLevel() : &quot;(jdk-name only)&quot;));</span>
+
+<span class="nc bnc" id="L764" title="All 2 branches missed.">            if (publish) {</span>
+<span class="nc" id="L765">                Files.writeString(misc, updated, StandardCharsets.UTF_8);</span>
+<span class="nc" id="L766">                run.applied++;</span>
+            }
+<span class="nc" id="L768">        } catch (IOException e) {</span>
+<span class="nc" id="L769">            log.warn(&quot;  Could not update .idea/misc.xml: &quot; + e.getMessage());</span>
+<span class="nc" id="L770">        }</span>
+<span class="nc" id="L771">    }</span>
+
+    /**
+     * Apply {@code ide.languageLevel} and {@code ide.jdkName} to the
+     * {@code ProjectRootManager} component in {@code .idea/misc.xml}
+     * content. Returns the updated content, or the original if no
+     * change is needed. Package-private for test access.
+     *
+     * @param content the current {@code misc.xml} content
+     * @param ide     the settings to enforce (null fields are no-ops)
+     * @return the updated content
+     */
+    public static String applyIdeSettings(String content, IdeSettings ide) {
+<span class="fc" id="L784">        String updated = content;</span>
+<span class="fc bfc" id="L785" title="All 2 branches covered.">        if (ide.languageLevel() != null) {</span>
+<span class="fc" id="L786">            updated = replaceProjectRootAttr(updated, &quot;languageLevel&quot;,</span>
+<span class="fc" id="L787">                    ide.languageLevel());</span>
+        }
+<span class="fc bfc" id="L789" title="All 2 branches covered.">        if (ide.jdkName() != null) {</span>
+<span class="fc" id="L790">            updated = replaceProjectRootAttr(updated, &quot;project-jdk-name&quot;,</span>
+<span class="fc" id="L791">                    ide.jdkName());</span>
+        }
+<span class="fc" id="L793">        return updated;</span>
+    }
+
+    private static String replaceProjectRootAttr(String content, String attr,
+                                                  String value) {
+<span class="fc" id="L798">        Pattern p = Pattern.compile(</span>
+                &quot;(&lt;component\\s+name=\&quot;ProjectRootManager\&quot;[^&gt;]*\\b&quot;
+<span class="fc" id="L800">                        + Pattern.quote(attr) + &quot;=\&quot;)([^\&quot;]*)(\&quot;)&quot;);</span>
+<span class="fc" id="L801">        Matcher m = p.matcher(content);</span>
+<span class="fc bfc" id="L802" title="All 2 branches covered.">        if (!m.find()) {</span>
+<span class="fc" id="L803">            return content;</span>
+        }
+<span class="fc bfc" id="L805" title="All 2 branches covered.">        if (m.group(2).equals(value)) {</span>
+<span class="fc" id="L806">            return content;</span>
+        }
+<span class="fc" id="L808">        return m.replaceFirst(Matcher.quoteReplacement(m.group(1))</span>
+<span class="fc" id="L809">                + Matcher.quoteReplacement(value)</span>
+<span class="fc" id="L810">                + Matcher.quoteReplacement(m.group(3)));</span>
+    }
+
+    // ── 9. Plugin version ─────────────────────────────────────────
+
+    private static void upgradePluginVersion(Path root, String pluginVersion,
+                                              Run run, boolean publish,
+                                              Log log) {
+<span class="nc" id="L818">        Path pom = root.resolve(&quot;pom.xml&quot;);</span>
+        try {
+<span class="nc bnc" id="L820" title="All 2 branches missed.">            if (!Files.exists(pom)) {</span>
+<span class="nc" id="L821">                return;</span>
+            }
+
+<span class="nc" id="L824">            String content = Files.readString(pom, StandardCharsets.UTF_8);</span>
+<span class="nc" id="L825">            boolean changed = false;</span>
+<span class="nc" id="L826">            List&lt;String&gt; notes = new ArrayList&lt;&gt;();</span>
+
+            // Migration: rename ike-maven-plugin.version → ike-tooling.version.
+<span class="nc bnc" id="L829" title="All 2 branches missed.">            if (content.contains(&quot;&lt;ike-maven-plugin.version&gt;&quot;)) {</span>
+<span class="nc" id="L830">                content = content.replace(</span>
+                        &quot;&lt;ike-maven-plugin.version&gt;&quot;, &quot;&lt;ike-tooling.version&gt;&quot;);
+<span class="nc" id="L832">                content = content.replace(</span>
+                        &quot;&lt;/ike-maven-plugin.version&gt;&quot;, &quot;&lt;/ike-tooling.version&gt;&quot;);
+<span class="nc" id="L834">                content = content.replace(</span>
+                        &quot;${ike-maven-plugin.version}&quot;, &quot;${ike-tooling.version}&quot;);
+<span class="nc" id="L836">                changed = true;</span>
+<span class="nc" id="L837">                notes.add(&quot;rename ike-maven-plugin.version → ike-tooling.version&quot;);</span>
+            }
+
+<span class="nc" id="L840">            Pattern versionProp = Pattern.compile(</span>
+                    &quot;(&lt;ike-tooling\\.version&gt;)(.*?)(&lt;/ike-tooling\\.version&gt;)&quot;);
+<span class="nc" id="L842">            Matcher m = versionProp.matcher(content);</span>
+
+<span class="nc bnc" id="L844" title="All 2 branches missed.">            if (!m.find()) {</span>
+<span class="nc bnc" id="L845" title="All 2 branches missed.">                if (changed) {</span>
+<span class="nc" id="L846">                    finalizePluginVersion(pom, content, publish, run, notes);</span>
+                }
+<span class="nc" id="L848">                return;</span>
+            }
+
+<span class="nc" id="L851">            String currentVersion = m.group(2);</span>
+<span class="nc bnc" id="L852" title="All 2 branches missed.">            if (!currentVersion.equals(pluginVersion)) {</span>
+<span class="nc" id="L853">                content = m.replaceFirst(&quot;$1&quot; + pluginVersion + &quot;$3&quot;);</span>
+<span class="nc" id="L854">                changed = true;</span>
+<span class="nc" id="L855">                notes.add(&quot;ike-tooling.version &quot; + currentVersion</span>
+                        + &quot; → &quot; + pluginVersion);
+            }
+
+<span class="nc bnc" id="L859" title="All 2 branches missed.">            if (!changed) {</span>
+<span class="nc" id="L860">                return;</span>
+            }
+<span class="nc" id="L862">            finalizePluginVersion(pom, content, publish, run, notes);</span>
+<span class="nc" id="L863">        } catch (IOException e) {</span>
+<span class="nc" id="L864">            log.warn(&quot;  Could not update plugin version: &quot; + e.getMessage());</span>
+<span class="nc" id="L865">        }</span>
+<span class="nc" id="L866">    }</span>
+
+    private static void finalizePluginVersion(Path pom, String content,
+                                                boolean publish, Run run,
+                                                List&lt;String&gt; notes)
+            throws IOException {
+<span class="nc" id="L872">        run.drift.add(&quot;plugin-version: &quot; + String.join(&quot;; &quot;, notes));</span>
+<span class="nc bnc" id="L873" title="All 2 branches missed.">        if (publish) {</span>
+<span class="nc" id="L874">            Files.writeString(pom, content, StandardCharsets.UTF_8);</span>
+<span class="nc" id="L875">            run.applied++;</span>
+        }
+<span class="nc" id="L877">    }</span>
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

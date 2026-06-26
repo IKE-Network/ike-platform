@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>PostMutationSync.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">PostMutationSync.java</span></div><h1>PostMutationSync.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
 
+import network.ike.plugin.ws.vcs.VcsOperations;
+import org.apache.maven.api.plugin.MojoException;
 import org.apache.maven.api.plugin.Log;
 
 import java.io.File;
@@ -30,6 +32,21 @@ import java.io.File;
  * no further changes. Failures are logged at WARN and do not abort
  * the caller.
  *
+ * &lt;p&gt;&lt;b&gt;Self-committing.&lt;/b&gt; {@code workspace.yaml} is machine-maintained,
+ * never hand-authored, so a re-derivation it produces must not be left as
+ * an uncommitted working-tree change — that strands the change for the
+ * next goal's clean-tree preflight to trip over (the reported failure mode
+ * in {@code IKE-Network/ike-issues#774}: {@code ws:commit} re-derived
+ * {@code depends-on} edges &lt;em&gt;after&lt;/em&gt; its commit loop, and the next
+ * {@code ws:push}/{@code ws:sync} then refused to run). When the
+ * re-derivation is the &lt;em&gt;sole&lt;/em&gt; pending change to {@code workspace.yaml}
+ * — i.e. the manifest was committed-clean when the hook ran — it is
+ * committed here in isolation. When the manifest already carried a
+ * caller's own edit (e.g. {@code ws:add} adding a subproject, which
+ * deliberately leaves the manifest staged for the user), the combined
+ * change is left for that caller's own commit policy and this hook does
+ * not commit.
+ *
  * &lt;p&gt;Triggered from: {@code ws:add}, {@code ws:remove}, {@code ws:sync},
  * {@code ws:pull}, {@code ws:commit-publish}, {@code ws:scaffold-init},
  * {@code ws:feature-finish-merge-publish},
@@ -44,15 +61,54 @@ public final class PostMutationSync {
 
     private PostMutationSync() {}
 
+    /** Path of the machine-maintained manifest, relative to the root. */
+    private static final String MANIFEST = &quot;workspace.yaml&quot;;
+
     /**
      * Run all post-mutation derivations against the workspace at
-     * {@code workspaceRoot}.
+     * {@code workspaceRoot}, committing a re-derived {@code workspace.yaml}
+     * in isolation when it is the sole pending change (see the class
+     * note on self-committing).
      *
      * @param workspaceRoot the workspace root directory
      * @param log           plugin log for status messages
+     * @return {@code true} if a re-derived {@code workspace.yaml} was
+     *         committed by this call; {@code false} if nothing changed or
+     *         the change was left for the caller to commit
      */
-    public static void refresh(File workspaceRoot, Log log) {
-<span class="fc" id="L55">        YamlDepsSync.run(workspaceRoot, log);</span>
-<span class="fc" id="L56">    }</span>
+    public static boolean refresh(File workspaceRoot, Log log) {
+        // Was the manifest committed-clean before the re-derivation? If so,
+        // any change the derivation makes is attributable solely to it and
+        // can be committed on its own. If the manifest already carried an
+        // edit, leave the combined change for the caller (#774).
+<span class="fc" id="L84">        boolean manifestCleanBefore =</span>
+<span class="fc" id="L85">                VcsOperations.isPathClean(workspaceRoot, MANIFEST);</span>
+
+<span class="fc" id="L87">        boolean changed = YamlDepsSync.run(workspaceRoot, log);</span>
+        // Commit only when the re-derivation is the sole pending change.
+        // A false manifestCleanBefore also covers the no-git-state case
+        // (e.g. .git excluded from Syncthing on a not-yet-bootstrapped
+        // sibling): there git status reports the path as not-clean, so the
+        // rewrite is left on disk for whatever later bootstraps the repo.
+<span class="fc bfc" id="L93" title="All 4 branches covered.">        if (!changed || !manifestCleanBefore) {</span>
+<span class="fc" id="L94">            return false;</span>
+        }
+        try {
+<span class="fc" id="L97">            VcsOperations.commitPaths(workspaceRoot, log,</span>
+                    &quot;ws: re-derive depends-on edges\n\n&quot;
+                            + &quot;Re-derives workspace.yaml depends-on from POM &quot;
+                            + &quot;reality after a workspace mutation, so the &quot;
+                            + &quot;manifest is never left uncommitted.\n\n&quot;
+                            + &quot;Refs: IKE-Network/ike-issues#774\n&quot;
+                            + &quot;Refs: IKE-Network/ike-issues#279&quot;,
+                    MANIFEST);
+<span class="fc" id="L105">            log.info(&quot;  workspace.yaml: committed re-derived depends-on edges&quot;);</span>
+<span class="fc" id="L106">            return true;</span>
+<span class="nc" id="L107">        } catch (MojoException e) {</span>
+<span class="nc" id="L108">            log.warn(&quot;  workspace.yaml: re-derived depends-on edges but could &quot;</span>
+<span class="nc" id="L109">                    + &quot;not commit them — &quot; + e.getMessage());</span>
+<span class="nc" id="L110">            return false;</span>
+        }
+    }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

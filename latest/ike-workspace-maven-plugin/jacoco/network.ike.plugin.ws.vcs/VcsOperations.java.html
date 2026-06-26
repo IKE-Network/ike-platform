@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -49,7 +50,7 @@ public class VcsOperations {
      * @throws MojoException if the git command fails
      */
     public static String headSha(File dir) throws MojoException {
-<span class="fc" id="L52">        return captureRead(dir, &quot;git&quot;, &quot;rev-parse&quot;, &quot;--short=8&quot;, &quot;HEAD&quot;);</span>
+<span class="fc" id="L53">        return captureRead(dir, &quot;git&quot;, &quot;rev-parse&quot;, &quot;--short=8&quot;, &quot;HEAD&quot;);</span>
     }
 
     /**
@@ -60,7 +61,7 @@ public class VcsOperations {
      * @throws MojoException if the git command fails
      */
     public static String currentBranch(File dir) throws MojoException {
-<span class="fc" id="L63">        return captureRead(dir, &quot;git&quot;, &quot;branch&quot;, &quot;--show-current&quot;);</span>
+<span class="fc" id="L64">        return captureRead(dir, &quot;git&quot;, &quot;branch&quot;, &quot;--show-current&quot;);</span>
     }
 
     /**
@@ -75,15 +76,15 @@ public class VcsOperations {
     public static Optional&lt;String&gt; remoteSha(File dir, String remote, String branch)
             throws MojoException {
         try {
-<span class="fc" id="L78">            String output = captureRead(dir, &quot;git&quot;, &quot;ls-remote&quot;, remote, branch);</span>
-<span class="pc bpc" id="L79" title="1 of 2 branches missed.">            if (output.isEmpty()) {</span>
-<span class="nc" id="L80">                return Optional.empty();</span>
+<span class="fc" id="L79">            String output = captureRead(dir, &quot;git&quot;, &quot;ls-remote&quot;, remote, branch);</span>
+<span class="pc bpc" id="L80" title="1 of 2 branches missed.">            if (output.isEmpty()) {</span>
+<span class="nc" id="L81">                return Optional.empty();</span>
             }
             // ls-remote output: &lt;full-sha&gt;\trefs/heads/&lt;branch&gt;
-<span class="fc" id="L83">            String fullSha = output.split(&quot;\\s+&quot;)[0];</span>
-<span class="fc" id="L84">            return Optional.of(fullSha.substring(0, 8));</span>
-<span class="fc" id="L85">        } catch (MojoException e) {</span>
-<span class="fc" id="L86">            return Optional.empty();</span>
+<span class="fc" id="L84">            String fullSha = output.split(&quot;\\s+&quot;)[0];</span>
+<span class="fc" id="L85">            return Optional.of(fullSha.substring(0, 8));</span>
+<span class="fc" id="L86">        } catch (MojoException e) {</span>
+<span class="fc" id="L87">            return Optional.empty();</span>
         }
     }
 
@@ -95,10 +96,34 @@ public class VcsOperations {
      */
     public static boolean isClean(File dir) {
         try {
-<span class="fc" id="L98">            String status = capture(dir, &quot;git&quot;, &quot;status&quot;, &quot;--porcelain&quot;);</span>
-<span class="fc" id="L99">            return status.isEmpty();</span>
-<span class="nc" id="L100">        } catch (MojoException e) {</span>
-<span class="nc" id="L101">            return false;</span>
+<span class="fc" id="L99">            String status = capture(dir, &quot;git&quot;, &quot;status&quot;, &quot;--porcelain&quot;);</span>
+<span class="fc" id="L100">            return status.isEmpty();</span>
+<span class="nc" id="L101">        } catch (MojoException e) {</span>
+<span class="nc" id="L102">            return false;</span>
+        }
+    }
+
+    /**
+     * Check whether a single path is committed-clean — no staged or
+     * unstaged modification and not untracked. Used to decide whether a
+     * machine-derived rewrite of that path (e.g. the
+     * {@code workspace.yaml depends-on} re-derivation in
+     * {@link network.ike.plugin.ws.PostMutationSync}) is the &lt;em&gt;sole&lt;/em&gt;
+     * pending change to it, so it can be committed in isolation without
+     * sweeping in a caller's own concurrent edit
+     * (IKE-Network/ike-issues#774).
+     *
+     * @param dir  the repository root directory
+     * @param path the path to check, relative to {@code dir}
+     * @return true if {@code path} has no pending changes
+     */
+    public static boolean isPathClean(File dir, String path) {
+        try {
+<span class="fc" id="L122">            String status =</span>
+<span class="fc" id="L123">                    capture(dir, &quot;git&quot;, &quot;status&quot;, &quot;--porcelain&quot;, &quot;--&quot;, path);</span>
+<span class="fc" id="L124">            return status.isEmpty();</span>
+<span class="fc" id="L125">        } catch (MojoException e) {</span>
+<span class="fc" id="L126">            return false;</span>
         }
     }
 
@@ -110,10 +135,10 @@ public class VcsOperations {
      */
     public static boolean hasStagedChanges(File dir) {
         try {
-<span class="fc" id="L113">            String diff = capture(dir, &quot;git&quot;, &quot;diff&quot;, &quot;--cached&quot;, &quot;--name-only&quot;);</span>
-<span class="fc bfc" id="L114" title="All 2 branches covered.">            return !diff.isEmpty();</span>
-<span class="nc" id="L115">        } catch (MojoException e) {</span>
-<span class="nc" id="L116">            return false;</span>
+<span class="fc" id="L138">            String diff = capture(dir, &quot;git&quot;, &quot;diff&quot;, &quot;--cached&quot;, &quot;--name-only&quot;);</span>
+<span class="fc bfc" id="L139" title="All 2 branches covered.">            return !diff.isEmpty();</span>
+<span class="nc" id="L140">        } catch (MojoException e) {</span>
+<span class="nc" id="L141">            return false;</span>
         }
     }
 
@@ -125,10 +150,10 @@ public class VcsOperations {
      */
     public static boolean hasUnstagedChanges(File dir) {
         try {
-<span class="nc" id="L128">            String diff = capture(dir, &quot;git&quot;, &quot;diff&quot;, &quot;--name-only&quot;);</span>
-<span class="nc bnc" id="L129" title="All 2 branches missed.">            return !diff.isEmpty();</span>
-<span class="nc" id="L130">        } catch (MojoException e) {</span>
-<span class="nc" id="L131">            return false;</span>
+<span class="nc" id="L153">            String diff = capture(dir, &quot;git&quot;, &quot;diff&quot;, &quot;--name-only&quot;);</span>
+<span class="nc bnc" id="L154" title="All 2 branches missed.">            return !diff.isEmpty();</span>
+<span class="nc" id="L155">        } catch (MojoException e) {</span>
+<span class="nc" id="L156">            return false;</span>
         }
     }
 
@@ -141,11 +166,11 @@ public class VcsOperations {
      */
     public static String unstagedFiles(File dir) {
         try {
-<span class="fc" id="L144">            String diff = capture(dir, &quot;git&quot;, &quot;diff&quot;, &quot;--name-only&quot;);</span>
-<span class="fc bfc" id="L145" title="All 2 branches covered.">            if (diff.isEmpty()) return &quot;&quot;;</span>
-<span class="fc" id="L146">            return String.join(&quot;, &quot;, diff.split(&quot;\n&quot;));</span>
-<span class="nc" id="L147">        } catch (MojoException e) {</span>
-<span class="nc" id="L148">            return &quot;&quot;;</span>
+<span class="fc" id="L169">            String diff = capture(dir, &quot;git&quot;, &quot;diff&quot;, &quot;--name-only&quot;);</span>
+<span class="fc bfc" id="L170" title="All 2 branches covered.">            if (diff.isEmpty()) return &quot;&quot;;</span>
+<span class="fc" id="L171">            return String.join(&quot;, &quot;, diff.split(&quot;\n&quot;));</span>
+<span class="nc" id="L172">        } catch (MojoException e) {</span>
+<span class="nc" id="L173">            return &quot;&quot;;</span>
         }
     }
 
@@ -158,9 +183,9 @@ public class VcsOperations {
      */
     public static String uncommittedStatus(File dir) {
         try {
-<span class="nc" id="L161">            return capture(dir, &quot;git&quot;, &quot;status&quot;, &quot;--porcelain&quot;);</span>
-<span class="nc" id="L162">        } catch (MojoException e) {</span>
-<span class="nc" id="L163">            return &quot;&quot;;</span>
+<span class="nc" id="L186">            return capture(dir, &quot;git&quot;, &quot;status&quot;, &quot;--porcelain&quot;);</span>
+<span class="nc" id="L187">        } catch (MojoException e) {</span>
+<span class="nc" id="L188">            return &quot;&quot;;</span>
         }
     }
 
@@ -173,17 +198,17 @@ public class VcsOperations {
      */
     public static int modifiedTrackedCount(File dir) {
         try {
-<span class="fc" id="L176">            String porcelain = capture(dir, &quot;git&quot;, &quot;status&quot;, &quot;--porcelain&quot;);</span>
-<span class="pc bpc" id="L177" title="1 of 2 branches missed.">            if (porcelain.isEmpty()) return 0;</span>
-<span class="fc" id="L178">            int count = 0;</span>
-<span class="fc bfc" id="L179" title="All 2 branches covered.">            for (String line : porcelain.split(&quot;\n&quot;)) {</span>
-<span class="pc bpc" id="L180" title="1 of 2 branches missed.">                if (line.length() &lt; 2) continue;</span>
+<span class="fc" id="L201">            String porcelain = capture(dir, &quot;git&quot;, &quot;status&quot;, &quot;--porcelain&quot;);</span>
+<span class="pc bpc" id="L202" title="1 of 2 branches missed.">            if (porcelain.isEmpty()) return 0;</span>
+<span class="fc" id="L203">            int count = 0;</span>
+<span class="fc bfc" id="L204" title="All 2 branches covered.">            for (String line : porcelain.split(&quot;\n&quot;)) {</span>
+<span class="pc bpc" id="L205" title="1 of 2 branches missed.">                if (line.length() &lt; 2) continue;</span>
                 // ?? = untracked, !! = ignored; everything else is tracked
-<span class="pc bpc" id="L182" title="2 of 4 branches missed.">                if (!line.startsWith(&quot;??&quot;) &amp;&amp; !line.startsWith(&quot;!!&quot;)) count++;</span>
+<span class="pc bpc" id="L207" title="1 of 4 branches missed.">                if (!line.startsWith(&quot;??&quot;) &amp;&amp; !line.startsWith(&quot;!!&quot;)) count++;</span>
             }
-<span class="fc" id="L184">            return count;</span>
-<span class="nc" id="L185">        } catch (MojoException e) {</span>
-<span class="nc" id="L186">            return 0;</span>
+<span class="fc" id="L209">            return count;</span>
+<span class="nc" id="L210">        } catch (MojoException e) {</span>
+<span class="nc" id="L211">            return 0;</span>
         }
     }
 
@@ -195,12 +220,12 @@ public class VcsOperations {
      */
     public static List&lt;String&gt; untrackedFiles(File dir) {
         try {
-<span class="fc" id="L198">            String output = capture(dir, &quot;git&quot;, &quot;ls-files&quot;,</span>
+<span class="fc" id="L223">            String output = capture(dir, &quot;git&quot;, &quot;ls-files&quot;,</span>
                     &quot;--others&quot;, &quot;--exclude-standard&quot;);
-<span class="pc bpc" id="L200" title="1 of 2 branches missed.">            if (output.isEmpty()) return List.of();</span>
-<span class="nc" id="L201">            return List.of(output.split(&quot;\n&quot;));</span>
-<span class="nc" id="L202">        } catch (MojoException e) {</span>
-<span class="nc" id="L203">            return List.of();</span>
+<span class="fc bfc" id="L225" title="All 2 branches covered.">            if (output.isEmpty()) return List.of();</span>
+<span class="fc" id="L226">            return List.of(output.split(&quot;\n&quot;));</span>
+<span class="nc" id="L227">        } catch (MojoException e) {</span>
+<span class="nc" id="L228">            return List.of();</span>
         }
     }
 
@@ -212,11 +237,11 @@ public class VcsOperations {
      */
     public static List&lt;String&gt; conflictingFiles(File dir) {
         try {
-<span class="nc" id="L215">            String output = capture(dir, &quot;git&quot;, &quot;diff&quot;, &quot;--name-only&quot;, &quot;--diff-filter=U&quot;);</span>
-<span class="nc bnc" id="L216" title="All 2 branches missed.">            if (output.isEmpty()) return List.of();</span>
-<span class="nc" id="L217">            return List.of(output.split(&quot;\n&quot;));</span>
-<span class="nc" id="L218">        } catch (MojoException e) {</span>
-<span class="nc" id="L219">            return List.of();</span>
+<span class="nc" id="L240">            String output = capture(dir, &quot;git&quot;, &quot;diff&quot;, &quot;--name-only&quot;, &quot;--diff-filter=U&quot;);</span>
+<span class="nc bnc" id="L241" title="All 2 branches missed.">            if (output.isEmpty()) return List.of();</span>
+<span class="nc" id="L242">            return List.of(output.split(&quot;\n&quot;));</span>
+<span class="nc" id="L243">        } catch (MojoException e) {</span>
+<span class="nc" id="L244">            return List.of();</span>
         }
     }
 
@@ -232,12 +257,12 @@ public class VcsOperations {
      */
     public static List&lt;String&gt; changedFiles(File dir, String base, String head) {
         try {
-<span class="fc" id="L235">            String output = capture(dir, &quot;git&quot;, &quot;diff&quot;, &quot;--name-only&quot;,</span>
+<span class="fc" id="L260">            String output = capture(dir, &quot;git&quot;, &quot;diff&quot;, &quot;--name-only&quot;,</span>
                     base + &quot;...&quot; + head);
-<span class="pc bpc" id="L237" title="1 of 2 branches missed.">            if (output.isEmpty()) return List.of();</span>
-<span class="fc" id="L238">            return List.of(output.split(&quot;\n&quot;));</span>
-<span class="nc" id="L239">        } catch (MojoException e) {</span>
-<span class="nc" id="L240">            return List.of();</span>
+<span class="pc bpc" id="L262" title="1 of 2 branches missed.">            if (output.isEmpty()) return List.of();</span>
+<span class="fc" id="L263">            return List.of(output.split(&quot;\n&quot;));</span>
+<span class="nc" id="L264">        } catch (MojoException e) {</span>
+<span class="nc" id="L265">            return List.of();</span>
         }
     }
 
@@ -260,37 +285,37 @@ public class VcsOperations {
         try {
             // git merge-tree --write-tree exits 0 if clean, 1 if conflicts
             // With --name-only, conflicting file names appear after a blank line
-<span class="fc" id="L263">            ProcessBuilder pb = new ProcessBuilder(</span>
+<span class="fc" id="L288">            ProcessBuilder pb = new ProcessBuilder(</span>
                     &quot;git&quot;, &quot;merge-tree&quot;, &quot;--write-tree&quot;, &quot;--name-only&quot;,
                     branch, other)
-<span class="fc" id="L266">                    .directory(dir)</span>
-<span class="fc" id="L267">                    .redirectErrorStream(false);</span>
-<span class="fc" id="L268">            Process proc = pb.start();</span>
+<span class="fc" id="L291">                    .directory(dir)</span>
+<span class="fc" id="L292">                    .redirectErrorStream(false);</span>
+<span class="fc" id="L293">            Process proc = pb.start();</span>
 
-<span class="fc" id="L270">            String stdout = new String(</span>
-<span class="fc" id="L271">                    proc.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();</span>
-<span class="fc" id="L272">            String stderr = new String(</span>
-<span class="fc" id="L273">                    proc.getErrorStream().readAllBytes(), StandardCharsets.UTF_8).trim();</span>
-<span class="fc" id="L274">            int exit = proc.waitFor();</span>
+<span class="fc" id="L295">            String stdout = new String(</span>
+<span class="fc" id="L296">                    proc.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();</span>
+<span class="fc" id="L297">            String stderr = new String(</span>
+<span class="fc" id="L298">                    proc.getErrorStream().readAllBytes(), StandardCharsets.UTF_8).trim();</span>
+<span class="fc" id="L299">            int exit = proc.waitFor();</span>
 
-<span class="pc bpc" id="L276" title="1 of 2 branches missed.">            if (exit == 0) {</span>
-<span class="fc" id="L277">                return List.of(); // clean merge</span>
+<span class="pc bpc" id="L301" title="1 of 2 branches missed.">            if (exit == 0) {</span>
+<span class="fc" id="L302">                return List.of(); // clean merge</span>
             }
 
-<span class="nc bnc" id="L280" title="All 4 branches missed.">            if (exit == 1 &amp;&amp; !stdout.isEmpty()) {</span>
+<span class="nc bnc" id="L305" title="All 4 branches missed.">            if (exit == 1 &amp;&amp; !stdout.isEmpty()) {</span>
                 // Output format: tree SHA on first line, then blank line,
                 // then conflicting file names (one per line)
-<span class="nc" id="L283">                String[] sections = stdout.split(&quot;\n\n&quot;, 2);</span>
-<span class="nc bnc" id="L284" title="All 4 branches missed.">                if (sections.length == 2 &amp;&amp; !sections[1].isBlank()) {</span>
-<span class="nc" id="L285">                    return List.of(sections[1].trim().split(&quot;\n&quot;));</span>
+<span class="nc" id="L308">                String[] sections = stdout.split(&quot;\n\n&quot;, 2);</span>
+<span class="nc bnc" id="L309" title="All 4 branches missed.">                if (sections.length == 2 &amp;&amp; !sections[1].isBlank()) {</span>
+<span class="nc" id="L310">                    return List.of(sections[1].trim().split(&quot;\n&quot;));</span>
                 }
             }
 
             // Unexpected exit or format — can't predict
-<span class="nc" id="L290">            return List.of();</span>
-<span class="nc" id="L291">        } catch (Exception e) {</span>
+<span class="nc" id="L315">            return List.of();</span>
+<span class="nc" id="L316">        } catch (Exception e) {</span>
             // git merge-tree not available or failed — can't predict
-<span class="nc" id="L293">            return List.of();</span>
+<span class="nc" id="L318">            return List.of();</span>
         }
     }
 
@@ -304,12 +329,12 @@ public class VcsOperations {
      */
     public static java.util.Optional&lt;String&gt; remoteUrl(File dir, String remote) {
         try {
-<span class="fc" id="L307">            String url = capture(dir, &quot;git&quot;, &quot;remote&quot;, &quot;get-url&quot;, remote);</span>
-<span class="pc bpc" id="L308" title="1 of 2 branches missed.">            return url.isEmpty()</span>
-<span class="nc" id="L309">                    ? java.util.Optional.empty()</span>
-<span class="fc" id="L310">                    : java.util.Optional.of(url);</span>
-<span class="nc" id="L311">        } catch (MojoException e) {</span>
-<span class="nc" id="L312">            return java.util.Optional.empty();</span>
+<span class="fc" id="L332">            String url = capture(dir, &quot;git&quot;, &quot;remote&quot;, &quot;get-url&quot;, remote);</span>
+<span class="pc bpc" id="L333" title="1 of 2 branches missed.">            return url.isEmpty()</span>
+<span class="nc" id="L334">                    ? java.util.Optional.empty()</span>
+<span class="fc" id="L335">                    : java.util.Optional.of(url);</span>
+<span class="nc" id="L336">        } catch (MojoException e) {</span>
+<span class="nc" id="L337">            return java.util.Optional.empty();</span>
         }
     }
 
@@ -327,16 +352,16 @@ public class VcsOperations {
         try {
             // --left-right with HEAD...@{u} returns one line per commit;
             // --count collapses into &quot;ahead\tbehind&quot;.
-<span class="fc" id="L330">            String output = capture(dir, &quot;git&quot;, &quot;rev-list&quot;,</span>
+<span class="fc" id="L355">            String output = capture(dir, &quot;git&quot;, &quot;rev-list&quot;,</span>
                     &quot;--left-right&quot;, &quot;--count&quot;, &quot;HEAD...@{u}&quot;);
-<span class="pc bpc" id="L332" title="1 of 2 branches missed.">            if (output.isEmpty()) return java.util.Optional.empty();</span>
-<span class="fc" id="L333">            String[] parts = output.split(&quot;\\s+&quot;);</span>
-<span class="pc bpc" id="L334" title="1 of 2 branches missed.">            if (parts.length != 2) return java.util.Optional.empty();</span>
-<span class="fc" id="L335">            return java.util.Optional.of(new int[]{</span>
-<span class="fc" id="L336">                    Integer.parseInt(parts[0]),</span>
-<span class="fc" id="L337">                    Integer.parseInt(parts[1])});</span>
-<span class="fc" id="L338">        } catch (MojoException | NumberFormatException e) {</span>
-<span class="fc" id="L339">            return java.util.Optional.empty();</span>
+<span class="pc bpc" id="L357" title="1 of 2 branches missed.">            if (output.isEmpty()) return java.util.Optional.empty();</span>
+<span class="fc" id="L358">            String[] parts = output.split(&quot;\\s+&quot;);</span>
+<span class="pc bpc" id="L359" title="1 of 2 branches missed.">            if (parts.length != 2) return java.util.Optional.empty();</span>
+<span class="fc" id="L360">            return java.util.Optional.of(new int[]{</span>
+<span class="fc" id="L361">                    Integer.parseInt(parts[0]),</span>
+<span class="fc" id="L362">                    Integer.parseInt(parts[1])});</span>
+<span class="fc" id="L363">        } catch (MojoException | NumberFormatException e) {</span>
+<span class="fc" id="L364">            return java.util.Optional.empty();</span>
         }
     }
 
@@ -350,10 +375,10 @@ public class VcsOperations {
      */
     public static List&lt;String&gt; commitLog(File dir, String base, String head)
             throws MojoException {
-<span class="fc" id="L353">        String output = capture(dir, &quot;git&quot;, &quot;log&quot;,</span>
+<span class="fc" id="L378">        String output = capture(dir, &quot;git&quot;, &quot;log&quot;,</span>
                 base + &quot;..&quot; + head, &quot;--oneline&quot;, &quot;--no-decorate&quot;);
-<span class="fc bfc" id="L355" title="All 2 branches covered.">        if (output.isEmpty()) return List.of();</span>
-<span class="fc" id="L356">        return List.of(output.split(&quot;\n&quot;));</span>
+<span class="fc bfc" id="L380" title="All 2 branches covered.">        if (output.isEmpty()) return List.of();</span>
+<span class="fc" id="L381">        return List.of(output.split(&quot;\n&quot;));</span>
     }
 
     // ── Git operations ───────────────────────────────────────────
@@ -374,9 +399,9 @@ public class VcsOperations {
      * @throws MojoException if the git command fails
      */
     public static void fetch(File dir, Log log) throws MojoException {
-<span class="fc" id="L377">        run(dir, log, null, &quot;git&quot;, &quot;-c&quot;, &quot;maintenance.auto=false&quot;,</span>
+<span class="fc" id="L402">        run(dir, log, null, &quot;git&quot;, &quot;-c&quot;, &quot;maintenance.auto=false&quot;,</span>
                 &quot;fetch&quot;, &quot;--all&quot;, &quot;--quiet&quot;);
-<span class="fc" id="L379">    }</span>
+<span class="fc" id="L404">    }</span>
 
     /**
      * Soft reset (no --hard) — updates HEAD and index, leaves working tree.
@@ -388,8 +413,8 @@ public class VcsOperations {
      */
     public static void resetSoft(File dir, Log log, String ref)
             throws MojoException {
-<span class="fc" id="L391">        run(dir, log, null, &quot;git&quot;, &quot;reset&quot;, ref, &quot;--quiet&quot;);</span>
-<span class="fc" id="L392">    }</span>
+<span class="fc" id="L416">        run(dir, log, null, &quot;git&quot;, &quot;reset&quot;, ref, &quot;--quiet&quot;);</span>
+<span class="fc" id="L417">    }</span>
 
     /**
      * Hard reset — updates HEAD, index, and working tree to match
@@ -406,8 +431,8 @@ public class VcsOperations {
      */
     public static void resetHard(File dir, Log log, String ref)
             throws MojoException {
-<span class="fc" id="L409">        run(dir, log, null, &quot;git&quot;, &quot;reset&quot;, &quot;--hard&quot;, ref, &quot;--quiet&quot;);</span>
-<span class="fc" id="L410">    }</span>
+<span class="fc" id="L434">        run(dir, log, null, &quot;git&quot;, &quot;reset&quot;, &quot;--hard&quot;, ref, &quot;--quiet&quot;);</span>
+<span class="fc" id="L435">    }</span>
 
     /**
      * Check whether one commit is an ancestor of (or equal to) another.
@@ -425,23 +450,23 @@ public class VcsOperations {
     public static boolean isAncestor(File dir, String maybeAncestor, String descendant)
             throws MojoException {
         try {
-<span class="fc" id="L428">            Process proc = new ProcessBuilder(&quot;git&quot;, &quot;merge-base&quot;,</span>
+<span class="fc" id="L453">            Process proc = new ProcessBuilder(&quot;git&quot;, &quot;merge-base&quot;,</span>
                     &quot;--is-ancestor&quot;, maybeAncestor, descendant)
-<span class="fc" id="L430">                    .directory(dir)</span>
-<span class="fc" id="L431">                    .redirectErrorStream(true)</span>
-<span class="fc" id="L432">                    .start();</span>
-<span class="fc" id="L433">            String output = new String(proc.getInputStream().readAllBytes(),</span>
+<span class="fc" id="L455">                    .directory(dir)</span>
+<span class="fc" id="L456">                    .redirectErrorStream(true)</span>
+<span class="fc" id="L457">                    .start();</span>
+<span class="fc" id="L458">            String output = new String(proc.getInputStream().readAllBytes(),</span>
                     StandardCharsets.UTF_8);
-<span class="fc" id="L435">            int exit = proc.waitFor();</span>
-<span class="fc bfc" id="L436" title="All 2 branches covered.">            if (exit == 0) return true;</span>
-<span class="fc bfc" id="L437" title="All 2 branches covered.">            if (exit == 1) return false;</span>
-<span class="fc" id="L438">            throw new MojoException(</span>
+<span class="fc" id="L460">            int exit = proc.waitFor();</span>
+<span class="fc bfc" id="L461" title="All 2 branches covered.">            if (exit == 0) return true;</span>
+<span class="fc bfc" id="L462" title="All 2 branches covered.">            if (exit == 1) return false;</span>
+<span class="fc" id="L463">            throw new MojoException(</span>
                     &quot;git merge-base --is-ancestor &quot; + maybeAncestor + &quot; &quot;
                             + descendant + &quot; failed (exit &quot; + exit + &quot;): &quot; + output);
-<span class="nc" id="L441">        } catch (IOException | InterruptedException e) {</span>
-<span class="nc" id="L442">            throw new MojoException(</span>
+<span class="nc" id="L466">        } catch (IOException | InterruptedException e) {</span>
+<span class="nc" id="L467">            throw new MojoException(</span>
                     &quot;Failed to check ancestry of &quot; + maybeAncestor + &quot; / &quot;
-<span class="nc" id="L444">                            + descendant + &quot;: &quot; + e.getMessage(), e);</span>
+<span class="nc" id="L469">                            + descendant + &quot;: &quot; + e.getMessage(), e);</span>
         }
     }
 
@@ -455,8 +480,8 @@ public class VcsOperations {
      */
     public static void checkout(File dir, Log log, String branch)
             throws MojoException {
-<span class="fc" id="L458">        run(dir, log, null, &quot;git&quot;, &quot;checkout&quot;, branch);</span>
-<span class="fc" id="L459">    }</span>
+<span class="fc" id="L483">        run(dir, log, null, &quot;git&quot;, &quot;checkout&quot;, branch);</span>
+<span class="fc" id="L484">    }</span>
 
     /**
      * Create and checkout a new branch.
@@ -468,8 +493,8 @@ public class VcsOperations {
      */
     public static void checkoutNew(File dir, Log log, String branch)
             throws MojoException {
-<span class="fc" id="L471">        run(dir, log, null, &quot;git&quot;, &quot;checkout&quot;, &quot;-b&quot;, branch);</span>
-<span class="fc" id="L472">    }</span>
+<span class="fc" id="L496">        run(dir, log, null, &quot;git&quot;, &quot;checkout&quot;, &quot;-b&quot;, branch);</span>
+<span class="fc" id="L497">    }</span>
 
     /**
      * Commit the currently-staged changes with the given message via
@@ -485,8 +510,8 @@ public class VcsOperations {
      */
     public static void commit(File dir, Log log, String message)
             throws MojoException {
-<span class="fc" id="L488">        commitWithStdin(dir, log, message, &quot;git&quot;, &quot;commit&quot;, &quot;-F&quot;, &quot;-&quot;);</span>
-<span class="fc" id="L489">    }</span>
+<span class="fc" id="L513">        commitWithStdin(dir, log, message, &quot;git&quot;, &quot;commit&quot;, &quot;-F&quot;, &quot;-&quot;);</span>
+<span class="fc" id="L514">    }</span>
 
     /**
      * Alias for {@link #commit(File, Log, String)}; retained for callers
@@ -502,8 +527,34 @@ public class VcsOperations {
      */
     public static void commitStaged(File dir, Log log, String message)
             throws MojoException {
-<span class="fc" id="L505">        commit(dir, log, message);</span>
-<span class="fc" id="L506">    }</span>
+<span class="fc" id="L530">        commit(dir, log, message);</span>
+<span class="fc" id="L531">    }</span>
+
+    /**
+     * Commit specific paths in isolation, regardless of what else is in
+     * the index. Equivalent to {@code git commit -F - -- &lt;paths&gt;}: the
+     * working-tree content of the listed (tracked) paths is committed and
+     * nothing else, so a concurrent staged or unstaged change to another
+     * file is neither committed nor disturbed.
+     *
+     * &lt;p&gt;Used by {@link network.ike.plugin.ws.PostMutationSync} to commit
+     * the re-derived {@code workspace.yaml} on its own
+     * (IKE-Network/ike-issues#774). Sets {@code IKE_VCS_CONTEXT} to bypass
+     * the pre-commit hook.
+     *
+     * @param dir     the repository root directory
+     * @param log     Maven logger
+     * @param message the commit message; must not be {@code null} or blank
+     * @param paths   the paths to commit, relative to {@code dir}
+     * @throws MojoException if the git command fails
+     */
+    public static void commitPaths(File dir, Log log, String message,
+                                   String... paths) throws MojoException {
+<span class="fc" id="L553">        List&lt;String&gt; command = new ArrayList&lt;&gt;(</span>
+<span class="fc" id="L554">                List.of(&quot;git&quot;, &quot;commit&quot;, &quot;-F&quot;, &quot;-&quot;, &quot;--&quot;));</span>
+<span class="fc" id="L555">        command.addAll(List.of(paths));</span>
+<span class="fc" id="L556">        commitWithStdin(dir, log, message, command.toArray(new String[0]));</span>
+<span class="fc" id="L557">    }</span>
 
     /**
      * Stage all files.
@@ -519,9 +570,9 @@ public class VcsOperations {
      * @throws MojoException if the git command fails on both attempts
      */
     public static void addAll(File dir, Log log) throws MojoException {
-<span class="fc" id="L522">        log.debug(&quot;» git add -A&quot;);</span>
-<span class="fc" id="L523">        captureIdempotentMutation(dir, &quot;git&quot;, &quot;add&quot;, &quot;-A&quot;);</span>
-<span class="fc" id="L524">    }</span>
+<span class="fc" id="L573">        log.debug(&quot;» git add -A&quot;);</span>
+<span class="fc" id="L574">        captureIdempotentMutation(dir, &quot;git&quot;, &quot;add&quot;, &quot;-A&quot;);</span>
+<span class="fc" id="L575">    }</span>
 
     /**
      * Push to remote. Sets {@code IKE_VCS_CONTEXT} to bypass the pre-push hook.
@@ -534,8 +585,8 @@ public class VcsOperations {
      */
     public static void push(File dir, Log log, String remote, String branch)
             throws MojoException {
-<span class="fc" id="L537">        runWithContext(dir, log, &quot;git&quot;, &quot;push&quot;, remote, branch);</span>
-<span class="fc" id="L538">    }</span>
+<span class="fc" id="L588">        runWithContext(dir, log, &quot;git&quot;, &quot;push&quot;, remote, branch);</span>
+<span class="fc" id="L589">    }</span>
 
     /**
      * Push to remote, ignoring failures (no remote, offline, etc.).
@@ -548,11 +599,11 @@ public class VcsOperations {
      */
     public static void pushSafe(File dir, Log log, String remote, String branch) {
         try {
-<span class="nc" id="L551">            push(dir, log, remote, branch);</span>
-<span class="fc" id="L552">        } catch (MojoException e) {</span>
-<span class="fc" id="L553">            log.warn(&quot;  Push failed (non-fatal): &quot; + e.getMessage());</span>
-<span class="nc" id="L554">        }</span>
-<span class="fc" id="L555">    }</span>
+<span class="nc" id="L602">            push(dir, log, remote, branch);</span>
+<span class="fc" id="L603">        } catch (MojoException e) {</span>
+<span class="fc" id="L604">            log.warn(&quot;  Push failed (non-fatal): &quot; + e.getMessage());</span>
+<span class="nc" id="L605">        }</span>
+<span class="fc" id="L606">    }</span>
 
     /**
      * Push to remote if it exists. If no remote is configured, logs
@@ -566,16 +617,16 @@ public class VcsOperations {
     public static void pushIfRemoteExists(File dir, Log log,
                                             String remote, String branch) {
         try {
-<span class="pc bpc" id="L569" title="1 of 2 branches missed.">            if (!network.ike.plugin.ReleaseSupport.hasRemote(dir, remote)) {</span>
-<span class="fc" id="L570">                log.info(&quot;  No remote '&quot; + remote + &quot;' configured for &quot;</span>
-<span class="fc" id="L571">                        + dir.getName() + &quot; — changes remain local.&quot;);</span>
-<span class="fc" id="L572">                return;</span>
+<span class="pc bpc" id="L620" title="1 of 2 branches missed.">            if (!network.ike.plugin.ReleaseSupport.hasRemote(dir, remote)) {</span>
+<span class="fc" id="L621">                log.info(&quot;  No remote '&quot; + remote + &quot;' configured for &quot;</span>
+<span class="fc" id="L622">                        + dir.getName() + &quot; — changes remain local.&quot;);</span>
+<span class="fc" id="L623">                return;</span>
             }
-<span class="nc" id="L574">            push(dir, log, remote, branch);</span>
-<span class="nc" id="L575">        } catch (MojoException e) {</span>
-<span class="nc" id="L576">            log.warn(&quot;  Push failed (non-fatal): &quot; + e.getMessage());</span>
-<span class="nc" id="L577">        }</span>
-<span class="nc" id="L578">    }</span>
+<span class="nc" id="L625">            push(dir, log, remote, branch);</span>
+<span class="nc" id="L626">        } catch (MojoException e) {</span>
+<span class="nc" id="L627">            log.warn(&quot;  Push failed (non-fatal): &quot; + e.getMessage());</span>
+<span class="nc" id="L628">        }</span>
+<span class="nc" id="L629">    }</span>
 
     /**
      * Push to remote with upstream tracking.
@@ -589,8 +640,8 @@ public class VcsOperations {
      */
     public static void pushWithUpstream(File dir, Log log, String remote, String branch)
             throws MojoException {
-<span class="nc" id="L592">        runWithContext(dir, log, &quot;git&quot;, &quot;push&quot;, &quot;-u&quot;, remote, branch);</span>
-<span class="nc" id="L593">    }</span>
+<span class="nc" id="L643">        runWithContext(dir, log, &quot;git&quot;, &quot;push&quot;, &quot;-u&quot;, remote, branch);</span>
+<span class="nc" id="L644">    }</span>
 
     /**
      * Delete a local branch. Uses {@code -D} (force) because squash-merged
@@ -603,8 +654,8 @@ public class VcsOperations {
      */
     public static void deleteBranch(File dir, Log log, String branch)
             throws MojoException {
-<span class="fc" id="L606">        run(dir, log, null, &quot;git&quot;, &quot;branch&quot;, &quot;-D&quot;, branch);</span>
-<span class="fc" id="L607">    }</span>
+<span class="fc" id="L657">        run(dir, log, null, &quot;git&quot;, &quot;branch&quot;, &quot;-D&quot;, branch);</span>
+<span class="fc" id="L658">    }</span>
 
     /**
      * Delete a remote branch.
@@ -617,8 +668,8 @@ public class VcsOperations {
      */
     public static void deleteRemoteBranch(File dir, Log log, String remote, String branch)
             throws MojoException {
-<span class="nc" id="L620">        runWithContext(dir, log, &quot;git&quot;, &quot;push&quot;, remote, &quot;--delete&quot;, branch);</span>
-<span class="nc" id="L621">    }</span>
+<span class="nc" id="L671">        runWithContext(dir, log, &quot;git&quot;, &quot;push&quot;, remote, &quot;--delete&quot;, branch);</span>
+<span class="nc" id="L672">    }</span>
 
     /**
      * Squash-merge a branch into the current branch (does not commit).
@@ -630,8 +681,8 @@ public class VcsOperations {
      */
     public static void mergeSquash(File dir, Log log, String branch)
             throws MojoException {
-<span class="fc" id="L633">        run(dir, log, null, &quot;git&quot;, &quot;merge&quot;, &quot;--squash&quot;, branch);</span>
-<span class="fc" id="L634">    }</span>
+<span class="fc" id="L684">        run(dir, log, null, &quot;git&quot;, &quot;merge&quot;, &quot;--squash&quot;, branch);</span>
+<span class="fc" id="L685">    }</span>
 
     /**
      * No-fast-forward merge with a merge commit.
@@ -644,8 +695,8 @@ public class VcsOperations {
      */
     public static void mergeNoFf(File dir, Log log, String branch, String message)
             throws MojoException {
-<span class="fc" id="L647">        runWithContext(dir, log, &quot;git&quot;, &quot;merge&quot;, &quot;--no-ff&quot;, branch, &quot;-m&quot;, message);</span>
-<span class="fc" id="L648">    }</span>
+<span class="fc" id="L698">        runWithContext(dir, log, &quot;git&quot;, &quot;merge&quot;, &quot;--no-ff&quot;, branch, &quot;-m&quot;, message);</span>
+<span class="fc" id="L699">    }</span>
 
     /**
      * Fast-forward-only merge. Used to advance the currently-checked-out
@@ -659,8 +710,8 @@ public class VcsOperations {
      */
     public static void mergeFfOnly(File dir, Log log, String ref)
             throws MojoException {
-<span class="fc" id="L662">        runWithContext(dir, log, &quot;git&quot;, &quot;merge&quot;, &quot;--ff-only&quot;, ref);</span>
-<span class="fc" id="L663">    }</span>
+<span class="fc" id="L713">        runWithContext(dir, log, &quot;git&quot;, &quot;merge&quot;, &quot;--ff-only&quot;, ref);</span>
+<span class="fc" id="L714">    }</span>
 
     /**
      * Abort an in-progress merge ({@code git merge --abort}). Used as a
@@ -672,11 +723,11 @@ public class VcsOperations {
      */
     public static void mergeAbortQuiet(File dir, Log log) {
         try {
-<span class="nc" id="L675">            run(dir, log, null, &quot;git&quot;, &quot;merge&quot;, &quot;--abort&quot;);</span>
-<span class="nc" id="L676">        } catch (MojoException e) {</span>
+<span class="nc" id="L726">            run(dir, log, null, &quot;git&quot;, &quot;merge&quot;, &quot;--abort&quot;);</span>
+<span class="nc" id="L727">        } catch (MojoException e) {</span>
             // No merge in progress, or already aborted — non-fatal here.
-<span class="nc" id="L678">        }</span>
-<span class="nc" id="L679">    }</span>
+<span class="nc" id="L729">        }</span>
+<span class="nc" id="L730">    }</span>
 
     /**
      * Check whether a local branch exists.
@@ -687,10 +738,10 @@ public class VcsOperations {
      */
     public static boolean localBranchExists(File dir, String branch) {
         try {
-<span class="fc" id="L690">            String output = capture(dir, &quot;git&quot;, &quot;branch&quot;, &quot;--list&quot;, branch);</span>
-<span class="fc bfc" id="L691" title="All 2 branches covered.">            return !output.trim().isEmpty();</span>
-<span class="nc" id="L692">        } catch (MojoException e) {</span>
-<span class="nc" id="L693">            return false;</span>
+<span class="fc" id="L741">            String output = capture(dir, &quot;git&quot;, &quot;branch&quot;, &quot;--list&quot;, branch);</span>
+<span class="fc bfc" id="L742" title="All 2 branches covered.">            return !output.trim().isEmpty();</span>
+<span class="nc" id="L743">        } catch (MojoException e) {</span>
+<span class="nc" id="L744">            return false;</span>
         }
     }
 
@@ -705,15 +756,15 @@ public class VcsOperations {
      */
     public static List&lt;String&gt; mergedBranches(File dir, String target, String prefix) {
         try {
-<span class="fc" id="L708">            String output = capture(dir, &quot;git&quot;, &quot;branch&quot;, &quot;--merged&quot;, target);</span>
-<span class="pc bpc" id="L709" title="1 of 2 branches missed.">            if (output.isEmpty()) return List.of();</span>
-<span class="fc" id="L710">            return output.lines()</span>
-<span class="fc" id="L711">                    .map(line -&gt; line.replaceFirst(&quot;^[* ] +&quot;, &quot;&quot;))</span>
-<span class="fc" id="L712">                    .filter(b -&gt; b.startsWith(prefix))</span>
-<span class="pc bpc" id="L713" title="1 of 2 branches missed.">                    .filter(b -&gt; !b.equals(target))</span>
-<span class="fc" id="L714">                    .toList();</span>
-<span class="nc" id="L715">        } catch (MojoException e) {</span>
-<span class="nc" id="L716">            return List.of();</span>
+<span class="fc" id="L759">            String output = capture(dir, &quot;git&quot;, &quot;branch&quot;, &quot;--merged&quot;, target);</span>
+<span class="pc bpc" id="L760" title="1 of 2 branches missed.">            if (output.isEmpty()) return List.of();</span>
+<span class="fc" id="L761">            return output.lines()</span>
+<span class="fc" id="L762">                    .map(line -&gt; line.replaceFirst(&quot;^[* ] +&quot;, &quot;&quot;))</span>
+<span class="fc" id="L763">                    .filter(b -&gt; b.startsWith(prefix))</span>
+<span class="pc bpc" id="L764" title="1 of 2 branches missed.">                    .filter(b -&gt; !b.equals(target))</span>
+<span class="fc" id="L765">                    .toList();</span>
+<span class="nc" id="L766">        } catch (MojoException e) {</span>
+<span class="nc" id="L767">            return List.of();</span>
         }
     }
 
@@ -726,14 +777,14 @@ public class VcsOperations {
      */
     public static List&lt;String&gt; localBranches(File dir, String prefix) {
         try {
-<span class="fc" id="L729">            String output = capture(dir, &quot;git&quot;, &quot;branch&quot;);</span>
-<span class="pc bpc" id="L730" title="1 of 2 branches missed.">            if (output.isEmpty()) return List.of();</span>
-<span class="fc" id="L731">            return output.lines()</span>
-<span class="fc" id="L732">                    .map(line -&gt; line.replaceFirst(&quot;^[* ] +&quot;, &quot;&quot;))</span>
-<span class="fc" id="L733">                    .filter(b -&gt; b.startsWith(prefix))</span>
-<span class="fc" id="L734">                    .toList();</span>
-<span class="nc" id="L735">        } catch (MojoException e) {</span>
-<span class="nc" id="L736">            return List.of();</span>
+<span class="fc" id="L780">            String output = capture(dir, &quot;git&quot;, &quot;branch&quot;);</span>
+<span class="pc bpc" id="L781" title="1 of 2 branches missed.">            if (output.isEmpty()) return List.of();</span>
+<span class="fc" id="L782">            return output.lines()</span>
+<span class="fc" id="L783">                    .map(line -&gt; line.replaceFirst(&quot;^[* ] +&quot;, &quot;&quot;))</span>
+<span class="fc" id="L784">                    .filter(b -&gt; b.startsWith(prefix))</span>
+<span class="fc" id="L785">                    .toList();</span>
+<span class="nc" id="L786">        } catch (MojoException e) {</span>
+<span class="nc" id="L787">            return List.of();</span>
         }
     }
 
@@ -746,9 +797,9 @@ public class VcsOperations {
      */
     public static String branchLastCommitDate(File dir, String branch) {
         try {
-<span class="nc" id="L749">            return capture(dir, &quot;git&quot;, &quot;log&quot;, &quot;-1&quot;, &quot;--format=%ci&quot;, branch);</span>
-<span class="nc" id="L750">        } catch (MojoException e) {</span>
-<span class="nc" id="L751">            return &quot;unknown&quot;;</span>
+<span class="nc" id="L800">            return capture(dir, &quot;git&quot;, &quot;log&quot;, &quot;-1&quot;, &quot;--format=%ci&quot;, branch);</span>
+<span class="nc" id="L801">        } catch (MojoException e) {</span>
+<span class="nc" id="L802">            return &quot;unknown&quot;;</span>
         }
     }
 
@@ -762,12 +813,12 @@ public class VcsOperations {
      * @throws MojoException if no email is configured
      */
     public static String userEmail(File dir) throws MojoException {
-<span class="fc" id="L765">        String email = capture(dir, &quot;git&quot;, &quot;config&quot;, &quot;user.email&quot;).trim();</span>
-<span class="pc bpc" id="L766" title="1 of 2 branches missed.">        if (email.isEmpty()) {</span>
-<span class="nc" id="L767">            throw new MojoException(</span>
+<span class="fc" id="L816">        String email = capture(dir, &quot;git&quot;, &quot;config&quot;, &quot;user.email&quot;).trim();</span>
+<span class="pc bpc" id="L817" title="1 of 2 branches missed.">        if (email.isEmpty()) {</span>
+<span class="nc" id="L818">            throw new MojoException(</span>
                     &quot;git config user.email is not set in &quot; + dir);
         }
-<span class="fc" id="L770">        return email;</span>
+<span class="fc" id="L821">        return email;</span>
     }
 
     /**
@@ -780,9 +831,9 @@ public class VcsOperations {
      * @return an ASCII slug safe for ref names and cross-platform shells
      */
     public static String userSlug(String email) {
-<span class="fc" id="L783">        return email.toLowerCase()</span>
-<span class="fc" id="L784">                .replace(&quot;@&quot;, &quot;--&quot;)</span>
-<span class="fc" id="L785">                .replace(&quot;.&quot;, &quot;-&quot;);</span>
+<span class="fc" id="L834">        return email.toLowerCase()</span>
+<span class="fc" id="L835">                .replace(&quot;@&quot;, &quot;--&quot;)</span>
+<span class="fc" id="L836">                .replace(&quot;.&quot;, &quot;-&quot;);</span>
     }
 
     /**
@@ -802,8 +853,8 @@ public class VcsOperations {
      */
     public static boolean remoteRefExists(File dir, String remote, String ref)
             throws MojoException {
-<span class="nc" id="L805">        String output = capture(dir, &quot;git&quot;, &quot;ls-remote&quot;, remote, ref);</span>
-<span class="nc bnc" id="L806" title="All 2 branches missed.">        return !output.isEmpty();</span>
+<span class="nc" id="L856">        String output = capture(dir, &quot;git&quot;, &quot;ls-remote&quot;, remote, ref);</span>
+<span class="nc bnc" id="L857" title="All 2 branches missed.">        return !output.isEmpty();</span>
     }
 
     /**
@@ -818,8 +869,8 @@ public class VcsOperations {
      */
     public static void stashPushUntracked(File dir, Log log, String message)
             throws MojoException {
-<span class="fc" id="L821">        run(dir, log, null, &quot;git&quot;, &quot;stash&quot;, &quot;push&quot;, &quot;-u&quot;, &quot;-m&quot;, message);</span>
-<span class="fc" id="L822">    }</span>
+<span class="fc" id="L872">        run(dir, log, null, &quot;git&quot;, &quot;stash&quot;, &quot;push&quot;, &quot;-u&quot;, &quot;-m&quot;, message);</span>
+<span class="fc" id="L873">    }</span>
 
     /**
      * Apply a stash identified by its ref ({@code git stash apply &lt;ref&gt;}).
@@ -833,8 +884,8 @@ public class VcsOperations {
      */
     public static void stashApply(File dir, Log log, String ref)
             throws MojoException {
-<span class="nc" id="L836">        run(dir, log, null, &quot;git&quot;, &quot;stash&quot;, &quot;apply&quot;, ref);</span>
-<span class="nc" id="L837">    }</span>
+<span class="nc" id="L887">        run(dir, log, null, &quot;git&quot;, &quot;stash&quot;, &quot;apply&quot;, ref);</span>
+<span class="nc" id="L888">    }</span>
 
     /**
      * Drop the top of the stash stack ({@code git stash drop}).
@@ -844,8 +895,8 @@ public class VcsOperations {
      * @throws MojoException if the git command fails
      */
     public static void stashDrop(File dir, Log log) throws MojoException {
-<span class="fc" id="L847">        run(dir, log, null, &quot;git&quot;, &quot;stash&quot;, &quot;drop&quot;);</span>
-<span class="fc" id="L848">    }</span>
+<span class="fc" id="L898">        run(dir, log, null, &quot;git&quot;, &quot;stash&quot;, &quot;drop&quot;);</span>
+<span class="fc" id="L899">    }</span>
 
     /**
      * Point a ref at a given target ({@code git update-ref &lt;ref&gt; &lt;target&gt;}).
@@ -859,8 +910,8 @@ public class VcsOperations {
      */
     public static void updateRef(File dir, Log log, String ref, String target)
             throws MojoException {
-<span class="fc" id="L862">        run(dir, log, null, &quot;git&quot;, &quot;update-ref&quot;, ref, target);</span>
-<span class="fc" id="L863">    }</span>
+<span class="fc" id="L913">        run(dir, log, null, &quot;git&quot;, &quot;update-ref&quot;, ref, target);</span>
+<span class="fc" id="L914">    }</span>
 
     /**
      * Delete a local ref ({@code git update-ref -d &lt;ref&gt;}).
@@ -872,8 +923,8 @@ public class VcsOperations {
      */
     public static void deleteLocalRef(File dir, Log log, String ref)
             throws MojoException {
-<span class="nc" id="L875">        run(dir, log, null, &quot;git&quot;, &quot;update-ref&quot;, &quot;-d&quot;, ref);</span>
-<span class="nc" id="L876">    }</span>
+<span class="nc" id="L926">        run(dir, log, null, &quot;git&quot;, &quot;update-ref&quot;, &quot;-d&quot;, ref);</span>
+<span class="nc" id="L927">    }</span>
 
     /**
      * Push a ref to a remote under the same name
@@ -887,8 +938,8 @@ public class VcsOperations {
      */
     public static void pushRef(File dir, Log log, String remote, String ref)
             throws MojoException {
-<span class="fc" id="L890">        run(dir, log, null, &quot;git&quot;, &quot;push&quot;, remote, ref + &quot;:&quot; + ref);</span>
-<span class="fc" id="L891">    }</span>
+<span class="fc" id="L941">        run(dir, log, null, &quot;git&quot;, &quot;push&quot;, remote, ref + &quot;:&quot; + ref);</span>
+<span class="fc" id="L942">    }</span>
 
     /**
      * Delete a ref from a remote ({@code git push &lt;remote&gt; :&lt;ref&gt;}).
@@ -902,8 +953,8 @@ public class VcsOperations {
     public static void deleteRemoteRef(File dir, Log log,
                                         String remote, String ref)
             throws MojoException {
-<span class="nc" id="L905">        run(dir, log, null, &quot;git&quot;, &quot;push&quot;, remote, &quot;:&quot; + ref);</span>
-<span class="nc" id="L906">    }</span>
+<span class="nc" id="L956">        run(dir, log, null, &quot;git&quot;, &quot;push&quot;, remote, &quot;:&quot; + ref);</span>
+<span class="nc" id="L957">    }</span>
 
     /**
      * Fetch a remote ref into a local ref of the same name
@@ -922,9 +973,9 @@ public class VcsOperations {
      */
     public static void fetchRef(File dir, Log log, String remote, String ref)
             throws MojoException {
-<span class="nc" id="L925">        run(dir, log, null, &quot;git&quot;, &quot;-c&quot;, &quot;maintenance.auto=false&quot;,</span>
+<span class="nc" id="L976">        run(dir, log, null, &quot;git&quot;, &quot;-c&quot;, &quot;maintenance.auto=false&quot;,</span>
                 &quot;fetch&quot;, remote, ref + &quot;:&quot; + ref);
-<span class="nc" id="L927">    }</span>
+<span class="nc" id="L978">    }</span>
 
     // ── VCS state operations ─────────────────────────────────────
 
@@ -938,15 +989,15 @@ public class VcsOperations {
     public static void writeVcsState(File dir, VcsState.Action action)
             throws MojoException {
         try {
-<span class="fc" id="L941">            String branch = currentBranch(dir);</span>
-<span class="fc" id="L942">            String sha = headSha(dir);</span>
-<span class="fc" id="L943">            VcsState state = VcsState.create(branch, sha, action);</span>
-<span class="fc" id="L944">            VcsState.writeTo(dir.toPath(), state);</span>
-<span class="nc" id="L945">        } catch (IOException e) {</span>
-<span class="nc" id="L946">            throw new MojoException(</span>
-<span class="nc" id="L947">                    &quot;Failed to write VCS state file: &quot; + e.getMessage(), e);</span>
-<span class="fc" id="L948">        }</span>
-<span class="fc" id="L949">    }</span>
+<span class="fc" id="L992">            String branch = currentBranch(dir);</span>
+<span class="fc" id="L993">            String sha = headSha(dir);</span>
+<span class="fc" id="L994">            VcsState state = VcsState.create(branch, sha, action);</span>
+<span class="fc" id="L995">            VcsState.writeTo(dir.toPath(), state);</span>
+<span class="nc" id="L996">        } catch (IOException e) {</span>
+<span class="nc" id="L997">            throw new MojoException(</span>
+<span class="nc" id="L998">                    &quot;Failed to write VCS state file: &quot; + e.getMessage(), e);</span>
+<span class="fc" id="L999">        }</span>
+<span class="fc" id="L1000">    }</span>
 
     /**
      * Check whether the local HEAD has fallen behind the VCS state
@@ -975,32 +1026,32 @@ public class VcsOperations {
      * @throws MojoException if reading basic git state fails
      */
     public static boolean needsSync(File dir) throws MojoException {
-<span class="fc" id="L978">        Optional&lt;VcsState&gt; state = VcsState.readFrom(dir.toPath());</span>
-<span class="fc bfc" id="L979" title="All 2 branches covered.">        if (state.isEmpty()) {</span>
-<span class="fc" id="L980">            return false;</span>
+<span class="fc" id="L1029">        Optional&lt;VcsState&gt; state = VcsState.readFrom(dir.toPath());</span>
+<span class="fc bfc" id="L1030" title="All 2 branches covered.">        if (state.isEmpty()) {</span>
+<span class="fc" id="L1031">            return false;</span>
         }
-<span class="fc" id="L982">        VcsState s = state.get();</span>
-<span class="fc" id="L983">        String localBranch = currentBranch(dir);</span>
-<span class="fc bfc" id="L984" title="All 2 branches covered.">        if (!s.branch().equals(localBranch)) {</span>
-<span class="fc" id="L985">            return true;</span>
+<span class="fc" id="L1033">        VcsState s = state.get();</span>
+<span class="fc" id="L1034">        String localBranch = currentBranch(dir);</span>
+<span class="fc bfc" id="L1035" title="All 2 branches covered.">        if (!s.branch().equals(localBranch)) {</span>
+<span class="fc" id="L1036">            return true;</span>
         }
-<span class="fc" id="L987">        String localSha = headSha(dir);</span>
-<span class="fc bfc" id="L988" title="All 2 branches covered.">        if (s.sha().equals(localSha)) {</span>
-<span class="fc" id="L989">            return false;</span>
+<span class="fc" id="L1038">        String localSha = headSha(dir);</span>
+<span class="fc bfc" id="L1039" title="All 2 branches covered.">        if (s.sha().equals(localSha)) {</span>
+<span class="fc" id="L1040">            return false;</span>
         }
         // Common case after a routine local commit: state.sha is an
         // ancestor of HEAD, so the state file is just stale relative to
         // post-ws:commit-publish work. No sync needed.
         try {
-<span class="pc bpc" id="L995" title="1 of 2 branches missed.">            if (isAncestor(dir, s.sha(), localSha)) {</span>
-<span class="fc" id="L996">                return false;</span>
+<span class="pc bpc" id="L1046" title="1 of 2 branches missed.">            if (isAncestor(dir, s.sha(), localSha)) {</span>
+<span class="fc" id="L1047">                return false;</span>
             }
-<span class="fc" id="L998">        } catch (MojoException e) {</span>
+<span class="fc" id="L1049">        } catch (MojoException e) {</span>
             // state.sha unknown locally — could be a commit pushed
             // from another machine that we haven't fetched yet.
             // Treat as needing sync.
-<span class="nc" id="L1002">        }</span>
-<span class="fc" id="L1003">        return true;</span>
+<span class="nc" id="L1053">        }</span>
+<span class="fc" id="L1054">        return true;</span>
     }
 
     /**
@@ -1013,85 +1064,85 @@ public class VcsOperations {
      * @throws MojoException if a git command or state file read fails
      */
     public static String sync(File dir, Log log) throws MojoException {
-<span class="fc" id="L1016">        Optional&lt;VcsState&gt; stateOpt = VcsState.readFrom(dir.toPath());</span>
-<span class="pc bpc" id="L1017" title="1 of 2 branches missed.">        if (stateOpt.isEmpty()) {</span>
-<span class="nc" id="L1018">            log.info(&quot;  No VCS state file — nothing to sync.&quot;);</span>
-<span class="nc" id="L1019">            return headSha(dir);</span>
+<span class="fc" id="L1067">        Optional&lt;VcsState&gt; stateOpt = VcsState.readFrom(dir.toPath());</span>
+<span class="pc bpc" id="L1068" title="1 of 2 branches missed.">        if (stateOpt.isEmpty()) {</span>
+<span class="nc" id="L1069">            log.info(&quot;  No VCS state file — nothing to sync.&quot;);</span>
+<span class="nc" id="L1070">            return headSha(dir);</span>
         }
 
-<span class="fc" id="L1022">        VcsState state = stateOpt.get();</span>
-<span class="fc" id="L1023">        log.info(&quot;  Syncing to: &quot; + state.action().label() + &quot; by &quot; + state.machine()</span>
-<span class="fc" id="L1024">                + &quot; at &quot; + state.timestamp());</span>
+<span class="fc" id="L1073">        VcsState state = stateOpt.get();</span>
+<span class="fc" id="L1074">        log.info(&quot;  Syncing to: &quot; + state.action().label() + &quot; by &quot; + state.machine()</span>
+<span class="fc" id="L1075">                + &quot; at &quot; + state.timestamp());</span>
 
-<span class="fc" id="L1026">        fetch(dir, log);</span>
+<span class="fc" id="L1077">        fetch(dir, log);</span>
 
-<span class="fc" id="L1028">        String localBranch = currentBranch(dir);</span>
-<span class="fc bfc" id="L1029" title="All 2 branches covered.">        if (!state.branch().equals(localBranch)) {</span>
-<span class="pc bpc" id="L1030" title="1 of 2 branches missed.">            if (!localBranchExists(dir, state.branch())) {</span>
+<span class="fc" id="L1079">        String localBranch = currentBranch(dir);</span>
+<span class="fc bfc" id="L1080" title="All 2 branches covered.">        if (!state.branch().equals(localBranch)) {</span>
+<span class="pc bpc" id="L1081" title="1 of 2 branches missed.">            if (!localBranchExists(dir, state.branch())) {</span>
                 // Branch doesn't exist locally — check remote
-<span class="fc" id="L1032">                Optional&lt;String&gt; remoteCheck = remoteSha(dir, &quot;origin&quot;, state.branch());</span>
-<span class="pc bpc" id="L1033" title="1 of 2 branches missed.">                if (remoteCheck.isEmpty()) {</span>
-<span class="nc" id="L1034">                    log.warn(&quot;  Branch &quot; + state.branch()</span>
+<span class="fc" id="L1083">                Optional&lt;String&gt; remoteCheck = remoteSha(dir, &quot;origin&quot;, state.branch());</span>
+<span class="pc bpc" id="L1084" title="1 of 2 branches missed.">                if (remoteCheck.isEmpty()) {</span>
+<span class="nc" id="L1085">                    log.warn(&quot;  Branch &quot; + state.branch()</span>
                             + &quot; does not exist locally or on origin.&quot;);
-<span class="nc" id="L1036">                    log.warn(&quot;  The branch may not have been pushed from &quot;</span>
-<span class="nc" id="L1037">                            + state.machine() + &quot; yet.&quot;);</span>
-<span class="nc" id="L1038">                    log.warn(&quot;  Push from &quot; + state.machine()</span>
+<span class="nc" id="L1087">                    log.warn(&quot;  The branch may not have been pushed from &quot;</span>
+<span class="nc" id="L1088">                            + state.machine() + &quot; yet.&quot;);</span>
+<span class="nc" id="L1089">                    log.warn(&quot;  Push from &quot; + state.machine()</span>
                             + &quot; first, then retry sync.&quot;);
-<span class="nc" id="L1040">                    return headSha(dir);</span>
+<span class="nc" id="L1091">                    return headSha(dir);</span>
                 }
                 // Create local tracking branch from remote
-<span class="fc" id="L1043">                log.info(&quot;  Creating local branch from origin: &quot; + state.branch());</span>
-<span class="fc" id="L1044">                run(dir, log, null, &quot;git&quot;, &quot;checkout&quot;, &quot;-b&quot;,</span>
-<span class="fc" id="L1045">                        state.branch(), &quot;origin/&quot; + state.branch());</span>
-<span class="fc" id="L1046">            } else {</span>
-<span class="nc" id="L1047">                log.info(&quot;  Switching branch: &quot; + localBranch + &quot; → &quot; + state.branch());</span>
-<span class="nc" id="L1048">                checkout(dir, log, state.branch());</span>
+<span class="fc" id="L1094">                log.info(&quot;  Creating local branch from origin: &quot; + state.branch());</span>
+<span class="fc" id="L1095">                run(dir, log, null, &quot;git&quot;, &quot;checkout&quot;, &quot;-b&quot;,</span>
+<span class="fc" id="L1096">                        state.branch(), &quot;origin/&quot; + state.branch());</span>
+<span class="fc" id="L1097">            } else {</span>
+<span class="nc" id="L1098">                log.info(&quot;  Switching branch: &quot; + localBranch + &quot; → &quot; + state.branch());</span>
+<span class="nc" id="L1099">                checkout(dir, log, state.branch());</span>
             }
         }
 
-<span class="fc" id="L1052">        Optional&lt;String&gt; remoteRef = remoteSha(dir, &quot;origin&quot;, state.branch());</span>
-<span class="pc bpc" id="L1053" title="1 of 2 branches missed.">        if (remoteRef.isEmpty()) {</span>
-<span class="nc" id="L1054">            log.info(&quot;  No remote ref for &quot; + state.branch()</span>
+<span class="fc" id="L1103">        Optional&lt;String&gt; remoteRef = remoteSha(dir, &quot;origin&quot;, state.branch());</span>
+<span class="pc bpc" id="L1104" title="1 of 2 branches missed.">        if (remoteRef.isEmpty()) {</span>
+<span class="nc" id="L1105">            log.info(&quot;  No remote ref for &quot; + state.branch()</span>
                     + &quot; on origin — branch is local-only, using local state.&quot;);
-<span class="nc" id="L1056">            return headSha(dir);</span>
+<span class="nc" id="L1107">            return headSha(dir);</span>
         }
 
         // Evaluate the relationship between local branch tip and origin
         // before touching HEAD. An unconditional reset-to-origin would
         // silently discard unpushed local commits (#144).
-<span class="fc" id="L1062">        String localSha = headSha(dir);</span>
-<span class="fc" id="L1063">        String remoteShaValue = remoteRef.get();</span>
+<span class="fc" id="L1113">        String localSha = headSha(dir);</span>
+<span class="fc" id="L1114">        String remoteShaValue = remoteRef.get();</span>
 
-<span class="fc bfc" id="L1065" title="All 2 branches covered.">        if (localSha.equals(remoteShaValue)) {</span>
-<span class="fc" id="L1066">            log.info(&quot;  Already at origin/&quot; + state.branch()</span>
+<span class="fc bfc" id="L1116" title="All 2 branches covered.">        if (localSha.equals(remoteShaValue)) {</span>
+<span class="fc" id="L1117">            log.info(&quot;  Already at origin/&quot; + state.branch()</span>
                     + &quot; — no reset needed.&quot;);
-<span class="fc bfc" id="L1068" title="All 2 branches covered.">        } else if (isAncestor(dir, remoteShaValue, localSha)) {</span>
+<span class="fc bfc" id="L1119" title="All 2 branches covered.">        } else if (isAncestor(dir, remoteShaValue, localSha)) {</span>
             // Local is strictly ahead of origin. Preserve the unpushed
             // commits — the caller (usually ws:push) will push them.
-<span class="fc" id="L1071">            log.info(&quot;  Local &quot; + state.branch()</span>
+<span class="fc" id="L1122">            log.info(&quot;  Local &quot; + state.branch()</span>
                     + &quot; is ahead of origin — keeping unpushed commits.&quot;);
-<span class="fc bfc" id="L1073" title="All 2 branches covered.">        } else if (isAncestor(dir, localSha, remoteShaValue)) {</span>
+<span class="fc bfc" id="L1124" title="All 2 branches covered.">        } else if (isAncestor(dir, localSha, remoteShaValue)) {</span>
             // Local is strictly behind origin. Fast-forward is safe
             // (equivalent to git pull --ff-only).
-<span class="fc" id="L1076">            log.info(&quot;  Fast-forwarding &quot; + state.branch() + &quot; to origin.&quot;);</span>
-<span class="fc" id="L1077">            resetSoft(dir, log, &quot;origin/&quot; + state.branch());</span>
+<span class="fc" id="L1127">            log.info(&quot;  Fast-forwarding &quot; + state.branch() + &quot; to origin.&quot;);</span>
+<span class="fc" id="L1128">            resetSoft(dir, log, &quot;origin/&quot; + state.branch());</span>
         } else {
             // Diverged — local and origin each have unique commits.
             // Refuse to silently pick a side; ask the human.
-<span class="fc" id="L1081">            throw new MojoException(</span>
-<span class="fc" id="L1082">                    &quot;Local &quot; + state.branch() + &quot; (&quot; + localSha</span>
-<span class="fc" id="L1083">                            + &quot;) has diverged from origin/&quot; + state.branch()</span>
+<span class="fc" id="L1132">            throw new MojoException(</span>
+<span class="fc" id="L1133">                    &quot;Local &quot; + state.branch() + &quot; (&quot; + localSha</span>
+<span class="fc" id="L1134">                            + &quot;) has diverged from origin/&quot; + state.branch()</span>
                             + &quot; (&quot; + remoteShaValue + &quot;) — neither is an &quot;
                             + &quot;ancestor of the other. Resolve manually &quot;
                             + &quot;(git pull --rebase, git rebase origin/&quot;
-<span class="fc" id="L1087">                            + state.branch() + &quot;, or ws:update-feature), &quot;</span>
+<span class="fc" id="L1138">                            + state.branch() + &quot;, or ws:update-feature), &quot;</span>
                             + &quot;then retry.&quot;);
         }
 
-<span class="fc" id="L1091">        String newSha = headSha(dir);</span>
-<span class="pc bpc" id="L1092" title="1 of 2 branches missed.">        if (newSha.equals(state.sha())) {</span>
-<span class="fc" id="L1093">            log.info(&quot;  HEAD now matches state file: &quot; + newSha);</span>
-<span class="fc" id="L1094">            return newSha;</span>
+<span class="fc" id="L1142">        String newSha = headSha(dir);</span>
+<span class="pc bpc" id="L1143" title="1 of 2 branches missed.">        if (newSha.equals(state.sha())) {</span>
+<span class="fc" id="L1144">            log.info(&quot;  HEAD now matches state file: &quot; + newSha);</span>
+<span class="fc" id="L1145">            return newSha;</span>
         }
         // After fast-forward / no-op, HEAD may legitimately sit ahead
         // of state.sha — the state file is just stale relative to
@@ -1099,20 +1150,20 @@ public class VcsOperations {
         // (ike-issues#232). Only warn when state.sha is genuinely
         // unreachable from HEAD.
         try {
-<span class="nc bnc" id="L1102" title="All 2 branches missed.">            if (isAncestor(dir, state.sha(), newSha)) {</span>
-<span class="nc" id="L1103">                log.info(&quot;  HEAD (&quot; + newSha + &quot;) is ahead of state file (&quot;</span>
-<span class="nc" id="L1104">                        + state.sha() + &quot;) — state file is stale, no action needed.&quot;);</span>
-<span class="nc" id="L1105">                return newSha;</span>
+<span class="nc bnc" id="L1153" title="All 2 branches missed.">            if (isAncestor(dir, state.sha(), newSha)) {</span>
+<span class="nc" id="L1154">                log.info(&quot;  HEAD (&quot; + newSha + &quot;) is ahead of state file (&quot;</span>
+<span class="nc" id="L1155">                        + state.sha() + &quot;) — state file is stale, no action needed.&quot;);</span>
+<span class="nc" id="L1156">                return newSha;</span>
             }
-<span class="nc" id="L1107">        } catch (MojoException ignored) {</span>
+<span class="nc" id="L1158">        } catch (MojoException ignored) {</span>
             // state.sha unreachable locally — fall through to warning.
-<span class="nc" id="L1109">        }</span>
-<span class="nc" id="L1110">        log.warn(&quot;  HEAD after sync (&quot; + newSha + &quot;) does not match state file (&quot;</span>
-<span class="nc" id="L1111">                + state.sha() + &quot;).&quot;);</span>
-<span class="nc" id="L1112">        log.warn(&quot;  The push from &quot; + state.machine() + &quot; may not have completed.&quot;);</span>
-<span class="nc" id="L1113">        log.warn(&quot;  Push from &quot; + state.machine() + &quot; first, then retry sync.&quot;);</span>
+<span class="nc" id="L1160">        }</span>
+<span class="nc" id="L1161">        log.warn(&quot;  HEAD after sync (&quot; + newSha + &quot;) does not match state file (&quot;</span>
+<span class="nc" id="L1162">                + state.sha() + &quot;).&quot;);</span>
+<span class="nc" id="L1163">        log.warn(&quot;  The push from &quot; + state.machine() + &quot; may not have completed.&quot;);</span>
+<span class="nc" id="L1164">        log.warn(&quot;  Push from &quot; + state.machine() + &quot; first, then retry sync.&quot;);</span>
 
-<span class="nc" id="L1115">        return newSha;</span>
+<span class="nc" id="L1166">        return newSha;</span>
     }
 
     /**
@@ -1124,14 +1175,14 @@ public class VcsOperations {
      * @throws MojoException if sync fails
      */
     public static void catchUp(File dir, Log log) throws MojoException {
-<span class="fc bfc" id="L1127" title="All 2 branches covered.">        if (!VcsState.isIkeManaged(dir.toPath())) {</span>
-<span class="fc" id="L1128">            return;</span>
+<span class="fc bfc" id="L1178" title="All 2 branches covered.">        if (!VcsState.isIkeManaged(dir.toPath())) {</span>
+<span class="fc" id="L1179">            return;</span>
         }
-<span class="pc bpc" id="L1130" title="1 of 2 branches missed.">        if (needsSync(dir)) {</span>
-<span class="nc" id="L1131">            log.info(&quot;  VCS state is behind — catching up...&quot;);</span>
-<span class="nc" id="L1132">            sync(dir, log);</span>
+<span class="pc bpc" id="L1181" title="1 of 2 branches missed.">        if (needsSync(dir)) {</span>
+<span class="nc" id="L1182">            log.info(&quot;  VCS state is behind — catching up...&quot;);</span>
+<span class="nc" id="L1183">            sync(dir, log);</span>
         }
-<span class="fc" id="L1134">    }</span>
+<span class="fc" id="L1185">    }</span>
 
     // ── Internal helpers ─────────────────────────────────────────
 
@@ -1145,12 +1196,12 @@ public class VcsOperations {
         void beforeCommand(File workDir, String[] command) throws MojoException;
     }
 
-<span class="fc" id="L1148">    private static volatile CommandInterceptor commandInterceptor = (dir, cmd) -&gt; { };</span>
+<span class="fc" id="L1199">    private static volatile CommandInterceptor commandInterceptor = (dir, cmd) -&gt; { };</span>
 
     /** Install a command interceptor (tests only). Pass {@code null} to reset to the default no-op. */
     static void setCommandInterceptor(CommandInterceptor interceptor) {
-<span class="fc bfc" id="L1152" title="All 2 branches covered.">        commandInterceptor = (interceptor != null) ? interceptor : (dir, cmd) -&gt; { };</span>
-<span class="fc" id="L1153">    }</span>
+<span class="fc bfc" id="L1203" title="All 2 branches covered.">        commandInterceptor = (interceptor != null) ? interceptor : (dir, cmd) -&gt; { };</span>
+<span class="fc" id="L1204">    }</span>
 
     /**
      * Run a command with output routed through the Maven logger.
@@ -1158,43 +1209,43 @@ public class VcsOperations {
      */
     private static void run(File workDir, Log log, Map&lt;String, String&gt; env,
                             String... command) throws MojoException {
-<span class="fc" id="L1161">        log.debug(&quot;» &quot; + String.join(&quot; &quot;, command));</span>
-<span class="fc" id="L1162">        commandInterceptor.beforeCommand(workDir, command);</span>
+<span class="fc" id="L1212">        log.debug(&quot;» &quot; + String.join(&quot; &quot;, command));</span>
+<span class="fc" id="L1213">        commandInterceptor.beforeCommand(workDir, command);</span>
         try {
-<span class="fc" id="L1164">            ProcessBuilder pb = new ProcessBuilder(command)</span>
-<span class="fc" id="L1165">                    .directory(workDir)</span>
-<span class="fc" id="L1166">                    .redirectErrorStream(true);</span>
-<span class="fc bfc" id="L1167" title="All 2 branches covered.">            if (env != null) {</span>
-<span class="fc" id="L1168">                pb.environment().putAll(env);</span>
+<span class="fc" id="L1215">            ProcessBuilder pb = new ProcessBuilder(command)</span>
+<span class="fc" id="L1216">                    .directory(workDir)</span>
+<span class="fc" id="L1217">                    .redirectErrorStream(true);</span>
+<span class="fc bfc" id="L1218" title="All 2 branches covered.">            if (env != null) {</span>
+<span class="fc" id="L1219">                pb.environment().putAll(env);</span>
             }
-<span class="fc" id="L1170">            Process proc = pb.start();</span>
-<span class="fc" id="L1171">            try (BufferedReader reader = new BufferedReader(</span>
-<span class="fc" id="L1172">                    new InputStreamReader(proc.getInputStream(),</span>
+<span class="fc" id="L1221">            Process proc = pb.start();</span>
+<span class="fc" id="L1222">            try (BufferedReader reader = new BufferedReader(</span>
+<span class="fc" id="L1223">                    new InputStreamReader(proc.getInputStream(),</span>
                             StandardCharsets.UTF_8))) {
                 String line;
-<span class="fc bfc" id="L1175" title="All 2 branches covered.">                while ((line = reader.readLine()) != null) {</span>
-<span class="fc" id="L1176">                    log.debug(&quot;  &quot; + line);</span>
+<span class="fc bfc" id="L1226" title="All 2 branches covered.">                while ((line = reader.readLine()) != null) {</span>
+<span class="fc" id="L1227">                    log.debug(&quot;  &quot; + line);</span>
                 }
             }
-<span class="fc" id="L1179">            int exit = proc.waitFor();</span>
-<span class="fc bfc" id="L1180" title="All 2 branches covered.">            if (exit != 0) {</span>
-<span class="fc" id="L1181">                throw new MojoException(</span>
+<span class="fc" id="L1230">            int exit = proc.waitFor();</span>
+<span class="fc bfc" id="L1231" title="All 2 branches covered.">            if (exit != 0) {</span>
+<span class="fc" id="L1232">                throw new MojoException(</span>
                         &quot;Command failed (exit &quot; + exit + &quot;): &quot;
-<span class="fc" id="L1183">                                + String.join(&quot; &quot;, command));</span>
+<span class="fc" id="L1234">                                + String.join(&quot; &quot;, command));</span>
             }
-<span class="nc" id="L1185">        } catch (IOException | InterruptedException e) {</span>
-<span class="nc" id="L1186">            throw new MojoException(</span>
-<span class="nc" id="L1187">                    &quot;Failed to execute: &quot; + String.join(&quot; &quot;, command), e);</span>
-<span class="fc" id="L1188">        }</span>
-<span class="fc" id="L1189">    }</span>
+<span class="nc" id="L1236">        } catch (IOException | InterruptedException e) {</span>
+<span class="nc" id="L1237">            throw new MojoException(</span>
+<span class="nc" id="L1238">                    &quot;Failed to execute: &quot; + String.join(&quot; &quot;, command), e);</span>
+<span class="fc" id="L1239">        }</span>
+<span class="fc" id="L1240">    }</span>
 
     /**
      * Run a command with {@code IKE_VCS_CONTEXT} set in the environment.
      */
     private static void runWithContext(File workDir, Log log, String... command)
             throws MojoException {
-<span class="fc" id="L1196">        run(workDir, log, Map.of(IKE_VCS_CONTEXT, CONTEXT_VALUE), command);</span>
-<span class="fc" id="L1197">    }</span>
+<span class="fc" id="L1247">        run(workDir, log, Map.of(IKE_VCS_CONTEXT, CONTEXT_VALUE), command);</span>
+<span class="fc" id="L1248">    }</span>
 
     /**
      * Run a git command that reads its message from stdin via {@code -F -}.
@@ -1214,41 +1265,41 @@ public class VcsOperations {
     private static void commitWithStdin(File workDir, Log log,
                                          String message, String... command)
             throws MojoException {
-<span class="fc" id="L1217">        log.debug(&quot;» &quot; + String.join(&quot; &quot;, command) + &quot; &lt;&lt;&lt; (message via stdin)&quot;);</span>
-<span class="fc" id="L1218">        commandInterceptor.beforeCommand(workDir, command);</span>
+<span class="fc" id="L1268">        log.debug(&quot;» &quot; + String.join(&quot; &quot;, command) + &quot; &lt;&lt;&lt; (message via stdin)&quot;);</span>
+<span class="fc" id="L1269">        commandInterceptor.beforeCommand(workDir, command);</span>
         try {
-<span class="fc" id="L1220">            ProcessBuilder pb = new ProcessBuilder(command)</span>
-<span class="fc" id="L1221">                    .directory(workDir)</span>
-<span class="fc" id="L1222">                    .redirectErrorStream(true);</span>
-<span class="fc" id="L1223">            pb.environment().put(IKE_VCS_CONTEXT, CONTEXT_VALUE);</span>
-<span class="fc" id="L1224">            Process proc = pb.start();</span>
+<span class="fc" id="L1271">            ProcessBuilder pb = new ProcessBuilder(command)</span>
+<span class="fc" id="L1272">                    .directory(workDir)</span>
+<span class="fc" id="L1273">                    .redirectErrorStream(true);</span>
+<span class="fc" id="L1274">            pb.environment().put(IKE_VCS_CONTEXT, CONTEXT_VALUE);</span>
+<span class="fc" id="L1275">            Process proc = pb.start();</span>
 
             // Write message to stdin, then close to signal EOF
-<span class="fc" id="L1227">            try (OutputStream out = proc.getOutputStream()) {</span>
-<span class="fc" id="L1228">                out.write(message.getBytes(StandardCharsets.UTF_8));</span>
-<span class="fc" id="L1229">                out.flush();</span>
+<span class="fc" id="L1278">            try (OutputStream out = proc.getOutputStream()) {</span>
+<span class="fc" id="L1279">                out.write(message.getBytes(StandardCharsets.UTF_8));</span>
+<span class="fc" id="L1280">                out.flush();</span>
             }
 
             // Consume stdout/stderr
             String output;
-<span class="fc" id="L1234">            try (BufferedReader reader = new BufferedReader(</span>
-<span class="fc" id="L1235">                    new InputStreamReader(proc.getInputStream(),</span>
+<span class="fc" id="L1285">            try (BufferedReader reader = new BufferedReader(</span>
+<span class="fc" id="L1286">                    new InputStreamReader(proc.getInputStream(),</span>
                             StandardCharsets.UTF_8))) {
-<span class="fc" id="L1237">                output = reader.lines().collect(Collectors.joining(&quot;\n&quot;));</span>
+<span class="fc" id="L1288">                output = reader.lines().collect(Collectors.joining(&quot;\n&quot;));</span>
             }
 
-<span class="fc" id="L1240">            int exit = proc.waitFor();</span>
-<span class="pc bpc" id="L1241" title="1 of 2 branches missed.">            if (exit != 0) {</span>
-<span class="nc" id="L1242">                throw new MojoException(</span>
+<span class="fc" id="L1291">            int exit = proc.waitFor();</span>
+<span class="pc bpc" id="L1292" title="1 of 2 branches missed.">            if (exit != 0) {</span>
+<span class="nc" id="L1293">                throw new MojoException(</span>
                         &quot;Command failed (exit &quot; + exit + &quot;): &quot;
-<span class="nc" id="L1244">                                + String.join(&quot; &quot;, command)</span>
-<span class="nc bnc" id="L1245" title="All 2 branches missed.">                                + (output.isEmpty() ? &quot;&quot; : &quot;\n&quot; + output));</span>
+<span class="nc" id="L1295">                                + String.join(&quot; &quot;, command)</span>
+<span class="nc bnc" id="L1296" title="All 2 branches missed.">                                + (output.isEmpty() ? &quot;&quot; : &quot;\n&quot; + output));</span>
             }
-<span class="nc" id="L1247">        } catch (IOException | InterruptedException e) {</span>
-<span class="nc" id="L1248">            throw new MojoException(</span>
-<span class="nc" id="L1249">                    &quot;Failed to execute: &quot; + String.join(&quot; &quot;, command), e);</span>
-<span class="fc" id="L1250">        }</span>
-<span class="fc" id="L1251">    }</span>
+<span class="nc" id="L1298">        } catch (IOException | InterruptedException e) {</span>
+<span class="nc" id="L1299">            throw new MojoException(</span>
+<span class="nc" id="L1300">                    &quot;Failed to execute: &quot; + String.join(&quot; &quot;, command), e);</span>
+<span class="fc" id="L1301">        }</span>
+<span class="fc" id="L1302">    }</span>
 
     /**
      * Run a command and capture stdout as a trimmed string.
@@ -1268,35 +1319,35 @@ public class VcsOperations {
     private static String capture(File workDir, String... command)
             throws MojoException {
         try {
-<span class="fc" id="L1271">            Process proc = new ProcessBuilder(command)</span>
-<span class="fc" id="L1272">                    .directory(workDir)</span>
-<span class="fc" id="L1273">                    .redirectErrorStream(false)</span>
-<span class="fc" id="L1274">                    .start();</span>
+<span class="fc" id="L1322">            Process proc = new ProcessBuilder(command)</span>
+<span class="fc" id="L1323">                    .directory(workDir)</span>
+<span class="fc" id="L1324">                    .redirectErrorStream(false)</span>
+<span class="fc" id="L1325">                    .start();</span>
             String stdout;
-<span class="fc" id="L1276">            try (BufferedReader reader = new BufferedReader(</span>
-<span class="fc" id="L1277">                    new InputStreamReader(proc.getInputStream(),</span>
+<span class="fc" id="L1327">            try (BufferedReader reader = new BufferedReader(</span>
+<span class="fc" id="L1328">                    new InputStreamReader(proc.getInputStream(),</span>
                             StandardCharsets.UTF_8))) {
-<span class="fc" id="L1279">                stdout = reader.lines().collect(Collectors.joining(&quot;\n&quot;)).trim();</span>
+<span class="fc" id="L1330">                stdout = reader.lines().collect(Collectors.joining(&quot;\n&quot;)).trim();</span>
             }
-<span class="fc" id="L1281">            String stderr = new String(</span>
-<span class="fc" id="L1282">                    proc.getErrorStream().readAllBytes(),</span>
-<span class="fc" id="L1283">                    StandardCharsets.UTF_8).trim();</span>
-<span class="fc" id="L1284">            int exit = proc.waitFor();</span>
-<span class="fc bfc" id="L1285" title="All 2 branches covered.">            if (exit != 0) {</span>
-<span class="fc" id="L1286">                throw new MojoException(</span>
-<span class="fc" id="L1287">                        String.join(&quot; &quot;, command) + &quot; in &quot; + workDir</span>
+<span class="fc" id="L1332">            String stderr = new String(</span>
+<span class="fc" id="L1333">                    proc.getErrorStream().readAllBytes(),</span>
+<span class="fc" id="L1334">                    StandardCharsets.UTF_8).trim();</span>
+<span class="fc" id="L1335">            int exit = proc.waitFor();</span>
+<span class="fc bfc" id="L1336" title="All 2 branches covered.">            if (exit != 0) {</span>
+<span class="fc" id="L1337">                throw new MojoException(</span>
+<span class="fc" id="L1338">                        String.join(&quot; &quot;, command) + &quot; in &quot; + workDir</span>
                                 + &quot; failed (exit &quot; + exit + &quot;)&quot;
-<span class="pc bpc" id="L1289" title="1 of 2 branches missed.">                                + (stderr.isEmpty() ? &quot;&quot; : &quot;: &quot; + stderr));</span>
+<span class="pc bpc" id="L1340" title="1 of 2 branches missed.">                                + (stderr.isEmpty() ? &quot;&quot; : &quot;: &quot; + stderr));</span>
             }
-<span class="fc" id="L1291">            return stdout;</span>
-<span class="nc" id="L1292">        } catch (IOException e) {</span>
-<span class="nc" id="L1293">            throw new MojoException(</span>
-<span class="nc" id="L1294">                    &quot;Failed to execute &quot; + String.join(&quot; &quot;, command)</span>
-<span class="nc" id="L1295">                            + &quot; in &quot; + workDir + &quot;: &quot; + e.getMessage(), e);</span>
-<span class="nc" id="L1296">        } catch (InterruptedException e) {</span>
-<span class="nc" id="L1297">            Thread.currentThread().interrupt();</span>
-<span class="nc" id="L1298">            throw new MojoException(</span>
-<span class="nc" id="L1299">                    &quot;Interrupted while executing &quot; + String.join(&quot; &quot;, command)</span>
+<span class="fc" id="L1342">            return stdout;</span>
+<span class="nc" id="L1343">        } catch (IOException e) {</span>
+<span class="nc" id="L1344">            throw new MojoException(</span>
+<span class="nc" id="L1345">                    &quot;Failed to execute &quot; + String.join(&quot; &quot;, command)</span>
+<span class="nc" id="L1346">                            + &quot; in &quot; + workDir + &quot;: &quot; + e.getMessage(), e);</span>
+<span class="nc" id="L1347">        } catch (InterruptedException e) {</span>
+<span class="nc" id="L1348">            Thread.currentThread().interrupt();</span>
+<span class="nc" id="L1349">            throw new MojoException(</span>
+<span class="nc" id="L1350">                    &quot;Interrupted while executing &quot; + String.join(&quot; &quot;, command)</span>
                             + &quot; in &quot; + workDir, e);
         }
     }
@@ -1320,7 +1371,7 @@ public class VcsOperations {
      */
     private static String captureRead(File workDir, String... command)
             throws MojoException {
-<span class="fc" id="L1323">        return captureWithRetry(workDir, command);</span>
+<span class="fc" id="L1374">        return captureWithRetry(workDir, command);</span>
     }
 
     /**
@@ -1348,7 +1399,7 @@ public class VcsOperations {
      */
     private static String captureIdempotentMutation(File workDir, String... command)
             throws MojoException {
-<span class="fc" id="L1351">        return captureWithRetry(workDir, command);</span>
+<span class="fc" id="L1402">        return captureWithRetry(workDir, command);</span>
     }
 
     /**
@@ -1364,23 +1415,23 @@ public class VcsOperations {
      */
     private static String captureWithRetry(File workDir, String... command)
             throws MojoException {
-<span class="fc" id="L1367">        MojoException last = null;</span>
-<span class="fc bfc" id="L1368" title="All 2 branches covered.">        for (int attempt = 1; attempt &lt;= TRANSIENT_RETRY_ATTEMPTS; attempt++) {</span>
+<span class="fc" id="L1418">        MojoException last = null;</span>
+<span class="fc bfc" id="L1419" title="All 2 branches covered.">        for (int attempt = 1; attempt &lt;= TRANSIENT_RETRY_ATTEMPTS; attempt++) {</span>
             try {
-<span class="fc" id="L1370">                return capture(workDir, command);</span>
-<span class="fc" id="L1371">            } catch (MojoException e) {</span>
-<span class="fc" id="L1372">                last = e;</span>
-<span class="fc bfc" id="L1373" title="All 2 branches covered.">                if (attempt &lt; TRANSIENT_RETRY_ATTEMPTS) {</span>
+<span class="fc" id="L1421">                return capture(workDir, command);</span>
+<span class="fc" id="L1422">            } catch (MojoException e) {</span>
+<span class="fc" id="L1423">                last = e;</span>
+<span class="fc bfc" id="L1424" title="All 2 branches covered.">                if (attempt &lt; TRANSIENT_RETRY_ATTEMPTS) {</span>
                     try {
-<span class="fc" id="L1375">                        Thread.sleep(TRANSIENT_RETRY_BACKOFF_MILLIS);</span>
-<span class="nc" id="L1376">                    } catch (InterruptedException ie) {</span>
-<span class="nc" id="L1377">                        Thread.currentThread().interrupt();</span>
-<span class="nc" id="L1378">                        throw e;</span>
-<span class="fc" id="L1379">                    }</span>
+<span class="fc" id="L1426">                        Thread.sleep(TRANSIENT_RETRY_BACKOFF_MILLIS);</span>
+<span class="nc" id="L1427">                    } catch (InterruptedException ie) {</span>
+<span class="nc" id="L1428">                        Thread.currentThread().interrupt();</span>
+<span class="nc" id="L1429">                        throw e;</span>
+<span class="fc" id="L1430">                    }</span>
                 }
             }
         }
-<span class="fc" id="L1383">        throw last;</span>
+<span class="fc" id="L1434">        throw last;</span>
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

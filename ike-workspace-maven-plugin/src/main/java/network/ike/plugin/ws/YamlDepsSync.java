@@ -54,12 +54,15 @@ final class YamlDepsSync {
      *
      * @param workspaceRoot the workspace root directory
      * @param log           plugin log for the per-subproject summary
+     * @return {@code true} if {@code workspace.yaml} was rewritten,
+     *         {@code false} if it was already up to date or could not be
+     *         processed
      */
-    static void run(File workspaceRoot, Log log) {
+    static boolean run(File workspaceRoot, Log log) {
         Path manifestPath = workspaceRoot.toPath().resolve("workspace.yaml");
         if (!Files.isRegularFile(manifestPath)) {
             log.debug("yaml-deps-sync: no workspace.yaml — skipping");
-            return;
+            return false;
         }
 
         try {
@@ -128,12 +131,14 @@ final class YamlDepsSync {
                 Files.writeString(manifestPath, updated, StandardCharsets.UTF_8);
                 log.info("  yaml-deps-sync: " + totalAdded + " edge(s) added, "
                         + totalRemoved + " edge(s) removed");
-            } else {
-                log.debug("yaml-deps-sync: workspace.yaml is up to date");
+                return true;
             }
+            log.debug("yaml-deps-sync: workspace.yaml is up to date");
+            return false;
         } catch (IOException | ManifestException e) {
             log.warn("yaml-deps-sync: cannot update workspace.yaml — "
                     + e.getMessage());
+            return false;
         }
     }
 

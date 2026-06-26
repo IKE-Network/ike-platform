@@ -91,6 +91,50 @@ class VcsOperationsTest {
     }
 
     @Test
+    void isPathClean_trueForUntouchedTrackedPath() {
+        assertThat(VcsOperations.isPathClean(repoDir, "file.txt")).isTrue();
+    }
+
+    @Test
+    void isPathClean_falseForModifiedPath_trueForOthers() throws Exception {
+        Files.writeString(tempDir.resolve("file.txt"), "hello v2",
+                StandardCharsets.UTF_8);
+        Files.writeString(tempDir.resolve("other.txt"), "x",
+                StandardCharsets.UTF_8);
+        exec("git", "add", "other.txt");
+        exec("git", "commit", "-m", "add other");
+
+        // Only file.txt is modified — the path scope must distinguish them.
+        assertThat(VcsOperations.isPathClean(repoDir, "file.txt")).isFalse();
+        assertThat(VcsOperations.isPathClean(repoDir, "other.txt")).isTrue();
+    }
+
+    @Test
+    void commitPaths_commitsOnlyNamedPath_leavingOthersUncommitted()
+            throws Exception {
+        // Track a second file, then modify both.
+        Files.writeString(tempDir.resolve("other.txt"), "v1",
+                StandardCharsets.UTF_8);
+        exec("git", "add", "other.txt");
+        exec("git", "commit", "-m", "add other");
+        Files.writeString(tempDir.resolve("file.txt"), "changed",
+                StandardCharsets.UTF_8);
+        Files.writeString(tempDir.resolve("other.txt"), "v2",
+                StandardCharsets.UTF_8);
+
+        VcsOperations.commitPaths(repoDir, log, "commit only other.txt",
+                "other.txt");
+
+        // other.txt committed in isolation; file.txt's change is untouched.
+        assertThat(VcsOperations.isPathClean(repoDir, "other.txt")).isTrue();
+        assertThat(VcsOperations.isPathClean(repoDir, "file.txt")).isFalse();
+        assertThat(execCapture("git", "log", "-1", "--format=%s"))
+                .isEqualTo("commit only other.txt");
+        // The committed snapshot of other.txt is its new content.
+        assertThat(execCapture("git", "show", "HEAD:other.txt")).isEqualTo("v2");
+    }
+
+    @Test
     void checkout_switchesBranch() throws Exception {
         exec("git", "checkout", "-b", "feature/test");
         exec("git", "checkout", "main");

@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -96,6 +97,30 @@ public class VcsOperations {
     public static boolean isClean(File dir) {
         try {
             String status = capture(dir, "git", "status", "--porcelain");
+            return status.isEmpty();
+        } catch (MojoException e) {
+            return false;
+        }
+    }
+
+    /**
+     * Check whether a single path is committed-clean — no staged or
+     * unstaged modification and not untracked. Used to decide whether a
+     * machine-derived rewrite of that path (e.g. the
+     * {@code workspace.yaml depends-on} re-derivation in
+     * {@link network.ike.plugin.ws.PostMutationSync}) is the <em>sole</em>
+     * pending change to it, so it can be committed in isolation without
+     * sweeping in a caller's own concurrent edit
+     * (IKE-Network/ike-issues#774).
+     *
+     * @param dir  the repository root directory
+     * @param path the path to check, relative to {@code dir}
+     * @return true if {@code path} has no pending changes
+     */
+    public static boolean isPathClean(File dir, String path) {
+        try {
+            String status =
+                    capture(dir, "git", "status", "--porcelain", "--", path);
             return status.isEmpty();
         } catch (MojoException e) {
             return false;
@@ -503,6 +528,32 @@ public class VcsOperations {
     public static void commitStaged(File dir, Log log, String message)
             throws MojoException {
         commit(dir, log, message);
+    }
+
+    /**
+     * Commit specific paths in isolation, regardless of what else is in
+     * the index. Equivalent to {@code git commit -F - -- <paths>}: the
+     * working-tree content of the listed (tracked) paths is committed and
+     * nothing else, so a concurrent staged or unstaged change to another
+     * file is neither committed nor disturbed.
+     *
+     * <p>Used by {@link network.ike.plugin.ws.PostMutationSync} to commit
+     * the re-derived {@code workspace.yaml} on its own
+     * (IKE-Network/ike-issues#774). Sets {@code IKE_VCS_CONTEXT} to bypass
+     * the pre-commit hook.
+     *
+     * @param dir     the repository root directory
+     * @param log     Maven logger
+     * @param message the commit message; must not be {@code null} or blank
+     * @param paths   the paths to commit, relative to {@code dir}
+     * @throws MojoException if the git command fails
+     */
+    public static void commitPaths(File dir, Log log, String message,
+                                   String... paths) throws MojoException {
+        List<String> command = new ArrayList<>(
+                List.of("git", "commit", "-F", "-", "--"));
+        command.addAll(List.of(paths));
+        commitWithStdin(dir, log, message, command.toArray(new String[0]));
     }
 
     /**

@@ -158,7 +158,17 @@ public class WsCommitPublishMojo extends AbstractWorkspaceMojo {
         getLog().info("");
 
         if (workingSet.isWorkspace()) {
-            PostMutationSync.refresh(workingSet.root().toFile(), getLog());
+            File root = workingSet.root().toFile();
+            boolean manifestCommitted =
+                    PostMutationSync.refresh(root, getLog());
+            // The refresh runs after the commit loop, so a manifest commit
+            // it makes is not covered by this goal's own push. When the
+            // caller asked to push, push the root again so the re-derived
+            // manifest reaches origin too (#774).
+            if (manifestCommitted && push) {
+                VcsOperations.push(root, getLog(), "origin",
+                        VcsOperations.currentBranch(root));
+            }
         }
 
         if (failed > 0) {

@@ -1,5 +1,6 @@
 package network.ike.plugin.ws;
 
+import network.ike.plugin.ws.vcs.VcsOperations;
 import network.ike.workspace.WorkspaceGraph;
 import org.apache.maven.api.plugin.MojoException;
 import org.apache.maven.api.plugin.annotations.Mojo;
@@ -150,11 +151,22 @@ public class WsSyncMojo extends AbstractWorkspaceMojo {
             pushPhaseBody = readChildReport(WsGoal.PUSH);
         }
 
-        // PostMutationSync refreshes workspace-derived state (IDE files,
-        // git-init scripts) and is workspace-only — a single-repo sync
-        // (working set of one, IKE-Network/ike-issues#703) has none.
+        // PostMutationSync re-derives workspace.yaml depends-on from POM
+        // reality and is workspace-only — a single-repo sync (working set
+        // of one, IKE-Network/ike-issues#703) has none. It runs after the
+        // push half, so a manifest commit it makes is not covered by that
+        // push; when the sync pushed (not pull-only) and did not already
+        // fail, push the root again so the re-derived manifest reaches
+        // origin in the same sync rather than waiting for the next one
+        // (#774).
         if (isWorkspaceMode()) {
-            PostMutationSync.refresh(workspaceRoot(), getLog());
+            File root = workspaceRoot();
+            boolean manifestCommitted =
+                    PostMutationSync.refresh(root, getLog());
+            if (manifestCommitted && !pullOnly && !pushFailed) {
+                VcsOperations.pushSafe(root, getLog(), remote,
+                        VcsOperations.currentBranch(root));
+            }
         }
 
         String body = buildSyncReport(pullPhaseBody, pushPhaseBody,

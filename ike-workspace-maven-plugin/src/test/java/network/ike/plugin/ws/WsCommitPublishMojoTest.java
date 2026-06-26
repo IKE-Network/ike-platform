@@ -175,6 +175,119 @@ class WsCommitPublishMojoTest {
                 .doesNotContain("b.txt");
     }
 
+    // ── ike-issues#774: post-loop manifest re-derivation must not strand ──
+
+    /**
+     * Regression for ike-issues#774. When the POMs declare an
+     * inter-subproject dependency that {@code workspace.yaml} has not yet
+     * caught up to, {@code ws:commit-publish}'s post-loop
+     * {@link PostMutationSync} re-derives the {@code depends-on} edge and
+     * rewrites the manifest. Before the fix that rewrite landed
+     * <em>after</em> the commit loop and was left uncommitted, so the next
+     * {@code ws:push}/{@code ws:sync} clean-tree preflight rejected the
+     * workspace root. The goal must now terminate with a clean tree: the
+     * re-derived manifest committed in its own follow-up commit.
+     */
+    @Test
+    void commitPublish_withDepsDrift_leavesCleanTree() throws Exception {
+        Path noHooks = tempDir.resolve("no-hooks");
+        Files.createDirectories(noHooks);
+        exec(tempDir, "git", "init", "-b", "main");
+        exec(tempDir, "git", "config", "core.hooksPath",
+                noHooks.toAbsolutePath().toString());
+        exec(tempDir, "git", "config", "user.email", "test@example.com");
+        exec(tempDir, "git", "config", "user.name", "Test");
+        exec(tempDir, "git", "config", "commit.gpgsign", "false");
+
+        // lib-b's POM depends on com.example.lib:lib-a, but its manifest
+        // entry starts with depends-on: [] — the drift YamlDepsSync resolves.
+        Files.writeString(tempDir.resolve("workspace.yaml"), """
+                schema-version: "1.1"
+                generated: "2026-05-28"
+
+                defaults:
+                  branch: main
+
+                subprojects:
+                  lib-a:
+                    type: software
+                    description: lib-a
+                    repo: https://example.com/lib-a.git
+                    groupId: com.example.lib
+                    depends-on: []
+                  lib-b:
+                    type: software
+                    description: lib-b
+                    repo: https://example.com/lib-b.git
+                    groupId: com.example.app
+                    depends-on: []
+                """, StandardCharsets.UTF_8);
+        Files.writeString(tempDir.resolve("pom.xml"), """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <project xmlns="http://maven.apache.org/POM/4.1.0">
+                    <modelVersion>4.1.0</modelVersion>
+                    <groupId>local.test</groupId>
+                    <artifactId>drift-ws</artifactId>
+                    <version>1-SNAPSHOT</version>
+                    <packaging>pom</packaging>
+                </project>
+                """, StandardCharsets.UTF_8);
+        writeSubprojectPom("lib-a", "com.example.lib", null, null);
+        writeSubprojectPom("lib-b", "com.example.app", "com.example.lib", "lib-a");
+        exec(tempDir, "git", "add", "-A");
+        exec(tempDir, "git", "commit", "-m", "initial");
+
+        // A real WIP change so the commit loop has something to commit —
+        // mirrors a normal ws:commit invocation.
+        Files.writeString(tempDir.resolve("note.txt"), "wip\n",
+                StandardCharsets.UTF_8);
+
+        WsCommitPublishMojo mojo = TestLog.createMojo(WsCommitPublishMojo.class);
+        setField(mojo, "manifest", tempDir.resolve("workspace.yaml").toFile(),
+                AbstractWorkspaceMojo.class);
+        setField(mojo, "message", "commit wip");
+        setField(mojo, "skipLint", true);
+        mojo.execute();
+
+        // workspace.yaml must not be left uncommitted (the bug stranded it
+        // here). An unrelated generated .gitignore may be untracked in this
+        // hermetic sandbox — in real repos it is committed — so the
+        // assertion targets the manifest specifically, not full emptiness.
+        String postStatus = execCapture(tempDir, "git", "status", "--porcelain");
+        assertThat(postStatus)
+                .as("ws:commit-publish must not strand workspace.yaml (#774)")
+                .doesNotContain("workspace.yaml");
+        // The re-derived edge is committed, not dangling.
+        assertThat(execCapture(tempDir, "git", "show", "HEAD:workspace.yaml"))
+                .contains("subproject: lib-a");
+        // It landed as its own follow-up commit, distinct from the WIP one.
+        assertThat(execCapture(tempDir, "git", "log", "-1", "--format=%s"))
+                .contains("re-derive depends-on edges");
+    }
+
+    private void writeSubprojectPom(String name, String groupId,
+                                    String depGroupId, String depArtifact)
+            throws Exception {
+        Path dir = tempDir.resolve(name);
+        Files.createDirectories(dir);
+        StringBuilder pom = new StringBuilder();
+        pom.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<project>\n");
+        pom.append("    <modelVersion>4.0.0</modelVersion>\n");
+        pom.append("    <groupId>").append(groupId).append("</groupId>\n");
+        pom.append("    <artifactId>").append(name).append("</artifactId>\n");
+        pom.append("    <version>1.0.0-SNAPSHOT</version>\n");
+        if (depGroupId != null && depArtifact != null) {
+            pom.append("    <dependencies>\n        <dependency>\n");
+            pom.append("            <groupId>").append(depGroupId).append("</groupId>\n");
+            pom.append("            <artifactId>").append(depArtifact).append("</artifactId>\n");
+            pom.append("            <version>1.0.0</version>\n");
+            pom.append("        </dependency>\n    </dependencies>\n");
+        }
+        pom.append("</project>\n");
+        Files.writeString(dir.resolve("pom.xml"), pom.toString(),
+                StandardCharsets.UTF_8);
+    }
+
     private static void exec(Path workDir, String... command) throws Exception {
         Process process = new ProcessBuilder(command)
                 .directory(workDir.toFile())

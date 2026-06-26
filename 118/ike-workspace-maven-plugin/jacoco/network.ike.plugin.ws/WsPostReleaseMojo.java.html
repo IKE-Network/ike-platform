@@ -1,0 +1,322 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>WsPostReleaseMojo.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">WsPostReleaseMojo.java</span></div><h1>WsPostReleaseMojo.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.plugin.ReleaseSupport;
+import network.ike.plugin.support.GoalReportBuilder;
+
+import network.ike.workspace.Subproject;
+import network.ike.workspace.ManifestWriter;
+import network.ike.workspace.WorkingSet;
+import network.ike.workspace.WorkspaceGraph;
+import network.ike.plugin.ws.vcs.VcsOperations;
+import network.ike.plugin.ws.vcs.VcsState;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Post-release version bump across workspace subprojects.
+ *
+ * &lt;p&gt;After a release, this goal bumps every checked-out subproject's
+ * POM version to the specified {@code nextVersion}, commits the
+ * change, pushes if a remote exists, then updates workspace.yaml
+ * to reflect the new development versions.
+ *
+ * &lt;p&gt;Components are processed in topological order so that upstream
+ * dependencies are bumped before downstream consumers.
+ *
+ * &lt;pre&gt;{@code
+ * mvn ike:post-release -DnextVersion=4-SNAPSHOT
+ * }&lt;/pre&gt;
+ */
+@Mojo(name = &quot;post-release&quot;, projectRequired = false, aggregator = true)
+public class WsPostReleaseMojo extends AbstractWorkspaceMojo {
+
+    /**
+     * The next development version to set across all subprojects,
+     * e.g., {@code &quot;4-SNAPSHOT&quot;}.
+     */
+    @Parameter(property = &quot;nextVersion&quot;)
+    String nextVersion;
+
+    /** Creates this goal instance. */
+<span class="fc" id="L51">    public WsPostReleaseMojo() {}</span>
+
+    @Override
+    protected WorkspaceReportSpec runGoal() throws MojoException {
+<span class="fc" id="L55">        nextVersion = requireParam(nextVersion, &quot;nextVersion&quot;,</span>
+                &quot;Next development version (e.g., 4-SNAPSHOT)&quot;);
+<span class="fc" id="L57">        validateMavenVersion(nextVersion);</span>
+
+<span class="fc" id="L59">        WorkspaceGraph graph = loadGraph();</span>
+<span class="fc" id="L60">        File root = workspaceRoot();</span>
+<span class="fc" id="L61">        Path manifestPath = resolveManifest();</span>
+
+        // VCS bridge: catch-up before modifying
+<span class="fc" id="L64">        VcsOperations.catchUp(root, getLog());</span>
+
+<span class="fc" id="L66">        List&lt;String&gt; sorted = graph.topologicalSort(</span>
+<span class="fc" id="L67">                new LinkedHashSet&lt;&gt;(graph.manifest().subprojects().keySet()));</span>
+
+<span class="fc" id="L69">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L70">        getLog().info(&quot;IKE Workspace \u2014 Post-Release&quot;);</span>
+<span class="fc" id="L71">        getLog().info(&quot;\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550&quot;);</span>
+<span class="fc" id="L72">        getLog().info(&quot;  Next version: &quot; + nextVersion);</span>
+<span class="fc" id="L73">        getLog().info(&quot;  Components:   &quot; + sorted.size());</span>
+<span class="fc" id="L74">        getLog().info(&quot;&quot;);</span>
+
+<span class="fc" id="L76">        Map&lt;String, String&gt; versionUpdates = new LinkedHashMap&lt;&gt;();</span>
+        // Per-subproject Effect for the working-set report (#763/#767): keyed
+        // by subproject name, valued by what post-release did to that member
+        // (bumped X \u2192 Y, skipped (already at Y), skipped (not cloned), \u2026). The
+        // aggregator's effect is derived separately, after the workspace.yaml
+        // write, so the report can carry one row per working-set member.
+<span class="fc" id="L82">        Map&lt;String, String&gt; effects = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc" id="L83">        int bumped = 0;</span>
+<span class="fc" id="L84">        int skipped = 0;</span>
+
+<span class="fc bfc" id="L86" title="All 2 branches covered.">        for (String name : sorted) {</span>
+<span class="fc" id="L87">            Subproject subproject = graph.manifest().subprojects().get(name);</span>
+<span class="fc" id="L88">            File dir = new File(root, name);</span>
+<span class="fc" id="L89">            File gitDir = new File(dir, &quot;.git&quot;);</span>
+<span class="fc" id="L90">            File pomFile = new File(dir, &quot;pom.xml&quot;);</span>
+
+<span class="pc bpc" id="L92" title="1 of 2 branches missed.">            if (!gitDir.exists()) {</span>
+<span class="nc" id="L93">                getLog().info(&quot;  \u26A0 &quot; + name + &quot; \u2014 not cloned, skipping&quot;);</span>
+<span class="nc" id="L94">                effects.put(name, &quot;skipped (not cloned)&quot;);</span>
+<span class="nc" id="L95">                skipped++;</span>
+<span class="nc" id="L96">                continue;</span>
+            }
+
+<span class="pc bpc" id="L99" title="1 of 2 branches missed.">            if (!pomFile.exists()) {</span>
+<span class="nc" id="L100">                getLog().info(&quot;  \u26A0 &quot; + name + &quot; \u2014 no pom.xml, skipping&quot;);</span>
+<span class="nc" id="L101">                effects.put(name, &quot;skipped (no pom.xml)&quot;);</span>
+<span class="nc" id="L102">                skipped++;</span>
+<span class="nc" id="L103">                continue;</span>
+            }
+
+            // Read current version from root POM
+            String currentVersion;
+            try {
+<span class="fc" id="L109">                currentVersion = ReleaseSupport.readPomVersion(pomFile);</span>
+<span class="nc" id="L110">            } catch (MojoException e) {</span>
+<span class="nc" id="L111">                getLog().warn(&quot;  \u26A0 &quot; + name + &quot; \u2014 could not read version: &quot;</span>
+<span class="nc" id="L112">                        + e.getMessage());</span>
+<span class="nc" id="L113">                effects.put(name, &quot;skipped (could not read version)&quot;);</span>
+<span class="nc" id="L114">                skipped++;</span>
+<span class="nc" id="L115">                continue;</span>
+<span class="fc" id="L116">            }</span>
+
+            // Idempotency guard (#294): re-running with the same
+            // -DnextVersion on a subproject already at that version is a
+            // no-op \u2014 log and skip rather than running the rewrite +
+            // commit machinery only to discover there's nothing to do.
+<span class="pc bpc" id="L122" title="1 of 2 branches missed.">            if (nextVersion.equals(currentVersion)) {</span>
+<span class="nc" id="L123">                getLog().info(&quot;  \u2713 &quot; + name + &quot; \u2014 already at &quot;</span>
+                        + nextVersion);
+<span class="nc" id="L125">                effects.put(name, &quot;skipped (already at &quot; + nextVersion + &quot;)&quot;);</span>
+<span class="nc" id="L126">                skipped++;</span>
+<span class="nc" id="L127">                continue;</span>
+            }
+
+<span class="fc" id="L130">            getLog().info(&quot;  \u2192 &quot; + name + &quot; \u2014 &quot; + currentVersion</span>
+                    + &quot; \u2192 &quot; + nextVersion);
+
+            // Set version to nextVersion in POM
+<span class="fc" id="L134">            ReleaseSupport.setPomVersion(pomFile, currentVersion, nextVersion);</span>
+
+            // Also update submodule POMs that reference the old version
+            try {
+<span class="fc" id="L138">                List&lt;File&gt; allPoms = ReleaseSupport.findPomFiles(dir);</span>
+<span class="fc bfc" id="L139" title="All 2 branches covered.">                for (File subPom : allPoms) {</span>
+<span class="pc bpc" id="L140" title="1 of 2 branches missed.">                    if (subPom.equals(pomFile)) continue;</span>
+                    try {
+<span class="nc" id="L142">                        String content = java.nio.file.Files.readString(</span>
+<span class="nc" id="L143">                                subPom.toPath(), java.nio.charset.StandardCharsets.UTF_8);</span>
+<span class="nc bnc" id="L144" title="All 2 branches missed.">                        if (content.contains(&quot;&lt;version&gt;&quot; + currentVersion + &quot;&lt;/version&gt;&quot;)) {</span>
+<span class="nc" id="L145">                            String updated = content.replace(</span>
+                                    &quot;&lt;version&gt;&quot; + currentVersion + &quot;&lt;/version&gt;&quot;,
+                                    &quot;&lt;version&gt;&quot; + nextVersion + &quot;&lt;/version&gt;&quot;);
+<span class="nc" id="L148">                            java.nio.file.Files.writeString(</span>
+<span class="nc" id="L149">                                    subPom.toPath(), updated,</span>
+                                    java.nio.charset.StandardCharsets.UTF_8);
+<span class="nc" id="L151">                            String rel = dir.toPath().relativize(subPom.toPath()).toString();</span>
+<span class="nc" id="L152">                            getLog().info(&quot;    updated: &quot; + rel);</span>
+                        }
+<span class="nc" id="L154">                    } catch (java.io.IOException e) {</span>
+<span class="nc" id="L155">                        getLog().warn(&quot;    Could not update &quot; + subPom + &quot;: &quot;</span>
+<span class="nc" id="L156">                                + e.getMessage());</span>
+<span class="nc" id="L157">                    }</span>
+<span class="nc" id="L158">                }</span>
+<span class="nc" id="L159">            } catch (MojoException e) {</span>
+<span class="nc" id="L160">                getLog().warn(&quot;    Could not scan submodule POMs: &quot; + e.getMessage());</span>
+<span class="fc" id="L161">            }</span>
+
+            // Commit: git add pom.xml &amp;&amp; git commit
+<span class="fc" id="L164">            ReleaseSupport.exec(dir, getLog(), &quot;git&quot;, &quot;add&quot;, &quot;pom.xml&quot;);</span>
+            // Stage any submodule POMs that were updated
+            try {
+<span class="fc" id="L167">                List&lt;File&gt; allPoms = ReleaseSupport.findPomFiles(dir);</span>
+<span class="fc bfc" id="L168" title="All 2 branches covered.">                for (File subPom : allPoms) {</span>
+<span class="pc bpc" id="L169" title="1 of 2 branches missed.">                    if (!subPom.equals(pomFile)) {</span>
+<span class="nc" id="L170">                        String rel = dir.toPath().relativize(subPom.toPath()).toString();</span>
+<span class="nc" id="L171">                        ReleaseSupport.exec(dir, getLog(), &quot;git&quot;, &quot;add&quot;, rel);</span>
+                    }
+<span class="fc" id="L173">                }</span>
+<span class="nc" id="L174">            } catch (MojoException e) {</span>
+<span class="nc" id="L175">                getLog().debug(&quot;Could not stage submodule POMs: &quot; + e.getMessage());</span>
+<span class="fc" id="L176">            }</span>
+<span class="fc" id="L177">            VcsOperations.commitStaged(dir, getLog(),</span>
+                    &quot;post-release: bump to &quot; + nextVersion);
+
+            // Push if remote exists (safe — ignores failure)
+<span class="fc" id="L181">            VcsOperations.pushIfRemoteExists(dir, getLog(), &quot;origin&quot;,</span>
+<span class="fc" id="L182">                    gitBranch(dir));</span>
+
+<span class="fc" id="L184">            versionUpdates.put(name, nextVersion);</span>
+<span class="fc" id="L185">            effects.put(name, &quot;bumped &quot; + currentVersion + &quot; → &quot; + nextVersion);</span>
+<span class="fc" id="L186">            bumped++;</span>
+<span class="fc" id="L187">        }</span>
+
+        // The aggregator (workspace root) is a first-class member, so
+        // post-release advances its own pom version like every subproject
+        // (#768). Root-pom only — the subproject repos beneath it were bumped
+        // in the loop above. Idempotent: a no-op when already at nextVersion.
+<span class="fc" id="L193">        File wsRoot = manifestPath.getParent().toFile();</span>
+<span class="fc" id="L194">        File rootPom = new File(wsRoot, &quot;pom.xml&quot;);</span>
+<span class="fc" id="L195">        boolean rootBumped = false;</span>
+<span class="pc bpc" id="L196" title="1 of 2 branches missed.">        if (rootPom.exists()) {</span>
+            try {
+<span class="fc" id="L198">                String rootCurrent = ReleaseSupport.readPomVersion(rootPom);</span>
+<span class="pc bpc" id="L199" title="1 of 2 branches missed.">                if (!nextVersion.equals(rootCurrent)) {</span>
+<span class="fc" id="L200">                    getLog().info(&quot;  → aggregator pom — &quot; + rootCurrent</span>
+                            + &quot; → &quot; + nextVersion);
+<span class="fc" id="L202">                    ReleaseSupport.setPomVersion(rootPom, rootCurrent, nextVersion);</span>
+<span class="fc" id="L203">                    rootBumped = true;</span>
+                }
+<span class="nc" id="L205">            } catch (MojoException e) {</span>
+<span class="nc" id="L206">                getLog().warn(&quot;  ⚠ aggregator — could not bump root pom: &quot;</span>
+<span class="nc" id="L207">                        + e.getMessage());</span>
+<span class="fc" id="L208">            }</span>
+        }
+
+        // Update workspace.yaml subproject versions, then commit the
+        // aggregator (root pom + manifest) together.
+<span class="pc bpc" id="L213" title="1 of 2 branches missed.">        String aggregatorEffect = rootBumped</span>
+<span class="pc" id="L214">                ? &quot;pom bumped → &quot; + nextVersion : &quot;no-op (unchanged)&quot;;</span>
+<span class="pc bpc" id="L215" title="3 of 4 branches missed.">        if (!versionUpdates.isEmpty() || rootBumped) {</span>
+<span class="pc bpc" id="L216" title="1 of 2 branches missed.">            if (!versionUpdates.isEmpty()) {</span>
+                try {
+<span class="fc" id="L218">                    ManifestWriter.updateMavenVersions(manifestPath, versionUpdates);</span>
+<span class="fc" id="L219">                    getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L220">                    getLog().info(&quot;  Updated workspace.yaml versions for &quot;</span>
+<span class="fc" id="L221">                            + versionUpdates.size() + &quot; components&quot;);</span>
+<span class="nc" id="L222">                } catch (IOException e) {</span>
+<span class="nc" id="L223">                    throw new MojoException(</span>
+<span class="nc" id="L224">                            &quot;Failed to update workspace.yaml: &quot; + e.getMessage(), e);</span>
+<span class="fc" id="L225">                }</span>
+            }
+
+<span class="fc" id="L228">            File wsGit = new File(wsRoot, &quot;.git&quot;);</span>
+<span class="pc bpc" id="L229" title="1 of 2 branches missed.">            if (wsGit.exists()) {</span>
+<span class="pc bpc" id="L230" title="1 of 2 branches missed.">                if (rootBumped) {</span>
+<span class="fc" id="L231">                    ReleaseSupport.exec(wsRoot, getLog(), &quot;git&quot;, &quot;add&quot;, &quot;pom.xml&quot;);</span>
+                }
+<span class="fc" id="L233">                ReleaseSupport.exec(wsRoot, getLog(), &quot;git&quot;, &quot;add&quot;, &quot;workspace.yaml&quot;);</span>
+<span class="fc" id="L234">                VcsOperations.commitStaged(wsRoot, getLog(),</span>
+                        &quot;post-release: bump aggregator + workspace versions to &quot;
+                                + nextVersion);
+<span class="fc" id="L237">                VcsOperations.pushIfRemoteExists(wsRoot, getLog(), &quot;origin&quot;,</span>
+<span class="fc" id="L238">                        gitBranch(wsRoot));</span>
+<span class="pc bpc" id="L239" title="1 of 2 branches missed.">                aggregatorEffect = (rootBumped ? &quot;pom + &quot; : &quot;&quot;)</span>
+                        + &quot;workspace.yaml bumped → &quot; + nextVersion
+                        + &quot; + committed&quot;;
+            } else {
+<span class="nc bnc" id="L243" title="All 2 branches missed.">                aggregatorEffect = (rootBumped ? &quot;pom + &quot; : &quot;&quot;)</span>
+                        + &quot;workspace.yaml bumped → &quot; + nextVersion
+                        + &quot; (not committed — no .git)&quot;;
+            }
+        }
+
+<span class="fc" id="L249">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L250">        getLog().info(&quot;  Bumped: &quot; + bumped + &quot; | Skipped: &quot; + skipped);</span>
+<span class="fc" id="L251">        getLog().info(&quot;&quot;);</span>
+
+<span class="fc" id="L253">        return new WorkspaceReportSpec(WsGoal.POST_RELEASE,</span>
+<span class="fc" id="L254">                buildReport(bumped, skipped, effects, aggregatorEffect));</span>
+    }
+
+    /**
+     * Build the post-release markdown report — the shared working-set table
+     * (#766/#767), one row per {@link WorkingSet.Member} including the
+     * aggregator. The aggregator row is now present (the #763 fix): its
+     * version, branch, and short SHA are gathered the same way as a
+     * subproject's, so a workspace root left stale is visible rather than
+     * silently absent from a subprojects-only table. The {@code Effect}
+     * column states what post-release applied to each member.
+     *
+     * @param bumped           count of subprojects whose version was bumped
+     * @param skipped          count of subprojects skipped (no-op / not cloned)
+     * @param effects          per-subproject Effect text, keyed by name
+     * @param aggregatorEffect what post-release applied to the workspace root
+     * @return the rendered markdown report body
+     */
+    private String buildReport(int bumped, int skipped,
+                               Map&lt;String, String&gt; effects,
+                               String aggregatorEffect) {
+<span class="fc" id="L275">        GoalReportBuilder report = new GoalReportBuilder();</span>
+<span class="fc" id="L276">        report.paragraph(&quot;**&quot; + bumped + &quot;** bumped, **&quot; + skipped</span>
+                + &quot;** skipped.&quot;);
+
+<span class="fc" id="L279">        List&lt;WorkingSetReportTable.Row&gt; rows = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L280" title="All 2 branches covered.">        for (WorkingSet.Member member : resolveWorkingSet().members()) {</span>
+<span class="fc" id="L281">            File dir = member.directory().toFile();</span>
+<span class="fc" id="L282">            String version = readMemberVersion(dir);</span>
+<span class="pc bpc" id="L283" title="1 of 2 branches missed.">            String branch = new File(dir, &quot;.git&quot;).exists()</span>
+<span class="pc" id="L284">                    ? gitBranch(dir) : null;</span>
+<span class="pc bpc" id="L285" title="1 of 2 branches missed.">            String sha = new File(dir, &quot;.git&quot;).exists()</span>
+<span class="pc" id="L286">                    ? gitShortSha(dir) : null;</span>
+<span class="fc bfc" id="L287" title="All 2 branches covered.">            String effect = member.isAggregator()</span>
+<span class="fc" id="L288">                    ? aggregatorEffect</span>
+<span class="fc" id="L289">                    : effects.getOrDefault(member.name(), &quot;—&quot;);</span>
+<span class="fc" id="L290">            rows.add(new WorkingSetReportTable.Row(</span>
+                    member, version, branch, sha, effect));
+<span class="fc" id="L292">        }</span>
+<span class="fc" id="L293">        WorkingSetReportTable.render(report, &quot;Working set&quot;, rows);</span>
+
+<span class="fc" id="L295">        return report.build();</span>
+    }
+
+    /**
+     * Read a working-set member's POM version, gathered uniformly for
+     * subprojects and the aggregator (the workspace root) alike — gathering
+     * the root's version is the #763 fix, surfacing the staleness a
+     * subprojects-only report hid. A missing or unreadable POM yields
+     * {@code null}, rendered as the report's blank-cell placeholder.
+     *
+     * @param dir the member's directory
+     * @return the POM version, or {@code null} when no readable POM exists
+     */
+    private String readMemberVersion(File dir) {
+<span class="fc" id="L309">        File pomFile = new File(dir, &quot;pom.xml&quot;);</span>
+<span class="pc bpc" id="L310" title="1 of 2 branches missed.">        if (!pomFile.exists()) {</span>
+<span class="nc" id="L311">            return null;</span>
+        }
+        try {
+<span class="fc" id="L314">            return ReleaseSupport.readPomVersion(pomFile);</span>
+<span class="nc" id="L315">        } catch (MojoException e) {</span>
+<span class="nc" id="L316">            getLog().debug(&quot;Could not read POM version for &quot; + dir + &quot;: &quot;</span>
+<span class="nc" id="L317">                    + e.getMessage());</span>
+<span class="nc" id="L318">            return null;</span>
+        }
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

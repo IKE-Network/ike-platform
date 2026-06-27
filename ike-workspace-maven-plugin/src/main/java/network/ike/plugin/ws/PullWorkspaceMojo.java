@@ -2,9 +2,6 @@ package network.ike.plugin.ws;
 
 import network.ike.plugin.ReleaseSupport;
 import network.ike.plugin.support.GoalReportBuilder;
-import network.ike.plugin.ws.preflight.Preflight;
-import network.ike.plugin.ws.preflight.PreflightCondition;
-import network.ike.plugin.ws.preflight.PreflightContext;
 import network.ike.plugin.ws.vcs.VcsOperations;
 
 import network.ike.workspace.WorkingSet;
@@ -75,12 +72,9 @@ public class PullWorkspaceMojo extends AbstractWorkspaceMojo {
 
         List<String> sorted = graph.topologicalSort(new LinkedHashSet<>(targets));
 
-        // Preflight: all working trees must be clean (#132, #154)
-        Preflight.of(
-                List.of(PreflightCondition.WORKING_TREE_CLEAN),
-                PreflightContext.of(root, graph, sorted))
-                .requirePassed(WsGoal.PULL);
-
+        // Sync goal (#780): rather than refuse on uncommitted work — the
+        // normal state of a Syncthing-bridged workspace — each repo's WIP is
+        // auto-stashed before its pull and re-applied after (see pullStashed).
         printPullBanner();
 
         List<PullRow> rows = new ArrayList<>();
@@ -89,7 +83,7 @@ public class PullWorkspaceMojo extends AbstractWorkspaceMojo {
         // before subproject pulls so any update to the root POM or
         // workspace.yaml is observed by downstream steps.
         if (new File(root, ".git").exists()) {
-            rows.add(pullOne(root, "workspace root", true));
+            rows.add(pullStashed(root, "workspace root", true));
         }
 
         for (String name : sorted) {
@@ -101,7 +95,7 @@ public class PullWorkspaceMojo extends AbstractWorkspaceMojo {
                 rows.add(PullRow.notCloned(name));
                 continue;
             }
-            rows.add(pullOne(dir, name, false));
+            rows.add(pullStashed(dir, name, false));
         }
 
         WorkspaceReportSpec spec = pullReport(rows);
@@ -127,7 +121,36 @@ public class PullWorkspaceMojo extends AbstractWorkspaceMojo {
             throw new MojoException("ws:pull: " + dir
                     + " is not a git repository.");
         }
-        return pullReport(List.of(pullOne(dir, name, true)));
+        return pullReport(List.of(pullStashed(dir, name, true)));
+    }
+
+    /**
+     * Pull {@code dir}, auto-stashing any uncommitted work first and restoring
+     * it after (#780) — so a routine pull never refuses on the in-flight edits
+     * that are the normal state of a Syncthing-bridged workspace. Restore runs
+     * in a {@code finally}; a restore failure is reported (the WIP survives on
+     * {@code refs/ws-stash}) rather than masking the pull result.
+     *
+     * @param dir   the repository directory
+     * @param label the report label
+     * @param atCwd whether {@code dir} is the invocation directory
+     * @return the pull report row for {@code dir}
+     * @throws MojoException if the tree is dirty but cannot be stashed (e.g.
+     *                       {@code git user.email} is unset)
+     */
+    private PullRow pullStashed(File dir, String label, boolean atCwd)
+            throws MojoException {
+        boolean stashed = AutoStashGuard.stashIfDirty(dir, getLog());
+        try {
+            return pullOne(dir, label, atCwd);
+        } finally {
+            try {
+                AutoStashGuard.restoreIfStashed(dir, getLog(), stashed);
+            } catch (MojoException e) {
+                getLog().warn("  could not restore stashed WIP in " + label
+                        + " — recover it from refs/ws-stash. " + e.getMessage());
+            }
+        }
     }
 
     /** Print the goal banner, shared by the workspace and bare paths. */

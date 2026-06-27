@@ -162,7 +162,7 @@ class FeatureStartSiblingPublishVerifyTest {
         assertThatThrownBy(mojo::runGoal)
                 .isInstanceOf(MojoException.class)
                 .hasMessageContaining("reactor build failed");
-        assertThat(tempDir.resolve("app-broken").resolve(".git")).isDirectory();
+        assertThat(tempDir.resolve("app꞉broken").resolve(".git")).isDirectory();
     }
 
     // ── Helpers ──────────────────────────────────────────────────────

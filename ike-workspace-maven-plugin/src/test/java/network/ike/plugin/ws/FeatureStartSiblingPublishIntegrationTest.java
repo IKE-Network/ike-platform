@@ -47,7 +47,7 @@ class FeatureStartSiblingPublishIntegrationTest {
 
         mojo.execute();
 
-        Path sibling = tempDir.resolve("primary-jira-456");
+        Path sibling = tempDir.resolve("primary꞉jira-456");
 
         // 1. Expected directory layout: a self-contained clone of the root
         //    plus every component.
@@ -106,7 +106,7 @@ class FeatureStartSiblingPublishIntegrationTest {
 
     @Test
     void siblingCreate_refusesWhenSiblingDirectoryAlreadyExists() throws Exception {
-        Files.createDirectories(tempDir.resolve("primary-dup"));
+        Files.createDirectories(tempDir.resolve("primary꞉dup"));
 
         FeatureStartSiblingPublishMojo mojo =
                 TestLog.createMojo(FeatureStartSiblingPublishMojo.class);
@@ -118,7 +118,7 @@ class FeatureStartSiblingPublishIntegrationTest {
                 .hasMessageContaining("already exists");
 
         // The pre-existing directory is left untouched — nothing was cloned.
-        assertThat(tempDir.resolve("primary-dup").resolve("workspace.yaml"))
+        assertThat(tempDir.resolve("primary꞉dup").resolve("workspace.yaml"))
                 .doesNotExist();
     }
 
@@ -134,7 +134,7 @@ class FeatureStartSiblingPublishIntegrationTest {
                 .hasMessageContaining("filesystem-safe");
 
         // No sibling materialized for the rejected name.
-        assertThat(tempDir.resolve("primary-bad")).doesNotExist();
+        assertThat(tempDir.resolve("primary꞉bad")).doesNotExist();
     }
 
     @Test
@@ -196,7 +196,7 @@ class FeatureStartSiblingPublishIntegrationTest {
 
         mojo.execute();
 
-        Path sibling = tempDir.resolve("primary-docs");
+        Path sibling = tempDir.resolve("primary꞉docs");
         for (String name : COMPONENTS) {
             assertThat(branch(sibling.resolve(name))).isEqualTo("feature/docs");
         }
@@ -228,7 +228,7 @@ class FeatureStartSiblingPublishIntegrationTest {
                 .hasMessageContaining("-Dfrom=feature/already-here");
 
         // Nothing was cloned.
-        assertThat(tempDir.resolve("primary-jira-789")).doesNotExist();
+        assertThat(tempDir.resolve("primary꞉jira-789")).doesNotExist();
     }
 
     @Test
@@ -253,7 +253,7 @@ class FeatureStartSiblingPublishIntegrationTest {
 
         mojo.execute();
 
-        Path sibling = tempDir.resolve("primary-jira-789");
+        Path sibling = tempDir.resolve("primary꞉jira-789");
         assertThat(sibling.resolve(".git")).isDirectory();
         assertThat(branch(sibling)).isEqualTo("feature/jira-789");
         for (String name : COMPONENTS) {
@@ -291,7 +291,7 @@ class FeatureStartSiblingPublishIntegrationTest {
         mojo.execute();
 
         // The sibling is named from the baseName (workspace-root artifactId).
-        Path baseNameSibling = tempDir.resolve("renamed-aggregator-jira-456");
+        Path baseNameSibling = tempDir.resolve("renamed-aggregator꞉jira-456");
         assertThat(baseNameSibling)
                 .as("sibling named from workspace-root artifactId (baseName)")
                 .isDirectory();
@@ -299,7 +299,7 @@ class FeatureStartSiblingPublishIntegrationTest {
         assertThat(branch(baseNameSibling)).isEqualTo("feature/jira-456");
 
         // NOT named from the on-disk directory name.
-        assertThat(tempDir.resolve("primary-jira-456"))
+        assertThat(tempDir.resolve("primary꞉jira-456"))
                 .as("sibling NOT named from the on-disk dir name")
                 .doesNotExist();
     }

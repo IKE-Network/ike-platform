@@ -23,8 +23,7 @@ import org.apache.maven.api.plugin.annotations.Mojo;
  * #   whole reactor from its root before handing it back ready to work in.
  * }</pre>
  *
- * @see FeatureStartSiblingPublishMojo for the create logic and the
- *      {@code -Dverify} flag this goal defaults on
+ * @see FeatureStartSiblingPublishMojo
  */
 @Mojo(name = "feature-start-sibling-publish-verify",
         projectRequired = false, aggregator = true)

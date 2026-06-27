@@ -2,6 +2,7 @@
 
 import network.ike.plugin.ReleaseSupport;
 import network.ike.plugin.support.GoalReportBuilder;
+import network.ike.plugin.ws.vcs.VcsOperations;
 import network.ike.workspace.ManifestWriter;
 import network.ike.workspace.Subproject;
 import network.ike.workspace.WorkingSet;
@@ -101,91 +102,120 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
     boolean force;
 
     /** Creates this goal instance. */
-<span class="fc" id="L104">    public WsReconcileBranchesDraftMojo() {}</span>
+<span class="fc" id="L105">    public WsReconcileBranchesDraftMojo() {}</span>
 
     @Override
     protected WorkspaceReportSpec runGoal() throws MojoException {
         // Defensive scope validation: this goal is branch-only. Any
         // other -Dscope= value is almost certainly a user invoking the
         // wrong goal (e.g., they meant ws:align-draft).
-<span class="pc bpc" id="L111" title="3 of 4 branches missed.">        if (!&quot;branches&quot;.equals(scope) &amp;&amp; !&quot;all&quot;.equals(scope)) {</span>
-<span class="nc" id="L112">            throw new MojoException(</span>
+<span class="pc bpc" id="L112" title="3 of 4 branches missed.">        if (!&quot;branches&quot;.equals(scope) &amp;&amp; !&quot;all&quot;.equals(scope)) {</span>
+<span class="nc" id="L113">            throw new MojoException(</span>
                     &quot;ws:reconcile-branches only supports -Dscope=branches &quot;
                             + &quot;(default). For POM alignment, use &quot;
-<span class="nc bnc" id="L115" title="All 2 branches missed.">                            + (publish ? WsGoal.ALIGN_PUBLISH</span>
-<span class="nc" id="L116">                                       : WsGoal.ALIGN_DRAFT).qualified() + &quot;.&quot;);</span>
+<span class="nc bnc" id="L116" title="All 2 branches missed.">                            + (publish ? WsGoal.ALIGN_PUBLISH</span>
+<span class="nc" id="L117">                                       : WsGoal.ALIGN_DRAFT).qualified() + &quot;.&quot;);</span>
         }
-<span class="fc bfc" id="L118" title="All 2 branches covered.">        if (!&quot;repos&quot;.equals(from)</span>
-<span class="fc bfc" id="L119" title="All 2 branches covered.">                &amp;&amp; !&quot;manifest&quot;.equals(from)</span>
-<span class="fc bfc" id="L120" title="All 2 branches covered.">                &amp;&amp; !&quot;workspace-head&quot;.equals(from)) {</span>
-<span class="fc" id="L121">            throw new MojoException(</span>
+<span class="fc bfc" id="L119" title="All 2 branches covered.">        if (!&quot;repos&quot;.equals(from)</span>
+<span class="fc bfc" id="L120" title="All 2 branches covered.">                &amp;&amp; !&quot;manifest&quot;.equals(from)</span>
+<span class="fc bfc" id="L121" title="All 2 branches covered.">                &amp;&amp; !&quot;workspace-head&quot;.equals(from)) {</span>
+<span class="fc" id="L122">            throw new MojoException(</span>
                     &quot;Invalid from '&quot; + from
                             + &quot;' — expected repos|manifest|workspace-head&quot;);
         }
 
-<span class="fc bfc" id="L126" title="All 2 branches covered.">        boolean draft = !publish;</span>
-<span class="fc" id="L127">        WorkspaceGraph graph = loadGraph();</span>
-<span class="fc" id="L128">        File root = workspaceRoot();</span>
-<span class="fc" id="L129">        Path manifestPath = resolveManifest();</span>
+<span class="fc bfc" id="L127" title="All 2 branches covered.">        boolean draft = !publish;</span>
+<span class="fc" id="L128">        WorkspaceGraph graph = loadGraph();</span>
+<span class="fc" id="L129">        File root = workspaceRoot();</span>
+<span class="fc" id="L130">        Path manifestPath = resolveManifest();</span>
 
-<span class="fc" id="L131">        getLog().info(&quot;&quot;);</span>
-<span class="fc" id="L132">        getLog().info(&quot;IKE Workspace Reconcile Branches — &quot;</span>
-<span class="fc" id="L133">                + describeFromMode());</span>
-<span class="fc" id="L134">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
-<span class="fc bfc" id="L135" title="All 2 branches covered.">        if (draft) {</span>
-<span class="fc" id="L136">            getLog().info(&quot;  (draft — no files will be modified)&quot;);</span>
+        // COORDINATING preflight (#780): only from=manifest / from=workspace-head
+        // CHECK OUT the coherent branch in each subproject, so for those modes
+        // every subproject tree must be unmodified to reconcile onto it. The
+        // default from=repos only READS each branch and writes the workspace
+        // root's workspace.yaml — it touches no subproject tree — so it is
+        // exempt. Two escapes bypass the refusal: -Dforce (check out over the
+        // modified tree, the documented override) and -Dallow-uncommitted (skip
+        // the affected subprojects, the per-subproject path below). Draft
+        // previews, never refuses. The workspace root is deliberately not
+        // checked — its workspace.yaml is reconcile's own input/output.
+<span class="fc bfc" id="L142" title="All 6 branches covered.">        if (publish &amp;&amp; !allowUncommitted() &amp;&amp; !force</span>
+<span class="fc bfc" id="L143" title="All 2 branches covered.">                &amp;&amp; !&quot;repos&quot;.equals(from)) {</span>
+<span class="fc" id="L144">            List&lt;String&gt; uncommitted = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L145" title="All 2 branches covered.">            for (String name : graph.manifest().subprojects().keySet()) {</span>
+<span class="fc" id="L146">                File dir = new File(root, name);</span>
+<span class="pc bpc" id="L147" title="1 of 4 branches missed.">                if (new File(dir, &quot;.git&quot;).exists() &amp;&amp; !gitStatus(dir).isEmpty()) {</span>
+<span class="fc" id="L148">                    uncommitted.add(name);</span>
+                }
+<span class="fc" id="L150">            }</span>
+<span class="fc bfc" id="L151" title="All 2 branches covered.">            if (!uncommitted.isEmpty()) {</span>
+<span class="fc" id="L152">                throw new MojoException(WsGoal.RECONCILE_BRANCHES_PUBLISH.qualified()</span>
+<span class="fc" id="L153">                        + &quot;: &quot; + uncommitted.size() + &quot; subproject(s) have &quot;</span>
+                        + &quot;uncommitted changes and cannot be reconciled onto the &quot;
+                        + &quot;coherent branch: &quot; + uncommitted + &quot;\nCommit them, pass &quot;
+                        + &quot;-Dforce to check out over the changes, or &quot;
+                        + &quot;-Dallow-uncommitted to skip the affected subprojects.&quot;);
+            }
         }
-<span class="fc" id="L138">        getLog().info(&quot;&quot;);</span>
 
-<span class="fc" id="L140">        BranchChanges result = alignBranches(graph, root, manifestPath, draft);</span>
-<span class="fc" id="L141">        int totalChanges = result.changes().size();</span>
+<span class="fc" id="L161">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L162">        getLog().info(&quot;IKE Workspace Reconcile Branches — &quot;</span>
+<span class="fc" id="L163">                + describeFromMode());</span>
+<span class="fc" id="L164">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+<span class="fc bfc" id="L165" title="All 2 branches covered.">        if (draft) {</span>
+<span class="fc" id="L166">            getLog().info(&quot;  (draft — no files will be modified)&quot;);</span>
+        }
+<span class="fc" id="L168">        getLog().info(&quot;&quot;);</span>
 
-<span class="fc" id="L143">        getLog().info(&quot;&quot;);</span>
-<span class="fc" id="L144">        GoalReportBuilder report = new GoalReportBuilder();</span>
-<span class="fc" id="L145">        report.paragraph(&quot;**Mode:** &quot; + describeFromMode()</span>
-<span class="fc bfc" id="L146" title="All 2 branches covered.">                + (draft ? &quot;  _(draft — no changes made)_&quot; : &quot;&quot;));</span>
+<span class="fc" id="L170">        BranchChanges result = alignBranches(graph, root, manifestPath, draft);</span>
+<span class="fc" id="L171">        int totalChanges = result.changes().size();</span>
+
+<span class="fc" id="L173">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L174">        GoalReportBuilder report = new GoalReportBuilder();</span>
+<span class="fc" id="L175">        report.paragraph(&quot;**Mode:** &quot; + describeFromMode()</span>
+<span class="fc bfc" id="L176" title="All 2 branches covered.">                + (draft ? &quot;  _(draft — no changes made)_&quot; : &quot;&quot;));</span>
 
         // Working-set table — one row per member, the aggregator
         // (workspace root) included, so the staleness a subproject-only
         // list hid (IKE-Network/ike-issues#763, #764) is visible. The
         // Effect column phrases the branch reconcile as PLANNED in draft
         // mode, APPLIED in publish mode.
-<span class="fc" id="L153">        WorkingSetReportTable.render(report, &quot;Working set&quot;,</span>
-<span class="fc" id="L154">                workingSetRows(result.effects()));</span>
+<span class="fc" id="L183">        WorkingSetReportTable.render(report, &quot;Working set&quot;,</span>
+<span class="fc" id="L184">                workingSetRows(result.effects()));</span>
 
-<span class="fc bfc" id="L156" title="All 4 branches covered.">        if (totalChanges == 0 &amp;&amp; result.skipped().isEmpty()) {</span>
-<span class="fc" id="L157">            getLog().info(&quot;  Nothing to reconcile  ✓&quot;);</span>
-<span class="fc" id="L158">            report.paragraph(&quot;Nothing to reconcile — branches already coherent.&quot;);</span>
+<span class="fc bfc" id="L186" title="All 4 branches covered.">        if (totalChanges == 0 &amp;&amp; result.skipped().isEmpty()) {</span>
+<span class="fc" id="L187">            getLog().info(&quot;  Nothing to reconcile  ✓&quot;);</span>
+<span class="fc" id="L188">            report.paragraph(&quot;Nothing to reconcile — branches already coherent.&quot;);</span>
         } else {
-<span class="fc" id="L160">            report.paragraph(&quot;**&quot; + totalChanges + &quot;** branch change(s) &quot;</span>
-<span class="fc bfc" id="L161" title="All 2 branches covered.">                    + (draft ? &quot;would be applied&quot; : &quot;applied&quot;) + &quot;.&quot;);</span>
+<span class="fc" id="L190">            report.paragraph(&quot;**&quot; + totalChanges + &quot;** branch change(s) &quot;</span>
+<span class="fc bfc" id="L191" title="All 2 branches covered.">                    + (draft ? &quot;would be applied&quot; : &quot;applied&quot;) + &quot;.&quot;);</span>
 
-<span class="fc bfc" id="L163" title="All 2 branches covered.">            if (!result.changes().isEmpty()) {</span>
-<span class="fc bfc" id="L164" title="All 2 branches covered.">                report.section(draft ? &quot;Would change&quot; : &quot;Changed&quot;);</span>
-<span class="fc bfc" id="L165" title="All 2 branches covered.">                for (String c : result.changes()) report.bullet(c);</span>
+<span class="fc bfc" id="L193" title="All 2 branches covered.">            if (!result.changes().isEmpty()) {</span>
+<span class="fc bfc" id="L194" title="All 2 branches covered.">                report.section(draft ? &quot;Would change&quot; : &quot;Changed&quot;);</span>
+<span class="fc bfc" id="L195" title="All 2 branches covered.">                for (String c : result.changes()) report.bullet(c);</span>
             }
-<span class="fc bfc" id="L167" title="All 2 branches covered.">            if (!result.skipped().isEmpty()) {</span>
-<span class="fc" id="L168">                report.section(&quot;Skipped (uncommitted)&quot;);</span>
-<span class="fc bfc" id="L169" title="All 2 branches covered.">                for (String s : result.skipped()) report.bullet(s);</span>
+<span class="fc bfc" id="L197" title="All 2 branches covered.">            if (!result.skipped().isEmpty()) {</span>
+<span class="fc" id="L198">                report.section(&quot;Skipped (uncommitted)&quot;);</span>
+<span class="fc bfc" id="L199" title="All 2 branches covered.">                for (String s : result.skipped()) report.bullet(s);</span>
             }
 
-<span class="fc bfc" id="L172" title="All 2 branches covered.">            if (draft) {</span>
-<span class="fc" id="L173">                getLog().info(&quot;  &quot; + totalChanges + &quot; change(s) would be applied&quot;);</span>
-<span class="fc" id="L174">                getLog().info(&quot;  Use &quot;</span>
-<span class="fc" id="L175">                        + WsGoal.RECONCILE_BRANCHES_PUBLISH.qualified() + &quot; to apply.&quot;);</span>
-<span class="fc" id="L176">                String cmd = &quot;mvn &quot; + WsGoal.RECONCILE_BRANCHES_PUBLISH.qualified();</span>
-<span class="fc bfc" id="L177" title="All 2 branches covered.">                if (!&quot;repos&quot;.equals(from)) cmd += &quot; -Dfrom=&quot; + from;</span>
-<span class="pc bpc" id="L178" title="1 of 2 branches missed.">                if (!result.skipped().isEmpty()) cmd += &quot; -Dforce=true&quot;;</span>
-<span class="fc" id="L179">                report.paragraph(&quot;Apply with `&quot; + cmd + &quot;`.&quot;);</span>
-<span class="fc" id="L180">            } else {</span>
-<span class="fc" id="L181">                getLog().info(&quot;  Applied &quot; + totalChanges + &quot; change(s)&quot;);</span>
+<span class="fc bfc" id="L202" title="All 2 branches covered.">            if (draft) {</span>
+<span class="fc" id="L203">                getLog().info(&quot;  &quot; + totalChanges + &quot; change(s) would be applied&quot;);</span>
+<span class="fc" id="L204">                getLog().info(&quot;  Use &quot;</span>
+<span class="fc" id="L205">                        + WsGoal.RECONCILE_BRANCHES_PUBLISH.qualified() + &quot; to apply.&quot;);</span>
+<span class="fc" id="L206">                String cmd = &quot;mvn &quot; + WsGoal.RECONCILE_BRANCHES_PUBLISH.qualified();</span>
+<span class="fc bfc" id="L207" title="All 2 branches covered.">                if (!&quot;repos&quot;.equals(from)) cmd += &quot; -Dfrom=&quot; + from;</span>
+<span class="pc bpc" id="L208" title="1 of 2 branches missed.">                if (!result.skipped().isEmpty()) cmd += &quot; -Dforce=true&quot;;</span>
+<span class="fc" id="L209">                report.paragraph(&quot;Apply with `&quot; + cmd + &quot;`.&quot;);</span>
+<span class="fc" id="L210">            } else {</span>
+<span class="fc" id="L211">                getLog().info(&quot;  Applied &quot; + totalChanges + &quot; change(s)&quot;);</span>
             }
         }
-<span class="fc" id="L184">        getLog().info(&quot;&quot;);</span>
-<span class="fc" id="L185">        return new WorkspaceReportSpec(</span>
-<span class="fc bfc" id="L186" title="All 2 branches covered.">                publish ? WsGoal.RECONCILE_BRANCHES_PUBLISH</span>
-<span class="fc" id="L187">                        : WsGoal.RECONCILE_BRANCHES_DRAFT,</span>
-<span class="fc" id="L188">                report.build());</span>
+<span class="fc" id="L214">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L215">        return new WorkspaceReportSpec(</span>
+<span class="fc bfc" id="L216" title="All 2 branches covered.">                publish ? WsGoal.RECONCILE_BRANCHES_PUBLISH</span>
+<span class="fc" id="L217">                        : WsGoal.RECONCILE_BRANCHES_DRAFT,</span>
+<span class="fc" id="L218">                report.build());</span>
     }
 
     /**
@@ -205,12 +235,12 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
      * @param skipped one line per subproject skipped (uncommitted)
      * @param effects per-member {@code Effect} cell (member name → effect)
      */
-<span class="fc" id="L208">    private record BranchChanges(List&lt;String&gt; changes, List&lt;String&gt; skipped,</span>
+<span class="fc" id="L238">    private record BranchChanges(List&lt;String&gt; changes, List&lt;String&gt; skipped,</span>
                                  Map&lt;String, String&gt; effects) {
 
         /** Empty outcome — nothing changed and no per-member effects. */
         static BranchChanges empty() {
-<span class="fc" id="L213">            return new BranchChanges(List.of(), List.of(),</span>
+<span class="fc" id="L243">            return new BranchChanges(List.of(), List.of(),</span>
                     new LinkedHashMap&lt;&gt;());
         }
     }
@@ -225,24 +255,24 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
     private BranchChanges alignBranches(WorkspaceGraph graph, File root,
                               Path manifestPath, boolean draft)
             throws MojoException {
-<span class="fc bfc" id="L228" title="All 3 branches covered.">        return switch (from) {</span>
+<span class="fc bfc" id="L258" title="All 3 branches covered.">        return switch (from) {</span>
             case &quot;manifest&quot; -&gt;
-<span class="fc" id="L230">                    alignBranchesFromManifest(graph, root, draft);</span>
+<span class="fc" id="L260">                    alignBranchesFromManifest(graph, root, draft);</span>
             case &quot;workspace-head&quot; -&gt;
-<span class="fc" id="L232">                    alignBranchesFromWorkspaceHead(graph, root, manifestPath,</span>
+<span class="fc" id="L262">                    alignBranchesFromWorkspaceHead(graph, root, manifestPath,</span>
                             draft);
             default -&gt;
-<span class="fc" id="L235">                    alignBranchesFromRepos(graph, root, manifestPath, draft);</span>
+<span class="fc" id="L265">                    alignBranchesFromRepos(graph, root, manifestPath, draft);</span>
         };
     }
 
     /** Human-readable label for the active {@code from=...} mode. */
     private String describeFromMode() {
-<span class="fc bfc" id="L241" title="All 3 branches covered.">        return switch (from) {</span>
-<span class="fc" id="L242">            case &quot;manifest&quot; -&gt; &quot;manifest → repos (git checkout)&quot;;</span>
+<span class="fc bfc" id="L271" title="All 3 branches covered.">        return switch (from) {</span>
+<span class="fc" id="L272">            case &quot;manifest&quot; -&gt; &quot;manifest → repos (git checkout)&quot;;</span>
             case &quot;workspace-head&quot; -&gt;
-<span class="fc" id="L244">                    &quot;workspace HEAD → manifest + repos (authoritative branch)&quot;;</span>
-<span class="fc" id="L245">            default -&gt; &quot;repos → manifest (update yaml)&quot;;</span>
+<span class="fc" id="L274">                    &quot;workspace HEAD → manifest + repos (authoritative branch)&quot;;</span>
+<span class="fc" id="L275">            default -&gt; &quot;repos → manifest (update yaml)&quot;;</span>
         };
     }
 
@@ -254,55 +284,56 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
     private BranchChanges alignBranchesFromRepos(WorkspaceGraph graph, File root,
                                        Path manifestPath, boolean draft)
             throws MojoException {
-<span class="fc" id="L257">        Map&lt;String, String&gt; updates = new LinkedHashMap&lt;&gt;();</span>
-<span class="fc" id="L258">        List&lt;String&gt; changes = new ArrayList&lt;&gt;();</span>
-<span class="fc" id="L259">        Map&lt;String, String&gt; effects = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc" id="L287">        Map&lt;String, String&gt; updates = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc" id="L288">        List&lt;String&gt; changes = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L289">        Map&lt;String, String&gt; effects = new LinkedHashMap&lt;&gt;();</span>
 
         for (Map.Entry&lt;String, Subproject&gt; entry
-<span class="fc bfc" id="L262" title="All 2 branches covered.">                : graph.manifest().subprojects().entrySet()) {</span>
-<span class="fc" id="L263">            String name = entry.getKey();</span>
-<span class="fc" id="L264">            Subproject subproject = entry.getValue();</span>
-<span class="fc" id="L265">            File dir = new File(root, name);</span>
-<span class="pc bpc" id="L266" title="1 of 2 branches missed.">            if (!new File(dir, &quot;.git&quot;).exists()) continue;</span>
+<span class="fc bfc" id="L292" title="All 2 branches covered.">                : graph.manifest().subprojects().entrySet()) {</span>
+<span class="fc" id="L293">            String name = entry.getKey();</span>
+<span class="fc" id="L294">            Subproject subproject = entry.getValue();</span>
+<span class="fc" id="L295">            File dir = new File(root, name);</span>
+<span class="pc bpc" id="L296" title="1 of 2 branches missed.">            if (!new File(dir, &quot;.git&quot;).exists()) continue;</span>
 
-<span class="fc" id="L268">            String actual = gitBranch(dir);</span>
-<span class="fc" id="L269">            String declared = subproject.branch();</span>
-<span class="fc bfc" id="L270" title="All 2 branches covered.">            if (actual.equals(declared)) continue;</span>
+<span class="fc" id="L298">            String actual = gitBranch(dir);</span>
+<span class="fc" id="L299">            String declared = subproject.branch();</span>
+<span class="fc bfc" id="L300" title="All 2 branches covered.">            if (actual.equals(declared)) continue;</span>
 
-<span class="fc" id="L272">            updates.put(name, actual);</span>
-<span class="fc" id="L273">            changes.add(&quot;`&quot; + name + &quot;` (yaml): `&quot; + declared</span>
+<span class="fc" id="L302">            updates.put(name, actual);</span>
+<span class="fc" id="L303">            changes.add(&quot;`&quot; + name + &quot;` (yaml): `&quot; + declared</span>
                     + &quot;` → `&quot; + actual + &quot;`&quot;);
-<span class="fc bfc" id="L275" title="All 2 branches covered.">            effects.put(name, (draft ? &quot;yaml branch → `&quot; : &quot;yaml branch set → `&quot;)</span>
+<span class="fc bfc" id="L305" title="All 2 branches covered.">            effects.put(name, (draft ? &quot;yaml branch → `&quot; : &quot;yaml branch set → `&quot;)</span>
                     + actual + &quot;`&quot;);
-<span class="fc" id="L277">            getLog().info(&quot;  branch: &quot; + name + &quot;: &quot; + declared</span>
-<span class="fc bfc" id="L278" title="All 2 branches covered.">                    + &quot; → &quot; + actual + (draft ? &quot; (draft)&quot; : &quot;&quot;));</span>
-<span class="fc" id="L279">        }</span>
+<span class="fc" id="L307">            getLog().info(&quot;  branch: &quot; + name + &quot;: &quot; + declared</span>
+<span class="fc bfc" id="L308" title="All 2 branches covered.">                    + &quot; → &quot; + actual + (draft ? &quot; (draft)&quot; : &quot;&quot;));</span>
+<span class="fc" id="L309">        }</span>
 
-<span class="fc bfc" id="L281" title="All 2 branches covered.">        if (updates.isEmpty()) {</span>
-<span class="fc" id="L282">            getLog().info(&quot;  Branches: yaml already matches repos  ✓&quot;);</span>
-<span class="fc" id="L283">            return BranchChanges.empty();</span>
+<span class="fc bfc" id="L311" title="All 2 branches covered.">        if (updates.isEmpty()) {</span>
+<span class="fc" id="L312">            getLog().info(&quot;  Branches: yaml already matches repos  ✓&quot;);</span>
+<span class="fc" id="L313">            return BranchChanges.empty();</span>
         }
 
-<span class="fc bfc" id="L286" title="All 2 branches covered.">        if (!draft) {</span>
+<span class="fc bfc" id="L316" title="All 2 branches covered.">        if (!draft) {</span>
             try {
-<span class="fc" id="L288">                ManifestWriter.updateBranches(manifestPath, updates);</span>
-<span class="fc" id="L289">                getLog().info(&quot;  Branches: updated workspace.yaml (&quot;</span>
-<span class="fc" id="L290">                        + updates.size() + &quot; change(s))&quot;);</span>
-<span class="fc" id="L291">                File wsRoot = manifestPath.getParent().toFile();</span>
-<span class="pc bpc" id="L292" title="1 of 2 branches missed.">                if (new File(wsRoot, &quot;.git&quot;).exists()) {</span>
-<span class="fc" id="L293">                    ReleaseSupport.exec(wsRoot, getLog(),</span>
-                            &quot;git&quot;, &quot;add&quot;, &quot;workspace.yaml&quot;);
-<span class="fc" id="L295">                    ReleaseSupport.exec(wsRoot, getLog(),</span>
-                            &quot;git&quot;, &quot;commit&quot;, &quot;-m&quot;,
-                            &quot;workspace: align branch fields from repos&quot;);
+<span class="fc" id="L318">                ManifestWriter.updateBranches(manifestPath, updates);</span>
+<span class="fc" id="L319">                getLog().info(&quot;  Branches: updated workspace.yaml (&quot;</span>
+<span class="fc" id="L320">                        + updates.size() + &quot; change(s))&quot;);</span>
+<span class="fc" id="L321">                File wsRoot = manifestPath.getParent().toFile();</span>
+<span class="pc bpc" id="L322" title="1 of 2 branches missed.">                if (new File(wsRoot, &quot;.git&quot;).exists()) {</span>
+                    // Commit workspace.yaml in isolation (#780): only the path
+                    // this goal authored, never the whole index.
+<span class="fc" id="L325">                    VcsOperations.commitPaths(wsRoot, getLog(),</span>
+                            &quot;workspace: align branch fields from repos&quot;
+                            + &quot;\n\nRefs: IKE-Network/ike-issues#780&quot;,
+                            &quot;workspace.yaml&quot;);
                 }
-<span class="nc" id="L299">            } catch (IOException e) {</span>
-<span class="nc" id="L300">                throw new MojoException(</span>
-<span class="nc" id="L301">                        &quot;Failed to update workspace.yaml: &quot; + e.getMessage(), e);</span>
-<span class="fc" id="L302">            }</span>
+<span class="nc" id="L330">            } catch (IOException e) {</span>
+<span class="nc" id="L331">                throw new MojoException(</span>
+<span class="nc" id="L332">                        &quot;Failed to update workspace.yaml: &quot; + e.getMessage(), e);</span>
+<span class="fc" id="L333">            }</span>
         }
 
-<span class="fc" id="L305">        return new BranchChanges(changes, List.of(), effects);</span>
+<span class="fc" id="L336">        return new BranchChanges(changes, List.of(), effects);</span>
     }
 
     /**
@@ -339,128 +370,129 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
     private BranchChanges alignBranchesFromWorkspaceHead(WorkspaceGraph graph,
                                                 File root, Path manifestPath,
                                                 boolean draft) {
-<span class="fc" id="L342">        File wsRoot = manifestPath.getParent().toFile();</span>
-<span class="fc bfc" id="L343" title="All 2 branches covered.">        if (!new File(wsRoot, &quot;.git&quot;).exists()) {</span>
-<span class="fc" id="L344">            throw new MojoException(</span>
+<span class="fc" id="L373">        File wsRoot = manifestPath.getParent().toFile();</span>
+<span class="fc bfc" id="L374" title="All 2 branches covered.">        if (!new File(wsRoot, &quot;.git&quot;).exists()) {</span>
+<span class="fc" id="L375">            throw new MojoException(</span>
                     &quot;from=workspace-head requires the workspace directory to be &quot;
-<span class="fc" id="L346">                            + &quot;a git repository. &quot; + wsRoot.getAbsolutePath()</span>
+<span class="fc" id="L377">                            + &quot;a git repository. &quot; + wsRoot.getAbsolutePath()</span>
                             + &quot; has no .git directory.&quot;);
         }
-<span class="fc" id="L349">        String wsBranch = gitBranch(wsRoot);</span>
-<span class="pc bpc" id="L350" title="3 of 6 branches missed.">        if (wsBranch == null || wsBranch.isBlank() || &quot;unknown&quot;.equals(wsBranch)) {</span>
-<span class="nc" id="L351">            throw new MojoException(</span>
+<span class="fc" id="L380">        String wsBranch = gitBranch(wsRoot);</span>
+<span class="pc bpc" id="L381" title="3 of 6 branches missed.">        if (wsBranch == null || wsBranch.isBlank() || &quot;unknown&quot;.equals(wsBranch)) {</span>
+<span class="nc" id="L382">            throw new MojoException(</span>
                     &quot;Could not read the workspace repo's current branch. &quot;
                             + &quot;Ensure HEAD points at a named branch (not a &quot;
                             + &quot;detached HEAD).&quot;);
         }
 
-<span class="fc" id="L357">        getLog().info(&quot;  Workspace HEAD: &quot; + wsBranch);</span>
+<span class="fc" id="L388">        getLog().info(&quot;  Workspace HEAD: &quot; + wsBranch);</span>
 
-<span class="fc" id="L359">        Map&lt;String, String&gt; yamlUpdates = new LinkedHashMap&lt;&gt;();</span>
-<span class="fc" id="L360">        List&lt;String&gt; changes = new ArrayList&lt;&gt;();</span>
-<span class="fc" id="L361">        List&lt;String&gt; skipped = new ArrayList&lt;&gt;();</span>
-<span class="fc" id="L362">        Map&lt;String, String&gt; effects = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc" id="L390">        Map&lt;String, String&gt; yamlUpdates = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc" id="L391">        List&lt;String&gt; changes = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L392">        List&lt;String&gt; skipped = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L393">        Map&lt;String, String&gt; effects = new LinkedHashMap&lt;&gt;();</span>
         // The workspace repo (aggregator) is the authority in this mode —
         // record that so its working-set row reads as the branch source,
         // not a no-op.
-<span class="fc" id="L366">        effects.put(aggregatorName(root), &quot;authority — HEAD `&quot; + wsBranch + &quot;`&quot;);</span>
-<span class="fc" id="L367">        int checkoutsPlanned = 0;</span>
-<span class="fc" id="L368">        int checkoutsApplied = 0;</span>
-<span class="fc" id="L369">        int skippedDirty = 0;</span>
+<span class="fc" id="L397">        effects.put(aggregatorName(root), &quot;authority — HEAD `&quot; + wsBranch + &quot;`&quot;);</span>
+<span class="fc" id="L398">        int checkoutsPlanned = 0;</span>
+<span class="fc" id="L399">        int checkoutsApplied = 0;</span>
+<span class="fc" id="L400">        int skippedDirty = 0;</span>
 
         for (Map.Entry&lt;String, Subproject&gt; entry
-<span class="fc bfc" id="L372" title="All 2 branches covered.">                : graph.manifest().subprojects().entrySet()) {</span>
-<span class="fc" id="L373">            String name = entry.getKey();</span>
-<span class="fc" id="L374">            Subproject subproject = entry.getValue();</span>
-<span class="fc" id="L375">            File dir = new File(root, name);</span>
+<span class="fc bfc" id="L403" title="All 2 branches covered.">                : graph.manifest().subprojects().entrySet()) {</span>
+<span class="fc" id="L404">            String name = entry.getKey();</span>
+<span class="fc" id="L405">            Subproject subproject = entry.getValue();</span>
+<span class="fc" id="L406">            File dir = new File(root, name);</span>
 
             // YAML reconciliation runs whether or not the repo is cloned.
-<span class="fc" id="L378">            String declared = subproject.branch();</span>
-<span class="pc bpc" id="L379" title="1 of 4 branches missed.">            if (declared == null || !declared.equals(wsBranch)) {</span>
-<span class="fc" id="L380">                yamlUpdates.put(name, wsBranch);</span>
-<span class="fc" id="L381">                changes.add(&quot;`&quot; + name + &quot;` (yaml): `&quot;</span>
-<span class="pc bpc" id="L382" title="1 of 2 branches missed.">                        + (declared == null ? &quot;(unset)&quot; : declared)</span>
+<span class="fc" id="L409">            String declared = subproject.branch();</span>
+<span class="pc bpc" id="L410" title="1 of 4 branches missed.">            if (declared == null || !declared.equals(wsBranch)) {</span>
+<span class="fc" id="L411">                yamlUpdates.put(name, wsBranch);</span>
+<span class="fc" id="L412">                changes.add(&quot;`&quot; + name + &quot;` (yaml): `&quot;</span>
+<span class="pc bpc" id="L413" title="1 of 2 branches missed.">                        + (declared == null ? &quot;(unset)&quot; : declared)</span>
                         + &quot;` → `&quot; + wsBranch + &quot;`&quot;);
-<span class="fc bfc" id="L384" title="All 2 branches covered.">                effects.put(name, (draft ? &quot;yaml branch → `&quot; : &quot;yaml branch set → `&quot;)</span>
+<span class="fc bfc" id="L415" title="All 2 branches covered.">                effects.put(name, (draft ? &quot;yaml branch → `&quot; : &quot;yaml branch set → `&quot;)</span>
                         + wsBranch + &quot;`&quot;);
-<span class="fc" id="L386">                getLog().info(&quot;  branch: &quot; + name + &quot; (yaml): &quot;</span>
-<span class="pc bpc" id="L387" title="1 of 2 branches missed.">                        + (declared == null ? &quot;(unset)&quot; : declared)</span>
-<span class="fc bfc" id="L388" title="All 2 branches covered.">                        + &quot; → &quot; + wsBranch + (draft ? &quot; (draft)&quot; : &quot;&quot;));</span>
+<span class="fc" id="L417">                getLog().info(&quot;  branch: &quot; + name + &quot; (yaml): &quot;</span>
+<span class="pc bpc" id="L418" title="1 of 2 branches missed.">                        + (declared == null ? &quot;(unset)&quot; : declared)</span>
+<span class="fc bfc" id="L419" title="All 2 branches covered.">                        + &quot; → &quot; + wsBranch + (draft ? &quot; (draft)&quot; : &quot;&quot;));</span>
             }
 
             // Checkout reconciliation only applies to cloned subprojects.
-<span class="pc bpc" id="L392" title="1 of 2 branches missed.">            if (!new File(dir, &quot;.git&quot;).exists()) continue;</span>
-<span class="fc" id="L393">            String actual = gitBranch(dir);</span>
-<span class="fc bfc" id="L394" title="All 2 branches covered.">            if (wsBranch.equals(actual)) continue;</span>
+<span class="pc bpc" id="L423" title="1 of 2 branches missed.">            if (!new File(dir, &quot;.git&quot;).exists()) continue;</span>
+<span class="fc" id="L424">            String actual = gitBranch(dir);</span>
+<span class="fc bfc" id="L425" title="All 2 branches covered.">            if (wsBranch.equals(actual)) continue;</span>
 
-<span class="fc" id="L396">            String status = gitStatus(dir);</span>
-<span class="pc bpc" id="L397" title="3 of 4 branches missed.">            if (!status.isEmpty() &amp;&amp; !force) {</span>
-<span class="nc" id="L398">                getLog().warn(&quot;  ⚠ &quot; + name + &quot;: uncommitted changes — skipping&quot;</span>
+<span class="fc" id="L427">            String status = gitStatus(dir);</span>
+<span class="pc bpc" id="L428" title="3 of 4 branches missed.">            if (!status.isEmpty() &amp;&amp; !force) {</span>
+<span class="nc" id="L429">                getLog().warn(&quot;  ⚠ &quot; + name + &quot;: uncommitted changes — skipping&quot;</span>
                         + &quot; checkout (pass -Dforce=true to override)&quot;);
-<span class="nc" id="L400">                skipped.add(&quot;`&quot; + name + &quot;` — uncommitted (use -Dforce=true)&quot;);</span>
-<span class="nc" id="L401">                effects.put(name, &quot;skipped (uncommitted)&quot;);</span>
-<span class="nc" id="L402">                skippedDirty++;</span>
-<span class="nc" id="L403">                continue;</span>
+<span class="nc" id="L431">                skipped.add(&quot;`&quot; + name + &quot;` — uncommitted (use -Dforce=true)&quot;);</span>
+<span class="nc" id="L432">                effects.put(name, &quot;skipped (uncommitted)&quot;);</span>
+<span class="nc" id="L433">                skippedDirty++;</span>
+<span class="nc" id="L434">                continue;</span>
             }
 
-<span class="fc" id="L406">            checkoutsPlanned++;</span>
-<span class="fc" id="L407">            changes.add(&quot;`&quot; + name + &quot;` (repo): `&quot; + actual</span>
+<span class="fc" id="L437">            checkoutsPlanned++;</span>
+<span class="fc" id="L438">            changes.add(&quot;`&quot; + name + &quot;` (repo): `&quot; + actual</span>
                     + &quot;` → `&quot; + wsBranch + &quot;`&quot;);
-<span class="fc" id="L409">            effects.merge(name,</span>
-<span class="fc bfc" id="L410" title="All 2 branches covered.">                    (draft ? &quot;checkout → `&quot; : &quot;checked out → `&quot;) + wsBranch + &quot;`&quot;,</span>
-<span class="fc" id="L411">                    (yaml, checkout) -&gt; yaml + &quot;, &quot; + checkout);</span>
-<span class="fc" id="L412">            getLog().info(&quot;  branch: &quot; + name + &quot; (repo): &quot; + actual</span>
-<span class="fc bfc" id="L413" title="All 2 branches covered.">                    + &quot; → &quot; + wsBranch + (draft ? &quot; (draft)&quot; : &quot;&quot;));</span>
+<span class="fc" id="L440">            effects.merge(name,</span>
+<span class="fc bfc" id="L441" title="All 2 branches covered.">                    (draft ? &quot;checkout → `&quot; : &quot;checked out → `&quot;) + wsBranch + &quot;`&quot;,</span>
+<span class="fc" id="L442">                    (yaml, checkout) -&gt; yaml + &quot;, &quot; + checkout);</span>
+<span class="fc" id="L443">            getLog().info(&quot;  branch: &quot; + name + &quot; (repo): &quot; + actual</span>
+<span class="fc bfc" id="L444" title="All 2 branches covered.">                    + &quot; → &quot; + wsBranch + (draft ? &quot; (draft)&quot; : &quot;&quot;));</span>
 
-<span class="fc bfc" id="L415" title="All 2 branches covered.">            if (!draft) {</span>
-<span class="pc bpc" id="L416" title="1 of 2 branches missed.">                if (localBranchExists(dir, wsBranch)</span>
-<span class="pc bpc" id="L417" title="1 of 2 branches missed.">                        || originBranchExists(dir, wsBranch)) {</span>
-<span class="nc" id="L418">                    ReleaseSupport.exec(dir, getLog(),</span>
+<span class="fc bfc" id="L446" title="All 2 branches covered.">            if (!draft) {</span>
+<span class="pc bpc" id="L447" title="1 of 2 branches missed.">                if (localBranchExists(dir, wsBranch)</span>
+<span class="pc bpc" id="L448" title="1 of 2 branches missed.">                        || originBranchExists(dir, wsBranch)) {</span>
+<span class="nc" id="L449">                    ReleaseSupport.exec(dir, getLog(),</span>
                             &quot;git&quot;, &quot;checkout&quot;, wsBranch);
                 } else {
-<span class="fc" id="L421">                    getLog().info(&quot;    &quot; + name + &quot; has no '&quot; + wsBranch</span>
+<span class="fc" id="L452">                    getLog().info(&quot;    &quot; + name + &quot; has no '&quot; + wsBranch</span>
                             + &quot;' locally or on origin — creating from &quot;
                             + actual + &quot;.&quot;);
-<span class="fc" id="L424">                    ReleaseSupport.exec(dir, getLog(),</span>
+<span class="fc" id="L455">                    ReleaseSupport.exec(dir, getLog(),</span>
                             &quot;git&quot;, &quot;checkout&quot;, &quot;-b&quot;, wsBranch);
                 }
-<span class="fc" id="L427">                checkoutsApplied++;</span>
+<span class="fc" id="L458">                checkoutsApplied++;</span>
             }
-<span class="fc" id="L429">        }</span>
+<span class="fc" id="L460">        }</span>
 
-<span class="pc bpc" id="L431" title="2 of 6 branches missed.">        if (yamlUpdates.isEmpty() &amp;&amp; checkoutsPlanned == 0 &amp;&amp; skippedDirty == 0) {</span>
-<span class="fc" id="L432">            getLog().info(&quot;  Branches: workspace, manifest, and repos all agree  ✓&quot;);</span>
-<span class="fc" id="L433">            return new BranchChanges(List.of(), List.of(), effects);</span>
+<span class="pc bpc" id="L462" title="2 of 6 branches missed.">        if (yamlUpdates.isEmpty() &amp;&amp; checkoutsPlanned == 0 &amp;&amp; skippedDirty == 0) {</span>
+<span class="fc" id="L463">            getLog().info(&quot;  Branches: workspace, manifest, and repos all agree  ✓&quot;);</span>
+<span class="fc" id="L464">            return new BranchChanges(List.of(), List.of(), effects);</span>
         }
 
-<span class="pc bpc" id="L436" title="1 of 4 branches missed.">        if (!draft &amp;&amp; !yamlUpdates.isEmpty()) {</span>
+<span class="pc bpc" id="L467" title="1 of 4 branches missed.">        if (!draft &amp;&amp; !yamlUpdates.isEmpty()) {</span>
             try {
-<span class="fc" id="L438">                ManifestWriter.updateBranches(manifestPath, yamlUpdates);</span>
-<span class="fc" id="L439">                getLog().info(&quot;  Branches: updated workspace.yaml (&quot;</span>
-<span class="fc" id="L440">                        + yamlUpdates.size() + &quot; field(s))&quot;);</span>
-<span class="fc" id="L441">                ReleaseSupport.exec(wsRoot, getLog(),</span>
-                        &quot;git&quot;, &quot;add&quot;, &quot;workspace.yaml&quot;);
-<span class="fc" id="L443">                ReleaseSupport.exec(wsRoot, getLog(),</span>
-                        &quot;git&quot;, &quot;commit&quot;, &quot;-m&quot;,
-                        &quot;workspace: align branch fields to &quot; + wsBranch);
-<span class="nc" id="L446">            } catch (IOException e) {</span>
-<span class="nc" id="L447">                throw new MojoException(</span>
-<span class="nc" id="L448">                        &quot;Failed to update workspace.yaml: &quot; + e.getMessage(), e);</span>
-<span class="fc" id="L449">            }</span>
+<span class="fc" id="L469">                ManifestWriter.updateBranches(manifestPath, yamlUpdates);</span>
+<span class="fc" id="L470">                getLog().info(&quot;  Branches: updated workspace.yaml (&quot;</span>
+<span class="fc" id="L471">                        + yamlUpdates.size() + &quot; field(s))&quot;);</span>
+                // Commit workspace.yaml in isolation (#780): only the path this
+                // goal authored, never the whole index.
+<span class="fc" id="L474">                VcsOperations.commitPaths(wsRoot, getLog(),</span>
+                        &quot;workspace: align branch fields to &quot; + wsBranch
+                        + &quot;\n\nRefs: IKE-Network/ike-issues#780&quot;,
+                        &quot;workspace.yaml&quot;);
+<span class="nc" id="L478">            } catch (IOException e) {</span>
+<span class="nc" id="L479">                throw new MojoException(</span>
+<span class="nc" id="L480">                        &quot;Failed to update workspace.yaml: &quot; + e.getMessage(), e);</span>
+<span class="fc" id="L481">            }</span>
         }
 
-<span class="fc bfc" id="L452" title="All 2 branches covered.">        if (draft) {</span>
-<span class="fc" id="L453">            getLog().info(&quot;  Branches: &quot; + (yamlUpdates.size() + checkoutsPlanned)</span>
+<span class="fc bfc" id="L484" title="All 2 branches covered.">        if (draft) {</span>
+<span class="fc" id="L485">            getLog().info(&quot;  Branches: &quot; + (yamlUpdates.size() + checkoutsPlanned)</span>
                     + &quot; change(s) would be applied&quot;
-<span class="pc bpc" id="L455" title="1 of 2 branches missed.">                    + (skippedDirty &gt; 0</span>
-<span class="nc" id="L456">                            ? &quot; (&quot; + skippedDirty + &quot; skipped — uncommitted)&quot;</span>
-<span class="fc" id="L457">                            : &quot;&quot;));</span>
-<span class="fc" id="L458">            return new BranchChanges(changes, skipped, effects);</span>
+<span class="pc bpc" id="L487" title="1 of 2 branches missed.">                    + (skippedDirty &gt; 0</span>
+<span class="nc" id="L488">                            ? &quot; (&quot; + skippedDirty + &quot; skipped — uncommitted)&quot;</span>
+<span class="fc" id="L489">                            : &quot;&quot;));</span>
+<span class="fc" id="L490">            return new BranchChanges(changes, skipped, effects);</span>
         }
-<span class="fc" id="L460">        getLog().info(&quot;  Branches: &quot; + yamlUpdates.size()</span>
+<span class="fc" id="L492">        getLog().info(&quot;  Branches: &quot; + yamlUpdates.size()</span>
                 + &quot; yaml update(s), &quot; + checkoutsApplied + &quot; checkout(s), &quot;
                 + skippedDirty + &quot; skipped (uncommitted)&quot;);
-<span class="fc" id="L463">        return new BranchChanges(changes, skipped, effects);</span>
+<span class="fc" id="L495">        return new BranchChanges(changes, skipped, effects);</span>
     }
 
     /**
@@ -468,11 +500,11 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
      */
     private static boolean localBranchExists(File dir, String branch) {
         try {
-<span class="fc" id="L471">            String out = ReleaseSupport.execCapture(dir,</span>
+<span class="fc" id="L503">            String out = ReleaseSupport.execCapture(dir,</span>
                     &quot;git&quot;, &quot;branch&quot;, &quot;--list&quot;, branch);
-<span class="pc bpc" id="L473" title="2 of 4 branches missed.">            return out != null &amp;&amp; !out.trim().isEmpty();</span>
-<span class="nc" id="L474">        } catch (Exception e) {</span>
-<span class="nc" id="L475">            return false;</span>
+<span class="pc bpc" id="L505" title="2 of 4 branches missed.">            return out != null &amp;&amp; !out.trim().isEmpty();</span>
+<span class="nc" id="L506">        } catch (Exception e) {</span>
+<span class="nc" id="L507">            return false;</span>
         }
     }
 
@@ -484,11 +516,11 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
      */
     private static boolean originBranchExists(File dir, String branch) {
         try {
-<span class="nc" id="L487">            String out = ReleaseSupport.execCapture(dir,</span>
+<span class="nc" id="L519">            String out = ReleaseSupport.execCapture(dir,</span>
                     &quot;git&quot;, &quot;ls-remote&quot;, &quot;--heads&quot;, &quot;origin&quot;, branch);
-<span class="nc bnc" id="L489" title="All 4 branches missed.">            return out != null &amp;&amp; !out.trim().isEmpty();</span>
-<span class="fc" id="L490">        } catch (Exception e) {</span>
-<span class="fc" id="L491">            return false;</span>
+<span class="nc bnc" id="L521" title="All 4 branches missed.">            return out != null &amp;&amp; !out.trim().isEmpty();</span>
+<span class="fc" id="L522">        } catch (Exception e) {</span>
+<span class="fc" id="L523">            return false;</span>
         }
     }
 
@@ -500,61 +532,61 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
      */
     private BranchChanges alignBranchesFromManifest(WorkspaceGraph graph,
                                           File root, boolean draft) {
-<span class="fc" id="L503">        int switched = 0;</span>
-<span class="fc" id="L504">        int skippedDirty = 0;</span>
-<span class="fc" id="L505">        int planned = 0;</span>
-<span class="fc" id="L506">        List&lt;String&gt; changes = new ArrayList&lt;&gt;();</span>
-<span class="fc" id="L507">        List&lt;String&gt; skipped = new ArrayList&lt;&gt;();</span>
-<span class="fc" id="L508">        Map&lt;String, String&gt; effects = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc" id="L535">        int switched = 0;</span>
+<span class="fc" id="L536">        int skippedDirty = 0;</span>
+<span class="fc" id="L537">        int planned = 0;</span>
+<span class="fc" id="L538">        List&lt;String&gt; changes = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L539">        List&lt;String&gt; skipped = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L540">        Map&lt;String, String&gt; effects = new LinkedHashMap&lt;&gt;();</span>
 
         for (Map.Entry&lt;String, Subproject&gt; entry
-<span class="fc bfc" id="L511" title="All 2 branches covered.">                : graph.manifest().subprojects().entrySet()) {</span>
-<span class="fc" id="L512">            String name = entry.getKey();</span>
-<span class="fc" id="L513">            Subproject subproject = entry.getValue();</span>
-<span class="fc" id="L514">            File dir = new File(root, name);</span>
-<span class="pc bpc" id="L515" title="1 of 2 branches missed.">            if (!new File(dir, &quot;.git&quot;).exists()) continue;</span>
+<span class="fc bfc" id="L543" title="All 2 branches covered.">                : graph.manifest().subprojects().entrySet()) {</span>
+<span class="fc" id="L544">            String name = entry.getKey();</span>
+<span class="fc" id="L545">            Subproject subproject = entry.getValue();</span>
+<span class="fc" id="L546">            File dir = new File(root, name);</span>
+<span class="pc bpc" id="L547" title="1 of 2 branches missed.">            if (!new File(dir, &quot;.git&quot;).exists()) continue;</span>
 
-<span class="fc" id="L517">            String declared = subproject.branch();</span>
-<span class="pc bpc" id="L518" title="1 of 2 branches missed.">            if (declared == null) continue;</span>
-<span class="fc" id="L519">            String actual = gitBranch(dir);</span>
-<span class="fc bfc" id="L520" title="All 2 branches covered.">            if (actual.equals(declared)) continue;</span>
+<span class="fc" id="L549">            String declared = subproject.branch();</span>
+<span class="pc bpc" id="L550" title="1 of 2 branches missed.">            if (declared == null) continue;</span>
+<span class="fc" id="L551">            String actual = gitBranch(dir);</span>
+<span class="fc bfc" id="L552" title="All 2 branches covered.">            if (actual.equals(declared)) continue;</span>
 
-<span class="fc" id="L522">            String status = gitStatus(dir);</span>
-<span class="pc bpc" id="L523" title="1 of 4 branches missed.">            if (!status.isEmpty() &amp;&amp; !force) {</span>
-<span class="fc" id="L524">                getLog().warn(&quot;  ⚠ &quot; + name + &quot;: uncommitted changes — skipping&quot;</span>
+<span class="fc" id="L554">            String status = gitStatus(dir);</span>
+<span class="fc bfc" id="L555" title="All 4 branches covered.">            if (!status.isEmpty() &amp;&amp; !force) {</span>
+<span class="fc" id="L556">                getLog().warn(&quot;  ⚠ &quot; + name + &quot;: uncommitted changes — skipping&quot;</span>
                         + &quot; (pass -Dforce=true to override)&quot;);
-<span class="fc" id="L526">                skipped.add(&quot;`&quot; + name + &quot;` — uncommitted (use -Dforce=true)&quot;);</span>
-<span class="fc" id="L527">                effects.put(name, &quot;skipped (uncommitted)&quot;);</span>
-<span class="fc" id="L528">                skippedDirty++;</span>
-<span class="fc" id="L529">                continue;</span>
+<span class="fc" id="L558">                skipped.add(&quot;`&quot; + name + &quot;` — uncommitted (use -Dforce=true)&quot;);</span>
+<span class="fc" id="L559">                effects.put(name, &quot;skipped (uncommitted)&quot;);</span>
+<span class="fc" id="L560">                skippedDirty++;</span>
+<span class="fc" id="L561">                continue;</span>
             }
 
-<span class="fc" id="L532">            planned++;</span>
-<span class="fc" id="L533">            changes.add(&quot;`&quot; + name + &quot;` (checkout): `&quot; + actual</span>
+<span class="fc" id="L564">            planned++;</span>
+<span class="fc" id="L565">            changes.add(&quot;`&quot; + name + &quot;` (checkout): `&quot; + actual</span>
                     + &quot;` → `&quot; + declared + &quot;`&quot;);
-<span class="pc bpc" id="L535" title="1 of 2 branches missed.">            effects.put(name, (draft ? &quot;checkout → `&quot; : &quot;checked out → `&quot;)</span>
+<span class="pc bpc" id="L567" title="1 of 2 branches missed.">            effects.put(name, (draft ? &quot;checkout → `&quot; : &quot;checked out → `&quot;)</span>
                     + declared + &quot;`&quot;);
-<span class="fc" id="L537">            getLog().info(&quot;  branch: &quot; + name + &quot;: &quot; + actual</span>
-<span class="pc bpc" id="L538" title="1 of 2 branches missed.">                    + &quot; → &quot; + declared + (draft ? &quot; (draft)&quot; : &quot;&quot;));</span>
+<span class="fc" id="L569">            getLog().info(&quot;  branch: &quot; + name + &quot;: &quot; + actual</span>
+<span class="pc bpc" id="L570" title="1 of 2 branches missed.">                    + &quot; → &quot; + declared + (draft ? &quot; (draft)&quot; : &quot;&quot;));</span>
 
-<span class="pc bpc" id="L540" title="1 of 2 branches missed.">            if (!draft) {</span>
-<span class="fc" id="L541">                ReleaseSupport.exec(dir, getLog(),</span>
+<span class="pc bpc" id="L572" title="1 of 2 branches missed.">            if (!draft) {</span>
+<span class="fc" id="L573">                ReleaseSupport.exec(dir, getLog(),</span>
                         &quot;git&quot;, &quot;checkout&quot;, declared);
-<span class="fc" id="L543">                switched++;</span>
+<span class="fc" id="L575">                switched++;</span>
             }
-<span class="fc" id="L545">        }</span>
+<span class="fc" id="L577">        }</span>
 
-<span class="pc bpc" id="L547" title="1 of 6 branches missed.">        if (switched == 0 &amp;&amp; skippedDirty == 0 &amp;&amp; planned == 0) {</span>
-<span class="fc" id="L548">            getLog().info(&quot;  Branches: repos already match yaml  ✓&quot;);</span>
-<span class="pc bpc" id="L549" title="1 of 2 branches missed.">        } else if (draft) {</span>
-<span class="nc" id="L550">            getLog().info(&quot;  Branches: &quot; + planned</span>
+<span class="pc bpc" id="L579" title="1 of 6 branches missed.">        if (switched == 0 &amp;&amp; skippedDirty == 0 &amp;&amp; planned == 0) {</span>
+<span class="fc" id="L580">            getLog().info(&quot;  Branches: repos already match yaml  ✓&quot;);</span>
+<span class="pc bpc" id="L581" title="1 of 2 branches missed.">        } else if (draft) {</span>
+<span class="nc" id="L582">            getLog().info(&quot;  Branches: &quot; + planned</span>
                     + &quot; subproject(s) would be switched&quot;);
         } else {
-<span class="fc" id="L553">            getLog().info(&quot;  Branches: switched &quot; + switched</span>
+<span class="fc" id="L585">            getLog().info(&quot;  Branches: switched &quot; + switched</span>
                     + &quot;, skipped &quot; + skippedDirty + &quot; (uncommitted)&quot;);
         }
 
-<span class="fc" id="L557">        return new BranchChanges(changes, skipped, effects);</span>
+<span class="fc" id="L589">        return new BranchChanges(changes, skipped, effects);</span>
     }
 
     /**
@@ -567,7 +599,7 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
      * @return the aggregator member name
      */
     private static String aggregatorName(File root) {
-<span class="fc" id="L570">        return root.getName();</span>
+<span class="fc" id="L602">        return root.getName();</span>
     }
 
     /**
@@ -580,12 +612,12 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
      * @return the POM version, or {@link WorkingSetReportTable#NONE}
      */
     private String readPomVersion(File dir) {
-<span class="fc" id="L583">        File pom = new File(dir, &quot;pom.xml&quot;);</span>
-<span class="fc bfc" id="L584" title="All 2 branches covered.">        if (!pom.isFile()) return WorkingSetReportTable.NONE;</span>
+<span class="fc" id="L615">        File pom = new File(dir, &quot;pom.xml&quot;);</span>
+<span class="fc bfc" id="L616" title="All 2 branches covered.">        if (!pom.isFile()) return WorkingSetReportTable.NONE;</span>
         try {
-<span class="fc" id="L586">            return ReleaseSupport.readPomVersion(pom);</span>
-<span class="nc" id="L587">        } catch (MojoException e) {</span>
-<span class="nc" id="L588">            return WorkingSetReportTable.NONE;</span>
+<span class="fc" id="L618">            return ReleaseSupport.readPomVersion(pom);</span>
+<span class="nc" id="L619">        } catch (MojoException e) {</span>
+<span class="nc" id="L620">            return WorkingSetReportTable.NONE;</span>
         }
     }
 
@@ -602,18 +634,18 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
      */
     private List&lt;WorkingSetReportTable.Row&gt; workingSetRows(
             Map&lt;String, String&gt; effects) {
-<span class="fc" id="L605">        List&lt;WorkingSetReportTable.Row&gt; rows = new ArrayList&lt;&gt;();</span>
-<span class="fc bfc" id="L606" title="All 2 branches covered.">        for (WorkingSet.Member member : resolveWorkingSet().members()) {</span>
-<span class="fc" id="L607">            File dir = member.directory().toFile();</span>
-<span class="fc" id="L608">            boolean isRepo = new File(dir, &quot;.git&quot;).exists();</span>
-<span class="fc" id="L609">            String version = readPomVersion(dir);</span>
-<span class="pc bpc" id="L610" title="1 of 2 branches missed.">            String branch = isRepo ? gitBranch(dir) : WorkingSetReportTable.NONE;</span>
-<span class="pc bpc" id="L611" title="1 of 2 branches missed.">            String sha = isRepo ? gitShortSha(dir) : WorkingSetReportTable.NONE;</span>
-<span class="fc" id="L612">            String effect = effects.getOrDefault(member.name(), &quot;unchanged&quot;);</span>
-<span class="fc" id="L613">            rows.add(new WorkingSetReportTable.Row(</span>
+<span class="fc" id="L637">        List&lt;WorkingSetReportTable.Row&gt; rows = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L638" title="All 2 branches covered.">        for (WorkingSet.Member member : resolveWorkingSet().members()) {</span>
+<span class="fc" id="L639">            File dir = member.directory().toFile();</span>
+<span class="fc" id="L640">            boolean isRepo = new File(dir, &quot;.git&quot;).exists();</span>
+<span class="fc" id="L641">            String version = readPomVersion(dir);</span>
+<span class="pc bpc" id="L642" title="1 of 2 branches missed.">            String branch = isRepo ? gitBranch(dir) : WorkingSetReportTable.NONE;</span>
+<span class="pc bpc" id="L643" title="1 of 2 branches missed.">            String sha = isRepo ? gitShortSha(dir) : WorkingSetReportTable.NONE;</span>
+<span class="fc" id="L644">            String effect = effects.getOrDefault(member.name(), &quot;unchanged&quot;);</span>
+<span class="fc" id="L645">            rows.add(new WorkingSetReportTable.Row(</span>
                     member, version, branch, sha, effect));
-<span class="fc" id="L615">        }</span>
-<span class="fc" id="L616">        return rows;</span>
+<span class="fc" id="L647">        }</span>
+<span class="fc" id="L648">        return rows;</span>
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

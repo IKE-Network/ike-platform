@@ -107,8 +107,105 @@ public class FeatureStartSiblingPublishMojo extends AbstractWorkspaceMojo {
     @Parameter(property = "from")
     String from;
 
+    /**
+     * Opt in to building the sibling's whole reactor from its root once the
+     * clone is made — proving it compiles and populating the local repository
+     * with the sibling's {@code -<feature>-SNAPSHOT} artifacts. Off by default
+     * (creating the sibling is the goal's effect; building is verification).
+     * The dedicated {@code ws:feature-start-sibling-publish-verify} goal turns
+     * this on by default. See IKE-Network/ike-issues#777.
+     */
+    @Parameter(property = "verify", defaultValue = "false")
+    boolean verify;
+
+    /**
+     * Maven goals run from the sibling root when {@link #verify} is set (or for
+     * the {@code -verify} goal). Defaults to {@code clean install -DskipTests
+     * -T 1C}: {@code install} (not just {@code verify}) so every subproject's
+     * {@code -<feature>-SNAPSHOT} lands in the local repository — which is what
+     * lets a later partial ({@code -pl … -am}) or IDE build resolve them, the
+     * gap that made an unbuilt sibling look broken (#777). A full-reactor build
+     * also sidesteps the trap directly. Override for a lighter or stricter
+     * check, e.g. {@code -Dws.sibling.verifyGoals="clean verify -DskipTests"}.
+     */
+    @Parameter(property = "ws.sibling.verifyGoals",
+            defaultValue = "clean install -DskipTests -T 1C")
+    String verifyGoals;
+
     /** Creates this goal instance. */
     public FeatureStartSiblingPublishMojo() {}
+
+    /**
+     * Whether to build the sibling reactor after creating it. The base goal
+     * returns the {@code -Dverify} flag; the {@code -verify} subclass overrides
+     * {@link #verifyByDefault()} so the build is on by default.
+     *
+     * @return {@code true} when the post-create reactor build should run
+     */
+    protected final boolean shouldVerify() {
+        return verify || verifyByDefault();
+    }
+
+    /**
+     * Default for the post-create reactor build when {@code -Dverify} is not
+     * given. {@code false} here; {@link FeatureStartSiblingPublishVerifyMojo}
+     * overrides it to {@code true}.
+     *
+     * @return {@code false} — the base goal does not build unless asked
+     */
+    protected boolean verifyByDefault() {
+        return false;
+    }
+
+    /**
+     * The goal identity used for this run's report file. The base goal reports
+     * as {@link WsGoal#FEATURE_START_SIBLING_PUBLISH}; the {@code -verify}
+     * subclass overrides this so its report lands in its own file.
+     *
+     * @return the {@link WsGoal} this invocation reports as
+     */
+    protected WsGoal reportGoal() {
+        return WsGoal.FEATURE_START_SIBLING_PUBLISH;
+    }
+
+    /**
+     * Build the sibling's whole reactor from its root, failing loud if it does
+     * not build. Runs {@link #verifyGoals} (default {@code clean install
+     * -DskipTests -T 1C}) as a subprocess against the freshly created sibling,
+     * mirroring {@code ws:checkpoint-publish}'s pre-tag reactor gate (#689).
+     *
+     * <p>On failure the clone is left intact — the message says so — so the
+     * user can fix the build in place rather than re-clone. Overridable so the
+     * #777 coverage can drive the pass/fail outcome without a nested build.
+     *
+     * @param siblingRoot the sibling workspace root to build from
+     * @throws MojoException if the reactor build fails, or the subprocess setup
+     *                       itself fails
+     */
+    protected void verifySibling(File siblingRoot) throws MojoException {
+        String mvn = WsReleaseDraftMojo.resolveMvnCommand(siblingRoot);
+        getLog().info("");
+        getLog().info("  Verifying the sibling reactor builds (" + verifyGoals
+                + ") ...");
+        List<String> cmd = new ArrayList<>();
+        cmd.add(mvn);
+        for (String token : verifyGoals.split("\\s+")) {
+            if (!token.isBlank()) {
+                cmd.add(token);
+            }
+        }
+        cmd.add("-B");
+        try {
+            ReleaseSupport.exec(siblingRoot, getLog(), cmd.toArray(new String[0]));
+            getLog().info(Ansi.green("  ✓ ") + "Sibling reactor build succeeded");
+        } catch (MojoException e) {
+            throw new MojoException(
+                    "Sibling created at " + siblingRoot.getAbsolutePath()
+                    + ", but its reactor build failed. The clone is intact — fix "
+                    + "the build there, or re-run without verification. Cause: "
+                    + e.getMessage(), e);
+        }
+    }
 
     @Override
     protected WorkspaceReportSpec runGoal() throws MojoException {
@@ -200,6 +297,7 @@ public class FeatureStartSiblingPublishMojo extends AbstractWorkspaceMojo {
         //    same POM state ws:feature-start-publish would have in-place.
         FeatureStartSupport support = new FeatureStartSupport(getLog());
         Map<String, String> versionByName = new LinkedHashMap<>();
+        String rootQualified = null;
         if (!skipVersion) {
             for (String name : branched) {
                 Subproject sub = graph.manifest().subprojects().get(name);
@@ -222,6 +320,41 @@ public class FeatureStartSiblingPublishMojo extends AbstractWorkspaceMojo {
             support.cascadeVersionProperties(graph, siblingRoot, sorted, branchName);
             support.cascadeBomProperties(graph, siblingRoot, sorted, branchName);
             support.cascadeBomImports(graph, siblingRoot, sorted, branchName);
+
+            // Qualify the aggregator's OWN POM version too — feature-start
+            // branches the workspace root, so its version takes the same
+            // qualifier as every subproject. The in-place path already does
+            // this (FeatureStartDraftMojo.branchWorkspaceRepo, ike-issues#721);
+            // the sibling path had not ported it, leaving the root pom at its
+            // base version (ike-issues#777). The aggregator parents off
+            // ike-parent (not itself) and subprojects parent off ike-parent
+            // too, so this is a standalone <version> edit. The cascades above
+            // commit their own changes, so this is its own commit, like each
+            // subproject's. The merge/squash finish paths already de-qualify
+            // the aggregator (FeatureFinishSupport.stripWorkspaceRootPom), so
+            // qualifying it here makes the round-trip symmetric.
+            File rootPom = new File(siblingRoot, "pom.xml");
+            if (rootPom.exists()) {
+                try {
+                    String rootVersion = ReleaseSupport.readPomVersion(rootPom);
+                    String qualified = VersionSupport.branchQualifiedVersion(
+                            rootVersion, branchName);
+                    if (!qualified.equals(rootVersion)) {
+                        support.setPomVersion(siblingRoot, rootVersion, qualified);
+                        ReleaseSupport.exec(siblingRoot, getLog(),
+                                "git", "add", "pom.xml");
+                        ReleaseSupport.exec(siblingRoot, getLog(), "git", "commit",
+                                "-m", "feature: set version " + qualified
+                                        + " for " + branchName);
+                        rootQualified = qualified;
+                        getLog().info(Ansi.green("  ✓ ") + String.format(
+                                "%-24s %s → %s", baseName, rootVersion, qualified));
+                    }
+                } catch (MojoException e) {
+                    getLog().warn("  Could not qualify aggregator root version: "
+                            + e.getMessage());
+                }
+            }
         }
 
         // 4. Rewrite the sibling's workspace.yaml branch fields and commit.
@@ -253,6 +386,12 @@ public class FeatureStartSiblingPublishMojo extends AbstractWorkspaceMojo {
                 + "rm -rf to discard");
         getLog().info("");
 
+        boolean verified = false;
+        if (shouldVerify()) {
+            verifySibling(siblingRoot);
+            verified = true;
+        }
+
         // Build the report rows over the whole working set — every
         // subproject AND the aggregator (workspace root). The aggregator
         // row makes the sibling root's own clone + branch + qualified
@@ -267,9 +406,12 @@ public class FeatureStartSiblingPublishMojo extends AbstractWorkspaceMojo {
                     : new File(siblingRoot, member.name());
             String effect;
             if (member.isAggregator()) {
-                // The aggregator is always cloned + branched, then its
-                // workspace.yaml is rewritten and committed.
-                effect = "cloned + branched " + branchName;
+                // The aggregator is cloned + branched, its own POM version
+                // qualified like every subproject (#777), and its
+                // workspace.yaml rewritten + committed.
+                effect = (rootQualified != null)
+                        ? "cloned + branched " + branchName + " → " + rootQualified
+                        : "cloned + branched " + branchName;
             } else if (branched.contains(member.name())) {
                 String qualified = versionByName.get(member.name());
                 effect = (qualified != null)
@@ -288,8 +430,9 @@ public class FeatureStartSiblingPublishMojo extends AbstractWorkspaceMojo {
                     effect));
         }
 
-        return new WorkspaceReportSpec(WsGoal.FEATURE_START_SIBLING_PUBLISH,
-                buildReport(siblingName, siblingRoot, branchName, base, rows));
+        return new WorkspaceReportSpec(reportGoal(),
+                buildReport(siblingName, siblingRoot, branchName, base, rows,
+                        verified));
     }
 
     /**
@@ -393,6 +536,12 @@ public class FeatureStartSiblingPublishMojo extends AbstractWorkspaceMojo {
                 + "rm -rf to discard");
         getLog().info("");
 
+        boolean verified = false;
+        if (shouldVerify()) {
+            verifySibling(siblingRoot);
+            verified = true;
+        }
+
         // Single-repo working set: one member (the repo, resolved as the
         // aggregator), mapped to its sibling clone. The aggregator is a row
         // here too, so a bare-mode report is shaped identically to the
@@ -404,8 +553,9 @@ public class FeatureStartSiblingPublishMojo extends AbstractWorkspaceMojo {
         List<WorkingSetReportTable.Row> rows = List.of(
                 new WorkingSetReportTable.Row(member, siblingVersion(siblingRoot),
                         gitBranch(siblingRoot), gitShortSha(siblingRoot), effect));
-        return new WorkspaceReportSpec(WsGoal.FEATURE_START_SIBLING_PUBLISH,
-                buildReport(siblingName, siblingRoot, branchName, base, rows));
+        return new WorkspaceReportSpec(reportGoal(),
+                buildReport(siblingName, siblingRoot, branchName, base, rows,
+                        verified));
     }
 
     /**
@@ -534,11 +684,15 @@ public class FeatureStartSiblingPublishMojo extends AbstractWorkspaceMojo {
      * @param branchName  the feature branch created in each clone
      * @param base        the base branch each clone was cut from
      * @param rows        one working-set row per member, aggregator included
+     * @param verified    whether the sibling reactor was built and verified
+     *                    during this run (the {@code -Dverify} flag / the
+     *                    {@code -verify} goal)
      * @return the Markdown report body
      */
     private String buildReport(String siblingName, File siblingRoot,
                                String branchName, String base,
-                               List<WorkingSetReportTable.Row> rows) {
+                               List<WorkingSetReportTable.Row> rows,
+                               boolean verified) {
         GoalReportBuilder report = new GoalReportBuilder();
         report.paragraph("**Sibling:** `" + siblingName + "`")
                 .paragraph("**Branch:** `" + branchName + "`")
@@ -551,10 +705,34 @@ public class FeatureStartSiblingPublishMojo extends AbstractWorkspaceMojo {
                 + branchName + "`, cut from `" + base
                 + "` with `--reference --dissociate` against the primary."
                 + " The primary stays on its current branch.");
+
+        if (verified) {
+            report.paragraph("**Verified** — `" + verifyGoals
+                    + "` from the sibling root succeeded, so the reactor builds"
+                    + " and every `-" + branchName.substring("feature/".length())
+                    + "-SNAPSHOT` artifact is now installed in the local"
+                    + " repository (a later `-pl … -am` or IDE build will resolve"
+                    + " them).");
+        }
+
         report.paragraph("**No push** — clones and branches stay local."
                 + " Next steps:");
+        // The bootstrap build is the first step (#777): a sibling's
+        // -<feature>-SNAPSHOT artifacts exist nowhere else, so a partial
+        // (-pl … -am) or IDE build cannot resolve them until the whole reactor
+        // has been installed once. When already verified this run, it is noted
+        // as done but kept for re-running after later edits.
+        String buildStep = verified
+                ? "./mvnw clean install -DskipTests   "
+                        + "# already run by verification — re-run after edits"
+                : "./mvnw clean install -DskipTests   "
+                        + "# build the whole reactor first — a sibling's\n"
+                        + "                                   "
+                        + "# -" + branchName.substring("feature/".length())
+                        + "-SNAPSHOT artifacts exist nowhere else";
         report.paragraph("```bash\ncd " + siblingRoot.getAbsolutePath()
-                + "\n# work, then:\nmvn ws:commit-publish -Dmessage=\"…\"\n"
+                + "\n" + buildStep
+                + "\n# then work, then:\nmvn ws:commit-publish -Dmessage=\"…\"\n"
                 + "mvn ws:push                       # publish the branch\n"
                 + "mvn ws:feature-finish-merge-publish -Dfeature="
                 + branchName.substring("feature/".length())

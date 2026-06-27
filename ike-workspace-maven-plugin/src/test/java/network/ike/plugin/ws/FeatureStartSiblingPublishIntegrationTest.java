@@ -47,7 +47,7 @@ class FeatureStartSiblingPublishIntegrationTest {
 
         mojo.execute();
 
-        Path sibling = tempDir.resolve("primary-jira-456");
+        Path sibling = tempDir.resolve("primary꞉jira-456");
 
         // 1. Expected directory layout: a self-contained clone of the root
         //    plus every component.
@@ -71,6 +71,11 @@ class FeatureStartSiblingPublishIntegrationTest {
                     sibling.resolve(name).resolve("pom.xml"), StandardCharsets.UTF_8);
             assertThat(pom).contains("jira-456").contains("SNAPSHOT");
         }
+        // 3a. The aggregator's OWN pom is qualified too (#777) — not just the
+        //     subprojects. This is the gap the sibling path used to miss.
+        assertThat(Files.readString(sibling.resolve("pom.xml"), StandardCharsets.UTF_8))
+                .as("aggregator root pom is branch-qualified")
+                .contains("jira-456").contains("SNAPSHOT");
 
         // 4. The sibling's workspace.yaml carries the feature branch.
         String yaml = Files.readString(
@@ -85,8 +90,12 @@ class FeatureStartSiblingPublishIntegrationTest {
         assertThat(originLibA).contains("upstream-lib-a.git");
         assertThat(originLibA).doesNotContain(File.separator + "primary" + File.separator);
 
-        // 6. The primary is untouched: still on main, versions not qualified.
+        // 6. The primary is untouched: still on main, versions not qualified
+        //    — including the primary's own aggregator root pom.
         assertThat(branch(primary)).isEqualTo("main");
+        assertThat(Files.readString(primary.resolve("pom.xml"), StandardCharsets.UTF_8))
+                .as("primary aggregator root pom is left untouched")
+                .doesNotContain("jira-456");
         for (String name : COMPONENTS) {
             assertThat(branch(primary.resolve(name))).isEqualTo("main");
             String pom = Files.readString(
@@ -97,7 +106,7 @@ class FeatureStartSiblingPublishIntegrationTest {
 
     @Test
     void siblingCreate_refusesWhenSiblingDirectoryAlreadyExists() throws Exception {
-        Files.createDirectories(tempDir.resolve("primary-dup"));
+        Files.createDirectories(tempDir.resolve("primary꞉dup"));
 
         FeatureStartSiblingPublishMojo mojo =
                 TestLog.createMojo(FeatureStartSiblingPublishMojo.class);
@@ -109,7 +118,7 @@ class FeatureStartSiblingPublishIntegrationTest {
                 .hasMessageContaining("already exists");
 
         // The pre-existing directory is left untouched — nothing was cloned.
-        assertThat(tempDir.resolve("primary-dup").resolve("workspace.yaml"))
+        assertThat(tempDir.resolve("primary꞉dup").resolve("workspace.yaml"))
                 .doesNotExist();
     }
 
@@ -125,7 +134,7 @@ class FeatureStartSiblingPublishIntegrationTest {
                 .hasMessageContaining("filesystem-safe");
 
         // No sibling materialized for the rejected name.
-        assertThat(tempDir.resolve("primary-bad")).doesNotExist();
+        assertThat(tempDir.resolve("primary꞉bad")).doesNotExist();
     }
 
     @Test
@@ -157,18 +166,20 @@ class FeatureStartSiblingPublishIntegrationTest {
 
         // The aggregator (workspace root) is a row — the #763 gap closed: the
         // sibling root's clone is no longer invisible. The root dir is named
-        // "primary"; its declared aggregator version is 1-SNAPSHOT, and that
-        // string must now appear (the #763 fix — gathering the root's
-        // readPomVersion the same way as a subproject).
+        // "primary"; its base version 1-SNAPSHOT is now branch-qualified to
+        // 1-jira-456-SNAPSHOT (the #777 fix — the aggregator pom is qualified
+        // like every subproject, and the report surfaces the qualified value).
         assertThat(report)
                 .as("aggregator row present and labeled")
                 .contains("primary").contains("aggregator");
         assertThat(report)
-                .as("the aggregator (root) version is surfaced — the #763 fix")
-                .contains("1-SNAPSHOT");
+                .as("the aggregator (root) version is qualified — the #777 fix")
+                .contains("1-jira-456-SNAPSHOT");
 
-        // The effect states what was applied to each cloned member.
-        assertThat(report).contains("cloned + branched feature/jira-456");
+        // The effect states what was applied to each cloned member; the
+        // aggregator's effect now carries its qualified version too (#777).
+        assertThat(report)
+                .contains("cloned + branched feature/jira-456 → 1-jira-456-SNAPSHOT");
 
         // The base branch the sibling was cut from is surfaced.
         assertThat(report).as("base branch in report").contains("main");
@@ -185,7 +196,7 @@ class FeatureStartSiblingPublishIntegrationTest {
 
         mojo.execute();
 
-        Path sibling = tempDir.resolve("primary-docs");
+        Path sibling = tempDir.resolve("primary꞉docs");
         for (String name : COMPONENTS) {
             assertThat(branch(sibling.resolve(name))).isEqualTo("feature/docs");
         }
@@ -193,6 +204,10 @@ class FeatureStartSiblingPublishIntegrationTest {
         String libAPom = Files.readString(
                 sibling.resolve("lib-a").resolve("pom.xml"), StandardCharsets.UTF_8);
         assertThat(libAPom).contains("1.0.0-SNAPSHOT").doesNotContain("docs");
+        // The aggregator root pom is likewise left unqualified under skipVersion
+        // (the #777 root-pom qualification is gated on !skipVersion).
+        assertThat(Files.readString(sibling.resolve("pom.xml"), StandardCharsets.UTF_8))
+                .doesNotContain("docs");
     }
 
     @Test
@@ -213,7 +228,7 @@ class FeatureStartSiblingPublishIntegrationTest {
                 .hasMessageContaining("-Dfrom=feature/already-here");
 
         // Nothing was cloned.
-        assertThat(tempDir.resolve("primary-jira-789")).doesNotExist();
+        assertThat(tempDir.resolve("primary꞉jira-789")).doesNotExist();
     }
 
     @Test
@@ -238,7 +253,7 @@ class FeatureStartSiblingPublishIntegrationTest {
 
         mojo.execute();
 
-        Path sibling = tempDir.resolve("primary-jira-789");
+        Path sibling = tempDir.resolve("primary꞉jira-789");
         assertThat(sibling.resolve(".git")).isDirectory();
         assertThat(branch(sibling)).isEqualTo("feature/jira-789");
         for (String name : COMPONENTS) {
@@ -276,7 +291,7 @@ class FeatureStartSiblingPublishIntegrationTest {
         mojo.execute();
 
         // The sibling is named from the baseName (workspace-root artifactId).
-        Path baseNameSibling = tempDir.resolve("renamed-aggregator-jira-456");
+        Path baseNameSibling = tempDir.resolve("renamed-aggregator꞉jira-456");
         assertThat(baseNameSibling)
                 .as("sibling named from workspace-root artifactId (baseName)")
                 .isDirectory();
@@ -284,7 +299,7 @@ class FeatureStartSiblingPublishIntegrationTest {
         assertThat(branch(baseNameSibling)).isEqualTo("feature/jira-456");
 
         // NOT named from the on-disk directory name.
-        assertThat(tempDir.resolve("primary-jira-456"))
+        assertThat(tempDir.resolve("primary꞉jira-456"))
                 .as("sibling NOT named from the on-disk dir name")
                 .doesNotExist();
     }

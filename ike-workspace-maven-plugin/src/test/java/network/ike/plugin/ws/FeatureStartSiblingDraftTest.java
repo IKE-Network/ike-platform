@@ -43,7 +43,7 @@ class FeatureStartSiblingDraftTest {
         mojo.execute();
 
         // No sibling directory created — this is a preview.
-        assertThat(tempDir.resolve("primary-jira-456")).doesNotExist();
+        assertThat(tempDir.resolve("primary꞉jira-456")).doesNotExist();
 
         // The primary is untouched, still on main.
         assertThat(branch(primary)).isEqualTo("main");
@@ -52,7 +52,7 @@ class FeatureStartSiblingDraftTest {
 
         // Plan section: the sibling dir, branch, base, and every member.
         assertThat(report).contains("Preview").contains("no clone");
-        assertThat(report).contains("primary-jira-456");
+        assertThat(report).contains("primary꞉jira-456");
         assertThat(report).contains("feature/jira-456");
         assertThat(report).contains("Plan");
         assertThat(report).contains("primary").contains("aggregator");
@@ -103,7 +103,7 @@ class FeatureStartSiblingDraftTest {
 
         mojo.execute();
 
-        assertThat(tempDir.resolve("primary-jira-456")).doesNotExist();
+        assertThat(tempDir.resolve("primary꞉jira-456")).doesNotExist();
         String report = readReport("feature-start-sibling-draft");
         assertThat(report).contains("**Base:** `feature/wip`");
     }

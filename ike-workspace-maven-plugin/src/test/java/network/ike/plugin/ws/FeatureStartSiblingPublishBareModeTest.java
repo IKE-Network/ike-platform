@@ -73,7 +73,7 @@ class FeatureStartSiblingPublishBareModeTest {
 
         mojo.execute();
 
-        Path sibling = tempDir.resolve("app-solo");
+        Path sibling = tempDir.resolve("app꞉solo");
 
         // Sibling exists, is its own clone, on the feature branch.
         assertThat(sibling.resolve(".git")).isDirectory();
@@ -102,7 +102,7 @@ class FeatureStartSiblingPublishBareModeTest {
 
         mojo.execute();
 
-        Path sibling = tempDir.resolve("app-docs");
+        Path sibling = tempDir.resolve("app꞉docs");
         assertThat(branch(sibling)).isEqualTo("feature/docs");
         assertThat(Files.readString(sibling.resolve("pom.xml"), StandardCharsets.UTF_8))
                 .contains("1.0.0-SNAPSHOT").doesNotContain("docs");
@@ -110,7 +110,7 @@ class FeatureStartSiblingPublishBareModeTest {
 
     @Test
     void bareMode_refusesWhenSiblingExists() throws Exception {
-        Files.createDirectories(tempDir.resolve("app-dup"));
+        Files.createDirectories(tempDir.resolve("app꞉dup"));
         FeatureStartSiblingPublishMojo mojo =
                 TestLog.createMojo(FeatureStartSiblingPublishMojo.class);
         mojo.feature = "dup";
@@ -160,7 +160,7 @@ class FeatureStartSiblingPublishBareModeTest {
                 .hasMessageContaining("not the base branch")
                 .hasMessageContaining("-Dfrom=feature/wip");
 
-        assertThat(tempDir.resolve("app-solo")).doesNotExist();
+        assertThat(tempDir.resolve("app꞉solo")).doesNotExist();
     }
 
     @Test
@@ -176,7 +176,7 @@ class FeatureStartSiblingPublishBareModeTest {
 
         mojo.execute();
 
-        Path sibling = tempDir.resolve("app-solo");
+        Path sibling = tempDir.resolve("app꞉solo");
         assertThat(sibling.resolve(".git")).isDirectory();
         assertThat(branch(sibling)).isEqualTo("feature/solo");
     }

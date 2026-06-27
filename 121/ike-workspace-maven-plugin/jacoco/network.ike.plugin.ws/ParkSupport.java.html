@@ -1,0 +1,167 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ParkSupport.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">ParkSupport.java</span></div><h1>ParkSupport.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.plugin.ws.vcs.VcsOperations;
+
+import org.apache.maven.api.plugin.Log;
+import org.apache.maven.api.plugin.MojoException;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Comparator;
+import java.util.stream.Stream;
+
+/**
+ * Work-preserving park and per-user auto-stash primitives shared by the
+ * branch-scoped workspace goals (ike-issues#573, ike-issues#575).
+ *
+ * &lt;p&gt;&quot;Parking&quot; a subproject sets its clone aside without losing work: the
+ * subproject's branch is first pushed to {@value #STASH_REMOTE} (origin is the
+ * park), and only then is the local clone removed. If the push fails the park
+ * &lt;b&gt;aborts in place&lt;/b&gt; — the clone is never reduced below what is on origin.
+ * &quot;Stashing&quot; moves uncommitted work (including untracked files) to a pushable
+ * per-user custom ref ({@code refs/ws-stash/&lt;user-slug&gt;/&lt;branch&gt;}) on origin so
+ * it follows the developer across branches and machines, and re-applies it on
+ * return.
+ *
+ * &lt;p&gt;These primitives were extracted verbatim from {@code WsSwitchDraftMojo}
+ * (where {@code ws:switch} introduced them in ike-issues#573) so {@code ws:remove}
+ * can reuse them, taking an explicit {@link Log} rather than reaching for a
+ * mojo's {@code getLog()}. The extraction is behavior-preserving for
+ * {@code ws:switch}.
+ */
+final class ParkSupport {
+
+    /** Full ref prefix for auto-stash refs (see ike-issues#153). */
+    static final String STASH_REF_PREFIX = &quot;refs/ws-stash/&quot;;
+
+    /** Remote name for auto-stash and park push/fetch/delete. */
+    static final String STASH_REMOTE = &quot;origin&quot;;
+
+    private ParkSupport() {
+    }
+
+    /**
+     * Build the auto-stash ref path for a given user slug and branch.
+     * Branches with {@code /} in their name (e.g. {@code feature/A})
+     * become multi-segment ref paths, which git supports.
+     *
+     * @param slug   user slug from {@link VcsOperations#userSlug(String)}
+     * @param branch the branch name
+     * @return full ref path, e.g.
+     *         {@code &quot;refs/ws-stash/kec--knowledge-design/feature/A&quot;}
+     */
+    static String stashRef(String slug, String branch) {
+<span class="fc" id="L56">        return STASH_REF_PREFIX + slug + &quot;/&quot; + branch;</span>
+    }
+
+    /**
+     * Park a subproject that is not a member of the target branch (#573):
+     * push its branch to {@value #STASH_REMOTE} so no work is lost, then
+     * remove the local clone. Aborts in place (no deletion) if the push
+     * fails — the working tree is never reduced below what is on origin.
+     *
+     * @param dir        the subproject directory
+     * @param log        Maven logger
+     * @param name       the subproject name
+     * @param compBranch the branch the subproject is currently on
+     * @throws MojoException if the branch cannot be pushed (park aborts)
+     */
+    static void parkSubproject(File dir, Log log, String name, String compBranch)
+            throws MojoException {
+        try {
+<span class="fc" id="L74">            VcsOperations.push(dir, log, STASH_REMOTE, compBranch);</span>
+<span class="fc" id="L75">        } catch (MojoException e) {</span>
+<span class="fc" id="L76">            throw new MojoException(&quot;Park aborted for '&quot; + name + &quot;': could not &quot;</span>
+                    + &quot;push '&quot; + compBranch + &quot;' to &quot; + STASH_REMOTE
+                    + &quot; — refusing to remove a clone whose work is not on &quot;
+<span class="fc" id="L79">                    + &quot;origin. &quot; + e.getMessage(), e);</span>
+<span class="fc" id="L80">        }</span>
+<span class="fc" id="L81">        log.info(&quot;  &quot; + Ansi.cyan(&quot;⇲ &quot;) + name + &quot; — parked (&quot;</span>
+                + compBranch + &quot; → &quot; + STASH_REMOTE + &quot;, clone removed)&quot;);
+<span class="fc" id="L83">        deleteDirectory(dir.toPath());</span>
+<span class="fc" id="L84">    }</span>
+
+    /**
+     * Execute the leave flow on a subproject with uncommitted work:
+     * stash (including untracked), move stash to custom ref, drop local
+     * stash entry, push ref to origin. A collision on the source ref is
+     * detected at preflight; hitting it here means state changed between
+     * preflight and execute (racy), so fail loudly.
+     *
+     * @param dir          the subproject directory
+     * @param log          Maven logger
+     * @param slug         user slug
+     * @param sourceBranch the branch we're leaving
+     * @throws MojoException if any step fails
+     */
+    static void stashLeave(File dir, Log log, String slug, String sourceBranch)
+            throws MojoException {
+<span class="fc" id="L101">        String ref = stashRef(slug, sourceBranch);</span>
+<span class="fc" id="L102">        String message = &quot;ws-auto/&quot; + sourceBranch;</span>
+<span class="fc" id="L103">        VcsOperations.stashPushUntracked(dir, log, message);</span>
+<span class="fc" id="L104">        VcsOperations.updateRef(dir, log, ref, &quot;refs/stash&quot;);</span>
+<span class="fc" id="L105">        VcsOperations.stashDrop(dir, log);</span>
+<span class="fc" id="L106">        VcsOperations.pushRef(dir, log, STASH_REMOTE, ref);</span>
+<span class="fc" id="L107">        log.info(&quot;    &quot; + Ansi.yellow(&quot;↟ &quot;) + &quot;stashed → &quot; + ref);</span>
+<span class="fc" id="L108">    }</span>
+
+    /**
+     * Execute the arrive flow on a subproject that's just checked out
+     * the target branch: probe for a remote stash ref for this
+     * user/branch; if present, fetch it, apply it, and delete the ref
+     * locally and remotely.
+     *
+     * @param dir          the subproject directory
+     * @param log          Maven logger
+     * @param slug         user slug
+     * @param targetBranch the branch we just switched to
+     * @return {@code true} if a stash was applied, {@code false} if no
+     *         stash was present
+     * @throws MojoException if the apply or cleanup fails
+     */
+    static boolean stashArrive(File dir, Log log, String slug, String targetBranch)
+            throws MojoException {
+<span class="fc" id="L126">        String ref = stashRef(slug, targetBranch);</span>
+        boolean present;
+        try {
+<span class="nc" id="L129">            present = VcsOperations.remoteRefExists(dir, STASH_REMOTE, ref);</span>
+<span class="fc" id="L130">        } catch (MojoException e) {</span>
+<span class="fc" id="L131">            log.warn(&quot;    &quot; + Ansi.yellow(&quot;⚠ &quot;) + &quot;could not probe &quot;</span>
+<span class="fc" id="L132">                    + STASH_REMOTE + &quot; for &quot; + ref + &quot; — &quot; + e.getMessage());</span>
+<span class="fc" id="L133">            return false;</span>
+<span class="nc" id="L134">        }</span>
+<span class="nc bnc" id="L135" title="All 2 branches missed.">        if (!present) return false;</span>
+
+<span class="nc" id="L137">        VcsOperations.fetchRef(dir, log, STASH_REMOTE, ref);</span>
+<span class="nc" id="L138">        VcsOperations.stashApply(dir, log, ref);</span>
+<span class="nc" id="L139">        VcsOperations.deleteLocalRef(dir, log, ref);</span>
+<span class="nc" id="L140">        VcsOperations.deleteRemoteRef(dir, log, STASH_REMOTE, ref);</span>
+<span class="nc" id="L141">        log.info(&quot;    &quot; + Ansi.green(&quot;↡ &quot;) + &quot;stash applied from &quot; + ref);</span>
+<span class="nc" id="L142">        return true;</span>
+    }
+
+    /**
+     * Recursively delete a directory tree (removes a parked clone).
+     *
+     * @param dir the directory to delete
+     * @throws MojoException if deletion fails
+     */
+    static void deleteDirectory(Path dir) throws MojoException {
+<span class="fc" id="L152">        try (Stream&lt;Path&gt; paths = Files.walk(dir)) {</span>
+<span class="fc" id="L153">            paths.sorted(Comparator.reverseOrder())</span>
+<span class="fc" id="L154">                    .forEach(p -&gt; {</span>
+                        try {
+<span class="fc" id="L156">                            Files.delete(p);</span>
+<span class="nc" id="L157">                        } catch (IOException e) {</span>
+<span class="nc" id="L158">                            throw new RuntimeException(e);</span>
+<span class="fc" id="L159">                        }</span>
+<span class="fc" id="L160">                    });</span>
+<span class="nc" id="L161">        } catch (IOException | RuntimeException e) {</span>
+<span class="nc" id="L162">            throw new MojoException(</span>
+<span class="nc" id="L163">                    &quot;Failed to delete &quot; + dir + &quot;: &quot; + e.getMessage(), e);</span>
+<span class="fc" id="L164">        }</span>
+<span class="fc" id="L165">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

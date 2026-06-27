@@ -188,135 +188,144 @@ public class UpdateFeatureDraftMojo extends AbstractWorkspaceMojo {
 <span class="nc" id="L188">            uncommitted.add(&quot;workspace root&quot;);</span>
         }
 
-<span class="fc bfc" id="L191" title="All 2 branches covered.">        if (!uncommitted.isEmpty()) {</span>
-<span class="fc" id="L192">            StringBuilder sb = new StringBuilder();</span>
-<span class="fc" id="L193">            sb.append(&quot;Cannot update — uncommitted changes in:\n&quot;);</span>
-<span class="fc bfc" id="L194" title="All 2 branches covered.">            for (String name : uncommitted) {</span>
-<span class="fc" id="L195">                sb.append(&quot;  &quot;).append(name).append(&quot;\n&quot;);</span>
-<span class="fc" id="L196">            }</span>
-<span class="fc" id="L197">            sb.append(&quot;Commit or stash, then try again.&quot;);</span>
-<span class="fc" id="L198">            throw new MojoException(sb.toString());</span>
+        // COORDINATING preflight (#780): the publish path refuses on an
+        // uncommitted working set so the merge it commits is attributable;
+        // -Dallow-uncommitted escapes. The draft is a preview (WARN) — it
+        // proceeds and only notes the uncommitted state.
+<span class="fc bfc" id="L195" title="All 2 branches covered.">        if (!uncommitted.isEmpty()) {</span>
+<span class="pc bpc" id="L196" title="2 of 4 branches missed.">            if (publish &amp;&amp; !allowUncommitted()) {</span>
+<span class="fc" id="L197">                StringBuilder sb = new StringBuilder();</span>
+<span class="fc" id="L198">                sb.append(&quot;Cannot update — uncommitted changes in:\n&quot;);</span>
+<span class="fc bfc" id="L199" title="All 2 branches covered.">                for (String name : uncommitted) {</span>
+<span class="fc" id="L200">                    sb.append(&quot;  &quot;).append(name).append(&quot;\n&quot;);</span>
+<span class="fc" id="L201">                }</span>
+<span class="fc" id="L202">                sb.append(&quot;Commit or stash, then try again&quot;</span>
+                        + &quot; (or pass -Dallow-uncommitted).&quot;);
+<span class="fc" id="L204">                throw new MojoException(sb.toString());</span>
+            }
+<span class="nc" id="L206">            getLog().warn(&quot;  Uncommitted changes in &quot; + uncommitted</span>
+                    + &quot; — preview only; commit before ws:update-feature-publish.&quot;);
         }
 
-<span class="pc bpc" id="L201" title="1 of 2 branches missed.">        if (eligible.isEmpty()) {</span>
-<span class="nc" id="L202">            getLog().info(&quot;  No components on &quot; + branchName + &quot; — nothing to update.&quot;);</span>
-<span class="nc" id="L203">            return new WorkspaceReportSpec(</span>
-<span class="nc bnc" id="L204" title="All 2 branches missed.">                    publish ? WsGoal.UPDATE_FEATURE_PUBLISH : WsGoal.UPDATE_FEATURE_DRAFT,</span>
+<span class="pc bpc" id="L210" title="1 of 2 branches missed.">        if (eligible.isEmpty()) {</span>
+<span class="nc" id="L211">            getLog().info(&quot;  No components on &quot; + branchName + &quot; — nothing to update.&quot;);</span>
+<span class="nc" id="L212">            return new WorkspaceReportSpec(</span>
+<span class="nc bnc" id="L213" title="All 2 branches missed.">                    publish ? WsGoal.UPDATE_FEATURE_PUBLISH : WsGoal.UPDATE_FEATURE_DRAFT,</span>
                     &quot;No components on `&quot; + branchName + &quot;` — nothing to update.\n&quot;);
         }
 
         // Refresh local main from origin/main across eligible components
         // before any feature-side comparison or merge. In draft, preview
         // read-only — never mutate local main (#570). See ike-issues#284.
-<span class="fc bfc" id="L211" title="All 2 branches covered.">        if (publish) {</span>
-<span class="fc" id="L212">            RefreshMainSupport.refreshOrThrow(root, eligible, targetBranch, getLog());</span>
+<span class="fc bfc" id="L220" title="All 2 branches covered.">        if (publish) {</span>
+<span class="fc" id="L221">            RefreshMainSupport.refreshOrThrow(root, eligible, targetBranch, getLog());</span>
         } else {
-<span class="fc" id="L214">            RefreshMainSupport.previewRefresh(root, eligible, targetBranch, getLog());</span>
+<span class="fc" id="L223">            RefreshMainSupport.previewRefresh(root, eligible, targetBranch, getLog());</span>
         }
 
         // Show how far behind each subproject is + record its effect. The
         // working-set report (below) reads these effects per member; the
         // -draft variant phrases them as PLANNED, -publish as APPLIED.
-<span class="fc bfc" id="L220" title="All 2 branches covered.">        for (String name : eligible) {</span>
-<span class="fc" id="L221">            File dir = new File(root, name);</span>
+<span class="fc bfc" id="L229" title="All 2 branches covered.">        for (String name : eligible) {</span>
+<span class="fc" id="L230">            File dir = new File(root, name);</span>
             try {
-<span class="fc" id="L223">                List&lt;String&gt; behind = VcsOperations.commitLog(</span>
+<span class="fc" id="L232">                List&lt;String&gt; behind = VcsOperations.commitLog(</span>
                         dir, branchName, targetBranch);
-<span class="fc" id="L225">                List&lt;String&gt; ahead = VcsOperations.commitLog(</span>
+<span class="fc" id="L234">                List&lt;String&gt; ahead = VcsOperations.commitLog(</span>
                         dir, targetBranch, branchName);
 
-<span class="fc bfc" id="L228" title="All 2 branches covered.">                if (behind.isEmpty()) {</span>
-<span class="fc" id="L229">                    getLog().info(&quot;  &quot; + Ansi.green(&quot;✓ &quot;) + name</span>
+<span class="fc bfc" id="L237" title="All 2 branches covered.">                if (behind.isEmpty()) {</span>
+<span class="fc" id="L238">                    getLog().info(&quot;  &quot; + Ansi.green(&quot;✓ &quot;) + name</span>
                             + &quot; — up to date with &quot; + targetBranch);
-<span class="fc" id="L231">                    effects.put(name, &quot;up to date with `&quot; + targetBranch + &quot;`&quot;);</span>
-<span class="fc bfc" id="L232" title="All 2 branches covered.">                } else if (draft) {</span>
+<span class="fc" id="L240">                    effects.put(name, &quot;up to date with `&quot; + targetBranch + &quot;`&quot;);</span>
+<span class="fc bfc" id="L241" title="All 2 branches covered.">                } else if (draft) {</span>
                     // Predict conflicts without touching working tree
-<span class="fc" id="L234">                    List&lt;String&gt; predicted = VcsOperations.predictConflicts(</span>
+<span class="fc" id="L243">                    List&lt;String&gt; predicted = VcsOperations.predictConflicts(</span>
                             dir, branchName, targetBranch);
 
-<span class="pc bpc" id="L237" title="1 of 2 branches missed.">                    if (predicted.isEmpty()) {</span>
-<span class="fc" id="L238">                        getLog().info(&quot;  &quot; + Ansi.green(&quot;✓ &quot;) + name + &quot; — &quot;</span>
-<span class="fc" id="L239">                                + behind.size() + &quot; commit(s) behind &quot;</span>
-<span class="fc" id="L240">                                + targetBranch + &quot;, &quot; + ahead.size()</span>
+<span class="pc bpc" id="L246" title="1 of 2 branches missed.">                    if (predicted.isEmpty()) {</span>
+<span class="fc" id="L247">                        getLog().info(&quot;  &quot; + Ansi.green(&quot;✓ &quot;) + name + &quot; — &quot;</span>
+<span class="fc" id="L248">                                + behind.size() + &quot; commit(s) behind &quot;</span>
+<span class="fc" id="L249">                                + targetBranch + &quot;, &quot; + ahead.size()</span>
                                 + &quot; ahead — clean update expected&quot;);
-<span class="fc" id="L242">                        effects.put(name, &quot;clean update expected (&quot;</span>
-<span class="fc" id="L243">                                + behind.size() + &quot; behind, &quot; + ahead.size()</span>
+<span class="fc" id="L251">                        effects.put(name, &quot;clean update expected (&quot;</span>
+<span class="fc" id="L252">                                + behind.size() + &quot; behind, &quot; + ahead.size()</span>
                                 + &quot; ahead)&quot;);
                     } else {
-<span class="nc" id="L246">                        getLog().warn(&quot;  &quot; + Ansi.red(&quot;⚠ &quot;) + name + &quot; — &quot;</span>
-<span class="nc" id="L247">                                + behind.size() + &quot; commit(s) behind &quot;</span>
-<span class="nc" id="L248">                                + targetBranch + &quot;, &quot; + ahead.size()</span>
-<span class="nc" id="L249">                                + &quot; ahead — &quot; + predicted.size()</span>
+<span class="nc" id="L255">                        getLog().warn(&quot;  &quot; + Ansi.red(&quot;⚠ &quot;) + name + &quot; — &quot;</span>
+<span class="nc" id="L256">                                + behind.size() + &quot; commit(s) behind &quot;</span>
+<span class="nc" id="L257">                                + targetBranch + &quot;, &quot; + ahead.size()</span>
+<span class="nc" id="L258">                                + &quot; ahead — &quot; + predicted.size()</span>
                                 + &quot; conflict(s) expected:&quot;);
-<span class="nc bnc" id="L251" title="All 2 branches missed.">                        for (String file : predicted) {</span>
-<span class="nc" id="L252">                            getLog().warn(&quot;      • &quot; + file);</span>
-<span class="nc" id="L253">                        }</span>
-<span class="nc" id="L254">                        getLog().warn(&quot;      Resolve in IntelliJ after running&quot;</span>
-<span class="nc" id="L255">                                + &quot; &quot; + WsGoal.UPDATE_FEATURE_PUBLISH.qualified());</span>
-<span class="nc" id="L256">                        effects.put(name, predicted.size()</span>
+<span class="nc bnc" id="L260" title="All 2 branches missed.">                        for (String file : predicted) {</span>
+<span class="nc" id="L261">                            getLog().warn(&quot;      • &quot; + file);</span>
+<span class="nc" id="L262">                        }</span>
+<span class="nc" id="L263">                        getLog().warn(&quot;      Resolve in IntelliJ after running&quot;</span>
+<span class="nc" id="L264">                                + &quot; &quot; + WsGoal.UPDATE_FEATURE_PUBLISH.qualified());</span>
+<span class="nc" id="L265">                        effects.put(name, predicted.size()</span>
                                 + &quot; conflict(s) expected: &quot;
-<span class="nc" id="L258">                                + String.join(&quot;, &quot;, predicted));</span>
+<span class="nc" id="L267">                                + String.join(&quot;, &quot;, predicted));</span>
                     }
-<span class="fc" id="L260">                } else {</span>
-<span class="fc" id="L261">                    getLog().info(&quot;  &quot; + Ansi.cyan(&quot;→ &quot;) + name + &quot; — &quot;</span>
-<span class="fc" id="L262">                            + behind.size() + &quot; commit(s) behind, &quot;</span>
+<span class="fc" id="L269">                } else {</span>
+<span class="fc" id="L270">                    getLog().info(&quot;  &quot; + Ansi.cyan(&quot;→ &quot;) + name + &quot; — &quot;</span>
+<span class="fc" id="L271">                            + behind.size() + &quot; commit(s) behind, &quot;</span>
                             + strategy + &quot;...&quot;);
 
-<span class="fc" id="L265">                    VcsOperations.mergeNoFf(dir, getLog(), targetBranch,</span>
+<span class="fc" id="L274">                    VcsOperations.mergeNoFf(dir, getLog(), targetBranch,</span>
                             &quot;update: merge &quot; + targetBranch
                                     + &quot; into &quot; + branchName);
 
-<span class="fc" id="L269">                    getLog().info(&quot;    &quot; + Ansi.green(&quot;✓ &quot;) + &quot;updated&quot;);</span>
-<span class="fc" id="L270">                    effects.put(name, &quot;merged `&quot; + targetBranch + &quot;` (&quot;</span>
-<span class="fc" id="L271">                            + behind.size() + &quot; behind, &quot; + ahead.size()</span>
+<span class="fc" id="L278">                    getLog().info(&quot;    &quot; + Ansi.green(&quot;✓ &quot;) + &quot;updated&quot;);</span>
+<span class="fc" id="L279">                    effects.put(name, &quot;merged `&quot; + targetBranch + &quot;` (&quot;</span>
+<span class="fc" id="L280">                            + behind.size() + &quot; behind, &quot; + ahead.size()</span>
                             + &quot; ahead)&quot;);
                 }
-<span class="nc" id="L274">            } catch (MojoException e) {</span>
-<span class="nc" id="L275">                List&lt;String&gt; conflicts = VcsOperations.conflictingFiles(dir);</span>
+<span class="nc" id="L283">            } catch (MojoException e) {</span>
+<span class="nc" id="L284">                List&lt;String&gt; conflicts = VcsOperations.conflictingFiles(dir);</span>
 
-<span class="nc" id="L277">                getLog().error(&quot;&quot;);</span>
-<span class="nc" id="L278">                getLog().error(&quot;  &quot; + Ansi.red(&quot;✗ &quot;) + name</span>
+<span class="nc" id="L286">                getLog().error(&quot;&quot;);</span>
+<span class="nc" id="L287">                getLog().error(&quot;  &quot; + Ansi.red(&quot;✗ &quot;) + name</span>
                         + &quot; — &quot; + strategy + &quot; failed&quot;);
-<span class="nc" id="L280">                getLog().error(&quot;&quot;);</span>
+<span class="nc" id="L289">                getLog().error(&quot;&quot;);</span>
 
-<span class="nc bnc" id="L282" title="All 2 branches missed.">                if (!conflicts.isEmpty()) {</span>
-<span class="nc" id="L283">                    getLog().error(&quot;  Conflicting files in &quot; + name + &quot;:&quot;);</span>
-<span class="nc bnc" id="L284" title="All 2 branches missed.">                    for (String file : conflicts) {</span>
-<span class="nc" id="L285">                        getLog().error(&quot;    • &quot; + file);</span>
-<span class="nc" id="L286">                    }</span>
-<span class="nc" id="L287">                    getLog().error(&quot;&quot;);</span>
+<span class="nc bnc" id="L291" title="All 2 branches missed.">                if (!conflicts.isEmpty()) {</span>
+<span class="nc" id="L292">                    getLog().error(&quot;  Conflicting files in &quot; + name + &quot;:&quot;);</span>
+<span class="nc bnc" id="L293" title="All 2 branches missed.">                    for (String file : conflicts) {</span>
+<span class="nc" id="L294">                        getLog().error(&quot;    • &quot; + file);</span>
+<span class="nc" id="L295">                    }</span>
+<span class="nc" id="L296">                    getLog().error(&quot;&quot;);</span>
                 }
 
-<span class="nc" id="L290">                getLog().error(&quot;  To resolve in IntelliJ:&quot;);</span>
-<span class="nc" id="L291">                getLog().error(&quot;    1. Open the &quot; + name + &quot; project&quot;);</span>
-<span class="nc" id="L292">                getLog().error(&quot;    2. IntelliJ will detect the conflicts automatically&quot;);</span>
-<span class="nc" id="L293">                getLog().error(&quot;    3. Git → Resolve Conflicts → resolve each file&quot;</span>
+<span class="nc" id="L299">                getLog().error(&quot;  To resolve in IntelliJ:&quot;);</span>
+<span class="nc" id="L300">                getLog().error(&quot;    1. Open the &quot; + name + &quot; project&quot;);</span>
+<span class="nc" id="L301">                getLog().error(&quot;    2. IntelliJ will detect the conflicts automatically&quot;);</span>
+<span class="nc" id="L302">                getLog().error(&quot;    3. Git → Resolve Conflicts → resolve each file&quot;</span>
                         + &quot; with the 3-way merge editor&quot;);
-<span class="nc" id="L295">                getLog().error(&quot;    4. Commit the merge resolution&quot;);</span>
-<span class="nc" id="L296">                getLog().error(&quot;    5. Re-run: mvn &quot;</span>
-<span class="nc" id="L297">                        + WsGoal.UPDATE_FEATURE_PUBLISH.qualified());</span>
-<span class="nc" id="L298">                getLog().error(&quot;       (already-updated components will be skipped)&quot;);</span>
-<span class="nc" id="L299">                getLog().error(&quot;&quot;);</span>
-<span class="nc" id="L300">                throw new MojoException(</span>
+<span class="nc" id="L304">                getLog().error(&quot;    4. Commit the merge resolution&quot;);</span>
+<span class="nc" id="L305">                getLog().error(&quot;    5. Re-run: mvn &quot;</span>
+<span class="nc" id="L306">                        + WsGoal.UPDATE_FEATURE_PUBLISH.qualified());</span>
+<span class="nc" id="L307">                getLog().error(&quot;       (already-updated components will be skipped)&quot;);</span>
+<span class="nc" id="L308">                getLog().error(&quot;&quot;);</span>
+<span class="nc" id="L309">                throw new MojoException(</span>
                         strategy + &quot; failed for &quot; + name
-<span class="nc" id="L302">                                + &quot; (&quot; + conflicts.size() + &quot; conflicting file&quot;</span>
-<span class="nc bnc" id="L303" title="All 2 branches missed.">                                + (conflicts.size() == 1 ? &quot;&quot; : &quot;s&quot;)</span>
+<span class="nc" id="L311">                                + &quot; (&quot; + conflicts.size() + &quot; conflicting file&quot;</span>
+<span class="nc bnc" id="L312" title="All 2 branches missed.">                                + (conflicts.size() == 1 ? &quot;&quot; : &quot;s&quot;)</span>
                                 + &quot;). See above for resolution steps.&quot;, e);
-<span class="fc" id="L305">            }</span>
-<span class="fc" id="L306">        }</span>
+<span class="fc" id="L314">            }</span>
+<span class="fc" id="L315">        }</span>
 
-<span class="fc" id="L308">        getLog().info(&quot;&quot;);</span>
-<span class="fc bfc" id="L309" title="All 2 branches covered.">        if (draft) {</span>
-<span class="fc" id="L310">            getLog().info(&quot;  Components to update: &quot; + eligible.size()</span>
-<span class="fc" id="L311">                    + &quot; | Skipped: &quot; + skipped.size());</span>
-<span class="fc" id="L312">            getLog().info(&quot;&quot;);</span>
-<span class="fc" id="L313">            getLog().info(&quot;  Next: mvn &quot;</span>
-<span class="fc" id="L314">                    + WsGoal.UPDATE_FEATURE_PUBLISH.qualified());</span>
+<span class="fc" id="L317">        getLog().info(&quot;&quot;);</span>
+<span class="fc bfc" id="L318" title="All 2 branches covered.">        if (draft) {</span>
+<span class="fc" id="L319">            getLog().info(&quot;  Components to update: &quot; + eligible.size()</span>
+<span class="fc" id="L320">                    + &quot; | Skipped: &quot; + skipped.size());</span>
+<span class="fc" id="L321">            getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L322">            getLog().info(&quot;  Next: mvn &quot;</span>
+<span class="fc" id="L323">                    + WsGoal.UPDATE_FEATURE_PUBLISH.qualified());</span>
         } else {
-<span class="fc" id="L316">            getLog().info(&quot;  Updated: &quot; + eligible.size() + &quot; subproject(s)&quot;</span>
-<span class="fc" id="L317">                    + &quot; | Skipped: &quot; + skipped.size());</span>
+<span class="fc" id="L325">            getLog().info(&quot;  Updated: &quot; + eligible.size() + &quot; subproject(s)&quot;</span>
+<span class="fc" id="L326">                    + &quot; | Skipped: &quot; + skipped.size());</span>
         }
-<span class="fc" id="L319">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L328">        getLog().info(&quot;&quot;);</span>
 
         // Write report. One WorkingSetReportTable.Row per working-set member —
         // the aggregator (workspace root) included — so the table shows the
@@ -324,37 +333,37 @@ public class UpdateFeatureDraftMojo extends AbstractWorkspaceMojo {
         // Each member's Effect comes from the eligibility/merge loops above;
         // a member with no recorded effect (e.g. the aggregator, which this
         // goal does not merge) is reported as skipped.
-<span class="fc" id="L327">        GoalReportBuilder report = new GoalReportBuilder();</span>
-<span class="fc" id="L328">        report.paragraph(&quot;**Branch:** `&quot; + branchName</span>
+<span class="fc" id="L336">        GoalReportBuilder report = new GoalReportBuilder();</span>
+<span class="fc" id="L337">        report.paragraph(&quot;**Branch:** `&quot; + branchName</span>
                 + &quot;` ← `&quot; + targetBranch + &quot;`&quot;);
 
-<span class="fc" id="L331">        List&lt;WorkingSetReportTable.Row&gt; rows = new ArrayList&lt;&gt;();</span>
-<span class="fc bfc" id="L332" title="All 2 branches covered.">        for (WorkingSet.Member member : resolveWorkingSet().members()) {</span>
-<span class="fc" id="L333">            File dir = member.directory().toFile();</span>
-<span class="fc" id="L334">            String version = readPomVersion(dir);   // the aggregator too (#763)</span>
-<span class="fc" id="L335">            String branch = gitBranch(dir);</span>
-<span class="fc" id="L336">            String sha = gitShortSha(dir);</span>
-<span class="fc" id="L337">            String effect = effects.get(member.name());</span>
-<span class="fc bfc" id="L338" title="All 2 branches covered.">            if (effect == null) {</span>
+<span class="fc" id="L340">        List&lt;WorkingSetReportTable.Row&gt; rows = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L341" title="All 2 branches covered.">        for (WorkingSet.Member member : resolveWorkingSet().members()) {</span>
+<span class="fc" id="L342">            File dir = member.directory().toFile();</span>
+<span class="fc" id="L343">            String version = readPomVersion(dir);   // the aggregator too (#763)</span>
+<span class="fc" id="L344">            String branch = gitBranch(dir);</span>
+<span class="fc" id="L345">            String sha = gitShortSha(dir);</span>
+<span class="fc" id="L346">            String effect = effects.get(member.name());</span>
+<span class="fc bfc" id="L347" title="All 2 branches covered.">            if (effect == null) {</span>
                 // No effect recorded for this member. The aggregator is not on
                 // the feature branch (this goal merges only the subprojects),
                 // so it is skipped; same for any member outside the eligible
                 // loop.
-<span class="pc bpc" id="L343" title="1 of 2 branches missed.">                effect = member.isAggregator()</span>
-<span class="fc" id="L344">                        ? &quot;skipped (aggregator)&quot;</span>
-<span class="pc" id="L345">                        : &quot;skipped (not on `&quot; + branchName + &quot;`)&quot;;</span>
+<span class="pc bpc" id="L352" title="1 of 2 branches missed.">                effect = member.isAggregator()</span>
+<span class="fc" id="L353">                        ? &quot;skipped (aggregator)&quot;</span>
+<span class="pc" id="L354">                        : &quot;skipped (not on `&quot; + branchName + &quot;`)&quot;;</span>
             }
-<span class="fc" id="L347">            rows.add(new WorkingSetReportTable.Row(</span>
+<span class="fc" id="L356">            rows.add(new WorkingSetReportTable.Row(</span>
                     member, version, branch, sha, effect));
-<span class="fc" id="L349">        }</span>
-<span class="fc" id="L350">        WorkingSetReportTable.render(report, &quot;Working set&quot;, rows);</span>
+<span class="fc" id="L358">        }</span>
+<span class="fc" id="L359">        WorkingSetReportTable.render(report, &quot;Working set&quot;, rows);</span>
 
-<span class="fc" id="L352">        report.paragraph(&quot;**&quot; + eligible.size() + &quot;** subproject(s)&quot;</span>
-<span class="fc bfc" id="L353" title="All 2 branches covered.">                + (draft ? &quot; to update&quot; : &quot; updated&quot;)</span>
-<span class="fc" id="L354">                + &quot;, **&quot; + skipped.size() + &quot;** skipped.&quot;);</span>
-<span class="fc" id="L355">        return new WorkspaceReportSpec(</span>
-<span class="fc bfc" id="L356" title="All 2 branches covered.">                publish ? WsGoal.UPDATE_FEATURE_PUBLISH : WsGoal.UPDATE_FEATURE_DRAFT,</span>
-<span class="fc" id="L357">                report.build());</span>
+<span class="fc" id="L361">        report.paragraph(&quot;**&quot; + eligible.size() + &quot;** subproject(s)&quot;</span>
+<span class="fc bfc" id="L362" title="All 2 branches covered.">                + (draft ? &quot; to update&quot; : &quot; updated&quot;)</span>
+<span class="fc" id="L363">                + &quot;, **&quot; + skipped.size() + &quot;** skipped.&quot;);</span>
+<span class="fc" id="L364">        return new WorkspaceReportSpec(</span>
+<span class="fc bfc" id="L365" title="All 2 branches covered.">                publish ? WsGoal.UPDATE_FEATURE_PUBLISH : WsGoal.UPDATE_FEATURE_DRAFT,</span>
+<span class="fc" id="L366">                report.build());</span>
     }
 
     /**
@@ -368,14 +377,14 @@ public class UpdateFeatureDraftMojo extends AbstractWorkspaceMojo {
      * @return the POM version, or {@link WorkingSetReportTable#NONE}
      */
     private String readPomVersion(File dir) {
-<span class="fc" id="L371">        File pom = new File(dir, &quot;pom.xml&quot;);</span>
-<span class="fc bfc" id="L372" title="All 2 branches covered.">        if (!pom.isFile()) {</span>
-<span class="fc" id="L373">            return WorkingSetReportTable.NONE;</span>
+<span class="fc" id="L380">        File pom = new File(dir, &quot;pom.xml&quot;);</span>
+<span class="fc bfc" id="L381" title="All 2 branches covered.">        if (!pom.isFile()) {</span>
+<span class="fc" id="L382">            return WorkingSetReportTable.NONE;</span>
         }
         try {
-<span class="fc" id="L376">            return ReleaseSupport.readPomVersion(pom);</span>
-<span class="nc" id="L377">        } catch (MojoException e) {</span>
-<span class="nc" id="L378">            return WorkingSetReportTable.NONE;</span>
+<span class="fc" id="L385">            return ReleaseSupport.readPomVersion(pom);</span>
+<span class="nc" id="L386">        } catch (MojoException e) {</span>
+<span class="nc" id="L387">            return WorkingSetReportTable.NONE;</span>
         }
     }
 }

@@ -2,9 +2,6 @@
 
 import network.ike.plugin.ReleaseSupport;
 import network.ike.plugin.support.GoalReportBuilder;
-import network.ike.plugin.ws.preflight.Preflight;
-import network.ike.plugin.ws.preflight.PreflightCondition;
-import network.ike.plugin.ws.preflight.PreflightContext;
 import network.ike.plugin.ws.vcs.VcsOperations;
 
 import network.ike.workspace.WorkingSet;
@@ -43,19 +40,19 @@ import java.util.Set;
 public class PullWorkspaceMojo extends AbstractWorkspaceMojo {
 
     /** Creates this goal instance. */
-<span class="fc" id="L46">    public PullWorkspaceMojo() {}</span>
+<span class="fc" id="L43">    public PullWorkspaceMojo() {}</span>
 
     @Override
     protected WorkspaceReportSpec runGoal() throws MojoException {
         // Resolve the scope once: a workspace pulls its subprojects + root;
         // a bare repo is a working set of one (IKE-Network/ike-issues#703,
         // completing the #611 working-set migration).
-<span class="fc" id="L53">        WorkingSet workingSet = resolveWorkingSet();</span>
-<span class="fc bfc" id="L54" title="All 2 branches covered.">        if (!workingSet.isWorkspace()) {</span>
-<span class="fc" id="L55">            return pullSingleRepo(workingSet.root().toFile(),</span>
-<span class="fc" id="L56">                    workingSet.members().getFirst().name());</span>
+<span class="fc" id="L50">        WorkingSet workingSet = resolveWorkingSet();</span>
+<span class="fc bfc" id="L51" title="All 2 branches covered.">        if (!workingSet.isWorkspace()) {</span>
+<span class="fc" id="L52">            return pullSingleRepo(workingSet.root().toFile(),</span>
+<span class="fc" id="L53">                    workingSet.members().getFirst().name());</span>
         }
-<span class="fc" id="L58">        return pullWorkspace();</span>
+<span class="fc" id="L55">        return pullWorkspace();</span>
     }
 
     /**
@@ -68,45 +65,42 @@ public class PullWorkspaceMojo extends AbstractWorkspaceMojo {
      * @return the pull report for the workspace
      */
     private WorkspaceReportSpec pullWorkspace() throws MojoException {
-<span class="fc" id="L71">        WorkspaceGraph graph = loadGraph();</span>
-<span class="fc" id="L72">        File root = workspaceRoot();</span>
+<span class="fc" id="L68">        WorkspaceGraph graph = loadGraph();</span>
+<span class="fc" id="L69">        File root = workspaceRoot();</span>
 
-<span class="fc" id="L74">        Set&lt;String&gt; targets = graph.manifest().subprojects().keySet();</span>
+<span class="fc" id="L71">        Set&lt;String&gt; targets = graph.manifest().subprojects().keySet();</span>
 
-<span class="fc" id="L76">        List&lt;String&gt; sorted = graph.topologicalSort(new LinkedHashSet&lt;&gt;(targets));</span>
+<span class="fc" id="L73">        List&lt;String&gt; sorted = graph.topologicalSort(new LinkedHashSet&lt;&gt;(targets));</span>
 
-        // Preflight: all working trees must be clean (#132, #154)
-<span class="fc" id="L79">        Preflight.of(</span>
-<span class="fc" id="L80">                List.of(PreflightCondition.WORKING_TREE_CLEAN),</span>
-<span class="fc" id="L81">                PreflightContext.of(root, graph, sorted))</span>
-<span class="fc" id="L82">                .requirePassed(WsGoal.PULL);</span>
+        // Sync goal (#780): rather than refuse on uncommitted work — the
+        // normal state of a Syncthing-bridged workspace — each repo's WIP is
+        // auto-stashed before its pull and re-applied after (see pullStashed).
+<span class="fc" id="L78">        printPullBanner();</span>
 
-<span class="fc" id="L84">        printPullBanner();</span>
-
-<span class="fc" id="L86">        List&lt;PullRow&gt; rows = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L80">        List&lt;PullRow&gt; rows = new ArrayList&lt;&gt;();</span>
 
         // Pull workspace root if it has a .git directory (#179). Must run
         // before subproject pulls so any update to the root POM or
         // workspace.yaml is observed by downstream steps.
-<span class="pc bpc" id="L91" title="1 of 2 branches missed.">        if (new File(root, &quot;.git&quot;).exists()) {</span>
-<span class="nc" id="L92">            rows.add(pullOne(root, &quot;workspace root&quot;, true));</span>
+<span class="pc bpc" id="L85" title="1 of 2 branches missed.">        if (new File(root, &quot;.git&quot;).exists()) {</span>
+<span class="nc" id="L86">            rows.add(pullStashed(root, &quot;workspace root&quot;, true));</span>
         }
 
-<span class="fc bfc" id="L95" title="All 2 branches covered.">        for (String name : sorted) {</span>
-<span class="fc" id="L96">            File dir = new File(root, name);</span>
-<span class="fc" id="L97">            File gitDir = new File(dir, &quot;.git&quot;);</span>
+<span class="fc bfc" id="L89" title="All 2 branches covered.">        for (String name : sorted) {</span>
+<span class="fc" id="L90">            File dir = new File(root, name);</span>
+<span class="fc" id="L91">            File gitDir = new File(dir, &quot;.git&quot;);</span>
 
-<span class="pc bpc" id="L99" title="1 of 2 branches missed.">            if (!gitDir.exists()) {</span>
-<span class="nc" id="L100">                getLog().info(Ansi.yellow(&quot;  ⚠ &quot;) + name + &quot; — not cloned, skipping&quot;);</span>
-<span class="nc" id="L101">                rows.add(PullRow.notCloned(name));</span>
-<span class="nc" id="L102">                continue;</span>
+<span class="pc bpc" id="L93" title="1 of 2 branches missed.">            if (!gitDir.exists()) {</span>
+<span class="nc" id="L94">                getLog().info(Ansi.yellow(&quot;  ⚠ &quot;) + name + &quot; — not cloned, skipping&quot;);</span>
+<span class="nc" id="L95">                rows.add(PullRow.notCloned(name));</span>
+<span class="nc" id="L96">                continue;</span>
             }
-<span class="fc" id="L104">            rows.add(pullOne(dir, name, false));</span>
-<span class="fc" id="L105">        }</span>
+<span class="fc" id="L98">            rows.add(pullStashed(dir, name, false));</span>
+<span class="fc" id="L99">        }</span>
 
-<span class="fc" id="L107">        WorkspaceReportSpec spec = pullReport(rows);</span>
-<span class="fc" id="L108">        PostMutationSync.refresh(root, getLog());</span>
-<span class="fc" id="L109">        return spec;</span>
+<span class="fc" id="L101">        WorkspaceReportSpec spec = pullReport(rows);</span>
+<span class="fc" id="L102">        PostMutationSync.refresh(root, getLog());</span>
+<span class="fc" id="L103">        return spec;</span>
     }
 
     /**
@@ -122,21 +116,50 @@ public class PullWorkspaceMojo extends AbstractWorkspaceMojo {
      * @return the pull report for the one repository
      */
     private WorkspaceReportSpec pullSingleRepo(File dir, String name) {
-<span class="fc" id="L125">        printPullBanner();</span>
-<span class="fc bfc" id="L126" title="All 2 branches covered.">        if (!new File(dir, &quot;.git&quot;).exists()) {</span>
-<span class="fc" id="L127">            throw new MojoException(&quot;ws:pull: &quot; + dir</span>
+<span class="fc" id="L119">        printPullBanner();</span>
+<span class="fc bfc" id="L120" title="All 2 branches covered.">        if (!new File(dir, &quot;.git&quot;).exists()) {</span>
+<span class="fc" id="L121">            throw new MojoException(&quot;ws:pull: &quot; + dir</span>
                     + &quot; is not a git repository.&quot;);
         }
-<span class="fc" id="L130">        return pullReport(List.of(pullOne(dir, name, true)));</span>
+<span class="fc" id="L124">        return pullReport(List.of(pullStashed(dir, name, true)));</span>
+    }
+
+    /**
+     * Pull {@code dir}, auto-stashing any uncommitted work first and restoring
+     * it after (#780) — so a routine pull never refuses on the in-flight edits
+     * that are the normal state of a Syncthing-bridged workspace. Restore runs
+     * in a {@code finally}; a restore failure is reported (the WIP survives on
+     * {@code refs/ws-stash}) rather than masking the pull result.
+     *
+     * @param dir   the repository directory
+     * @param label the report label
+     * @param atCwd whether {@code dir} is the invocation directory
+     * @return the pull report row for {@code dir}
+     * @throws MojoException if the tree is dirty but cannot be stashed (e.g.
+     *                       {@code git user.email} is unset)
+     */
+    private PullRow pullStashed(File dir, String label, boolean atCwd)
+            throws MojoException {
+<span class="fc" id="L143">        boolean stashed = AutoStashGuard.stashIfDirty(dir, getLog());</span>
+        try {
+<span class="fc" id="L145">            return pullOne(dir, label, atCwd);</span>
+        } finally {
+            try {
+<span class="fc" id="L148">                AutoStashGuard.restoreIfStashed(dir, getLog(), stashed);</span>
+<span class="nc" id="L149">            } catch (MojoException e) {</span>
+<span class="nc" id="L150">                getLog().warn(&quot;  could not restore stashed WIP in &quot; + label</span>
+<span class="nc" id="L151">                        + &quot; — recover it from refs/ws-stash. &quot; + e.getMessage());</span>
+<span class="fc" id="L152">            }</span>
+        }
     }
 
     /** Print the goal banner, shared by the workspace and bare paths. */
     private void printPullBanner() {
-<span class="fc" id="L135">        getLog().info(&quot;&quot;);</span>
-<span class="fc" id="L136">        getLog().info(header(&quot;Pull&quot;));</span>
-<span class="fc" id="L137">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
-<span class="fc" id="L138">        getLog().info(&quot;&quot;);</span>
-<span class="fc" id="L139">    }</span>
+<span class="fc" id="L158">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L159">        getLog().info(header(&quot;Pull&quot;));</span>
+<span class="fc" id="L160">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+<span class="fc" id="L161">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L162">    }</span>
 
     /**
      * Tally the per-repo outcomes, log the one-line summary, and build the
@@ -147,28 +170,28 @@ public class PullWorkspaceMojo extends AbstractWorkspaceMojo {
      * @return the pull report
      */
     private WorkspaceReportSpec pullReport(List&lt;PullRow&gt; rows) {
-<span class="fc bfc" id="L150" title="All 2 branches covered.">        int pulled = (int) rows.stream().filter(r -&gt; r.outcome == Outcome.PULLED).count();</span>
-<span class="fc bfc" id="L151" title="All 2 branches covered.">        int upToDate = (int) rows.stream().filter(r -&gt; r.outcome == Outcome.UP_TO_DATE).count();</span>
-<span class="fc bfc" id="L152" title="All 2 branches covered.">        int noUpstream = (int) rows.stream().filter(r -&gt; r.outcome == Outcome.NO_UPSTREAM).count();</span>
-<span class="pc bpc" id="L153" title="1 of 2 branches missed.">        int notCloned = (int) rows.stream().filter(r -&gt; r.outcome == Outcome.NOT_CLONED).count();</span>
-<span class="pc bpc" id="L154" title="1 of 2 branches missed.">        int failed = (int) rows.stream().filter(r -&gt; r.outcome == Outcome.FAILED).count();</span>
+<span class="fc bfc" id="L173" title="All 2 branches covered.">        int pulled = (int) rows.stream().filter(r -&gt; r.outcome == Outcome.PULLED).count();</span>
+<span class="fc bfc" id="L174" title="All 2 branches covered.">        int upToDate = (int) rows.stream().filter(r -&gt; r.outcome == Outcome.UP_TO_DATE).count();</span>
+<span class="fc bfc" id="L175" title="All 2 branches covered.">        int noUpstream = (int) rows.stream().filter(r -&gt; r.outcome == Outcome.NO_UPSTREAM).count();</span>
+<span class="pc bpc" id="L176" title="1 of 2 branches missed.">        int notCloned = (int) rows.stream().filter(r -&gt; r.outcome == Outcome.NOT_CLONED).count();</span>
+<span class="pc bpc" id="L177" title="1 of 2 branches missed.">        int failed = (int) rows.stream().filter(r -&gt; r.outcome == Outcome.FAILED).count();</span>
 
-<span class="fc" id="L156">        getLog().info(&quot;&quot;);</span>
-<span class="fc" id="L157">        StringBuilder summary = new StringBuilder();</span>
-<span class="fc" id="L158">        summary.append(pulled).append(&quot; pulled&quot;);</span>
-<span class="fc bfc" id="L159" title="All 2 branches covered.">        if (upToDate &gt; 0) summary.append(&quot;, &quot;).append(upToDate).append(&quot; up-to-date&quot;);</span>
-<span class="fc bfc" id="L160" title="All 2 branches covered.">        if (noUpstream &gt; 0) summary.append(&quot;, &quot;).append(noUpstream).append(&quot; without upstream&quot;);</span>
-<span class="pc bpc" id="L161" title="1 of 2 branches missed.">        if (notCloned &gt; 0) summary.append(&quot;, &quot;).append(notCloned).append(&quot; not cloned&quot;);</span>
-<span class="pc bpc" id="L162" title="1 of 2 branches missed.">        if (failed &gt; 0) summary.append(&quot;, &quot;).append(failed).append(&quot; failed&quot;);</span>
-<span class="fc" id="L163">        getLog().info(&quot;  Done: &quot; + summary);</span>
-<span class="fc" id="L164">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L179">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L180">        StringBuilder summary = new StringBuilder();</span>
+<span class="fc" id="L181">        summary.append(pulled).append(&quot; pulled&quot;);</span>
+<span class="fc bfc" id="L182" title="All 2 branches covered.">        if (upToDate &gt; 0) summary.append(&quot;, &quot;).append(upToDate).append(&quot; up-to-date&quot;);</span>
+<span class="fc bfc" id="L183" title="All 2 branches covered.">        if (noUpstream &gt; 0) summary.append(&quot;, &quot;).append(noUpstream).append(&quot; without upstream&quot;);</span>
+<span class="pc bpc" id="L184" title="1 of 2 branches missed.">        if (notCloned &gt; 0) summary.append(&quot;, &quot;).append(notCloned).append(&quot; not cloned&quot;);</span>
+<span class="pc bpc" id="L185" title="1 of 2 branches missed.">        if (failed &gt; 0) summary.append(&quot;, &quot;).append(failed).append(&quot; failed&quot;);</span>
+<span class="fc" id="L186">        getLog().info(&quot;  Done: &quot; + summary);</span>
+<span class="fc" id="L187">        getLog().info(&quot;&quot;);</span>
 
-<span class="pc bpc" id="L166" title="1 of 2 branches missed.">        if (failed &gt; 0) {</span>
-<span class="nc" id="L167">            getLog().warn(&quot;  Some pulls failed — check output above for details.&quot;);</span>
+<span class="pc bpc" id="L189" title="1 of 2 branches missed.">        if (failed &gt; 0) {</span>
+<span class="nc" id="L190">            getLog().warn(&quot;  Some pulls failed — check output above for details.&quot;);</span>
         }
 
-<span class="fc" id="L170">        return new WorkspaceReportSpec(WsGoal.PULL,</span>
-<span class="fc" id="L171">                buildPullReport(rows, summary.toString()));</span>
+<span class="fc" id="L193">        return new WorkspaceReportSpec(WsGoal.PULL,</span>
+<span class="fc" id="L194">                buildPullReport(rows, summary.toString()));</span>
     }
 
     /**
@@ -190,13 +213,13 @@ public class PullWorkspaceMojo extends AbstractWorkspaceMojo {
     private PullRow pullOne(File dir, String label, boolean atCwd) {
         String branch;
         try {
-<span class="fc" id="L193">            branch = VcsOperations.currentBranch(dir);</span>
-<span class="nc" id="L194">        } catch (MojoException e) {</span>
-<span class="nc" id="L195">            getLog().warn(Ansi.red(&quot;  ✗ &quot;) + label + &quot; — &quot;</span>
-<span class="nc" id="L196">                    + e.getMessage());</span>
-<span class="nc" id="L197">            return PullRow.failure(label, &quot;?&quot;, e.getMessage(),</span>
-<span class="nc" id="L198">                    buildRetryCommand(label, atCwd));</span>
-<span class="fc" id="L199">        }</span>
+<span class="fc" id="L216">            branch = VcsOperations.currentBranch(dir);</span>
+<span class="nc" id="L217">        } catch (MojoException e) {</span>
+<span class="nc" id="L218">            getLog().warn(Ansi.red(&quot;  ✗ &quot;) + label + &quot; — &quot;</span>
+<span class="nc" id="L219">                    + e.getMessage());</span>
+<span class="nc" id="L220">            return PullRow.failure(label, &quot;?&quot;, e.getMessage(),</span>
+<span class="nc" id="L221">                    buildRetryCommand(label, atCwd));</span>
+<span class="fc" id="L222">        }</span>
 
         // Detect &quot;no upstream&quot; up front. ReleaseSupport.exec routes
         // git's stderr through the Maven logger but the resulting
@@ -205,104 +228,104 @@ public class PullWorkspaceMojo extends AbstractWorkspaceMojo {
         // distinguish a missing-upstream case from a generic network
         // error. Pre-check is reliable and surfaces the right
         // recovery command (drafts-actionable-remediation).
-<span class="fc bfc" id="L208" title="All 2 branches covered.">        if (VcsOperations.aheadBehindUpstream(dir).isEmpty()) {</span>
-<span class="fc" id="L209">            getLog().warn(Ansi.yellow(&quot;  ⚠ &quot;) + label</span>
+<span class="fc bfc" id="L231" title="All 2 branches covered.">        if (VcsOperations.aheadBehindUpstream(dir).isEmpty()) {</span>
+<span class="fc" id="L232">            getLog().warn(Ansi.yellow(&quot;  ⚠ &quot;) + label</span>
                     + &quot; — no upstream configured&quot;);
-<span class="fc" id="L211">            return PullRow.noUpstream(label, branch,</span>
-<span class="fc" id="L212">                    buildSetUpstreamCommand(label, branch, atCwd));</span>
+<span class="fc" id="L234">            return PullRow.noUpstream(label, branch,</span>
+<span class="fc" id="L235">                    buildSetUpstreamCommand(label, branch, atCwd));</span>
         }
 
         String preHead;
         try {
-<span class="fc" id="L217">            preHead = VcsOperations.headSha(dir);</span>
-<span class="nc" id="L218">        } catch (MojoException e) {</span>
-<span class="nc" id="L219">            getLog().warn(Ansi.red(&quot;  ✗ &quot;) + label + &quot; — &quot;</span>
-<span class="nc" id="L220">                    + e.getMessage());</span>
-<span class="nc" id="L221">            return PullRow.failure(label, branch, e.getMessage(),</span>
-<span class="nc" id="L222">                    buildRetryCommand(label, atCwd));</span>
-<span class="fc" id="L223">        }</span>
+<span class="fc" id="L240">            preHead = VcsOperations.headSha(dir);</span>
+<span class="nc" id="L241">        } catch (MojoException e) {</span>
+<span class="nc" id="L242">            getLog().warn(Ansi.red(&quot;  ✗ &quot;) + label + &quot; — &quot;</span>
+<span class="nc" id="L243">                    + e.getMessage());</span>
+<span class="nc" id="L244">            return PullRow.failure(label, branch, e.getMessage(),</span>
+<span class="nc" id="L245">                    buildRetryCommand(label, atCwd));</span>
+<span class="fc" id="L246">        }</span>
 
-<span class="fc" id="L225">        getLog().info(Ansi.cyan(&quot;  ↓ &quot;) + label);</span>
+<span class="fc" id="L248">        getLog().info(Ansi.cyan(&quot;  ↓ &quot;) + label);</span>
         try {
-<span class="fc" id="L227">            ReleaseSupport.exec(dir, getLog(),</span>
+<span class="fc" id="L250">            ReleaseSupport.exec(dir, getLog(),</span>
                     &quot;git&quot;, &quot;pull&quot;, &quot;--rebase&quot;);
-<span class="nc" id="L229">        } catch (MojoException e) {</span>
-<span class="nc" id="L230">            String msg = String.valueOf(e.getMessage());</span>
-<span class="nc" id="L231">            getLog().warn(Ansi.red(&quot;  ✗ &quot;) + label + &quot; — pull failed: &quot;</span>
+<span class="nc" id="L252">        } catch (MojoException e) {</span>
+<span class="nc" id="L253">            String msg = String.valueOf(e.getMessage());</span>
+<span class="nc" id="L254">            getLog().warn(Ansi.red(&quot;  ✗ &quot;) + label + &quot; — pull failed: &quot;</span>
                     + msg);
-<span class="nc" id="L233">            return PullRow.failure(label, branch, msg,</span>
-<span class="nc" id="L234">                    buildRetryCommand(label, atCwd));</span>
-<span class="fc" id="L235">        }</span>
+<span class="nc" id="L256">            return PullRow.failure(label, branch, msg,</span>
+<span class="nc" id="L257">                    buildRetryCommand(label, atCwd));</span>
+<span class="fc" id="L258">        }</span>
 
         String postHead;
         try {
-<span class="fc" id="L239">            postHead = VcsOperations.headSha(dir);</span>
-<span class="nc" id="L240">        } catch (MojoException e) {</span>
+<span class="fc" id="L262">            postHead = VcsOperations.headSha(dir);</span>
+<span class="nc" id="L263">        } catch (MojoException e) {</span>
             // The pull succeeded but we can't read HEAD — treat as
             // pulled with unknown delta rather than fabricating one.
-<span class="nc" id="L243">            getLog().debug(&quot;Could not read HEAD after pull in &quot; + label</span>
-<span class="nc" id="L244">                    + &quot;: &quot; + e.getMessage());</span>
-<span class="nc" id="L245">            return PullRow.pulledUnknown(label, branch);</span>
-<span class="fc" id="L246">        }</span>
+<span class="nc" id="L266">            getLog().debug(&quot;Could not read HEAD after pull in &quot; + label</span>
+<span class="nc" id="L267">                    + &quot;: &quot; + e.getMessage());</span>
+<span class="nc" id="L268">            return PullRow.pulledUnknown(label, branch);</span>
+<span class="fc" id="L269">        }</span>
 
-<span class="fc bfc" id="L248" title="All 2 branches covered.">        if (preHead.equals(postHead)) {</span>
-<span class="fc" id="L249">            getLog().info(Ansi.green(&quot;  = &quot;) + label</span>
-<span class="fc" id="L250">                    + &quot; — already up-to-date (&quot; + shorten(preHead) + &quot;)&quot;);</span>
-<span class="fc" id="L251">            return PullRow.upToDate(label, branch, preHead);</span>
+<span class="fc bfc" id="L271" title="All 2 branches covered.">        if (preHead.equals(postHead)) {</span>
+<span class="fc" id="L272">            getLog().info(Ansi.green(&quot;  = &quot;) + label</span>
+<span class="fc" id="L273">                    + &quot; — already up-to-date (&quot; + shorten(preHead) + &quot;)&quot;);</span>
+<span class="fc" id="L274">            return PullRow.upToDate(label, branch, preHead);</span>
         }
 
-<span class="fc" id="L254">        List&lt;String&gt; commits = safeCommitLog(dir, preHead, postHead);</span>
-<span class="fc" id="L255">        int commitCount = commits.size();</span>
-<span class="fc" id="L256">        List&lt;String&gt; subjects = capCommitSubjects(commits);</span>
+<span class="fc" id="L277">        List&lt;String&gt; commits = safeCommitLog(dir, preHead, postHead);</span>
+<span class="fc" id="L278">        int commitCount = commits.size();</span>
+<span class="fc" id="L279">        List&lt;String&gt; subjects = capCommitSubjects(commits);</span>
 
-<span class="fc" id="L258">        getLog().info(Ansi.green(&quot;  ✓ &quot;) + label + &quot; — &quot;</span>
-<span class="fc" id="L259">                + shorten(preHead) + &quot;..&quot; + shorten(postHead)</span>
+<span class="fc" id="L281">        getLog().info(Ansi.green(&quot;  ✓ &quot;) + label + &quot; — &quot;</span>
+<span class="fc" id="L282">                + shorten(preHead) + &quot;..&quot; + shorten(postHead)</span>
                 + &quot; (&quot; + commitCount + &quot; commit&quot;
-<span class="fc bfc" id="L261" title="All 2 branches covered.">                + (commitCount == 1 ? &quot;&quot; : &quot;s&quot;) + &quot;)&quot;);</span>
-<span class="fc" id="L262">        return PullRow.pulled(label, branch, preHead, postHead,</span>
+<span class="fc bfc" id="L284" title="All 2 branches covered.">                + (commitCount == 1 ? &quot;&quot; : &quot;s&quot;) + &quot;)&quot;);</span>
+<span class="fc" id="L285">        return PullRow.pulled(label, branch, preHead, postHead,</span>
                 commitCount, subjects);
     }
 
     private static String buildRetryCommand(String label, boolean atCwd) {
-<span class="nc bnc" id="L267" title="All 2 branches missed.">        if (atCwd) {</span>
-<span class="nc" id="L268">            return &quot;git pull --rebase&quot;;</span>
+<span class="nc bnc" id="L290" title="All 2 branches missed.">        if (atCwd) {</span>
+<span class="nc" id="L291">            return &quot;git pull --rebase&quot;;</span>
         }
-<span class="nc" id="L270">        return &quot;(cd &quot; + label + &quot; &amp;&amp; git pull --rebase)&quot;;</span>
+<span class="nc" id="L293">        return &quot;(cd &quot; + label + &quot; &amp;&amp; git pull --rebase)&quot;;</span>
     }
 
     private static String buildSetUpstreamCommand(String label, String branch,
                                                   boolean atCwd) {
-<span class="fc bfc" id="L275" title="All 2 branches covered.">        if (atCwd) {</span>
-<span class="fc" id="L276">            return &quot;git push -u origin &quot; + branch;</span>
+<span class="fc bfc" id="L298" title="All 2 branches covered.">        if (atCwd) {</span>
+<span class="fc" id="L299">            return &quot;git push -u origin &quot; + branch;</span>
         }
-<span class="fc" id="L278">        return &quot;(cd &quot; + label + &quot; &amp;&amp; git push -u origin &quot; + branch + &quot;)&quot;;</span>
+<span class="fc" id="L301">        return &quot;(cd &quot; + label + &quot; &amp;&amp; git push -u origin &quot; + branch + &quot;)&quot;;</span>
     }
 
     private List&lt;String&gt; safeCommitLog(File dir, String base, String head) {
         try {
-<span class="fc" id="L283">            return VcsOperations.commitLog(dir, base, head);</span>
-<span class="nc" id="L284">        } catch (MojoException e) {</span>
-<span class="nc" id="L285">            getLog().debug(&quot;Could not compute commit log &quot; + base</span>
-<span class="nc" id="L286">                    + &quot;..&quot; + head + &quot;: &quot; + e.getMessage());</span>
-<span class="nc" id="L287">            return List.of();</span>
+<span class="fc" id="L306">            return VcsOperations.commitLog(dir, base, head);</span>
+<span class="nc" id="L307">        } catch (MojoException e) {</span>
+<span class="nc" id="L308">            getLog().debug(&quot;Could not compute commit log &quot; + base</span>
+<span class="nc" id="L309">                    + &quot;..&quot; + head + &quot;: &quot; + e.getMessage());</span>
+<span class="nc" id="L310">            return List.of();</span>
         }
     }
 
     private static String shorten(String sha) {
-<span class="pc bpc" id="L292" title="2 of 4 branches missed.">        if (sha == null || sha.length() &lt;= 7) return sha;</span>
-<span class="fc" id="L293">        return sha.substring(0, 7);</span>
+<span class="pc bpc" id="L315" title="2 of 4 branches missed.">        if (sha == null || sha.length() &lt;= 7) return sha;</span>
+<span class="fc" id="L316">        return sha.substring(0, 7);</span>
     }
 
     private static List&lt;String&gt; capCommitSubjects(List&lt;String&gt; commits) {
-<span class="pc bpc" id="L297" title="1 of 2 branches missed.">        if (commits.isEmpty()) return List.of();</span>
-<span class="fc" id="L298">        int max = Math.min(5, commits.size());</span>
-<span class="fc" id="L299">        List&lt;String&gt; capped = new ArrayList&lt;&gt;(max);</span>
-<span class="fc bfc" id="L300" title="All 2 branches covered.">        for (int i = 0; i &lt; max; i++) {</span>
-<span class="fc" id="L301">            String line = commits.get(i);</span>
-<span class="fc" id="L302">            int sp = line.indexOf(' ');</span>
-<span class="pc bpc" id="L303" title="1 of 2 branches missed.">            capped.add(sp &gt;= 0 ? line.substring(sp + 1) : line);</span>
+<span class="pc bpc" id="L320" title="1 of 2 branches missed.">        if (commits.isEmpty()) return List.of();</span>
+<span class="fc" id="L321">        int max = Math.min(5, commits.size());</span>
+<span class="fc" id="L322">        List&lt;String&gt; capped = new ArrayList&lt;&gt;(max);</span>
+<span class="fc bfc" id="L323" title="All 2 branches covered.">        for (int i = 0; i &lt; max; i++) {</span>
+<span class="fc" id="L324">            String line = commits.get(i);</span>
+<span class="fc" id="L325">            int sp = line.indexOf(' ');</span>
+<span class="pc bpc" id="L326" title="1 of 2 branches missed.">            capped.add(sp &gt;= 0 ? line.substring(sp + 1) : line);</span>
         }
-<span class="fc" id="L305">        return capped;</span>
+<span class="fc" id="L328">        return capped;</span>
     }
 
     /**
@@ -312,96 +335,96 @@ public class PullWorkspaceMojo extends AbstractWorkspaceMojo {
      * copy-pasteable recovery command (drafts-actionable-remediation).
      */
     private String buildPullReport(List&lt;PullRow&gt; rows, String summary) {
-<span class="fc" id="L315">        GoalReportBuilder report = new GoalReportBuilder();</span>
-<span class="fc" id="L316">        report.paragraph(&quot;**Result:** &quot; + summary + &quot;.&quot;);</span>
+<span class="fc" id="L338">        GoalReportBuilder report = new GoalReportBuilder();</span>
+<span class="fc" id="L339">        report.paragraph(&quot;**Result:** &quot; + summary + &quot;.&quot;);</span>
 
-<span class="fc" id="L318">        List&lt;String[]&gt; tableRows = new ArrayList&lt;&gt;();</span>
-<span class="fc bfc" id="L319" title="All 2 branches covered.">        for (PullRow r : rows) {</span>
+<span class="fc" id="L341">        List&lt;String[]&gt; tableRows = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L342" title="All 2 branches covered.">        for (PullRow r : rows) {</span>
             String shaDelta;
             String commits;
-<span class="fc bfc" id="L322" title="All 3 branches covered.">            switch (r.outcome) {</span>
+<span class="fc bfc" id="L345" title="All 3 branches covered.">            switch (r.outcome) {</span>
                 case PULLED -&gt; {
-<span class="fc" id="L324">                    shaDelta = &quot;`&quot; + shorten(r.preHead) + &quot;`..`&quot;</span>
-<span class="fc" id="L325">                            + shorten(r.postHead) + &quot;`&quot;;</span>
-<span class="fc" id="L326">                    commits = String.valueOf(r.commitCount);</span>
-<span class="fc" id="L327">                }</span>
+<span class="fc" id="L347">                    shaDelta = &quot;`&quot; + shorten(r.preHead) + &quot;`..`&quot;</span>
+<span class="fc" id="L348">                            + shorten(r.postHead) + &quot;`&quot;;</span>
+<span class="fc" id="L349">                    commits = String.valueOf(r.commitCount);</span>
+<span class="fc" id="L350">                }</span>
                 case UP_TO_DATE -&gt; {
-<span class="fc" id="L329">                    shaDelta = &quot;`&quot; + shorten(r.preHead) + &quot;`&quot;;</span>
-<span class="fc" id="L330">                    commits = &quot;0&quot;;</span>
-<span class="fc" id="L331">                }</span>
+<span class="fc" id="L352">                    shaDelta = &quot;`&quot; + shorten(r.preHead) + &quot;`&quot;;</span>
+<span class="fc" id="L353">                    commits = &quot;0&quot;;</span>
+<span class="fc" id="L354">                }</span>
                 default -&gt; {
-<span class="fc" id="L333">                    shaDelta = &quot;—&quot;;</span>
-<span class="fc" id="L334">                    commits = &quot;—&quot;;</span>
+<span class="fc" id="L356">                    shaDelta = &quot;—&quot;;</span>
+<span class="fc" id="L357">                    commits = &quot;—&quot;;</span>
                 }
             }
-<span class="pc bpc" id="L337" title="2 of 5 branches missed.">            String status = switch (r.outcome) {</span>
-<span class="fc" id="L338">                case PULLED -&gt; &quot;✓ pulled (rebase)&quot;;</span>
-<span class="fc" id="L339">                case UP_TO_DATE -&gt; &quot;= up-to-date&quot;;</span>
-<span class="fc" id="L340">                case NO_UPSTREAM -&gt; &quot;⚠ no upstream&quot;;</span>
-<span class="nc" id="L341">                case NOT_CLONED -&gt; &quot;not cloned&quot;;</span>
-<span class="nc" id="L342">                case FAILED -&gt; &quot;✗ failed&quot;;</span>
+<span class="pc bpc" id="L360" title="2 of 5 branches missed.">            String status = switch (r.outcome) {</span>
+<span class="fc" id="L361">                case PULLED -&gt; &quot;✓ pulled (rebase)&quot;;</span>
+<span class="fc" id="L362">                case UP_TO_DATE -&gt; &quot;= up-to-date&quot;;</span>
+<span class="fc" id="L363">                case NO_UPSTREAM -&gt; &quot;⚠ no upstream&quot;;</span>
+<span class="nc" id="L364">                case NOT_CLONED -&gt; &quot;not cloned&quot;;</span>
+<span class="nc" id="L365">                case FAILED -&gt; &quot;✗ failed&quot;;</span>
             };
-<span class="fc" id="L344">            tableRows.add(new String[]{r.label, r.branch, shaDelta, commits, status});</span>
-<span class="fc" id="L345">        }</span>
-<span class="fc" id="L346">        report.section(&quot;Subprojects&quot;)</span>
-<span class="fc" id="L347">                .table(List.of(&quot;Subproject&quot;, &quot;Branch&quot;, &quot;SHA delta&quot;,</span>
+<span class="fc" id="L367">            tableRows.add(new String[]{r.label, r.branch, shaDelta, commits, status});</span>
+<span class="fc" id="L368">        }</span>
+<span class="fc" id="L369">        report.section(&quot;Subprojects&quot;)</span>
+<span class="fc" id="L370">                .table(List.of(&quot;Subproject&quot;, &quot;Branch&quot;, &quot;SHA delta&quot;,</span>
                         &quot;Commits&quot;, &quot;Status&quot;), tableRows);
 
         // Detail: per-subproject subject lines for the actually-pulled ones.
-<span class="fc" id="L351">        List&lt;PullRow&gt; withSubjects = rows.stream()</span>
-<span class="fc bfc" id="L352" title="All 2 branches covered.">                .filter(r -&gt; r.outcome == Outcome.PULLED</span>
-<span class="pc bpc" id="L353" title="1 of 2 branches missed.">                        &amp;&amp; !r.subjects.isEmpty()).toList();</span>
-<span class="fc bfc" id="L354" title="All 2 branches covered.">        if (!withSubjects.isEmpty()) {</span>
-<span class="fc" id="L355">            report.section(&quot;Merged commits&quot;);</span>
-<span class="fc bfc" id="L356" title="All 2 branches covered.">            for (PullRow r : withSubjects) {</span>
-<span class="fc" id="L357">                report.bullet(&quot;**&quot; + r.label + &quot;** — `&quot;</span>
-<span class="fc" id="L358">                        + shorten(r.preHead) + &quot;`..`&quot;</span>
-<span class="fc" id="L359">                        + shorten(r.postHead) + &quot;`&quot;);</span>
-<span class="fc bfc" id="L360" title="All 2 branches covered.">                for (String s : r.subjects) {</span>
-<span class="fc" id="L361">                    report.bullet(&quot;    • &quot; + s);</span>
-<span class="fc" id="L362">                }</span>
-<span class="pc bpc" id="L363" title="1 of 2 branches missed.">                if (r.commitCount &gt; r.subjects.size()) {</span>
-<span class="nc" id="L364">                    report.bullet(&quot;    • +&quot; + (r.commitCount - r.subjects.size())</span>
+<span class="fc" id="L374">        List&lt;PullRow&gt; withSubjects = rows.stream()</span>
+<span class="fc bfc" id="L375" title="All 2 branches covered.">                .filter(r -&gt; r.outcome == Outcome.PULLED</span>
+<span class="pc bpc" id="L376" title="1 of 2 branches missed.">                        &amp;&amp; !r.subjects.isEmpty()).toList();</span>
+<span class="fc bfc" id="L377" title="All 2 branches covered.">        if (!withSubjects.isEmpty()) {</span>
+<span class="fc" id="L378">            report.section(&quot;Merged commits&quot;);</span>
+<span class="fc bfc" id="L379" title="All 2 branches covered.">            for (PullRow r : withSubjects) {</span>
+<span class="fc" id="L380">                report.bullet(&quot;**&quot; + r.label + &quot;** — `&quot;</span>
+<span class="fc" id="L381">                        + shorten(r.preHead) + &quot;`..`&quot;</span>
+<span class="fc" id="L382">                        + shorten(r.postHead) + &quot;`&quot;);</span>
+<span class="fc bfc" id="L383" title="All 2 branches covered.">                for (String s : r.subjects) {</span>
+<span class="fc" id="L384">                    report.bullet(&quot;    • &quot; + s);</span>
+<span class="fc" id="L385">                }</span>
+<span class="pc bpc" id="L386" title="1 of 2 branches missed.">                if (r.commitCount &gt; r.subjects.size()) {</span>
+<span class="nc" id="L387">                    report.bullet(&quot;    • +&quot; + (r.commitCount - r.subjects.size())</span>
                             + &quot; more&quot;);
                 }
-<span class="fc" id="L367">            }</span>
+<span class="fc" id="L390">            }</span>
         }
 
         // Subprojects whose branch has no upstream — copy-paste recovery.
-<span class="fc" id="L371">        List&lt;PullRow&gt; noUpstream = rows.stream()</span>
-<span class="fc bfc" id="L372" title="All 2 branches covered.">                .filter(r -&gt; r.outcome == Outcome.NO_UPSTREAM).toList();</span>
-<span class="fc bfc" id="L373" title="All 2 branches covered.">        if (!noUpstream.isEmpty()) {</span>
-<span class="fc" id="L374">            report.section(&quot;No upstream configured&quot;);</span>
-<span class="fc" id="L375">            report.paragraph(&quot;These subprojects' current branch has no &quot;</span>
+<span class="fc" id="L394">        List&lt;PullRow&gt; noUpstream = rows.stream()</span>
+<span class="fc bfc" id="L395" title="All 2 branches covered.">                .filter(r -&gt; r.outcome == Outcome.NO_UPSTREAM).toList();</span>
+<span class="fc bfc" id="L396" title="All 2 branches covered.">        if (!noUpstream.isEmpty()) {</span>
+<span class="fc" id="L397">            report.section(&quot;No upstream configured&quot;);</span>
+<span class="fc" id="L398">            report.paragraph(&quot;These subprojects' current branch has no &quot;</span>
                     + &quot;tracking branch on `origin`. To set one and &quot;
                     + &quot;establish a baseline:&quot;);
-<span class="fc" id="L378">            StringBuilder fix = new StringBuilder();</span>
-<span class="fc bfc" id="L379" title="All 2 branches covered.">            for (PullRow r : noUpstream) {</span>
-<span class="fc" id="L380">                fix.append(r.retryCommand).append(&quot;\n&quot;);</span>
-<span class="fc" id="L381">            }</span>
-<span class="fc" id="L382">            report.codeBlock(&quot;bash&quot;, fix.toString().stripTrailing());</span>
+<span class="fc" id="L401">            StringBuilder fix = new StringBuilder();</span>
+<span class="fc bfc" id="L402" title="All 2 branches covered.">            for (PullRow r : noUpstream) {</span>
+<span class="fc" id="L403">                fix.append(r.retryCommand).append(&quot;\n&quot;);</span>
+<span class="fc" id="L404">            }</span>
+<span class="fc" id="L405">            report.codeBlock(&quot;bash&quot;, fix.toString().stripTrailing());</span>
         }
 
-<span class="fc" id="L385">        List&lt;PullRow&gt; failures = rows.stream()</span>
-<span class="pc bpc" id="L386" title="1 of 2 branches missed.">                .filter(r -&gt; r.outcome == Outcome.FAILED).toList();</span>
-<span class="pc bpc" id="L387" title="1 of 2 branches missed.">        if (!failures.isEmpty()) {</span>
-<span class="nc" id="L388">            report.section(&quot;Failures&quot;);</span>
-<span class="nc bnc" id="L389" title="All 2 branches missed.">            for (PullRow r : failures) {</span>
-<span class="nc" id="L390">                report.bullet(&quot;**&quot; + r.label + &quot;** — `&quot; + r.failureMessage + &quot;`&quot;);</span>
-<span class="nc" id="L391">            }</span>
-<span class="nc" id="L392">            StringBuilder retry = new StringBuilder();</span>
-<span class="nc bnc" id="L393" title="All 2 branches missed.">            for (PullRow r : failures) {</span>
-<span class="nc" id="L394">                retry.append(r.retryCommand).append(&quot;\n&quot;);</span>
-<span class="nc" id="L395">            }</span>
-<span class="nc" id="L396">            report.paragraph(&quot;Retry the failed pulls individually:&quot;);</span>
-<span class="nc" id="L397">            report.codeBlock(&quot;bash&quot;, retry.toString().stripTrailing());</span>
+<span class="fc" id="L408">        List&lt;PullRow&gt; failures = rows.stream()</span>
+<span class="pc bpc" id="L409" title="1 of 2 branches missed.">                .filter(r -&gt; r.outcome == Outcome.FAILED).toList();</span>
+<span class="pc bpc" id="L410" title="1 of 2 branches missed.">        if (!failures.isEmpty()) {</span>
+<span class="nc" id="L411">            report.section(&quot;Failures&quot;);</span>
+<span class="nc bnc" id="L412" title="All 2 branches missed.">            for (PullRow r : failures) {</span>
+<span class="nc" id="L413">                report.bullet(&quot;**&quot; + r.label + &quot;** — `&quot; + r.failureMessage + &quot;`&quot;);</span>
+<span class="nc" id="L414">            }</span>
+<span class="nc" id="L415">            StringBuilder retry = new StringBuilder();</span>
+<span class="nc bnc" id="L416" title="All 2 branches missed.">            for (PullRow r : failures) {</span>
+<span class="nc" id="L417">                retry.append(r.retryCommand).append(&quot;\n&quot;);</span>
+<span class="nc" id="L418">            }</span>
+<span class="nc" id="L419">            report.paragraph(&quot;Retry the failed pulls individually:&quot;);</span>
+<span class="nc" id="L420">            report.codeBlock(&quot;bash&quot;, retry.toString().stripTrailing());</span>
         }
 
-<span class="fc" id="L400">        return report.build();</span>
+<span class="fc" id="L423">        return report.build();</span>
     }
 
     /** Outcome state for a single subproject's pull attempt. */
-<span class="fc" id="L404">    enum Outcome {PULLED, UP_TO_DATE, NO_UPSTREAM, NOT_CLONED, FAILED}</span>
+<span class="fc" id="L427">    enum Outcome {PULLED, UP_TO_DATE, NO_UPSTREAM, NOT_CLONED, FAILED}</span>
 
     /**
      * One row of per-subproject pull detail. Capture-once,
@@ -409,7 +432,7 @@ public class PullWorkspaceMojo extends AbstractWorkspaceMojo {
      * progresses; the markdown report consumes the full record at
      * the end of the goal.
      */
-<span class="fc" id="L412">    record PullRow(</span>
+<span class="fc" id="L435">    record PullRow(</span>
             String label,
             String branch,
             Outcome outcome,
@@ -423,37 +446,37 @@ public class PullWorkspaceMojo extends AbstractWorkspaceMojo {
         static PullRow pulled(String label, String branch, String preHead,
                               String postHead, int commits,
                               List&lt;String&gt; subjects) {
-<span class="fc" id="L426">            return new PullRow(label, branch, Outcome.PULLED, preHead, postHead,</span>
+<span class="fc" id="L449">            return new PullRow(label, branch, Outcome.PULLED, preHead, postHead,</span>
                     commits, subjects, null, null);
         }
 
         static PullRow pulledUnknown(String label, String branch) {
-<span class="nc" id="L431">            return new PullRow(label, branch, Outcome.PULLED, null, null,</span>
-<span class="nc" id="L432">                    0, List.of(), null, null);</span>
+<span class="nc" id="L454">            return new PullRow(label, branch, Outcome.PULLED, null, null,</span>
+<span class="nc" id="L455">                    0, List.of(), null, null);</span>
         }
 
         static PullRow upToDate(String label, String branch, String headSha) {
-<span class="fc" id="L436">            return new PullRow(label, branch, Outcome.UP_TO_DATE,</span>
-<span class="fc" id="L437">                    headSha, headSha, 0, List.of(), null, null);</span>
+<span class="fc" id="L459">            return new PullRow(label, branch, Outcome.UP_TO_DATE,</span>
+<span class="fc" id="L460">                    headSha, headSha, 0, List.of(), null, null);</span>
         }
 
         // A NO_UPSTREAM row never also FAILS, so it reuses the
         // retryCommand slot to carry its set-upstream recovery command.
         static PullRow noUpstream(String label, String branch,
                                   String recoveryCommand) {
-<span class="fc" id="L444">            return new PullRow(label, branch, Outcome.NO_UPSTREAM,</span>
-<span class="fc" id="L445">                    null, null, 0, List.of(), null, recoveryCommand);</span>
+<span class="fc" id="L467">            return new PullRow(label, branch, Outcome.NO_UPSTREAM,</span>
+<span class="fc" id="L468">                    null, null, 0, List.of(), null, recoveryCommand);</span>
         }
 
         static PullRow notCloned(String name) {
-<span class="nc" id="L449">            return new PullRow(name, &quot;—&quot;, Outcome.NOT_CLONED,</span>
-<span class="nc" id="L450">                    null, null, 0, List.of(), null, null);</span>
+<span class="nc" id="L472">            return new PullRow(name, &quot;—&quot;, Outcome.NOT_CLONED,</span>
+<span class="nc" id="L473">                    null, null, 0, List.of(), null, null);</span>
         }
 
         static PullRow failure(String label, String branch, String message,
                                 String retry) {
-<span class="nc" id="L455">            return new PullRow(label, branch, Outcome.FAILED,</span>
-<span class="nc" id="L456">                    null, null, 0, List.of(), message, retry);</span>
+<span class="nc" id="L478">            return new PullRow(label, branch, Outcome.FAILED,</span>
+<span class="nc" id="L479">                    null, null, 0, List.of(), message, retry);</span>
         }
     }
 }

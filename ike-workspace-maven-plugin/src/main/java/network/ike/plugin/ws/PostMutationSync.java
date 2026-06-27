@@ -1,7 +1,5 @@
 package network.ike.plugin.ws;
 
-import network.ike.plugin.ws.vcs.VcsOperations;
-import org.apache.maven.api.plugin.MojoException;
 import org.apache.maven.api.plugin.Log;
 
 import java.io.File;
@@ -77,37 +75,28 @@ public final class PostMutationSync {
      *         the change was left for the caller to commit
      */
     public static boolean refresh(File workspaceRoot, Log log) {
-        // Was the manifest committed-clean before the re-derivation? If so,
-        // any change the derivation makes is attributable solely to it and
-        // can be committed on its own. If the manifest already carried an
-        // edit, leave the combined change for the caller (#774).
-        boolean manifestCleanBefore =
-                VcsOperations.isPathClean(workspaceRoot, MANIFEST);
+        // Snapshot the manifest's state BEFORE the re-derivation. If it was
+        // unmodified, any change the derivation makes is attributable solely
+        // to it and is committed in isolation; if it already carried an edit
+        // (or there is no git state — e.g. .git excluded from Syncthing on a
+        // not-yet-bootstrapped sibling) it is excluded from the snapshot, so
+        // the combined change is left for the caller / bootstrapper (#774).
+        GoalAuthoredChanges authored =
+                GoalAuthoredChanges.snapshot(workspaceRoot, log, MANIFEST);
 
-        boolean changed = YamlDepsSync.run(workspaceRoot, log);
-        // Commit only when the re-derivation is the sole pending change.
-        // A false manifestCleanBefore also covers the no-git-state case
-        // (e.g. .git excluded from Syncthing on a not-yet-bootstrapped
-        // sibling): there git status reports the path as not-clean, so the
-        // rewrite is left on disk for whatever later bootstraps the repo.
-        if (!changed || !manifestCleanBefore) {
+        if (!YamlDepsSync.run(workspaceRoot, log)) {
             return false;
         }
-        try {
-            VcsOperations.commitPaths(workspaceRoot, log,
-                    "ws: re-derive depends-on edges\n\n"
-                            + "Re-derives workspace.yaml depends-on from POM "
-                            + "reality after a workspace mutation, so the "
-                            + "manifest is never left uncommitted.\n\n"
-                            + "Refs: IKE-Network/ike-issues#774\n"
-                            + "Refs: IKE-Network/ike-issues#279",
-                    MANIFEST);
+        boolean committed = authored.commitAuthored(
+                "ws: re-derive depends-on edges\n\n"
+                        + "Re-derives workspace.yaml depends-on from POM "
+                        + "reality after a workspace mutation, so the "
+                        + "manifest is never left uncommitted.\n\n"
+                        + "Refs: IKE-Network/ike-issues#774\n"
+                        + "Refs: IKE-Network/ike-issues#279");
+        if (committed) {
             log.info("  workspace.yaml: committed re-derived depends-on edges");
-            return true;
-        } catch (MojoException e) {
-            log.warn("  workspace.yaml: re-derived depends-on edges but could "
-                    + "not commit them — " + e.getMessage());
-            return false;
         }
+        return committed;
     }
 }

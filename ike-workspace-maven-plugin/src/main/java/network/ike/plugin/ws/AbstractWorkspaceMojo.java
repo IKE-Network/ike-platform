@@ -64,12 +64,34 @@ abstract class AbstractWorkspaceMojo implements Mojo {
     File manifest;
 
     /**
+     * Escape hatch for the {@link TreePreflight#REQUIRE_UNMODIFIED} preflight
+     * (#780): when {@code true}, a goal that would otherwise refuse to run on a
+     * working tree with uncommitted changes proceeds anyway. For the documented
+     * roll-forward (interrupted release) and fold-into-feature cases.
+     *
+     * <p>Inert until the per-goal preflight wiring lands (the #780 migration
+     * slice); declared here so every goal inherits the same flag.
+     */
+    @Parameter(property = "allow-uncommitted", defaultValue = "false")
+    boolean allowUncommitted;
+
+    /**
      * Access the Maven logger.
      *
      * @return the logger instance
      */
     protected Log getLog() {
         return log;
+    }
+
+    /**
+     * Whether the {@code -Dallow-uncommitted} escape hatch is set — bypasses a
+     * {@link TreePreflight#REQUIRE_UNMODIFIED} preflight (#780).
+     *
+     * @return {@code true} to proceed despite an uncommitted working tree
+     */
+    protected boolean allowUncommitted() {
+        return allowUncommitted;
     }
 
     /**

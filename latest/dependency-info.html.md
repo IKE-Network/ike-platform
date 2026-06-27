@@ -12,7 +12,7 @@ canonical_url: https://ike.network/ike-platform/dependency-info.html
 <dependency>
   <groupId>network.ike.platform</groupId>
   <artifactId>ike-platform</artifactId>
-  <version>119</version>
+  <version>120</version>
   <type>pom</type>
 </dependency>
 ```
@@ -20,7 +20,7 @@ canonical_url: https://ike.network/ike-platform/dependency-info.html
 ## [Apache Ivy](#apache-ivy)
 
 ```
-<dependency org="network.ike.platform" name="ike-platform" rev="119">
+<dependency org="network.ike.platform" name="ike-platform" rev="120">
   <artifact name="ike-platform" type="pom" />
 </dependency>
 ```
@@ -29,24 +29,24 @@ canonical_url: https://ike.network/ike-platform/dependency-info.html
 
 ```
 @Grapes(
-@Grab(group='network.ike.platform', module='ike-platform', version='119')
+@Grab(group='network.ike.platform', module='ike-platform', version='120')
 )
 ```
 
 ## [Gradle/Grails](#gradle-grails)
 
 ```
-implementation 'network.ike.platform:ike-platform:119'
+implementation 'network.ike.platform:ike-platform:120'
 ```
 
 ## [Scala SBT](#scala-sbt)
 
 ```
-libraryDependencies += "network.ike.platform" % "ike-platform" % "119"
+libraryDependencies += "network.ike.platform" % "ike-platform" % "120"
 ```
 
 ## [Leiningen](#leiningen)
 
 ```
-[network.ike.platform/ike-platform "119"]
+[network.ike.platform/ike-platform "120"]
 ```

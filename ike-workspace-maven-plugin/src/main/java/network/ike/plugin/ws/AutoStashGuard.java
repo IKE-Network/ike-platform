@@ -43,8 +43,18 @@ final class AutoStashGuard {
         if (VcsOperations.isClean(dir)) {
             return false;
         }
-        ParkSupport.stashLeave(dir, log, slug(dir),
-                VcsOperations.currentBranch(dir));
+        String branch = VcsOperations.currentBranch(dir);
+        if (branch.isBlank()) {
+            // Detached HEAD (release-tag checkout, mid-bisect): there is no
+            // branch to key the per-user stash ref on, and the work is not on a
+            // shareable branch anyway. Skip auto-stash rather than build a
+            // malformed (trailing-slash) ref; leave the tree for the caller's
+            // own handling instead of failing the whole sync.
+            log.warn("    " + dir.getName() + ": detached HEAD — skipping "
+                    + "auto-stash (commit or branch the work first)");
+            return false;
+        }
+        ParkSupport.stashLeave(dir, log, slug(dir), branch);
         return true;
     }
 

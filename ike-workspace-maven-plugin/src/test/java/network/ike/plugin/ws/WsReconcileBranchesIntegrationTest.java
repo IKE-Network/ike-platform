@@ -10,6 +10,7 @@ import java.nio.file.Path;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Integration tests for {@link WsReconcileBranchesDraftMojo} with {@code scope=branches},
@@ -124,6 +125,56 @@ class WsReconcileBranchesIntegrationTest {
         String log = execCapture(tempDir,
                 "git", "log", "--oneline", "-3");
         assertThat(log).contains("workspace: align branch fields from repos");
+    }
+
+    @Test
+    void fromRepos_dirtySubproject_doesNotRefuse() throws Exception {
+        // from=repos (the default) only READS each subproject's branch; in-flight
+        // WIP in a subproject must NOT block the manifest sync (#780): the
+        // COORDINATING refuse is scoped to the checkout modes only.
+        exec(tempDir.resolve("lib-a"), "git", "checkout", "-b", "feature/test");
+        Files.writeString(tempDir.resolve("lib-b").resolve("wip.txt"),
+                "in flight", StandardCharsets.UTF_8);
+
+        WsReconcileBranchesDraftMojo mojo = TestLog.createMojo(WsReconcileBranchesDraftMojo.class);
+        mojo.manifest = helper.workspaceYaml().toFile();
+        mojo.scope = "branches";
+        mojo.from = "repos";
+        mojo.publish = true;
+
+        mojo.execute(); // must NOT throw despite lib-b's WIP
+
+        String yaml = Files.readString(helper.workspaceYaml(), StandardCharsets.UTF_8);
+        assertThat(yaml).contains("feature/test");
+        assertThat(tempDir.resolve("lib-b").resolve("wip.txt")).exists();
+    }
+
+    @Test
+    void fromRepos_commitsYamlInIsolation() throws Exception {
+        // The workspace.yaml self-commit must commit ONLY workspace.yaml and
+        // never sweep a concurrently-staged sibling out of the workspace-root
+        // index (#780 IN_ISOLATION, via VcsOperations.commitPaths).
+        exec(tempDir.resolve("lib-a"), "git", "checkout", "-b", "feature/iso");
+        Files.writeString(tempDir.resolve("sibling.txt"), "unrelated",
+                StandardCharsets.UTF_8);
+        exec(tempDir, "git", "add", "sibling.txt");
+
+        WsReconcileBranchesDraftMojo mojo = TestLog.createMojo(WsReconcileBranchesDraftMojo.class);
+        mojo.manifest = helper.workspaceYaml().toFile();
+        mojo.scope = "branches";
+        mojo.from = "repos";
+        mojo.publish = true;
+
+        mojo.execute();
+
+        // The reconcile commit touched workspace.yaml...
+        String yamlLog = execCapture(tempDir,
+                "git", "log", "--oneline", "--", "workspace.yaml");
+        assertThat(yamlLog).contains("align branch fields from repos");
+        // ...but never committed the concurrently-staged sibling.
+        String siblingLog = execCapture(tempDir,
+                "git", "log", "--oneline", "--", "sibling.txt");
+        assertThat(siblingLog).isBlank();
     }
 
     @Test
@@ -243,7 +294,7 @@ class WsReconcileBranchesIntegrationTest {
     }
 
     @Test
-    void fromManifest_dirtyWorktree_skips() throws Exception {
+    void fromManifest_dirtyWorktree_refuses() throws Exception {
         // Create a "develop" branch in lib-a and switch back
         exec(tempDir.resolve("lib-a"), "git", "checkout", "-b", "develop");
         exec(tempDir.resolve("lib-a"), "git", "checkout", "main");
@@ -265,12 +316,75 @@ class WsReconcileBranchesIntegrationTest {
         mojo.from = "manifest";
         mojo.publish = true;
 
-        mojo.execute();
+        // COORDINATING (#780): publish refuses on an uncommitted subproject
+        // rather than silently skipping it.
+        assertThatThrownBy(mojo::execute)
+                .hasMessageContaining("uncommitted");
 
-        // lib-a should NOT be switched — still on main due to uncommitted changes
+        // lib-a is left untouched — the refuse happens before any checkout.
         String branch = execCapture(tempDir.resolve("lib-a"),
                 "git", "rev-parse", "--abbrev-ref", "HEAD");
         assertThat(branch).isEqualTo("main");
+    }
+
+    @Test
+    void fromManifest_dirtyWorktree_allowUncommitted_skips() throws Exception {
+        // Same setup as the refuses test, but -Dallow-uncommitted downgrades the
+        // COORDINATING preflight to the per-subproject skip (#780): the dirty
+        // lib-a is skipped (left on main), no refusal.
+        exec(tempDir.resolve("lib-a"), "git", "checkout", "-b", "develop");
+        exec(tempDir.resolve("lib-a"), "git", "checkout", "main");
+
+        Files.writeString(tempDir.resolve("lib-a").resolve("dirty.txt"),
+                "uncommitted", StandardCharsets.UTF_8);
+
+        String yaml = Files.readString(helper.workspaceYaml(), StandardCharsets.UTF_8);
+        yaml = yaml.replaceFirst(
+                "(lib-a:\\s+type: software\\s+description: [^\\n]+\\s+repo: [^\\n]+\\s+branch: )main",
+                "$1develop");
+        Files.writeString(helper.workspaceYaml(), yaml, StandardCharsets.UTF_8);
+
+        WsReconcileBranchesDraftMojo mojo = TestLog.createMojo(WsReconcileBranchesDraftMojo.class);
+        mojo.manifest = helper.workspaceYaml().toFile();
+        mojo.scope = "branches";
+        mojo.from = "manifest";
+        mojo.publish = true;
+        mojo.allowUncommitted = true;
+
+        mojo.execute(); // no throw — preflight bypassed, dirty lib-a skipped
+
+        String branch = execCapture(tempDir.resolve("lib-a"),
+                "git", "rev-parse", "--abbrev-ref", "HEAD");
+        assertThat(branch).isEqualTo("main");
+    }
+
+    @Test
+    void fromManifest_force_checksOutOverUncommitted() throws Exception {
+        // -Dforce bypasses the COORDINATING refuse and checks out the coherent
+        // branch over a modified subproject tree — the documented override (#780).
+        exec(tempDir.resolve("lib-a"), "git", "checkout", "-b", "develop");
+        exec(tempDir.resolve("lib-a"), "git", "checkout", "main");
+        Files.writeString(tempDir.resolve("lib-a").resolve("dirty.txt"),
+                "uncommitted", StandardCharsets.UTF_8);
+
+        String yaml = Files.readString(helper.workspaceYaml(), StandardCharsets.UTF_8);
+        yaml = yaml.replaceFirst(
+                "(lib-a:\\s+type: software\\s+description: [^\\n]+\\s+repo: [^\\n]+\\s+branch: )main",
+                "$1develop");
+        Files.writeString(helper.workspaceYaml(), yaml, StandardCharsets.UTF_8);
+
+        WsReconcileBranchesDraftMojo mojo = TestLog.createMojo(WsReconcileBranchesDraftMojo.class);
+        mojo.manifest = helper.workspaceYaml().toFile();
+        mojo.scope = "branches";
+        mojo.from = "manifest";
+        mojo.publish = true;
+        mojo.force = true;
+
+        mojo.execute(); // no throw — force bypasses the refuse
+
+        String branch = execCapture(tempDir.resolve("lib-a"),
+                "git", "rev-parse", "--abbrev-ref", "HEAD");
+        assertThat(branch).isEqualTo("develop");
     }
 
     @Test

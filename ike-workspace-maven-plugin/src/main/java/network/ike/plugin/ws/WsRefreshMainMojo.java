@@ -77,8 +77,34 @@ public class WsRefreshMainMojo extends AbstractWorkspaceMojo {
         getLog().info("  Scope:   " + sorted.size() + " components");
         getLog().info("");
 
-        List<RefreshMainSupport.Outcome> outcomes =
-                RefreshMainSupport.refreshOrThrow(root, sorted, mainBranch, getLog());
+        // SYNC goal (#780): auto-stash each cloned subproject's WIP so this goal
+        // — which checks out + fast-forwards main in every clone — runs against
+        // clean trees instead of failing mid-walk on an uncommitted one; the
+        // work is restored after. The release path calls
+        // RefreshMainSupport.refreshOrThrow directly (no goal wrapper), so this
+        // relaxation is scoped to the ws:refresh-main goal alone.
+        List<Boolean> stashed = new ArrayList<>();
+        List<RefreshMainSupport.Outcome> outcomes;
+        try {
+            for (String name : sorted) {
+                File dir = new File(root, name);
+                stashed.add(new File(dir, ".git").exists()
+                        && AutoStashGuard.stashIfDirty(dir, getLog()));
+            }
+            outcomes = RefreshMainSupport.refreshOrThrow(
+                    root, sorted, mainBranch, getLog());
+        } finally {
+            for (int i = 0; i < stashed.size(); i++) {
+                File dir = new File(root, sorted.get(i));
+                try {
+                    AutoStashGuard.restoreIfStashed(dir, getLog(), stashed.get(i));
+                } catch (MojoException e) {
+                    getLog().warn("  could not restore stashed WIP in "
+                            + sorted.get(i) + " — recover it from refs/ws-stash. "
+                            + e.getMessage());
+                }
+            }
+        }
 
         WorkspaceReportSpec spec = new WorkspaceReportSpec(
                 WsGoal.REFRESH_MAIN, buildReport(outcomes));

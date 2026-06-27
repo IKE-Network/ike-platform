@@ -188,14 +188,23 @@ public class UpdateFeatureDraftMojo extends AbstractWorkspaceMojo {
             uncommitted.add("workspace root");
         }
 
+        // COORDINATING preflight (#780): the publish path refuses on an
+        // uncommitted working set so the merge it commits is attributable;
+        // -Dallow-uncommitted escapes. The draft is a preview (WARN) — it
+        // proceeds and only notes the uncommitted state.
         if (!uncommitted.isEmpty()) {
-            StringBuilder sb = new StringBuilder();
-            sb.append("Cannot update — uncommitted changes in:\n");
-            for (String name : uncommitted) {
-                sb.append("  ").append(name).append("\n");
+            if (publish && !allowUncommitted()) {
+                StringBuilder sb = new StringBuilder();
+                sb.append("Cannot update — uncommitted changes in:\n");
+                for (String name : uncommitted) {
+                    sb.append("  ").append(name).append("\n");
+                }
+                sb.append("Commit or stash, then try again"
+                        + " (or pass -Dallow-uncommitted).");
+                throw new MojoException(sb.toString());
             }
-            sb.append("Commit or stash, then try again.");
-            throw new MojoException(sb.toString());
+            getLog().warn("  Uncommitted changes in " + uncommitted
+                    + " — preview only; commit before ws:update-feature-publish.");
         }
 
         if (eligible.isEmpty()) {

@@ -1,6 +1,9 @@
 package network.ike.plugin.ws;
 
 import network.ike.workspace.WorkspaceGraph;
+import network.ike.plugin.ws.preflight.Preflight;
+import network.ike.plugin.ws.preflight.PreflightCondition;
+import network.ike.plugin.ws.preflight.PreflightContext;
 import network.ike.plugin.ws.vcs.VcsOperations;
 
 import org.apache.maven.api.plugin.MojoException;
@@ -98,11 +101,12 @@ public class WsRemoveMojo extends AbstractWorkspaceMojo {
 
         // Removal is branch-scoped (#575): it operates on the current branch's
         // workspace.yaml / pom.xml and works on any branch, mirroring ws:add —
-        // no main-only guard. Uncommitted work is not refused either: in the
-        // default deleteDir=false path the clone is left untouched (its dirty
-        // state preserved), and under -DdeleteDir=true the park path below
-        // stashes WIP and pushes the branch before removing the clone, so
-        // nothing is lost.
+        // no main-only guard. The WORKSPACE-ROOT tree must be unmodified before
+        // we edit it (the COORDINATING contract, #780; -Dallow-uncommitted
+        // escapes), so the remove commit is attributable. Subproject CLONE work
+        // is NOT refused: the preflight is scoped root-only, and under
+        // -DdeleteDir=true the park path below stashes a clone's WIP and pushes
+        // its branch before removing it, so nothing is lost.
 
         // Load graph and validate subproject exists
         WorkspaceGraph graph = loadGraph();
@@ -121,6 +125,16 @@ public class WsRemoveMojo extends AbstractWorkspaceMojo {
                     + "Use -Dforce=true to remove anyway.");
         }
 
+        // COORDINATING preflight (#780): the workspace-root tree must be
+        // unmodified so the remove commit below is attributable solely to this
+        // goal. Scoped root-only (empty subproject list) — subproject clones may
+        // carry WIP, which the park path preserves. -Dallow-uncommitted bypasses.
+        if (!allowUncommitted()) {
+            Preflight.of(List.of(PreflightCondition.WORKING_TREE_CLEAN),
+                    PreflightContext.of(wsDir.toFile(), null, List.of()))
+                    .requirePassed(WsGoal.REMOVE);
+        }
+
         getLog().info("");
         getLog().info(header("Remove Subproject"));
         getLog().info("══════════════════════════════════════════════════════════════");
@@ -130,6 +144,10 @@ public class WsRemoveMojo extends AbstractWorkspaceMojo {
         }
         getLog().info("");
 
+        // Snapshot the root files BEFORE editing them, so the commit below is
+        // scoped to exactly what this goal authored (#780).
+        GoalAuthoredChanges authored = GoalAuthoredChanges.snapshot(
+                wsDir.toFile(), getLog(), "workspace.yaml", "pom.xml");
         try {
             // Remove from workspace.yaml
             removeSubprojectFromManifest(manifestPath);
@@ -142,6 +160,13 @@ public class WsRemoveMojo extends AbstractWorkspaceMojo {
         } catch (IOException e) {
             throw new MojoException(
                     "Failed to update workspace files: " + e.getMessage(), e);
+        }
+
+        // Commit the root edits in isolation (COORDINATING, #780): only the
+        // paths this goal authored, which the preflight guaranteed were clean.
+        if (authored.commitAuthored("workspace: remove " + subproject
+                + "\n\nRefs: IKE-Network/ike-issues#780")) {
+            getLog().info(Ansi.green("  ✓ ") + "committed workspace.yaml + pom.xml");
         }
 
         // Optionally remove the cloned directory — work-preserving (#575).

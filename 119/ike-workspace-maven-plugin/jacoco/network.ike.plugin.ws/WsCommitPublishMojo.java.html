@@ -1,0 +1,319 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>WsCommitPublishMojo.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">WsCommitPublishMojo.java</span></div><h1>WsCommitPublishMojo.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.plugin.ws.vcs.VcsOperations;
+import network.ike.plugin.ws.vcs.VcsState;
+import network.ike.workspace.WorkingSet;
+import network.ike.workspace.WorkspaceGraph;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
+
+import java.io.File;
+import java.util.List;
+
+/**
+ * Commit with a VCS bridge catch-up preamble.
+ *
+ * &lt;p&gt;By default stages all tracked-modified and untracked-not-ignored
+ * files before committing — workspace-wide goals routinely create new
+ * files (scaffold writes, IDE settings cleanup, generated configs) and
+ * the previous staged-only default silently dropped them. Pass
+ * {@code -DstagedOnly} to commit only what is already in the index for
+ * the rare cases where that is wanted (positive-form flag per the
+ * compiler-visibility principle).
+ *
+ * &lt;p&gt;Each subproject's commit line includes a count of modified vs. new
+ * files, with the new file paths listed inline so the developer can see
+ * what was pulled in without running {@code git status} after the fact:
+ *
+ * &lt;pre&gt;{@code
+ *   ✓ komet-ws — 7 modified, 1 new (.idea/kotlinc.xml)
+ * }&lt;/pre&gt;
+ *
+ * &lt;p&gt;When run from a workspace root (where {@code workspace.yaml} exists),
+ * iterates all subproject repositories in topological order, staging and
+ * committing changes in each. When run from a single repository, operates
+ * on the current directory only.
+ *
+ * &lt;p&gt;The {@code -publish} half of the commit pair — it mutates
+ * (stages, commits, optionally pushes). The read-only preview is
+ * {@link WsCommitDraftMojo ws:commit-draft}.
+ *
+ * &lt;p&gt;Usage:
+ * &lt;pre&gt;{@code
+ * mvn ws:commit-publish -Dmessage=&quot;my commit message&quot;        # stage all + commit (default)
+ * mvn ws:commit-publish -Dmessage=&quot;...&quot; -DstagedOnly         # commit only what is already staged
+ * mvn ws:commit-publish -Dmessage=&quot;...&quot; -Dpush=true          # commit then push
+ * }&lt;/pre&gt;
+ *
+ * &lt;p&gt;See issue #195 and the {@code dev-workspace-ops-completion} topic
+ * in {@code ike-lab-documents} for the design rationale.
+ *
+ * @see WsCommitDraftMojo
+ */
+@Mojo(name = &quot;commit-publish&quot;, projectRequired = false, aggregator = true)
+public class WsCommitPublishMojo extends AbstractWorkspaceMojo {
+
+    /** Creates this goal instance. */
+<span class="fc" id="L58">    public WsCommitPublishMojo() {}</span>
+
+    /**
+     * Commit message. Required. When omitted on the command line, the
+     * goal prompts interactively (terminal or IntelliJ Maven runner)
+     * via {@link AbstractWorkspaceMojo#requireParam}. Throws a clear
+     * error when running in a non-interactive context (CI, piped
+     * input). The same resolved message is used for every repo in the
+     * workspace iteration.
+     */
+    @Parameter(property = &quot;message&quot;)
+    String message;
+
+    /**
+     * Commit only what is already in the index — skip the default
+     * {@code git add -A} step. Use this when you have hand-staged a
+     * subset of changes and want only those to land.
+     */
+    @Parameter(property = &quot;stagedOnly&quot;, defaultValue = &quot;false&quot;)
+    boolean stagedOnly;
+
+    /**
+     * Push to origin after committing.
+     */
+    @Parameter(property = &quot;push&quot;, defaultValue = &quot;false&quot;)
+    boolean push;
+
+    /**
+     * Skip the {@code .mvn/jvm.config} hash-comment lint check that
+     * runs before commit (ike-issues#217). Default is to run the
+     * check; pass {@code -Dws.commit.skipLint=true} to opt out (rare —
+     * the check exists because Maven's own validate phase can't catch
+     * a {@code #}-comment'd jvm.config in the project that contains it).
+     */
+    @Parameter(property = &quot;ws.commit.skipLint&quot;, defaultValue = &quot;false&quot;)
+    boolean skipLint;
+
+    @Override
+    protected WorkspaceReportSpec runGoal() throws MojoException {
+<span class="fc" id="L97">        WorkingSet workingSet = resolveWorkingSet();</span>
+
+        // Pre-commit hygiene (workspace mode): catch # comments in
+        // .mvn/jvm.config before they reach git or Syncthing (#217). The
+        // check is graph-scoped, so it runs only for a declared workspace.
+<span class="pc bpc" id="L102" title="1 of 4 branches missed.">        if (workingSet.isWorkspace() &amp;&amp; !skipLint) {</span>
+<span class="nc" id="L103">            WorkspaceGraph graph = loadGraph();</span>
+<span class="nc" id="L104">            network.ike.plugin.ws.preflight.Preflight.of(</span>
+<span class="nc" id="L105">                    java.util.List.of(network.ike.plugin.ws.preflight</span>
+                            .PreflightCondition.JVM_CONFIG_NO_HASH_COMMENTS),
+<span class="nc" id="L107">                    network.ike.plugin.ws.preflight.PreflightContext.of(</span>
+<span class="nc" id="L108">                            workingSet.root().toFile(), graph,</span>
+<span class="nc" id="L109">                            graph.topologicalSort()))</span>
+<span class="nc" id="L110">                    .requirePassed(WsGoal.COMMIT_PUBLISH);</span>
+        }
+
+        // Resolve the message once — it applies to every repo this
+        // invocation.
+<span class="fc" id="L115">        message = requireParam(message, &quot;message&quot;, &quot;Commit message&quot;);</span>
+
+<span class="fc" id="L117">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L118">        getLog().info(header(&quot;Commit&quot;));</span>
+<span class="fc" id="L119">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+<span class="fc" id="L120">        getLog().info(&quot;&quot;);</span>
+
+<span class="fc" id="L122">        int committed = 0;</span>
+<span class="fc" id="L123">        int skippedClean = 0;</span>
+<span class="fc" id="L124">        int skippedUnstaged = 0;</span>
+<span class="fc" id="L125">        int failed = 0;</span>
+
+<span class="fc bfc" id="L127" title="All 2 branches covered.">        for (WorkingSet.Member member : workingSet.members()) {</span>
+<span class="fc" id="L128">            File dir = member.directory().toFile();</span>
+<span class="fc bfc" id="L129" title="All 2 branches covered.">            if (!new File(dir, &quot;.git&quot;).exists()) {</span>
+<span class="fc" id="L130">                getLog().debug(member.name() + &quot; — not cloned, skipping&quot;);</span>
+<span class="fc" id="L131">                skippedClean++;</span>
+<span class="fc" id="L132">                continue;</span>
+            }
+<span class="fc bfc" id="L134" title="All 2 branches covered.">            String label = workingSet.isWorkspace()</span>
+<span class="pc bpc" id="L135" title="1 of 2 branches missed.">                    &amp;&amp; member.directory().equals(workingSet.root())</span>
+<span class="fc" id="L136">                    ? &quot;workspace root&quot; : member.name();</span>
+<span class="fc" id="L137">            CommitOutcome outcome = commitOne(dir, label);</span>
+<span class="fc" id="L138">            committed += outcome.committed;</span>
+<span class="fc" id="L139">            skippedClean += outcome.skippedClean;</span>
+<span class="fc" id="L140">            skippedUnstaged += outcome.skippedUnstaged;</span>
+<span class="fc" id="L141">            failed += outcome.failed;</span>
+<span class="fc" id="L142">        }</span>
+
+<span class="fc" id="L144">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L145">        StringBuilder summary = new StringBuilder();</span>
+<span class="fc" id="L146">        summary.append(committed).append(&quot; committed&quot;);</span>
+<span class="fc bfc" id="L147" title="All 2 branches covered.">        if (skippedClean &gt; 0) {</span>
+<span class="fc" id="L148">            summary.append(&quot;, &quot;).append(skippedClean).append(&quot; clean&quot;);</span>
+        }
+<span class="pc bpc" id="L150" title="1 of 2 branches missed.">        if (skippedUnstaged &gt; 0) {</span>
+<span class="nc" id="L151">            summary.append(&quot;, &quot;).append(skippedUnstaged)</span>
+<span class="nc" id="L152">                    .append(&quot; skipped (uncommitted — drop -DstagedOnly to include)&quot;);</span>
+        }
+<span class="pc bpc" id="L154" title="1 of 2 branches missed.">        if (failed &gt; 0) {</span>
+<span class="nc" id="L155">            summary.append(&quot;, &quot;).append(failed).append(&quot; failed&quot;);</span>
+        }
+<span class="fc" id="L157">        getLog().info(&quot;  Done: &quot; + summary);</span>
+<span class="fc" id="L158">        getLog().info(&quot;&quot;);</span>
+
+<span class="fc bfc" id="L160" title="All 2 branches covered.">        if (workingSet.isWorkspace()) {</span>
+<span class="fc" id="L161">            File root = workingSet.root().toFile();</span>
+<span class="fc" id="L162">            boolean manifestCommitted =</span>
+<span class="fc" id="L163">                    PostMutationSync.refresh(root, getLog());</span>
+            // The refresh runs after the commit loop, so a manifest commit
+            // it makes is not covered by this goal's own push. When the
+            // caller asked to push, push the root again so the re-derived
+            // manifest reaches origin too (#774).
+<span class="pc bpc" id="L168" title="1 of 4 branches missed.">            if (manifestCommitted &amp;&amp; push) {</span>
+<span class="nc" id="L169">                VcsOperations.push(root, getLog(), &quot;origin&quot;,</span>
+<span class="nc" id="L170">                        VcsOperations.currentBranch(root));</span>
+            }
+        }
+
+<span class="pc bpc" id="L174" title="1 of 2 branches missed.">        if (failed &gt; 0) {</span>
+<span class="nc" id="L175">            throw new MojoException(failed</span>
+                    + &quot; commit(s) failed — check output above for details.&quot;);
+        }
+
+<span class="fc" id="L179">        return new WorkspaceReportSpec(WsGoal.COMMIT_PUBLISH, summary + &quot;\n&quot;);</span>
+    }
+
+
+    /**
+     * Commit a single repository, returning a tally for aggregation. The
+     * tally always sums to one — exactly one of {committed, skippedClean,
+     * skippedUnstaged, failed} is set.
+     */
+    private CommitOutcome commitOne(File dir, String label) {
+        try {
+<span class="fc" id="L190">            int modCount = VcsOperations.modifiedTrackedCount(dir);</span>
+<span class="fc" id="L191">            List&lt;String&gt; newFiles = VcsOperations.untrackedFiles(dir);</span>
+
+            // catch-up if there's nothing to commit yet — preserves
+            // the historical behavior where commit also serves as the
+            // &quot;make sure local is current&quot; step (#132).
+<span class="pc bpc" id="L196" title="1 of 2 branches missed.">            boolean hasWork = stagedOnly</span>
+<span class="nc" id="L197">                    ? VcsOperations.hasStagedChanges(dir)</span>
+<span class="pc bpc" id="L198" title="3 of 4 branches missed.">                    : !VcsOperations.isClean(dir) || !newFiles.isEmpty();</span>
+<span class="pc bpc" id="L199" title="1 of 2 branches missed.">            if (!hasWork) {</span>
+<span class="nc" id="L200">                VcsOperations.catchUp(dir, getLog());</span>
+            }
+
+<span class="pc bpc" id="L203" title="2 of 4 branches missed.">            if (!stagedOnly &amp;&amp; !VcsOperations.isClean(dir)) {</span>
+                // Stage everything tracked-modified and untracked-non-ignored
+                // before committing. The earlier split-condition form skipped
+                // addAll when staged-and-unstaged were mixed, silently
+                // dropping the unstaged half from the commit (#536). Calling
+                // addAll on already-staged files is a no-op.
+<span class="fc" id="L209">                VcsOperations.addAll(dir, getLog());</span>
+            }
+
+<span class="pc bpc" id="L212" title="1 of 2 branches missed.">            if (!VcsOperations.hasStagedChanges(dir)</span>
+<span class="nc bnc" id="L213" title="All 2 branches missed.">                    &amp;&amp; VcsOperations.isClean(dir)) {</span>
+<span class="nc" id="L214">                getLog().debug(label + &quot; — clean, skipping&quot;);</span>
+<span class="nc" id="L215">                return CommitOutcome.SKIPPED_CLEAN;</span>
+            }
+
+<span class="pc bpc" id="L218" title="1 of 2 branches missed.">            if (!VcsOperations.hasStagedChanges(dir)) {</span>
+                // stagedOnly=true and the user didn't stage anything,
+                // but there are untracked or unstaged changes — surface
+                // both kinds so the developer sees exactly what would be
+                // dropped vs. what -DstagedOnly=false would pick up. (#231)
+<span class="nc" id="L223">                String suffix = formatUncommittedSuffix(</span>
+<span class="nc" id="L224">                        VcsOperations.unstagedFiles(dir), newFiles);</span>
+<span class="nc" id="L225">                getLog().warn(Ansi.yellow(&quot;  ⚠ &quot;) + label</span>
+                        + &quot; — skipped (&quot; + suffix + &quot;)&quot;);
+<span class="nc" id="L227">                getLog().warn(&quot;    Drop -DstagedOnly to stage and commit&quot;);</span>
+<span class="nc" id="L228">                return CommitOutcome.SKIPPED_UNSTAGED;</span>
+            }
+
+<span class="fc" id="L231">            VcsOperations.commit(dir, getLog(), message);</span>
+<span class="fc" id="L232">            VcsOperations.writeVcsState(dir, VcsState.Action.COMMIT);</span>
+
+<span class="pc bpc" id="L234" title="1 of 2 branches missed.">            if (push) {</span>
+<span class="nc" id="L235">                String branch = VcsOperations.currentBranch(dir);</span>
+<span class="nc" id="L236">                VcsOperations.push(dir, getLog(), &quot;origin&quot;, branch);</span>
+<span class="nc" id="L237">                VcsOperations.writeVcsState(dir, VcsState.Action.PUSH);</span>
+            }
+
+<span class="fc" id="L240">            getLog().info(Ansi.green(&quot;  ✓ &quot;) + label</span>
+<span class="fc" id="L241">                    + &quot; — &quot; + previewSummary(modCount, newFiles));</span>
+<span class="fc" id="L242">            return CommitOutcome.COMMITTED;</span>
+<span class="nc" id="L243">        } catch (MojoException e) {</span>
+<span class="nc" id="L244">            getLog().warn(Ansi.red(&quot;  ✗ &quot;) + label + &quot; — &quot; + e.getMessage());</span>
+<span class="nc" id="L245">            return CommitOutcome.FAILED;</span>
+        }
+    }
+
+    /**
+     * Build the parenthesized suffix for the {@code stagedOnly}
+     * skip message. Reports both tracked-unstaged and untracked work
+     * with file paths so the developer sees exactly what is sitting
+     * uncommitted (#231).
+     *
+     * &lt;p&gt;Format examples:
+     * &lt;ul&gt;
+     *   &lt;li&gt;{@code &quot;unstaged: a.java, b.java&quot;} — tracked-unstaged only&lt;/li&gt;
+     *   &lt;li&gt;{@code &quot;untracked: c.java, d.java&quot;} — untracked only&lt;/li&gt;
+     *   &lt;li&gt;{@code &quot;unstaged: a.java; untracked: b.java&quot;} — both&lt;/li&gt;
+     * &lt;/ul&gt;
+     *
+     * @param unstagedFiles comma-separated list of tracked-modified-but-
+     *                      unstaged file paths (from
+     *                      {@link VcsOperations#unstagedFiles})
+     * @param newFiles      list of untracked-but-not-ignored file paths
+     *                      (from {@link VcsOperations#untrackedFiles})
+     * @return the suffix to interpolate inside {@code &quot;skipped (...)&quot;}
+     */
+    static String formatUncommittedSuffix(String unstagedFiles, List&lt;String&gt; newFiles) {
+<span class="fc" id="L270">        StringBuilder sb = new StringBuilder();</span>
+<span class="fc bfc" id="L271" title="All 4 branches covered.">        if (unstagedFiles != null &amp;&amp; !unstagedFiles.isEmpty()) {</span>
+<span class="fc" id="L272">            sb.append(&quot;unstaged: &quot;).append(unstagedFiles);</span>
+        }
+<span class="fc bfc" id="L274" title="All 4 branches covered.">        if (newFiles != null &amp;&amp; !newFiles.isEmpty()) {</span>
+<span class="fc bfc" id="L275" title="All 2 branches covered.">            if (sb.length() &gt; 0) sb.append(&quot;; &quot;);</span>
+<span class="fc" id="L276">            sb.append(&quot;untracked: &quot;).append(String.join(&quot;, &quot;, newFiles));</span>
+        }
+<span class="fc bfc" id="L278" title="All 2 branches covered.">        if (sb.length() == 0) {</span>
+            // Defensive: caller indicated uncommitted work, but no files
+            // were captured. Emit a placeholder rather than empty parens.
+<span class="fc" id="L281">            sb.append(&quot;uncommitted&quot;);</span>
+        }
+<span class="fc" id="L283">        return sb.toString();</span>
+    }
+
+    /**
+     * Format a one-line summary like {@code &quot;7 modified, 1 new
+     * (.idea/kotlinc.xml)&quot;}. New file paths are listed inline so the
+     * developer can see at a glance what {@code addAll} pulled in.
+     */
+    static String previewSummary(int modCount, List&lt;String&gt; newFiles) {
+<span class="fc" id="L292">        StringBuilder sb = new StringBuilder();</span>
+<span class="fc" id="L293">        sb.append(modCount).append(&quot; modified&quot;);</span>
+<span class="fc bfc" id="L294" title="All 2 branches covered.">        if (!newFiles.isEmpty()) {</span>
+<span class="fc" id="L295">            sb.append(&quot;, &quot;).append(newFiles.size()).append(&quot; new (&quot;);</span>
+<span class="fc" id="L296">            int max = Math.min(3, newFiles.size());</span>
+<span class="fc bfc" id="L297" title="All 2 branches covered.">            for (int i = 0; i &lt; max; i++) {</span>
+<span class="pc bpc" id="L298" title="1 of 2 branches missed.">                if (i &gt; 0) sb.append(&quot;, &quot;);</span>
+<span class="fc" id="L299">                sb.append(newFiles.get(i));</span>
+            }
+<span class="pc bpc" id="L301" title="1 of 2 branches missed.">            if (newFiles.size() &gt; max) {</span>
+<span class="nc" id="L302">                sb.append(&quot;, +&quot;).append(newFiles.size() - max).append(&quot; more&quot;);</span>
+            }
+<span class="fc" id="L304">            sb.append(&quot;)&quot;);</span>
+        }
+<span class="fc" id="L306">        return sb.toString();</span>
+    }
+
+
+    /** Per-repo outcome tally. Exactly one counter is set per repo. */
+<span class="fc" id="L311">    private record CommitOutcome(int committed, int skippedClean,</span>
+                                 int skippedUnstaged, int failed) {
+<span class="fc" id="L313">        static final CommitOutcome COMMITTED = new CommitOutcome(1, 0, 0, 0);</span>
+<span class="fc" id="L314">        static final CommitOutcome SKIPPED_CLEAN = new CommitOutcome(0, 1, 0, 0);</span>
+<span class="fc" id="L315">        static final CommitOutcome SKIPPED_UNSTAGED = new CommitOutcome(0, 0, 1, 0);</span>
+<span class="fc" id="L316">        static final CommitOutcome FAILED = new CommitOutcome(0, 0, 0, 1);</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

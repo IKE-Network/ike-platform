@@ -2,6 +2,7 @@ package network.ike.plugin.ws;
 
 import network.ike.plugin.ReleaseSupport;
 import network.ike.plugin.support.GoalReportBuilder;
+import network.ike.plugin.ws.vcs.VcsOperations;
 import network.ike.workspace.ManifestWriter;
 import network.ike.workspace.Subproject;
 import network.ike.workspace.WorkingSet;
@@ -127,6 +128,35 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
         WorkspaceGraph graph = loadGraph();
         File root = workspaceRoot();
         Path manifestPath = resolveManifest();
+
+        // COORDINATING preflight (#780): only from=manifest / from=workspace-head
+        // CHECK OUT the coherent branch in each subproject, so for those modes
+        // every subproject tree must be unmodified to reconcile onto it. The
+        // default from=repos only READS each branch and writes the workspace
+        // root's workspace.yaml — it touches no subproject tree — so it is
+        // exempt. Two escapes bypass the refusal: -Dforce (check out over the
+        // modified tree, the documented override) and -Dallow-uncommitted (skip
+        // the affected subprojects, the per-subproject path below). Draft
+        // previews, never refuses. The workspace root is deliberately not
+        // checked — its workspace.yaml is reconcile's own input/output.
+        if (publish && !allowUncommitted() && !force
+                && !"repos".equals(from)) {
+            List<String> uncommitted = new ArrayList<>();
+            for (String name : graph.manifest().subprojects().keySet()) {
+                File dir = new File(root, name);
+                if (new File(dir, ".git").exists() && !gitStatus(dir).isEmpty()) {
+                    uncommitted.add(name);
+                }
+            }
+            if (!uncommitted.isEmpty()) {
+                throw new MojoException(WsGoal.RECONCILE_BRANCHES_PUBLISH.qualified()
+                        + ": " + uncommitted.size() + " subproject(s) have "
+                        + "uncommitted changes and cannot be reconciled onto the "
+                        + "coherent branch: " + uncommitted + "\nCommit them, pass "
+                        + "-Dforce to check out over the changes, or "
+                        + "-Dallow-uncommitted to skip the affected subprojects.");
+            }
+        }
 
         getLog().info("");
         getLog().info("IKE Workspace Reconcile Branches — "
@@ -290,11 +320,12 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
                         + updates.size() + " change(s))");
                 File wsRoot = manifestPath.getParent().toFile();
                 if (new File(wsRoot, ".git").exists()) {
-                    ReleaseSupport.exec(wsRoot, getLog(),
-                            "git", "add", "workspace.yaml");
-                    ReleaseSupport.exec(wsRoot, getLog(),
-                            "git", "commit", "-m",
-                            "workspace: align branch fields from repos");
+                    // Commit workspace.yaml in isolation (#780): only the path
+                    // this goal authored, never the whole index.
+                    VcsOperations.commitPaths(wsRoot, getLog(),
+                            "workspace: align branch fields from repos"
+                            + "\n\nRefs: IKE-Network/ike-issues#780",
+                            "workspace.yaml");
                 }
             } catch (IOException e) {
                 throw new MojoException(
@@ -438,11 +469,12 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
                 ManifestWriter.updateBranches(manifestPath, yamlUpdates);
                 getLog().info("  Branches: updated workspace.yaml ("
                         + yamlUpdates.size() + " field(s))");
-                ReleaseSupport.exec(wsRoot, getLog(),
-                        "git", "add", "workspace.yaml");
-                ReleaseSupport.exec(wsRoot, getLog(),
-                        "git", "commit", "-m",
-                        "workspace: align branch fields to " + wsBranch);
+                // Commit workspace.yaml in isolation (#780): only the path this
+                // goal authored, never the whole index.
+                VcsOperations.commitPaths(wsRoot, getLog(),
+                        "workspace: align branch fields to " + wsBranch
+                        + "\n\nRefs: IKE-Network/ike-issues#780",
+                        "workspace.yaml");
             } catch (IOException e) {
                 throw new MojoException(
                         "Failed to update workspace.yaml: " + e.getMessage(), e);

@@ -8,6 +8,7 @@ import network.ike.plugin.ws.reconcile.AlignmentReconciler;
 import network.ike.plugin.ws.reconcile.DriftReport;
 import network.ike.plugin.ws.reconcile.ReconcilerOptions;
 import network.ike.plugin.ws.reconcile.WorkspaceContext;
+import network.ike.plugin.ws.vcs.VcsOperations;
 import network.ike.workspace.ManifestReader;
 import network.ike.workspace.WorkspaceGraph;
 import org.apache.maven.api.plugin.MojoException;
@@ -139,10 +140,14 @@ public class WsAlignDraftMojo extends AbstractWorkspaceMojo {
         PreflightResult preflight = Preflight.of(
                 List.of(PreflightCondition.WORKING_TREE_CLEAN),
                 PreflightContext.of(root, graph, sorted));
-        if (draft) {
-            preflight.warnIfFailed(getLog(), WsGoal.ALIGN_PUBLISH);
+        // Gate the REQUIRE_UNMODIFIED preflight (#780): draft previews;
+        // -Dallow-uncommitted relaxes it; -Ddefer-commit hands the clean-state
+        // guarantee to the cascade caller (which preflights + commits itself).
+        WsGoal alignGoal = publish ? WsGoal.ALIGN_PUBLISH : WsGoal.ALIGN_DRAFT;
+        if (draft || allowUncommitted() || deferCommit()) {
+            preflight.warnIfFailed(getLog(), alignGoal);
         } else {
-            preflight.requirePassed(WsGoal.ALIGN_PUBLISH);
+            preflight.requirePassed(alignGoal);
         }
 
         WorkspaceContext ctx = new WorkspaceContext(
@@ -164,12 +169,59 @@ public class WsAlignDraftMojo extends AbstractWorkspaceMojo {
             // some duplicated work, but the alternative would be a
             // bigger refactor of AlignmentReconciler.
             DriftReport report = reconciler.detect(ctx);
+            // Capture the exact POMs the plan will rewrite BEFORE applying, so
+            // the commit below touches only align's own output (#780,
+            // IN_ISOLATION) — never a concurrently-modified file. After apply
+            // the drift is resolved and the plan would be empty. Skipped under
+            // -Ddefer-commit, where the cascade caller owns the commit.
+            Map<String, List<String>> authoredPoms = deferCommit()
+                    ? Map.of()
+                    : reconciler.changedPomsBySubproject(ctx);
             reconciler.apply(ctx);
+            if (!deferCommit()) {
+                commitAlignedPoms(root, authoredPoms);
+            }
             content = WORKING_SET_NOTE + report.toAppliedMarkdown();
         }
         getLog().info("");
         return new WorkspaceReportSpec(
                 publish ? WsGoal.ALIGN_PUBLISH : WsGoal.ALIGN_DRAFT, content);
+    }
+
+    /**
+     * Commit the POMs the reconciler rewrote, in isolation (#780,
+     * {@link AuthoredCommit#IN_ISOLATION}). Each owning subproject is its own
+     * git repo, so this commits per subproject, passing the EXACT relative POM
+     * paths the plan changed (captured before {@code apply}) to
+     * {@link VcsOperations#commitPaths} — never a {@code git status} re-scan, so
+     * a concurrently-modified file is never swept in. Per-repo failures warn
+     * (one bad repo must not strand the others). Under {@code -Ddefer-commit}
+     * the caller owns the commit and {@code authoredPoms} is empty.
+     *
+     * @param root         the workspace root
+     * @param authoredPoms subproject name → its changed POM relative paths
+     */
+    private void commitAlignedPoms(File root,
+                                   Map<String, List<String>> authoredPoms) {
+        for (Map.Entry<String, List<String>> entry : authoredPoms.entrySet()) {
+            String subproject = entry.getKey();
+            File repo = new File(root, subproject);
+            if (!new File(repo, ".git").exists()) {
+                continue;
+            }
+            List<String> poms = entry.getValue();
+            try {
+                VcsOperations.commitPaths(repo, getLog(),
+                        "workspace: align inter-subproject versions"
+                        + "\n\nRefs: IKE-Network/ike-issues#780",
+                        poms.toArray(new String[0]));
+                getLog().info("  ✓ committed " + poms.size()
+                        + " aligned pom(s) in " + subproject);
+            } catch (MojoException e) {
+                getLog().warn("  could not commit aligned poms in " + subproject
+                        + " — " + e.getMessage());
+            }
+        }
     }
 
     /**

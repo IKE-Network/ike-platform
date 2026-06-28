@@ -76,6 +76,21 @@ abstract class AbstractWorkspaceMojo implements Mojo {
     boolean allowUncommitted;
 
     /**
+     * Cascade hand-off flag (#780): when a {@code COORDINATING} goal is invoked
+     * as a sub-step of another goal that owns the commit, the caller sets
+     * {@code -Ddefer-commit} so the goal writes its paths but performs NEITHER
+     * its {@link TreePreflight#REQUIRE_UNMODIFIED} preflight NOR its
+     * {@link AuthoredCommit#IN_ISOLATION} commit — collapsing
+     * {@link GoalBehavior#COORDINATING} to the
+     * {@link AuthoredCommit#DEFER_TO_CALLER} contract for that one invocation.
+     * The caller then owns committing the deferred output. Independent of
+     * {@code -Dallow-uncommitted} (which relaxes only the preflight); inert for
+     * goals with no preflight/commit wiring.
+     */
+    @Parameter(property = "defer-commit", defaultValue = "false")
+    boolean deferCommit;
+
+    /**
      * Access the Maven logger.
      *
      * @return the logger instance
@@ -92,6 +107,18 @@ abstract class AbstractWorkspaceMojo implements Mojo {
      */
     protected boolean allowUncommitted() {
         return allowUncommitted;
+    }
+
+    /**
+     * Whether the {@code -Ddefer-commit} cascade hand-off is set — the goal
+     * skips its own {@link TreePreflight#REQUIRE_UNMODIFIED} preflight and
+     * {@link AuthoredCommit#IN_ISOLATION} commit so the invoking goal owns the
+     * commit ({@link AuthoredCommit#DEFER_TO_CALLER}, #780).
+     *
+     * @return {@code true} to defer the preflight + commit to the caller
+     */
+    protected boolean deferCommit() {
+        return deferCommit;
     }
 
     /**

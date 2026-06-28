@@ -2,6 +2,9 @@ package network.ike.plugin.ws;
 
 import network.ike.plugin.ReleaseSupport;
 import network.ike.plugin.support.GoalReportBuilder;
+import network.ike.plugin.ws.preflight.Preflight;
+import network.ike.plugin.ws.preflight.PreflightCondition;
+import network.ike.plugin.ws.preflight.PreflightContext;
 import network.ike.plugin.ws.reconcile.FeatureVersionReconciler;
 import network.ike.plugin.ws.vcs.VcsOperations;
 import network.ike.workspace.Subproject;
@@ -146,6 +149,18 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
             throw new MojoException(
                     "No workspace.yaml found in " + wsDir
                     + ". Run " + WsGoal.SCAFFOLD_INIT.qualified() + " first.");
+        }
+
+        // COORDINATING preflight (#780): the workspace-root tree must be
+        // unmodified so the add commit below is attributable solely to this
+        // goal. Root-only (empty subproject list) — the new clone carries its
+        // own branch WIP, and its version-alignment edits are intentionally
+        // left uncommitted. -Dallow-uncommitted bypasses; -Ddefer-commit (a
+        // cascade caller owns the commit) skips it too.
+        if (!allowUncommitted() && !deferCommit()) {
+            Preflight.of(List.of(PreflightCondition.WORKING_TREE_CLEAN),
+                    PreflightContext.of(wsDir.toFile(), null, List.of()))
+                    .requirePassed(WsGoal.ADD);
         }
 
         // Resolve the target branch up front: workspace repo HEAD is
@@ -293,6 +308,10 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
         }
         getLog().info("");
 
+        // Snapshot the root files BEFORE editing them so the commit below is
+        // scoped to exactly what this goal authored (#780, IN_ISOLATION).
+        GoalAuthoredChanges authored = GoalAuthoredChanges.snapshot(
+                wsDir.toFile(), getLog(), "workspace.yaml", "pom.xml");
         try {
             if (alreadyRegistered) {
                 // Update existing entry's depends-on in workspace.yaml
@@ -331,13 +350,15 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
             }
         }
 
-        // Auto-commit workspace.yaml + pom.xml changes
-        try {
-            ReleaseSupport.exec(wsDir.toFile(), getLog(), "git", "add", "workspace.yaml", "pom.xml");
-            ReleaseSupport.exec(wsDir.toFile(), getLog(), "git", "commit", "-m", "workspace: add " + subproject);
-            getLog().info(Ansi.green("  ✓ ") + "committed workspace.yaml + pom.xml");
-        } catch (Exception e) {
-            getLog().warn("  Auto-commit failed (non-fatal): " + e.getMessage());
+        // Commit the root edits in isolation (#780, IN_ISOLATION): only the
+        // paths this goal authored (workspace.yaml + pom.xml), which the
+        // preflight guaranteed were clean. Skipped under -Ddefer-commit, where
+        // a cascade caller owns the commit.
+        if (!deferCommit()) {
+            if (authored.commitAuthored("workspace: add " + subproject
+                    + "\n\nRefs: IKE-Network/ike-issues#780")) {
+                getLog().info(Ansi.green("  ✓ ") + "committed workspace.yaml + pom.xml");
+            }
         }
 
         // Version alignment: update dependency versions in the newly

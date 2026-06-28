@@ -102,8 +102,12 @@ final class ParkSupport {
         String message = "ws-auto/" + sourceBranch;
         VcsOperations.stashPushUntracked(dir, log, message);
         VcsOperations.updateRef(dir, log, ref, "refs/stash");
-        VcsOperations.stashDrop(dir, log);
+        // Push the per-user ref to origin BEFORE dropping the local stash, so a
+        // push failure (offline / no origin write) leaves the work recoverable
+        // as a normal local stash entry rather than stranded in a local-only
+        // ref (IKE-Network/ike-issues#781).
         VcsOperations.pushRef(dir, log, STASH_REMOTE, ref);
+        VcsOperations.stashDrop(dir, log);
         log.info("    " + Ansi.yellow("↟ ") + "stashed → " + ref);
     }
 

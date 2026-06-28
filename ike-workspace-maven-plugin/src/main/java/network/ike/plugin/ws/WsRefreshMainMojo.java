@@ -84,6 +84,7 @@ public class WsRefreshMainMojo extends AbstractWorkspaceMojo {
         // RefreshMainSupport.refreshOrThrow directly (no goal wrapper), so this
         // relaxation is scoped to the ws:refresh-main goal alone.
         List<Boolean> stashed = new ArrayList<>();
+        List<String> restoreFailures = new ArrayList<>();
         List<RefreshMainSupport.Outcome> outcomes;
         try {
             for (String name : sorted) {
@@ -99,11 +100,24 @@ public class WsRefreshMainMojo extends AbstractWorkspaceMojo {
                 try {
                     AutoStashGuard.restoreIfStashed(dir, getLog(), stashed.get(i));
                 } catch (MojoException e) {
+                    restoreFailures.add(sorted.get(i)
+                            + " (" + e.getMessage() + ")");
                     getLog().warn("  could not restore stashed WIP in "
                             + sorted.get(i) + " — recover it from refs/ws-stash. "
                             + e.getMessage());
                 }
             }
+        }
+
+        // A restore that conflicts leaves that subproject's tree mid-apply, so
+        // fail loudly rather than report success over an inconsistent tree
+        // (IKE-Network/ike-issues#781). The work survives on refs/ws-stash, so
+        // the user can resolve and re-apply.
+        if (!restoreFailures.isEmpty()) {
+            throw new MojoException("refresh-main advanced main, but could not "
+                    + "restore auto-stashed work in: " + restoreFailures
+                    + "\nThe work survives on refs/ws-stash/<you>/<branch>; "
+                    + "resolve the conflict there and re-apply.");
         }
 
         WorkspaceReportSpec spec = new WorkspaceReportSpec(

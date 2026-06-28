@@ -120,8 +120,12 @@ public class WsCheckpointPublishMojo extends WsCheckpointDraftMojo {
         String mvn = WsReleaseDraftMojo.resolveMvnCommand(root);
         getLog().info("Auto-aligning workspace versions...");
         try {
+            // #780: hand the commit to checkpoint — align writes the aligned
+            // POMs but commitAlignmentSideEffects() below owns committing them
+            // (and requireCleanUserState() owns the preflight). -Ddefer-commit
+            // collapses align to DEFER_TO_CALLER so it does not double-commit.
             ReleaseSupport.exec(root, getLog(), mvn,
-                    WsGoal.ALIGN_PUBLISH.qualified(), "-B");
+                    WsGoal.ALIGN_PUBLISH.qualified(), "-Ddefer-commit", "-B");
         } catch (MojoException e) {
             getLog().warn("Auto-alignment completed with warnings: "
                     + e.getMessage());

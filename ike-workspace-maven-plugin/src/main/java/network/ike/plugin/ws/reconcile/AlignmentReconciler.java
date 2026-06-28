@@ -120,6 +120,30 @@ public class AlignmentReconciler implements Reconciler {
                 + plan.changedSubprojectCount() + " subproject(s)");
     }
 
+    /**
+     * The POMs this reconciler would rewrite on {@link #apply}, grouped by
+     * owning subproject and listed by path relative to that subproject's root
+     * (IKE-Network/ike-issues#780). Call this BEFORE {@code apply} — afterwards
+     * the drift is resolved and the plan is empty. Lets a caller commit exactly
+     * the aligned POMs in isolation. Read-only (recomputes the plan, no writes).
+     *
+     * @param ctx the workspace context
+     * @return subproject name → its changed POM relative paths (deduplicated),
+     *         empty when there is no drift
+     */
+    public Map<String, List<String>> changedPomsBySubproject(
+            WorkspaceContext ctx) {
+        Map<String, List<String>> byRepo = new LinkedHashMap<>();
+        for (AlignChange c : computePlan(ctx).changes) {
+            List<String> poms = byRepo.computeIfAbsent(
+                    c.subproject, k -> new ArrayList<>());
+            if (!poms.contains(c.pomRelPath)) {
+                poms.add(c.pomRelPath);
+            }
+        }
+        return byRepo;
+    }
+
     // ── Plan computation (read-only, shared by detect and apply) ────
 
     /**

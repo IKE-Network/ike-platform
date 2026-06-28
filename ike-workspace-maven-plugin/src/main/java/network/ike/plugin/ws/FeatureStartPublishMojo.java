@@ -37,6 +37,12 @@ public class FeatureStartPublishMojo extends FeatureStartDraftMojo {
         String mvn = WsReleaseDraftMojo.resolveMvnCommand(root);
         getLog().info("Auto-aligning workspace versions...");
         try {
+            // #780: unlike checkpoint, feature-start-publish does NOT pass
+            // -Ddefer-commit. It has no commit step of its own, so align must
+            // commit its aligned POMs IN_ISOLATION here — otherwise super
+            // .runGoal()'s FeatureStartDraftMojo preflight would refuse on the
+            // tree align just modified. Letting align self-commit keeps the
+            // tree clean for the feature-start that follows.
             ReleaseSupport.exec(root, getLog(), mvn,
                     WsGoal.ALIGN_PUBLISH.qualified(), "-B");
         } catch (MojoException e) {

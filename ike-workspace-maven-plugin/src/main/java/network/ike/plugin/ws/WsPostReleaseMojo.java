@@ -7,6 +7,9 @@ import network.ike.workspace.Subproject;
 import network.ike.workspace.ManifestWriter;
 import network.ike.workspace.WorkingSet;
 import network.ike.workspace.WorkspaceGraph;
+import network.ike.plugin.ws.preflight.Preflight;
+import network.ike.plugin.ws.preflight.PreflightCondition;
+import network.ike.plugin.ws.preflight.PreflightContext;
 import network.ike.plugin.ws.vcs.VcsOperations;
 import network.ike.plugin.ws.vcs.VcsState;
 import org.apache.maven.api.plugin.MojoException;
@@ -65,6 +68,17 @@ public class WsPostReleaseMojo extends AbstractWorkspaceMojo {
 
         List<String> sorted = graph.topologicalSort(
                 new LinkedHashSet<>(graph.manifest().subprojects().keySet()));
+
+        // COORDINATING preflight (#780): post-release bumps + commits every
+        // subproject pom, so the whole working set must be unmodified first
+        // (after the VCS-bridge catch-up above). -Dallow-uncommitted escapes
+        // (e.g. an interrupted release). post-release is not cascade-invoked, so
+        // -Ddefer-commit never fires here, but the guard mirrors the family.
+        if (!allowUncommitted() && !deferCommit()) {
+            Preflight.of(List.of(PreflightCondition.WORKING_TREE_CLEAN),
+                    PreflightContext.of(root, graph, sorted))
+                    .requirePassed(WsGoal.POST_RELEASE);
+        }
 
         getLog().info("");
         getLog().info("IKE Workspace \u2014 Post-Release");

@@ -102,10 +102,14 @@ final class ParkSupport {
 <span class="fc" id="L102">        String message = &quot;ws-auto/&quot; + sourceBranch;</span>
 <span class="fc" id="L103">        VcsOperations.stashPushUntracked(dir, log, message);</span>
 <span class="fc" id="L104">        VcsOperations.updateRef(dir, log, ref, &quot;refs/stash&quot;);</span>
-<span class="fc" id="L105">        VcsOperations.stashDrop(dir, log);</span>
-<span class="fc" id="L106">        VcsOperations.pushRef(dir, log, STASH_REMOTE, ref);</span>
-<span class="fc" id="L107">        log.info(&quot;    &quot; + Ansi.yellow(&quot;↟ &quot;) + &quot;stashed → &quot; + ref);</span>
-<span class="fc" id="L108">    }</span>
+        // Push the per-user ref to origin BEFORE dropping the local stash, so a
+        // push failure (offline / no origin write) leaves the work recoverable
+        // as a normal local stash entry rather than stranded in a local-only
+        // ref (IKE-Network/ike-issues#781).
+<span class="fc" id="L109">        VcsOperations.pushRef(dir, log, STASH_REMOTE, ref);</span>
+<span class="fc" id="L110">        VcsOperations.stashDrop(dir, log);</span>
+<span class="fc" id="L111">        log.info(&quot;    &quot; + Ansi.yellow(&quot;↟ &quot;) + &quot;stashed → &quot; + ref);</span>
+<span class="fc" id="L112">    }</span>
 
     /**
      * Execute the arrive flow on a subproject that's just checked out
@@ -123,23 +127,23 @@ final class ParkSupport {
      */
     static boolean stashArrive(File dir, Log log, String slug, String targetBranch)
             throws MojoException {
-<span class="fc" id="L126">        String ref = stashRef(slug, targetBranch);</span>
+<span class="fc" id="L130">        String ref = stashRef(slug, targetBranch);</span>
         boolean present;
         try {
-<span class="nc" id="L129">            present = VcsOperations.remoteRefExists(dir, STASH_REMOTE, ref);</span>
-<span class="fc" id="L130">        } catch (MojoException e) {</span>
-<span class="fc" id="L131">            log.warn(&quot;    &quot; + Ansi.yellow(&quot;⚠ &quot;) + &quot;could not probe &quot;</span>
-<span class="fc" id="L132">                    + STASH_REMOTE + &quot; for &quot; + ref + &quot; — &quot; + e.getMessage());</span>
-<span class="fc" id="L133">            return false;</span>
-<span class="nc" id="L134">        }</span>
-<span class="nc bnc" id="L135" title="All 2 branches missed.">        if (!present) return false;</span>
+<span class="fc" id="L133">            present = VcsOperations.remoteRefExists(dir, STASH_REMOTE, ref);</span>
+<span class="fc" id="L134">        } catch (MojoException e) {</span>
+<span class="fc" id="L135">            log.warn(&quot;    &quot; + Ansi.yellow(&quot;⚠ &quot;) + &quot;could not probe &quot;</span>
+<span class="fc" id="L136">                    + STASH_REMOTE + &quot; for &quot; + ref + &quot; — &quot; + e.getMessage());</span>
+<span class="fc" id="L137">            return false;</span>
+<span class="fc" id="L138">        }</span>
+<span class="pc bpc" id="L139" title="1 of 2 branches missed.">        if (!present) return false;</span>
 
-<span class="nc" id="L137">        VcsOperations.fetchRef(dir, log, STASH_REMOTE, ref);</span>
-<span class="nc" id="L138">        VcsOperations.stashApply(dir, log, ref);</span>
-<span class="nc" id="L139">        VcsOperations.deleteLocalRef(dir, log, ref);</span>
-<span class="nc" id="L140">        VcsOperations.deleteRemoteRef(dir, log, STASH_REMOTE, ref);</span>
-<span class="nc" id="L141">        log.info(&quot;    &quot; + Ansi.green(&quot;↡ &quot;) + &quot;stash applied from &quot; + ref);</span>
-<span class="nc" id="L142">        return true;</span>
+<span class="fc" id="L141">        VcsOperations.fetchRef(dir, log, STASH_REMOTE, ref);</span>
+<span class="fc" id="L142">        VcsOperations.stashApply(dir, log, ref);</span>
+<span class="fc" id="L143">        VcsOperations.deleteLocalRef(dir, log, ref);</span>
+<span class="fc" id="L144">        VcsOperations.deleteRemoteRef(dir, log, STASH_REMOTE, ref);</span>
+<span class="fc" id="L145">        log.info(&quot;    &quot; + Ansi.green(&quot;↡ &quot;) + &quot;stash applied from &quot; + ref);</span>
+<span class="fc" id="L146">        return true;</span>
     }
 
     /**
@@ -149,19 +153,19 @@ final class ParkSupport {
      * @throws MojoException if deletion fails
      */
     static void deleteDirectory(Path dir) throws MojoException {
-<span class="fc" id="L152">        try (Stream&lt;Path&gt; paths = Files.walk(dir)) {</span>
-<span class="fc" id="L153">            paths.sorted(Comparator.reverseOrder())</span>
-<span class="fc" id="L154">                    .forEach(p -&gt; {</span>
+<span class="fc" id="L156">        try (Stream&lt;Path&gt; paths = Files.walk(dir)) {</span>
+<span class="fc" id="L157">            paths.sorted(Comparator.reverseOrder())</span>
+<span class="fc" id="L158">                    .forEach(p -&gt; {</span>
                         try {
-<span class="fc" id="L156">                            Files.delete(p);</span>
-<span class="nc" id="L157">                        } catch (IOException e) {</span>
-<span class="nc" id="L158">                            throw new RuntimeException(e);</span>
-<span class="fc" id="L159">                        }</span>
-<span class="fc" id="L160">                    });</span>
-<span class="nc" id="L161">        } catch (IOException | RuntimeException e) {</span>
-<span class="nc" id="L162">            throw new MojoException(</span>
-<span class="nc" id="L163">                    &quot;Failed to delete &quot; + dir + &quot;: &quot; + e.getMessage(), e);</span>
-<span class="fc" id="L164">        }</span>
-<span class="fc" id="L165">    }</span>
+<span class="fc" id="L160">                            Files.delete(p);</span>
+<span class="nc" id="L161">                        } catch (IOException e) {</span>
+<span class="nc" id="L162">                            throw new RuntimeException(e);</span>
+<span class="fc" id="L163">                        }</span>
+<span class="fc" id="L164">                    });</span>
+<span class="nc" id="L165">        } catch (IOException | RuntimeException e) {</span>
+<span class="nc" id="L166">            throw new MojoException(</span>
+<span class="nc" id="L167">                    &quot;Failed to delete &quot; + dir + &quot;: &quot; + e.getMessage(), e);</span>
+<span class="fc" id="L168">        }</span>
+<span class="fc" id="L169">    }</span>
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

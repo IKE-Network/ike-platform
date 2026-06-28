@@ -1,0 +1,150 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>CheatsheetReconciler.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws.reconcile</a> &gt; <span class="el_source">CheatsheetReconciler.java</span></div><h1>CheatsheetReconciler.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws.reconcile;
+
+import network.ike.plugin.ws.bootstrap.SubprojectInitializer;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Keeps the workspace cheatsheets — {@code GOALS.md} and
+ * {@code WS-REFERENCE.md} — in lockstep with the goal set the plugin
+ * actually ships (IKE-Network/ike-issues#452).
+ *
+ * &lt;p&gt;Before this reconciler, those files were written only by
+ * {@link SubprojectInitializer}, which is constructed by exactly one
+ * mojo ({@code ws:scaffold-init}). After a plugin upgrade the
+ * cheatsheets stayed stale until someone remembered to re-run
+ * {@code ws:scaffold-init} — and {@code ws:scaffold-draft} did not
+ * even report the drift. Routing cheatsheet generation through the
+ * reconciler chain restores the &quot;draft reports / publish heals&quot;
+ * contract every other workspace dimension already enjoys.
+ *
+ * &lt;p&gt;Source-of-truth lives in
+ * {@link SubprojectInitializer#generateGoalCheatsheet()} and
+ * {@link SubprojectInitializer#generateWorkspaceReference()} — both
+ * already static so this reconciler can call them without any
+ * additional plumbing. A future iteration of those generators is
+ * planned to iterate {@code WsGoal} so the content cannot drift from
+ * the actual goal set.
+ *
+ * &lt;p&gt;Opt-out: {@code -DupdateCheatsheets=false}. Useful when the user
+ * has intentionally edited the cheatsheets and does not want
+ * {@code ws:scaffold-publish} to overwrite them.
+ */
+<span class="fc" id="L38">public class CheatsheetReconciler implements Reconciler {</span>
+
+    static final String GOALS_FILE = &quot;GOALS.md&quot;;
+    static final String REFERENCE_FILE = &quot;WS-REFERENCE.md&quot;;
+
+    @Override
+    public String dimension() {
+<span class="fc" id="L45">        return &quot;Workspace cheatsheets (GOALS.md, WS-REFERENCE.md)&quot;;</span>
+    }
+
+    @Override
+    public String optOutFlag() {
+<span class="fc" id="L50">        return &quot;updateCheatsheets&quot;;</span>
+    }
+
+    @Override
+    public DriftReport detect(WorkspaceContext ctx) {
+<span class="fc" id="L55">        Path root = ctx.workspaceRoot().toPath();</span>
+<span class="fc" id="L56">        List&lt;String&gt; stale = staleFiles(root);</span>
+<span class="fc bfc" id="L57" title="All 2 branches covered.">        if (stale.isEmpty()) {</span>
+<span class="fc" id="L58">            return DriftReport.noDrift(dimension());</span>
+        }
+<span class="fc" id="L60">        List&lt;String&gt; detail = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L61" title="All 2 branches covered.">        for (String name : stale) {</span>
+<span class="fc" id="L62">            detail.add(name + &quot;: content drifted from generator&quot;);</span>
+<span class="fc" id="L63">        }</span>
+<span class="fc bfc" id="L64" title="All 2 branches covered.">        String summary = stale.size() == 1</span>
+<span class="fc" id="L65">                ? &quot;1 cheatsheet stale&quot;</span>
+<span class="fc" id="L66">                : stale.size() + &quot; cheatsheets stale&quot;;</span>
+<span class="fc" id="L67">        return new DriftReport(</span>
+<span class="fc" id="L68">                dimension(),</span>
+                true,
+                summary,
+                detail,
+<span class="fc" id="L72">                &quot;regenerate &quot; + String.join(&quot; and &quot;, stale),</span>
+<span class="fc" id="L73">                &quot;-D&quot; + optOutFlag() + &quot;=false&quot;);</span>
+    }
+
+    @Override
+    public void apply(WorkspaceContext ctx) {
+<span class="fc bfc" id="L78" title="All 2 branches covered.">        if (ctx.options().isOptedOut(optOutFlag())) {</span>
+<span class="fc" id="L79">            ctx.log().info(&quot;  &quot; + dimension()</span>
+<span class="fc" id="L80">                    + &quot;: skipped (opted out via -D&quot; + optOutFlag() + &quot;=false)&quot;);</span>
+<span class="fc" id="L81">            return;</span>
+        }
+<span class="fc" id="L83">        Path root = ctx.workspaceRoot().toPath();</span>
+<span class="fc" id="L84">        List&lt;String&gt; stale = staleFiles(root);</span>
+<span class="pc bpc" id="L85" title="1 of 2 branches missed.">        if (stale.isEmpty()) {</span>
+<span class="nc" id="L86">            return;</span>
+        }
+<span class="fc" id="L88">        int written = 0;</span>
+<span class="fc bfc" id="L89" title="All 2 branches covered.">        for (String name : stale) {</span>
+<span class="fc" id="L90">            String generated = generatorFor(name);</span>
+            try {
+<span class="fc" id="L92">                Files.writeString(root.resolve(name), generated,</span>
+                        StandardCharsets.UTF_8);
+<span class="fc" id="L94">                written++;</span>
+<span class="nc" id="L95">            } catch (IOException e) {</span>
+<span class="nc" id="L96">                ctx.log().warn(&quot;  &quot; + dimension()</span>
+<span class="nc" id="L97">                        + &quot;: could not write &quot; + name + &quot; — &quot; + e.getMessage());</span>
+<span class="fc" id="L98">            }</span>
+<span class="fc" id="L99">        }</span>
+<span class="pc bpc" id="L100" title="1 of 2 branches missed.">        if (written &gt; 0) {</span>
+<span class="fc" id="L101">            ctx.log().info(&quot;  &quot; + dimension()</span>
+                    + &quot;: regenerated &quot; + written + &quot; file(s)&quot;);
+        }
+<span class="fc" id="L104">    }</span>
+
+    /**
+     * Return the cheatsheet filenames whose on-disk content differs
+     * from the generator's current output (or that are missing
+     * entirely). A missing file counts as stale so a fresh workspace
+     * that never ran {@code ws:scaffold-init} still gets one written
+     * by {@code ws:scaffold-publish}.
+     */
+    private static List&lt;String&gt; staleFiles(Path workspaceRoot) {
+<span class="fc" id="L114">        List&lt;String&gt; stale = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L115" title="All 2 branches covered.">        if (!matchesGenerator(workspaceRoot.resolve(GOALS_FILE),</span>
+<span class="fc" id="L116">                SubprojectInitializer.generateGoalCheatsheet())) {</span>
+<span class="fc" id="L117">            stale.add(GOALS_FILE);</span>
+        }
+<span class="fc bfc" id="L119" title="All 2 branches covered.">        if (!matchesGenerator(workspaceRoot.resolve(REFERENCE_FILE),</span>
+<span class="fc" id="L120">                SubprojectInitializer.generateWorkspaceReference())) {</span>
+<span class="fc" id="L121">            stale.add(REFERENCE_FILE);</span>
+        }
+<span class="fc" id="L123">        return stale;</span>
+    }
+
+    private static boolean matchesGenerator(Path file, String expected) {
+<span class="fc bfc" id="L127" title="All 2 branches covered.">        if (!Files.exists(file)) {</span>
+<span class="fc" id="L128">            return false;</span>
+        }
+        try {
+<span class="fc" id="L131">            String existing = Files.readString(file, StandardCharsets.UTF_8);</span>
+<span class="fc" id="L132">            return existing.equals(expected);</span>
+<span class="nc" id="L133">        } catch (IOException e) {</span>
+            // Unreadable file is treated as drifted — apply will then
+            // attempt to overwrite it (which surfaces the underlying
+            // IO error to the user explicitly via the warn path above).
+<span class="nc" id="L137">            return false;</span>
+        }
+    }
+
+    private static String generatorFor(String filename) {
+<span class="pc bpc" id="L142" title="1 of 3 branches missed.">        return switch (filename) {</span>
+<span class="fc" id="L143">            case GOALS_FILE -&gt; SubprojectInitializer.generateGoalCheatsheet();</span>
+<span class="fc" id="L144">            case REFERENCE_FILE -&gt; SubprojectInitializer.generateWorkspaceReference();</span>
+<span class="nc" id="L145">            default -&gt; throw new IllegalArgumentException(</span>
+                    &quot;Unknown cheatsheet filename: &quot; + filename);
+        };
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>AutoStashGuard.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">AutoStashGuard.java</span></div><h1>AutoStashGuard.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.plugin.ws.vcs.VcsOperations;
+import org.apache.maven.api.plugin.Log;
+import org.apache.maven.api.plugin.MojoException;
+
+import java.io.File;
+
+/**
+ * Auto-stash a working tree's uncommitted changes before a VCS-state sync
+ * (pull / sync / refresh-main) and restore them after — so the SYNC goals run
+ * against a clean tree instead of refusing on in-flight work (#780). Reuses the
+ * per-user pushable-stash machinery {@link ParkSupport} extracted from
+ * {@code ws:switch}: WIP is stashed to {@code refs/ws-stash/&lt;slug&gt;/&lt;branch&gt;} on
+ * origin, then re-applied — so even a hard failure mid-sync never loses work.
+ *
+ * &lt;p&gt;Because the branch does not change across a pull/refresh, the stash is
+ * keyed on the current branch and restored onto that same (now-advanced)
+ * branch — a 3-way re-apply, the intended &quot;keep my edits on top of what I
+ * pulled&quot; outcome. This is what makes a Syncthing-bridged workspace's normal
+ * state (uncommitted edits in flight) compatible with a routine pull.
+ *
+ * &lt;p&gt;The slug is resolved lazily — only when a directory is actually dirty —
+ * so a clean sync never requires a configured {@code git user.email}.
+ */
+final class AutoStashGuard {
+
+    private AutoStashGuard() {}
+
+    /**
+     * Stash {@code dir}'s uncommitted changes (to the per-user ref for its
+     * current branch) when it is dirty, leaving the tree clean for the sync.
+     *
+     * @param dir the repository directory
+     * @param log Maven logger
+     * @return {@code true} if a stash was left — pass it to
+     *         {@link #restoreIfStashed} after the sync
+     * @throws MojoException if the tree is dirty but {@code git user.email} is
+     *                       unset (the stash ref can't be keyed), or a stash
+     *                       step fails
+     */
+    static boolean stashIfDirty(File dir, Log log) throws MojoException {
+<span class="pc bpc" id="L43" title="1 of 2 branches missed.">        if (VcsOperations.isClean(dir)) {</span>
+<span class="fc" id="L44">            return false;</span>
+        }
+<span class="nc" id="L46">        String branch = VcsOperations.currentBranch(dir);</span>
+<span class="nc bnc" id="L47" title="All 2 branches missed.">        if (branch.isBlank()) {</span>
+            // Detached HEAD (release-tag checkout, mid-bisect): there is no
+            // branch to key the per-user stash ref on, and the work is not on a
+            // shareable branch anyway. Skip auto-stash rather than build a
+            // malformed (trailing-slash) ref; leave the tree for the caller's
+            // own handling instead of failing the whole sync.
+<span class="nc" id="L53">            log.warn(&quot;    &quot; + dir.getName() + &quot;: detached HEAD — skipping &quot;</span>
+                    + &quot;auto-stash (commit or branch the work first)&quot;);
+<span class="nc" id="L55">            return false;</span>
+        }
+<span class="nc" id="L57">        ParkSupport.stashLeave(dir, log, slug(dir), branch);</span>
+<span class="nc" id="L58">        return true;</span>
+    }
+
+    /**
+     * Re-apply the stash left by {@link #stashIfDirty} onto the current branch
+     * (now advanced by the sync). A no-op when {@code stashed} is false.
+     *
+     * @param dir     the repository directory
+     * @param log     Maven logger
+     * @param stashed whether {@link #stashIfDirty} left a stash
+     * @throws MojoException if the re-apply or ref cleanup fails
+     */
+    static void restoreIfStashed(File dir, Log log, boolean stashed)
+            throws MojoException {
+<span class="pc bpc" id="L72" title="1 of 2 branches missed.">        if (!stashed) {</span>
+<span class="fc" id="L73">            return;</span>
+        }
+<span class="nc" id="L75">        ParkSupport.stashArrive(dir, log, slug(dir),</span>
+<span class="nc" id="L76">                VcsOperations.currentBranch(dir));</span>
+<span class="nc" id="L77">    }</span>
+
+    /**
+     * Resolve the per-user stash slug for {@code dir} from its
+     * {@code git user.email}, failing loud with a friendly message rather than
+     * silently dropping WIP when the email is unset.
+     */
+    private static String slug(File dir) throws MojoException {
+        try {
+<span class="nc" id="L86">            return VcsOperations.userSlug(VcsOperations.userEmail(dir));</span>
+<span class="nc" id="L87">        } catch (MojoException e) {</span>
+<span class="nc" id="L88">            throw new MojoException(&quot;Auto-stash needs a git user.email to key &quot;</span>
+                    + &quot;the per-user stash ref so in-flight work is never lost. &quot;
+                    + &quot;Set it (git config user.email &lt;you@example&gt;), or commit &quot;
+<span class="nc" id="L91">                    + &quot;your changes first. Cause: &quot; + e.getMessage(), e);</span>
+        }
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

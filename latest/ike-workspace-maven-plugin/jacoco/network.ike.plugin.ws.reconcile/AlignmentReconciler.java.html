@@ -120,6 +120,30 @@ import java.util.Set;
 <span class="fc" id="L120">                + plan.changedSubprojectCount() + &quot; subproject(s)&quot;);</span>
 <span class="fc" id="L121">    }</span>
 
+    /**
+     * The POMs this reconciler would rewrite on {@link #apply}, grouped by
+     * owning subproject and listed by path relative to that subproject's root
+     * (IKE-Network/ike-issues#780). Call this BEFORE {@code apply} — afterwards
+     * the drift is resolved and the plan is empty. Lets a caller commit exactly
+     * the aligned POMs in isolation. Read-only (recomputes the plan, no writes).
+     *
+     * @param ctx the workspace context
+     * @return subproject name → its changed POM relative paths (deduplicated),
+     *         empty when there is no drift
+     */
+    public Map&lt;String, List&lt;String&gt;&gt; changedPomsBySubproject(
+            WorkspaceContext ctx) {
+<span class="fc" id="L136">        Map&lt;String, List&lt;String&gt;&gt; byRepo = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc bfc" id="L137" title="All 2 branches covered.">        for (AlignChange c : computePlan(ctx).changes) {</span>
+<span class="fc" id="L138">            List&lt;String&gt; poms = byRepo.computeIfAbsent(</span>
+<span class="fc" id="L139">                    c.subproject, k -&gt; new ArrayList&lt;&gt;());</span>
+<span class="pc bpc" id="L140" title="1 of 2 branches missed.">            if (!poms.contains(c.pomRelPath)) {</span>
+<span class="fc" id="L141">                poms.add(c.pomRelPath);</span>
+            }
+<span class="fc" id="L143">        }</span>
+<span class="fc" id="L144">        return byRepo;</span>
+    }
+
     // ── Plan computation (read-only, shared by detect and apply) ────
 
     /**
@@ -135,7 +159,7 @@ import java.util.Set;
      * @param fromVersion the version currently declared
      * @param toVersion   the version this reconciler will set
      */
-<span class="fc" id="L138">    private record AlignChange(String subproject, String pomRelPath,</span>
+<span class="fc" id="L162">    private record AlignChange(String subproject, String pomRelPath,</span>
                                 String artifact, String fromVersion,
                                 String toVersion) {}
 
@@ -144,80 +168,80 @@ import java.util.Set;
      * Plans are computed by {@link #computePlan} (no I/O writes) and
      * consumed by either {@link #detect} or {@link #applyPlan}.
      */
-<span class="fc" id="L147">    private record Plan(List&lt;AlignChange&gt; changes) {</span>
+<span class="fc" id="L171">    private record Plan(List&lt;AlignChange&gt; changes) {</span>
         int totalChanges() {
-<span class="fc" id="L149">            return changes.size();</span>
+<span class="fc" id="L173">            return changes.size();</span>
         }
         int changedSubprojectCount() {
-<span class="fc" id="L152">            return (int) changes.stream()</span>
-<span class="fc" id="L153">                    .map(c -&gt; c.subproject)</span>
-<span class="fc" id="L154">                    .distinct()</span>
-<span class="fc" id="L155">                    .count();</span>
+<span class="fc" id="L176">            return (int) changes.stream()</span>
+<span class="fc" id="L177">                    .map(c -&gt; c.subproject)</span>
+<span class="fc" id="L178">                    .distinct()</span>
+<span class="fc" id="L179">                    .count();</span>
         }
     }
 
     /**
      * Associates a subproject name with its current POM version.
      */
-<span class="fc" id="L162">    private record ComponentVersion(String name, String version) {}</span>
+<span class="fc" id="L186">    private record ComponentVersion(String name, String version) {}</span>
 
     /**
      * Compute the alignment plan without mutating any POMs. Used by
      * {@link #detect} and {@link #apply}.
      */
     private Plan computePlan(WorkspaceContext ctx) {
-<span class="fc" id="L169">        WorkspaceGraph graph = ctx.graph();</span>
-<span class="fc" id="L170">        File root = ctx.workspaceRoot();</span>
-<span class="fc" id="L171">        Log log = ctx.log();</span>
+<span class="fc" id="L193">        WorkspaceGraph graph = ctx.graph();</span>
+<span class="fc" id="L194">        File root = ctx.workspaceRoot();</span>
+<span class="fc" id="L195">        Log log = ctx.log();</span>
 
-<span class="fc" id="L173">        Map&lt;String, ComponentVersion&gt; artifactIndex =</span>
-<span class="fc" id="L174">                buildArtifactIndex(graph, root, log);</span>
+<span class="fc" id="L197">        Map&lt;String, ComponentVersion&gt; artifactIndex =</span>
+<span class="fc" id="L198">                buildArtifactIndex(graph, root, log);</span>
 
-<span class="fc" id="L176">        List&lt;AlignChange&gt; changes = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L200">        List&lt;AlignChange&gt; changes = new ArrayList&lt;&gt;();</span>
 
         // Dependency / plugin / property alignment per subproject.
         for (Map.Entry&lt;String, Subproject&gt; entry
-<span class="fc bfc" id="L180" title="All 2 branches covered.">                : graph.manifest().subprojects().entrySet()) {</span>
-<span class="fc" id="L181">            String name = entry.getKey();</span>
-<span class="fc" id="L182">            Subproject subproject = entry.getValue();</span>
-<span class="fc" id="L183">            File subprojectDir = new File(root, name);</span>
-<span class="pc bpc" id="L184" title="1 of 2 branches missed.">            if (!new File(subprojectDir, &quot;pom.xml&quot;).exists()) {</span>
-<span class="nc" id="L185">                continue;</span>
+<span class="fc bfc" id="L204" title="All 2 branches covered.">                : graph.manifest().subprojects().entrySet()) {</span>
+<span class="fc" id="L205">            String name = entry.getKey();</span>
+<span class="fc" id="L206">            Subproject subproject = entry.getValue();</span>
+<span class="fc" id="L207">            File subprojectDir = new File(root, name);</span>
+<span class="pc bpc" id="L208" title="1 of 2 branches missed.">            if (!new File(subprojectDir, &quot;pom.xml&quot;).exists()) {</span>
+<span class="nc" id="L209">                continue;</span>
             }
 
             List&lt;File&gt; pomFiles;
             try {
-<span class="fc" id="L190">                pomFiles = ReleaseSupport.findPomFiles(subprojectDir);</span>
-<span class="nc" id="L191">            } catch (MojoException e) {</span>
-<span class="nc" id="L192">                log.warn(&quot;  &quot; + name + &quot;: could not scan POM files — &quot;</span>
-<span class="nc" id="L193">                        + e.getMessage());</span>
-<span class="nc" id="L194">                continue;</span>
-<span class="fc" id="L195">            }</span>
+<span class="fc" id="L214">                pomFiles = ReleaseSupport.findPomFiles(subprojectDir);</span>
+<span class="nc" id="L215">            } catch (MojoException e) {</span>
+<span class="nc" id="L216">                log.warn(&quot;  &quot; + name + &quot;: could not scan POM files — &quot;</span>
+<span class="nc" id="L217">                        + e.getMessage());</span>
+<span class="nc" id="L218">                continue;</span>
+<span class="fc" id="L219">            }</span>
 
             // depends-on entries can declare a version-property hint
             // that should track the target subproject's version.
-<span class="fc" id="L199">            Map&lt;String, String&gt; versionPropertyMap = new LinkedHashMap&lt;&gt;();</span>
-<span class="fc bfc" id="L200" title="All 2 branches covered.">            for (Dependency dep : subproject.dependsOn()) {</span>
-<span class="pc bpc" id="L201" title="1 of 2 branches missed.">                if (dep.versionProperty() != null</span>
-<span class="nc bnc" id="L202" title="All 2 branches missed.">                        &amp;&amp; !dep.versionProperty().isEmpty()) {</span>
-<span class="nc" id="L203">                    Subproject target = graph.manifest().subprojects()</span>
-<span class="nc" id="L204">                            .get(dep.subproject());</span>
-<span class="nc bnc" id="L205" title="All 4 branches missed.">                    if (target != null &amp;&amp; target.groupId() != null</span>
-<span class="nc bnc" id="L206" title="All 2 branches missed.">                            &amp;&amp; !target.groupId().isEmpty()) {</span>
-<span class="nc" id="L207">                        versionPropertyMap.put(</span>
-<span class="nc" id="L208">                                dep.subproject(), dep.versionProperty());</span>
+<span class="fc" id="L223">            Map&lt;String, String&gt; versionPropertyMap = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc bfc" id="L224" title="All 2 branches covered.">            for (Dependency dep : subproject.dependsOn()) {</span>
+<span class="pc bpc" id="L225" title="1 of 2 branches missed.">                if (dep.versionProperty() != null</span>
+<span class="nc bnc" id="L226" title="All 2 branches missed.">                        &amp;&amp; !dep.versionProperty().isEmpty()) {</span>
+<span class="nc" id="L227">                    Subproject target = graph.manifest().subprojects()</span>
+<span class="nc" id="L228">                            .get(dep.subproject());</span>
+<span class="nc bnc" id="L229" title="All 4 branches missed.">                    if (target != null &amp;&amp; target.groupId() != null</span>
+<span class="nc bnc" id="L230" title="All 2 branches missed.">                            &amp;&amp; !target.groupId().isEmpty()) {</span>
+<span class="nc" id="L231">                        versionPropertyMap.put(</span>
+<span class="nc" id="L232">                                dep.subproject(), dep.versionProperty());</span>
                     }
                 }
-<span class="fc" id="L211">            }</span>
+<span class="fc" id="L235">            }</span>
 
-<span class="fc bfc" id="L213" title="All 2 branches covered.">            for (File pomFile : pomFiles) {</span>
-<span class="fc" id="L214">                collectDependencyChanges(name, pomFile, artifactIndex,</span>
+<span class="fc bfc" id="L237" title="All 2 branches covered.">            for (File pomFile : pomFiles) {</span>
+<span class="fc" id="L238">                collectDependencyChanges(name, pomFile, artifactIndex,</span>
                         versionPropertyMap, subprojectDir, root, changes,
                         log);
-<span class="fc" id="L217">                collectPluginChanges(name, pomFile, artifactIndex,</span>
+<span class="fc" id="L241">                collectPluginChanges(name, pomFile, artifactIndex,</span>
                         subprojectDir, changes, log);
-<span class="fc" id="L219">            }</span>
-<span class="fc" id="L220">        }</span>
+<span class="fc" id="L243">            }</span>
+<span class="fc" id="L244">        }</span>
 
         // Parent alignment: a subproject whose manifest declares
         // parent: &lt;other-subproject&gt; tracks that subproject's version —
@@ -230,19 +254,19 @@ import java.util.Set;
         // unrelated parent to the wrong version and break the build
         // (#566). Validate every edge through the shared resolver and
         // skip + warn on any mismatch.
-<span class="fc" id="L233">        SubprojectResolver parentResolver = null;</span>
+<span class="fc" id="L257">        SubprojectResolver parentResolver = null;</span>
         try {
-<span class="fc" id="L235">            parentResolver = SubprojectResolver.scan(</span>
-<span class="fc" id="L236">                    root.toPath(), graph.manifest());</span>
-<span class="nc" id="L237">        } catch (IOException e) {</span>
-<span class="nc" id="L238">            log.warn(&quot;  Parent alignment skipped: could not scan published &quot;</span>
-<span class="nc" id="L239">                    + &quot;artifacts — &quot; + e.getMessage());</span>
-<span class="fc" id="L240">        }</span>
-<span class="pc bpc" id="L241" title="1 of 2 branches missed.">        if (parentResolver != null) {</span>
-<span class="fc" id="L242">            collectParentChanges(graph, root, parentResolver, changes, log);</span>
+<span class="fc" id="L259">            parentResolver = SubprojectResolver.scan(</span>
+<span class="fc" id="L260">                    root.toPath(), graph.manifest());</span>
+<span class="nc" id="L261">        } catch (IOException e) {</span>
+<span class="nc" id="L262">            log.warn(&quot;  Parent alignment skipped: could not scan published &quot;</span>
+<span class="nc" id="L263">                    + &quot;artifacts — &quot; + e.getMessage());</span>
+<span class="fc" id="L264">        }</span>
+<span class="pc bpc" id="L265" title="1 of 2 branches missed.">        if (parentResolver != null) {</span>
+<span class="fc" id="L266">            collectParentChanges(graph, root, parentResolver, changes, log);</span>
         }
 
-<span class="fc" id="L245">        return new Plan(changes);</span>
+<span class="fc" id="L269">        return new Plan(changes);</span>
     }
 
     /**
@@ -267,109 +291,109 @@ import java.util.Set;
                                              SubprojectResolver resolver,
                                              List&lt;AlignChange&gt; changes, Log log) {
         for (Map.Entry&lt;String, Subproject&gt; entry
-<span class="fc bfc" id="L270" title="All 2 branches covered.">                : graph.manifest().subprojects().entrySet()) {</span>
-<span class="fc" id="L271">            String name = entry.getKey();</span>
-<span class="fc" id="L272">            Subproject subproject = entry.getValue();</span>
-<span class="fc" id="L273">            String parentSubprojectName = subproject.parent();</span>
-<span class="fc bfc" id="L274" title="All 2 branches covered.">            if (parentSubprojectName == null) continue;</span>
+<span class="fc bfc" id="L294" title="All 2 branches covered.">                : graph.manifest().subprojects().entrySet()) {</span>
+<span class="fc" id="L295">            String name = entry.getKey();</span>
+<span class="fc" id="L296">            Subproject subproject = entry.getValue();</span>
+<span class="fc" id="L297">            String parentSubprojectName = subproject.parent();</span>
+<span class="fc bfc" id="L298" title="All 2 branches covered.">            if (parentSubprojectName == null) continue;</span>
 
-<span class="fc" id="L276">            Subproject parentSubproject = graph.manifest().subprojects()</span>
-<span class="fc" id="L277">                    .get(parentSubprojectName);</span>
-<span class="pc bpc" id="L278" title="1 of 2 branches missed.">            if (parentSubproject == null</span>
-<span class="pc bpc" id="L279" title="1 of 2 branches missed.">                    || parentSubproject.version() == null) {</span>
-<span class="nc" id="L280">                continue;</span>
+<span class="fc" id="L300">            Subproject parentSubproject = graph.manifest().subprojects()</span>
+<span class="fc" id="L301">                    .get(parentSubprojectName);</span>
+<span class="pc bpc" id="L302" title="1 of 2 branches missed.">            if (parentSubproject == null</span>
+<span class="pc bpc" id="L303" title="1 of 2 branches missed.">                    || parentSubproject.version() == null) {</span>
+<span class="nc" id="L304">                continue;</span>
             }
 
-<span class="fc" id="L283">            File subprojectDir = new File(root, name);</span>
-<span class="fc" id="L284">            Path pomPath = subprojectDir.toPath().resolve(&quot;pom.xml&quot;);</span>
-<span class="pc bpc" id="L285" title="1 of 2 branches missed.">            if (!Files.exists(pomPath)) continue;</span>
+<span class="fc" id="L307">            File subprojectDir = new File(root, name);</span>
+<span class="fc" id="L308">            Path pomPath = subprojectDir.toPath().resolve(&quot;pom.xml&quot;);</span>
+<span class="pc bpc" id="L309" title="1 of 2 branches missed.">            if (!Files.exists(pomPath)) continue;</span>
 
             try {
-<span class="fc" id="L288">                PomModel pom = PomModel.parse(pomPath);</span>
-<span class="fc" id="L289">                Parent parentInfo = pom.parent();</span>
-<span class="pc bpc" id="L290" title="1 of 2 branches missed.">                if (parentInfo == null) continue;</span>
+<span class="fc" id="L312">                PomModel pom = PomModel.parse(pomPath);</span>
+<span class="fc" id="L313">                Parent parentInfo = pom.parent();</span>
+<span class="pc bpc" id="L314" title="1 of 2 branches missed.">                if (parentInfo == null) continue;</span>
 
                 // Full-GA guard (#566): the manifest parent: edge must
                 // name the subproject that actually publishes the POM's
                 // real &lt;parent&gt;. Otherwise the edge is stale/mis-derived
                 // (external parent, or a different subproject) — skip the
                 // rewrite rather than corrupt the &lt;parent&gt; version.
-<span class="fc" id="L297">                Optional&lt;String&gt; producer = resolver.subprojectForCoordinate(</span>
-<span class="fc" id="L298">                        parentInfo.getGroupId(), parentInfo.getArtifactId());</span>
-<span class="fc bfc" id="L299" title="All 2 branches covered.">                if (producer.isEmpty()</span>
-<span class="fc bfc" id="L300" title="All 2 branches covered.">                        || !producer.get().equals(parentSubprojectName)) {</span>
-<span class="fc" id="L301">                    log.warn(&quot;  &quot; + name + &quot;: manifest parent: '&quot;</span>
+<span class="fc" id="L321">                Optional&lt;String&gt; producer = resolver.subprojectForCoordinate(</span>
+<span class="fc" id="L322">                        parentInfo.getGroupId(), parentInfo.getArtifactId());</span>
+<span class="fc bfc" id="L323" title="All 2 branches covered.">                if (producer.isEmpty()</span>
+<span class="fc bfc" id="L324" title="All 2 branches covered.">                        || !producer.get().equals(parentSubprojectName)) {</span>
+<span class="fc" id="L325">                    log.warn(&quot;  &quot; + name + &quot;: manifest parent: '&quot;</span>
                             + parentSubprojectName + &quot;' does not match the POM's&quot;
-<span class="fc" id="L303">                            + &quot; &lt;parent&gt; &quot; + parentInfo.getGroupId() + &quot;:&quot;</span>
-<span class="fc" id="L304">                            + parentInfo.getArtifactId()</span>
-<span class="fc" id="L305">                            + producer.map(p -&gt; &quot; (produced by &quot; + p + &quot;)&quot;)</span>
-<span class="fc" id="L306">                                    .orElse(&quot; (external)&quot;)</span>
+<span class="fc" id="L327">                            + &quot; &lt;parent&gt; &quot; + parentInfo.getGroupId() + &quot;:&quot;</span>
+<span class="fc" id="L328">                            + parentInfo.getArtifactId()</span>
+<span class="fc" id="L329">                            + producer.map(p -&gt; &quot; (produced by &quot; + p + &quot;)&quot;)</span>
+<span class="fc" id="L330">                                    .orElse(&quot; (external)&quot;)</span>
                             + &quot; — skipping parent alignment (ike-issues#566)&quot;);
-<span class="fc" id="L308">                    continue;</span>
+<span class="fc" id="L332">                    continue;</span>
                 }
 
-<span class="fc" id="L311">                String expectedVersion = parentSubproject.version();</span>
-<span class="fc" id="L312">                String currentVersion = parentInfo.getVersion();</span>
-<span class="pc bpc" id="L313" title="1 of 2 branches missed.">                if (currentVersion == null</span>
-<span class="pc bpc" id="L314" title="1 of 2 branches missed.">                        || expectedVersion.equals(currentVersion)) {</span>
-<span class="nc" id="L315">                    continue;</span>
+<span class="fc" id="L335">                String expectedVersion = parentSubproject.version();</span>
+<span class="fc" id="L336">                String currentVersion = parentInfo.getVersion();</span>
+<span class="pc bpc" id="L337" title="1 of 2 branches missed.">                if (currentVersion == null</span>
+<span class="pc bpc" id="L338" title="1 of 2 branches missed.">                        || expectedVersion.equals(currentVersion)) {</span>
+<span class="nc" id="L339">                    continue;</span>
                 }
-<span class="fc" id="L317">                changes.add(new AlignChange(</span>
+<span class="fc" id="L341">                changes.add(new AlignChange(</span>
                         name, &quot;pom.xml&quot;,
-<span class="fc" id="L319">                        &quot;parent:&quot; + parentInfo.getArtifactId(),</span>
+<span class="fc" id="L343">                        &quot;parent:&quot; + parentInfo.getArtifactId(),</span>
                         currentVersion, expectedVersion));
-<span class="nc" id="L321">            } catch (IOException e) {</span>
-<span class="nc" id="L322">                log.warn(&quot;  &quot; + name + &quot;: could not read parent version — &quot;</span>
-<span class="nc" id="L323">                        + e.getMessage());</span>
-<span class="fc" id="L324">            }</span>
-<span class="fc" id="L325">        }</span>
-<span class="fc" id="L326">    }</span>
+<span class="nc" id="L345">            } catch (IOException e) {</span>
+<span class="nc" id="L346">                log.warn(&quot;  &quot; + name + &quot;: could not read parent version — &quot;</span>
+<span class="nc" id="L347">                        + e.getMessage());</span>
+<span class="fc" id="L348">            }</span>
+<span class="fc" id="L349">        }</span>
+<span class="fc" id="L350">    }</span>
 
     // ── Plan application (mutates POMs) ─────────────────────────────
 
     private void applyPlan(WorkspaceContext ctx, Plan plan) {
-<span class="fc" id="L331">        File root = ctx.workspaceRoot();</span>
-<span class="fc" id="L332">        Log log = ctx.log();</span>
+<span class="fc" id="L355">        File root = ctx.workspaceRoot();</span>
+<span class="fc" id="L356">        Log log = ctx.log();</span>
 
         // Group changes by (subproject, pomRelPath) so we re-read each
         // file once, apply all of its changes, then write back.
-<span class="fc" id="L336">        Map&lt;String, List&lt;AlignChange&gt;&gt; byPom = new LinkedHashMap&lt;&gt;();</span>
-<span class="fc bfc" id="L337" title="All 2 branches covered.">        for (AlignChange c : plan.changes) {</span>
-<span class="fc" id="L338">            String key = c.subproject + &quot;::&quot; + c.pomRelPath;</span>
-<span class="fc" id="L339">            byPom.computeIfAbsent(key, k -&gt; new ArrayList&lt;&gt;()).add(c);</span>
-<span class="fc" id="L340">        }</span>
+<span class="fc" id="L360">        Map&lt;String, List&lt;AlignChange&gt;&gt; byPom = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc bfc" id="L361" title="All 2 branches covered.">        for (AlignChange c : plan.changes) {</span>
+<span class="fc" id="L362">            String key = c.subproject + &quot;::&quot; + c.pomRelPath;</span>
+<span class="fc" id="L363">            byPom.computeIfAbsent(key, k -&gt; new ArrayList&lt;&gt;()).add(c);</span>
+<span class="fc" id="L364">        }</span>
 
-<span class="fc bfc" id="L342" title="All 2 branches covered.">        for (Map.Entry&lt;String, List&lt;AlignChange&gt;&gt; e : byPom.entrySet()) {</span>
-<span class="fc" id="L343">            List&lt;AlignChange&gt; group = e.getValue();</span>
-<span class="fc" id="L344">            AlignChange first = group.get(0);</span>
-<span class="fc" id="L345">            File subprojectDir = new File(root, first.subproject);</span>
-<span class="fc" id="L346">            Path pomPath = subprojectDir.toPath().resolve(first.pomRelPath);</span>
+<span class="fc bfc" id="L366" title="All 2 branches covered.">        for (Map.Entry&lt;String, List&lt;AlignChange&gt;&gt; e : byPom.entrySet()) {</span>
+<span class="fc" id="L367">            List&lt;AlignChange&gt; group = e.getValue();</span>
+<span class="fc" id="L368">            AlignChange first = group.get(0);</span>
+<span class="fc" id="L369">            File subprojectDir = new File(root, first.subproject);</span>
+<span class="fc" id="L370">            Path pomPath = subprojectDir.toPath().resolve(first.pomRelPath);</span>
 
             String content;
             try {
-<span class="fc" id="L350">                content = Files.readString(pomPath, StandardCharsets.UTF_8);</span>
-<span class="nc" id="L351">            } catch (IOException ex) {</span>
-<span class="nc" id="L352">                log.warn(&quot;  &quot; + first.subproject + &quot;: could not read &quot;</span>
-<span class="nc" id="L353">                        + first.pomRelPath + &quot; — &quot; + ex.getMessage());</span>
-<span class="nc" id="L354">                continue;</span>
-<span class="fc" id="L355">            }</span>
+<span class="fc" id="L374">                content = Files.readString(pomPath, StandardCharsets.UTF_8);</span>
+<span class="nc" id="L375">            } catch (IOException ex) {</span>
+<span class="nc" id="L376">                log.warn(&quot;  &quot; + first.subproject + &quot;: could not read &quot;</span>
+<span class="nc" id="L377">                        + first.pomRelPath + &quot; — &quot; + ex.getMessage());</span>
+<span class="nc" id="L378">                continue;</span>
+<span class="fc" id="L379">            }</span>
 
-<span class="fc bfc" id="L357" title="All 2 branches covered.">            for (AlignChange c : group) {</span>
-<span class="fc" id="L358">                content = applyOne(content, c, subprojectDir, log);</span>
-<span class="fc" id="L359">                log.info(&quot;  &quot; + c.subproject + &quot; (&quot; + c.pomRelPath</span>
+<span class="fc bfc" id="L381" title="All 2 branches covered.">            for (AlignChange c : group) {</span>
+<span class="fc" id="L382">                content = applyOne(content, c, subprojectDir, log);</span>
+<span class="fc" id="L383">                log.info(&quot;  &quot; + c.subproject + &quot; (&quot; + c.pomRelPath</span>
                         + &quot;): &quot; + c.artifact + &quot; &quot; + c.fromVersion
                         + &quot; → &quot; + c.toVersion);
-<span class="fc" id="L362">            }</span>
+<span class="fc" id="L386">            }</span>
 
             try {
-<span class="fc" id="L365">                Files.writeString(pomPath, content, StandardCharsets.UTF_8);</span>
-<span class="nc" id="L366">            } catch (IOException ex) {</span>
-<span class="nc" id="L367">                throw new MojoException(</span>
+<span class="fc" id="L389">                Files.writeString(pomPath, content, StandardCharsets.UTF_8);</span>
+<span class="nc" id="L390">            } catch (IOException ex) {</span>
+<span class="nc" id="L391">                throw new MojoException(</span>
                         &quot;Failed to write &quot; + pomPath + &quot;: &quot;
-<span class="nc" id="L369">                                + ex.getMessage(), ex);</span>
-<span class="fc" id="L370">            }</span>
-<span class="fc" id="L371">        }</span>
-<span class="fc" id="L372">    }</span>
+<span class="nc" id="L393">                                + ex.getMessage(), ex);</span>
+<span class="fc" id="L394">            }</span>
+<span class="fc" id="L395">        }</span>
+<span class="fc" id="L396">    }</span>
 
     /**
      * Apply a single {@link AlignChange} to in-memory POM text, and
@@ -379,45 +403,45 @@ import java.util.Set;
      */
     private String applyOne(String content, AlignChange c,
                              File subprojectDir, Log log) {
-<span class="fc" id="L382">        String artifact = c.artifact;</span>
-<span class="pc bpc" id="L383" title="1 of 2 branches missed.">        if (artifact.startsWith(&quot;property:&quot;)) {</span>
-<span class="nc" id="L384">            String propName = artifact.substring(&quot;property:&quot;.length());</span>
-<span class="nc" id="L385">            return PomModel.updateProperty(content, propName, c.toVersion);</span>
+<span class="fc" id="L406">        String artifact = c.artifact;</span>
+<span class="pc bpc" id="L407" title="1 of 2 branches missed.">        if (artifact.startsWith(&quot;property:&quot;)) {</span>
+<span class="nc" id="L408">            String propName = artifact.substring(&quot;property:&quot;.length());</span>
+<span class="nc" id="L409">            return PomModel.updateProperty(content, propName, c.toVersion);</span>
         }
-<span class="pc bpc" id="L387" title="1 of 2 branches missed.">        if (artifact.startsWith(&quot;plugin:&quot;)) {</span>
-<span class="nc" id="L388">            String coord = artifact.substring(&quot;plugin:&quot;.length());</span>
-<span class="nc" id="L389">            int colon = coord.indexOf(':');</span>
-<span class="nc bnc" id="L390" title="All 2 branches missed.">            if (colon &lt; 0) return content;</span>
-<span class="nc" id="L391">            String gid = coord.substring(0, colon);</span>
-<span class="nc" id="L392">            String aid = coord.substring(colon + 1);</span>
-<span class="nc" id="L393">            return PomModel.updatePluginVersion(content, gid, aid,</span>
+<span class="pc bpc" id="L411" title="1 of 2 branches missed.">        if (artifact.startsWith(&quot;plugin:&quot;)) {</span>
+<span class="nc" id="L412">            String coord = artifact.substring(&quot;plugin:&quot;.length());</span>
+<span class="nc" id="L413">            int colon = coord.indexOf(':');</span>
+<span class="nc bnc" id="L414" title="All 2 branches missed.">            if (colon &lt; 0) return content;</span>
+<span class="nc" id="L415">            String gid = coord.substring(0, colon);</span>
+<span class="nc" id="L416">            String aid = coord.substring(colon + 1);</span>
+<span class="nc" id="L417">            return PomModel.updatePluginVersion(content, gid, aid,</span>
                     c.toVersion);
         }
-<span class="pc bpc" id="L396" title="1 of 2 branches missed.">        if (artifact.startsWith(&quot;parent:&quot;)) {</span>
+<span class="pc bpc" id="L420" title="1 of 2 branches missed.">        if (artifact.startsWith(&quot;parent:&quot;)) {</span>
             // The parent change was recorded with artifact=parent:&lt;aid&gt;;
             // recover parent GA from the parsed POM.
-<span class="nc" id="L399">            Path pomPath = subprojectDir.toPath().resolve(c.pomRelPath);</span>
+<span class="nc" id="L423">            Path pomPath = subprojectDir.toPath().resolve(c.pomRelPath);</span>
             try {
-<span class="nc" id="L401">                PomModel pom = PomModel.parse(pomPath);</span>
-<span class="nc" id="L402">                Parent p = pom.parent();</span>
-<span class="nc bnc" id="L403" title="All 2 branches missed.">                if (p == null) return content;</span>
-<span class="nc" id="L404">                String updated = PomModel.updateParentVersion(content,</span>
-<span class="nc" id="L405">                        p.getGroupId(), p.getArtifactId(), c.toVersion);</span>
-<span class="nc" id="L406">                cascadeParentIntoSubmodules(subprojectDir, pomPath,</span>
-<span class="nc" id="L407">                        p.getGroupId(), p.getArtifactId(), c.toVersion, log);</span>
-<span class="nc" id="L408">                return updated;</span>
-<span class="nc" id="L409">            } catch (IOException e) {</span>
-<span class="nc" id="L410">                log.warn(&quot;  &quot; + c.subproject + &quot;: could not re-parse parent — &quot;</span>
-<span class="nc" id="L411">                        + e.getMessage());</span>
-<span class="nc" id="L412">                return content;</span>
+<span class="nc" id="L425">                PomModel pom = PomModel.parse(pomPath);</span>
+<span class="nc" id="L426">                Parent p = pom.parent();</span>
+<span class="nc bnc" id="L427" title="All 2 branches missed.">                if (p == null) return content;</span>
+<span class="nc" id="L428">                String updated = PomModel.updateParentVersion(content,</span>
+<span class="nc" id="L429">                        p.getGroupId(), p.getArtifactId(), c.toVersion);</span>
+<span class="nc" id="L430">                cascadeParentIntoSubmodules(subprojectDir, pomPath,</span>
+<span class="nc" id="L431">                        p.getGroupId(), p.getArtifactId(), c.toVersion, log);</span>
+<span class="nc" id="L432">                return updated;</span>
+<span class="nc" id="L433">            } catch (IOException e) {</span>
+<span class="nc" id="L434">                log.warn(&quot;  &quot; + c.subproject + &quot;: could not re-parse parent — &quot;</span>
+<span class="nc" id="L435">                        + e.getMessage());</span>
+<span class="nc" id="L436">                return content;</span>
             }
         }
         // Default: artifact is groupId:artifactId for a dependency.
-<span class="fc" id="L416">        int colon = artifact.indexOf(':');</span>
-<span class="pc bpc" id="L417" title="1 of 2 branches missed.">        if (colon &lt; 0) return content;</span>
-<span class="fc" id="L418">        String gid = artifact.substring(0, colon);</span>
-<span class="fc" id="L419">        String aid = artifact.substring(colon + 1);</span>
-<span class="fc" id="L420">        return PomModel.updateDependencyVersion(content, gid, aid,</span>
+<span class="fc" id="L440">        int colon = artifact.indexOf(':');</span>
+<span class="pc bpc" id="L441" title="1 of 2 branches missed.">        if (colon &lt; 0) return content;</span>
+<span class="fc" id="L442">        String gid = artifact.substring(0, colon);</span>
+<span class="fc" id="L443">        String aid = artifact.substring(colon + 1);</span>
+<span class="fc" id="L444">        return PomModel.updateDependencyVersion(content, gid, aid,</span>
                 c.toVersion);
     }
 
@@ -433,28 +457,28 @@ import java.util.Set;
                                                      Log log) {
         List&lt;File&gt; subPoms;
         try {
-<span class="nc" id="L436">            subPoms = ReleaseSupport.findPomFiles(subprojectDir);</span>
-<span class="nc" id="L437">        } catch (MojoException e) {</span>
+<span class="nc" id="L460">            subPoms = ReleaseSupport.findPomFiles(subprojectDir);</span>
+<span class="nc" id="L461">        } catch (MojoException e) {</span>
             // Non-fatal: the primary update still landed.
-<span class="nc" id="L439">            return;</span>
-<span class="nc" id="L440">        }</span>
-<span class="nc bnc" id="L441" title="All 2 branches missed.">        for (File subPom : subPoms) {</span>
-<span class="nc bnc" id="L442" title="All 2 branches missed.">            if (subPom.toPath().equals(primaryPom)) continue;</span>
+<span class="nc" id="L463">            return;</span>
+<span class="nc" id="L464">        }</span>
+<span class="nc bnc" id="L465" title="All 2 branches missed.">        for (File subPom : subPoms) {</span>
+<span class="nc bnc" id="L466" title="All 2 branches missed.">            if (subPom.toPath().equals(primaryPom)) continue;</span>
             try {
-<span class="nc" id="L444">                String subContent = Files.readString(subPom.toPath(),</span>
+<span class="nc" id="L468">                String subContent = Files.readString(subPom.toPath(),</span>
                         StandardCharsets.UTF_8);
-<span class="nc" id="L446">                String updated = PomModel.updateParentVersion(</span>
+<span class="nc" id="L470">                String updated = PomModel.updateParentVersion(</span>
                         subContent, parentGid, parentAid, newVersion);
-<span class="nc bnc" id="L448" title="All 2 branches missed.">                if (!updated.equals(subContent)) {</span>
-<span class="nc" id="L449">                    Files.writeString(subPom.toPath(), updated,</span>
+<span class="nc bnc" id="L472" title="All 2 branches missed.">                if (!updated.equals(subContent)) {</span>
+<span class="nc" id="L473">                    Files.writeString(subPom.toPath(), updated,</span>
                             StandardCharsets.UTF_8);
                 }
-<span class="nc" id="L452">            } catch (IOException e) {</span>
-<span class="nc" id="L453">                log.warn(&quot;  could not cascade parent into &quot;</span>
-<span class="nc" id="L454">                        + subPom + &quot; — &quot; + e.getMessage());</span>
-<span class="nc" id="L455">            }</span>
-<span class="nc" id="L456">        }</span>
-<span class="nc" id="L457">    }</span>
+<span class="nc" id="L476">            } catch (IOException e) {</span>
+<span class="nc" id="L477">                log.warn(&quot;  could not cascade parent into &quot;</span>
+<span class="nc" id="L478">                        + subPom + &quot; — &quot; + e.getMessage());</span>
+<span class="nc" id="L479">            }</span>
+<span class="nc" id="L480">        }</span>
+<span class="nc" id="L481">    }</span>
 
     // ── POM scanning helpers ────────────────────────────────────────
 
@@ -465,38 +489,38 @@ import java.util.Set;
      */
     private static Map&lt;String, ComponentVersion&gt; buildArtifactIndex(
             WorkspaceGraph graph, File root, Log log) {
-<span class="fc" id="L468">        Map&lt;String, ComponentVersion&gt; index = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc" id="L492">        Map&lt;String, ComponentVersion&gt; index = new LinkedHashMap&lt;&gt;();</span>
         for (Map.Entry&lt;String, Subproject&gt; entry
-<span class="fc bfc" id="L470" title="All 2 branches covered.">                : graph.manifest().subprojects().entrySet()) {</span>
-<span class="fc" id="L471">            String name = entry.getKey();</span>
-<span class="fc" id="L472">            File subprojectDir = new File(root, name);</span>
-<span class="pc bpc" id="L473" title="1 of 2 branches missed.">            if (!new File(subprojectDir, &quot;pom.xml&quot;).exists()) {</span>
-<span class="nc" id="L474">                continue;</span>
+<span class="fc bfc" id="L494" title="All 2 branches covered.">                : graph.manifest().subprojects().entrySet()) {</span>
+<span class="fc" id="L495">            String name = entry.getKey();</span>
+<span class="fc" id="L496">            File subprojectDir = new File(root, name);</span>
+<span class="pc bpc" id="L497" title="1 of 2 branches missed.">            if (!new File(subprojectDir, &quot;pom.xml&quot;).exists()) {</span>
+<span class="nc" id="L498">                continue;</span>
             }
             String pomVersion;
             try {
-<span class="fc" id="L478">                pomVersion = ReleaseSupport.readPomVersion(</span>
+<span class="fc" id="L502">                pomVersion = ReleaseSupport.readPomVersion(</span>
                         new File(subprojectDir, &quot;pom.xml&quot;));
-<span class="nc" id="L480">            } catch (MojoException e) {</span>
-<span class="nc" id="L481">                log.warn(&quot;  &quot; + name + &quot;: could not read POM version — &quot;</span>
-<span class="nc" id="L482">                        + e.getMessage());</span>
-<span class="nc" id="L483">                continue;</span>
-<span class="fc" id="L484">            }</span>
+<span class="nc" id="L504">            } catch (MojoException e) {</span>
+<span class="nc" id="L505">                log.warn(&quot;  &quot; + name + &quot;: could not read POM version — &quot;</span>
+<span class="nc" id="L506">                        + e.getMessage());</span>
+<span class="nc" id="L507">                continue;</span>
+<span class="fc" id="L508">            }</span>
             Set&lt;PublishedArtifactSet.Artifact&gt; published;
             try {
-<span class="fc" id="L487">                published = PublishedArtifactSet.scan(subprojectDir.toPath());</span>
-<span class="nc" id="L488">            } catch (IOException e) {</span>
-<span class="nc" id="L489">                log.warn(&quot;  &quot; + name + &quot;: could not scan published artifacts — &quot;</span>
-<span class="nc" id="L490">                        + e.getMessage());</span>
-<span class="nc" id="L491">                continue;</span>
-<span class="fc" id="L492">            }</span>
-<span class="fc" id="L493">            ComponentVersion cv = new ComponentVersion(name, pomVersion);</span>
-<span class="fc bfc" id="L494" title="All 2 branches covered.">            for (PublishedArtifactSet.Artifact artifact : published) {</span>
-<span class="fc" id="L495">                String key = artifact.groupId() + &quot;:&quot; + artifact.artifactId();</span>
-<span class="fc" id="L496">                index.put(key, cv);</span>
-<span class="fc" id="L497">            }</span>
-<span class="fc" id="L498">        }</span>
-<span class="fc" id="L499">        return index;</span>
+<span class="fc" id="L511">                published = PublishedArtifactSet.scan(subprojectDir.toPath());</span>
+<span class="nc" id="L512">            } catch (IOException e) {</span>
+<span class="nc" id="L513">                log.warn(&quot;  &quot; + name + &quot;: could not scan published artifacts — &quot;</span>
+<span class="nc" id="L514">                        + e.getMessage());</span>
+<span class="nc" id="L515">                continue;</span>
+<span class="fc" id="L516">            }</span>
+<span class="fc" id="L517">            ComponentVersion cv = new ComponentVersion(name, pomVersion);</span>
+<span class="fc bfc" id="L518" title="All 2 branches covered.">            for (PublishedArtifactSet.Artifact artifact : published) {</span>
+<span class="fc" id="L519">                String key = artifact.groupId() + &quot;:&quot; + artifact.artifactId();</span>
+<span class="fc" id="L520">                index.put(key, cv);</span>
+<span class="fc" id="L521">            }</span>
+<span class="fc" id="L522">        }</span>
+<span class="fc" id="L523">        return index;</span>
     }
 
     /**
@@ -514,65 +538,65 @@ import java.util.Set;
                                                   Log log) {
         PomModel pom;
         try {
-<span class="fc" id="L517">            pom = PomModel.parse(pomFile.toPath());</span>
-<span class="nc" id="L518">        } catch (IOException e) {</span>
-<span class="nc" id="L519">            log.debug(&quot;  &quot; + ownerName + &quot;: skipping &quot; + pomFile.getName()</span>
+<span class="fc" id="L541">            pom = PomModel.parse(pomFile.toPath());</span>
+<span class="nc" id="L542">        } catch (IOException e) {</span>
+<span class="nc" id="L543">            log.debug(&quot;  &quot; + ownerName + &quot;: skipping &quot; + pomFile.getName()</span>
                     + &quot; (empty or unparseable)&quot;);
-<span class="nc" id="L521">            return;</span>
-<span class="fc" id="L522">        }</span>
+<span class="nc" id="L545">            return;</span>
+<span class="fc" id="L546">        }</span>
 
-<span class="fc bfc" id="L524" title="All 2 branches covered.">        for (org.apache.maven.api.model.Dependency dep : pom.allDependencies()) {</span>
-<span class="fc" id="L525">            String depGroupId = dep.getGroupId();</span>
-<span class="fc" id="L526">            String depArtifactId = dep.getArtifactId();</span>
-<span class="fc" id="L527">            String currentVersion = dep.getVersion();</span>
-<span class="pc bpc" id="L528" title="3 of 6 branches missed.">            if (depGroupId == null || depArtifactId == null</span>
+<span class="fc bfc" id="L548" title="All 2 branches covered.">        for (org.apache.maven.api.model.Dependency dep : pom.allDependencies()) {</span>
+<span class="fc" id="L549">            String depGroupId = dep.getGroupId();</span>
+<span class="fc" id="L550">            String depArtifactId = dep.getArtifactId();</span>
+<span class="fc" id="L551">            String currentVersion = dep.getVersion();</span>
+<span class="pc bpc" id="L552" title="3 of 6 branches missed.">            if (depGroupId == null || depArtifactId == null</span>
                     || currentVersion == null) {
-<span class="nc" id="L530">                continue;</span>
+<span class="nc" id="L554">                continue;</span>
             }
 
-<span class="fc" id="L533">            String key = depGroupId + &quot;:&quot; + depArtifactId;</span>
-<span class="fc" id="L534">            ComponentVersion target = artifactIndex.get(key);</span>
-<span class="pc bpc" id="L535" title="2 of 4 branches missed.">            if (target == null || target.name.equals(ownerName)) {</span>
-<span class="nc" id="L536">                continue;</span>
+<span class="fc" id="L557">            String key = depGroupId + &quot;:&quot; + depArtifactId;</span>
+<span class="fc" id="L558">            ComponentVersion target = artifactIndex.get(key);</span>
+<span class="pc bpc" id="L559" title="2 of 4 branches missed.">            if (target == null || target.name.equals(ownerName)) {</span>
+<span class="nc" id="L560">                continue;</span>
             }
 
-<span class="fc" id="L539">            String relPath = subprojectDir.toPath().relativize(</span>
-<span class="fc" id="L540">                    pomFile.toPath()).toString();</span>
+<span class="fc" id="L563">            String relPath = subprojectDir.toPath().relativize(</span>
+<span class="fc" id="L564">                    pomFile.toPath()).toString();</span>
 
-<span class="pc bpc" id="L542" title="1 of 2 branches missed.">            if (currentVersion.startsWith(&quot;${&quot;)</span>
-<span class="nc bnc" id="L543" title="All 2 branches missed.">                    &amp;&amp; currentVersion.endsWith(&quot;}&quot;)) {</span>
-<span class="nc" id="L544">                String propName = currentVersion.substring(2,</span>
-<span class="nc" id="L545">                        currentVersion.length() - 1);</span>
-<span class="nc" id="L546">                String propValue = pom.properties().get(propName);</span>
-<span class="nc bnc" id="L547" title="All 4 branches missed.">                if (propValue != null &amp;&amp; !propValue.equals(target.version)) {</span>
-<span class="nc" id="L548">                    changes.add(new AlignChange(ownerName, relPath,</span>
+<span class="pc bpc" id="L566" title="1 of 2 branches missed.">            if (currentVersion.startsWith(&quot;${&quot;)</span>
+<span class="nc bnc" id="L567" title="All 2 branches missed.">                    &amp;&amp; currentVersion.endsWith(&quot;}&quot;)) {</span>
+<span class="nc" id="L568">                String propName = currentVersion.substring(2,</span>
+<span class="nc" id="L569">                        currentVersion.length() - 1);</span>
+<span class="nc" id="L570">                String propValue = pom.properties().get(propName);</span>
+<span class="nc bnc" id="L571" title="All 4 branches missed.">                if (propValue != null &amp;&amp; !propValue.equals(target.version)) {</span>
+<span class="nc" id="L572">                    changes.add(new AlignChange(ownerName, relPath,</span>
                             &quot;property:&quot; + propName,
                             propValue, target.version));
                 }
-<span class="pc bfc" id="L552" title="All 2 branches covered.">            } else if (!currentVersion.equals(target.version)) {</span>
-<span class="fc" id="L553">                changes.add(new AlignChange(ownerName, relPath, key,</span>
+<span class="pc bfc" id="L576" title="All 2 branches covered.">            } else if (!currentVersion.equals(target.version)) {</span>
+<span class="fc" id="L577">                changes.add(new AlignChange(ownerName, relPath, key,</span>
                         currentVersion, target.version));
             }
-<span class="fc" id="L556">        }</span>
+<span class="fc" id="L580">        }</span>
 
         // depends-on declared version-property hints.
         for (Map.Entry&lt;String, String&gt; vpEntry
-<span class="pc bpc" id="L560" title="1 of 2 branches missed.">                : versionPropertyMap.entrySet()) {</span>
-<span class="nc" id="L561">            String targetComponent = vpEntry.getKey();</span>
-<span class="nc" id="L562">            String versionProperty = vpEntry.getValue();</span>
-<span class="nc" id="L563">            ComponentVersion cv = findComponentVersion(</span>
+<span class="pc bpc" id="L584" title="1 of 2 branches missed.">                : versionPropertyMap.entrySet()) {</span>
+<span class="nc" id="L585">            String targetComponent = vpEntry.getKey();</span>
+<span class="nc" id="L586">            String versionProperty = vpEntry.getValue();</span>
+<span class="nc" id="L587">            ComponentVersion cv = findComponentVersion(</span>
                     targetComponent, artifactIndex, workspaceRoot);
-<span class="nc bnc" id="L565" title="All 2 branches missed.">            if (cv == null) continue;</span>
-<span class="nc" id="L566">            String currentValue = pom.properties().get(versionProperty);</span>
-<span class="nc bnc" id="L567" title="All 4 branches missed.">            if (currentValue != null &amp;&amp; !currentValue.equals(cv.version)) {</span>
-<span class="nc" id="L568">                String relPath = subprojectDir.toPath().relativize(</span>
-<span class="nc" id="L569">                        pomFile.toPath()).toString();</span>
-<span class="nc" id="L570">                changes.add(new AlignChange(ownerName, relPath,</span>
+<span class="nc bnc" id="L589" title="All 2 branches missed.">            if (cv == null) continue;</span>
+<span class="nc" id="L590">            String currentValue = pom.properties().get(versionProperty);</span>
+<span class="nc bnc" id="L591" title="All 4 branches missed.">            if (currentValue != null &amp;&amp; !currentValue.equals(cv.version)) {</span>
+<span class="nc" id="L592">                String relPath = subprojectDir.toPath().relativize(</span>
+<span class="nc" id="L593">                        pomFile.toPath()).toString();</span>
+<span class="nc" id="L594">                changes.add(new AlignChange(ownerName, relPath,</span>
                         &quot;property:&quot; + versionProperty,
                         currentValue, cv.version));
             }
-<span class="nc" id="L574">        }</span>
-<span class="fc" id="L575">    }</span>
+<span class="nc" id="L598">        }</span>
+<span class="fc" id="L599">    }</span>
 
     /**
      * Collect plugin literal version changes from one POM file.
@@ -589,35 +613,35 @@ import java.util.Set;
                                               Log log) {
         PomModel pom;
         try {
-<span class="fc" id="L592">            pom = PomModel.parse(pomFile.toPath());</span>
-<span class="nc" id="L593">        } catch (IOException e) {</span>
-<span class="nc" id="L594">            return;</span>
-<span class="fc" id="L595">        }</span>
-<span class="pc bpc" id="L596" title="1 of 2 branches missed.">        for (Plugin plugin : pom.allPlugins()) {</span>
-<span class="nc" id="L597">            String pluginGroupId = plugin.getGroupId();</span>
-<span class="nc" id="L598">            String pluginArtifactId = plugin.getArtifactId();</span>
-<span class="nc" id="L599">            String currentVersion = plugin.getVersion();</span>
-<span class="nc bnc" id="L600" title="All 6 branches missed.">            if (pluginGroupId == null || pluginArtifactId == null</span>
+<span class="fc" id="L616">            pom = PomModel.parse(pomFile.toPath());</span>
+<span class="nc" id="L617">        } catch (IOException e) {</span>
+<span class="nc" id="L618">            return;</span>
+<span class="fc" id="L619">        }</span>
+<span class="pc bpc" id="L620" title="1 of 2 branches missed.">        for (Plugin plugin : pom.allPlugins()) {</span>
+<span class="nc" id="L621">            String pluginGroupId = plugin.getGroupId();</span>
+<span class="nc" id="L622">            String pluginArtifactId = plugin.getArtifactId();</span>
+<span class="nc" id="L623">            String currentVersion = plugin.getVersion();</span>
+<span class="nc bnc" id="L624" title="All 6 branches missed.">            if (pluginGroupId == null || pluginArtifactId == null</span>
                     || currentVersion == null) {
-<span class="nc" id="L602">                continue;</span>
+<span class="nc" id="L626">                continue;</span>
             }
-<span class="nc bnc" id="L604" title="All 2 branches missed.">            if (currentVersion.startsWith(&quot;${&quot;)) {</span>
-<span class="nc" id="L605">                continue;</span>
+<span class="nc bnc" id="L628" title="All 2 branches missed.">            if (currentVersion.startsWith(&quot;${&quot;)) {</span>
+<span class="nc" id="L629">                continue;</span>
             }
-<span class="nc" id="L607">            String key = pluginGroupId + &quot;:&quot; + pluginArtifactId;</span>
-<span class="nc" id="L608">            ComponentVersion target = artifactIndex.get(key);</span>
-<span class="nc bnc" id="L609" title="All 4 branches missed.">            if (target == null || target.name().equals(ownerName)) {</span>
-<span class="nc" id="L610">                continue;</span>
+<span class="nc" id="L631">            String key = pluginGroupId + &quot;:&quot; + pluginArtifactId;</span>
+<span class="nc" id="L632">            ComponentVersion target = artifactIndex.get(key);</span>
+<span class="nc bnc" id="L633" title="All 4 branches missed.">            if (target == null || target.name().equals(ownerName)) {</span>
+<span class="nc" id="L634">                continue;</span>
             }
-<span class="nc bnc" id="L612" title="All 2 branches missed.">            if (!currentVersion.equals(target.version())) {</span>
-<span class="nc" id="L613">                String relPath = subprojectDir.toPath().relativize(</span>
-<span class="nc" id="L614">                        pomFile.toPath()).toString();</span>
-<span class="nc" id="L615">                changes.add(new AlignChange(ownerName, relPath,</span>
+<span class="nc bnc" id="L636" title="All 2 branches missed.">            if (!currentVersion.equals(target.version())) {</span>
+<span class="nc" id="L637">                String relPath = subprojectDir.toPath().relativize(</span>
+<span class="nc" id="L638">                        pomFile.toPath()).toString();</span>
+<span class="nc" id="L639">                changes.add(new AlignChange(ownerName, relPath,</span>
                         &quot;plugin:&quot; + key,
-<span class="nc" id="L617">                        currentVersion, target.version()));</span>
+<span class="nc" id="L641">                        currentVersion, target.version()));</span>
             }
-<span class="nc" id="L619">        }</span>
-<span class="fc" id="L620">    }</span>
+<span class="nc" id="L643">        }</span>
+<span class="fc" id="L644">    }</span>
 
     /**
      * Find a subproject's version by scanning its published artifacts
@@ -628,24 +652,24 @@ import java.util.Set;
             String subprojectName,
             Map&lt;String, ComponentVersion&gt; artifactIndex,
             File root) {
-<span class="nc" id="L631">        File subprojectDir = new File(root, subprojectName);</span>
-<span class="nc bnc" id="L632" title="All 2 branches missed.">        if (!new File(subprojectDir, &quot;pom.xml&quot;).exists()) {</span>
-<span class="nc" id="L633">            return null;</span>
+<span class="nc" id="L655">        File subprojectDir = new File(root, subprojectName);</span>
+<span class="nc bnc" id="L656" title="All 2 branches missed.">        if (!new File(subprojectDir, &quot;pom.xml&quot;).exists()) {</span>
+<span class="nc" id="L657">            return null;</span>
         }
         try {
-<span class="nc" id="L636">            Set&lt;PublishedArtifactSet.Artifact&gt; published =</span>
-<span class="nc" id="L637">                    PublishedArtifactSet.scan(subprojectDir.toPath());</span>
-<span class="nc bnc" id="L638" title="All 2 branches missed.">            for (PublishedArtifactSet.Artifact artifact : published) {</span>
-<span class="nc" id="L639">                String key = artifact.groupId() + &quot;:&quot; + artifact.artifactId();</span>
-<span class="nc" id="L640">                ComponentVersion cv = artifactIndex.get(key);</span>
-<span class="nc bnc" id="L641" title="All 4 branches missed.">                if (cv != null &amp;&amp; cv.name.equals(subprojectName)) {</span>
-<span class="nc" id="L642">                    return cv;</span>
+<span class="nc" id="L660">            Set&lt;PublishedArtifactSet.Artifact&gt; published =</span>
+<span class="nc" id="L661">                    PublishedArtifactSet.scan(subprojectDir.toPath());</span>
+<span class="nc bnc" id="L662" title="All 2 branches missed.">            for (PublishedArtifactSet.Artifact artifact : published) {</span>
+<span class="nc" id="L663">                String key = artifact.groupId() + &quot;:&quot; + artifact.artifactId();</span>
+<span class="nc" id="L664">                ComponentVersion cv = artifactIndex.get(key);</span>
+<span class="nc bnc" id="L665" title="All 4 branches missed.">                if (cv != null &amp;&amp; cv.name.equals(subprojectName)) {</span>
+<span class="nc" id="L666">                    return cv;</span>
                 }
-<span class="nc" id="L644">            }</span>
-<span class="nc" id="L645">        } catch (IOException e) {</span>
+<span class="nc" id="L668">            }</span>
+<span class="nc" id="L669">        } catch (IOException e) {</span>
             // Fall through
-<span class="nc" id="L647">        }</span>
-<span class="nc" id="L648">        return null;</span>
+<span class="nc" id="L671">        }</span>
+<span class="nc" id="L672">        return null;</span>
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

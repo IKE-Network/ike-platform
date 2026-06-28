@@ -8,6 +8,7 @@ import network.ike.plugin.ws.reconcile.AlignmentReconciler;
 import network.ike.plugin.ws.reconcile.DriftReport;
 import network.ike.plugin.ws.reconcile.ReconcilerOptions;
 import network.ike.plugin.ws.reconcile.WorkspaceContext;
+import network.ike.plugin.ws.vcs.VcsOperations;
 import network.ike.workspace.ManifestReader;
 import network.ike.workspace.WorkspaceGraph;
 import org.apache.maven.api.plugin.MojoException;
@@ -88,27 +89,27 @@ public class WsAlignDraftMojo extends AbstractWorkspaceMojo {
     String scope;
 
     /** Creates this goal instance. */
-<span class="fc" id="L91">    public WsAlignDraftMojo() {}</span>
+<span class="fc" id="L92">    public WsAlignDraftMojo() {}</span>
 
     @Override
     protected WorkspaceReportSpec runGoal() throws MojoException {
-<span class="fc bfc" id="L95" title="All 2 branches covered.">        boolean draft = !publish;</span>
+<span class="fc bfc" id="L96" title="All 2 branches covered.">        boolean draft = !publish;</span>
 
         // Migration gate (ike-issues#200): the align goals are POM-only.
         // Branch reconciliation moved to ws:reconcile-branches-{draft,publish}.
-<span class="fc bfc" id="L99" title="All 4 branches covered.">        if (&quot;branches&quot;.equals(scope) || &quot;all&quot;.equals(scope)) {</span>
-<span class="fc bfc" id="L100" title="All 2 branches covered.">            String invokedGoal = (publish ? WsGoal.ALIGN_PUBLISH</span>
-<span class="fc" id="L101">                                           : WsGoal.ALIGN_DRAFT).qualified();</span>
-<span class="fc" id="L102">            throw new MojoException(</span>
+<span class="fc bfc" id="L100" title="All 4 branches covered.">        if (&quot;branches&quot;.equals(scope) || &quot;all&quot;.equals(scope)) {</span>
+<span class="fc bfc" id="L101" title="All 2 branches covered.">            String invokedGoal = (publish ? WsGoal.ALIGN_PUBLISH</span>
+<span class="fc" id="L102">                                           : WsGoal.ALIGN_DRAFT).qualified();</span>
+<span class="fc" id="L103">            throw new MojoException(</span>
                     invokedGoal + &quot; no longer supports -Dscope=&quot; + scope
                             + &quot; (ike-issues#200). Branch reconciliation moved to:\n&quot;
-<span class="fc bfc" id="L105" title="All 2 branches covered.">                            + &quot;  mvn &quot; + (publish ? WsGoal.RECONCILE_BRANCHES_PUBLISH</span>
-<span class="fc" id="L106">                                                  : WsGoal.RECONCILE_BRANCHES_DRAFT).qualified()</span>
+<span class="fc bfc" id="L106" title="All 2 branches covered.">                            + &quot;  mvn &quot; + (publish ? WsGoal.RECONCILE_BRANCHES_PUBLISH</span>
+<span class="fc" id="L107">                                                  : WsGoal.RECONCILE_BRANCHES_DRAFT).qualified()</span>
                             + &quot;\n  &quot; + invokedGoal
                             + &quot; is now POM-only — drop -Dscope=.&quot;);
         }
-<span class="pc bpc" id="L110" title="1 of 2 branches missed.">        if (!&quot;poms&quot;.equals(scope)) {</span>
-<span class="nc" id="L111">            throw new MojoException(</span>
+<span class="pc bpc" id="L111" title="1 of 2 branches missed.">        if (!&quot;poms&quot;.equals(scope)) {</span>
+<span class="nc" id="L112">            throw new MojoException(</span>
                     &quot;Invalid scope '&quot; + scope + &quot;' — expected poms&quot;);
         }
 
@@ -118,44 +119,48 @@ public class WsAlignDraftMojo extends AbstractWorkspaceMojo {
         // users on an old workspace see a message pointing them at
         // ws:align-publish first. Do this BEFORE loadGraph() so graph
         // construction sees the migrated content.
-<span class="fc" id="L121">        Path manifestPath = resolveManifest();</span>
-<span class="fc" id="L122">        ManifestReader.migrateLegacySchemaIfNeeded(</span>
-<span class="nc" id="L123">                manifestPath, msg -&gt; getLog().info(&quot;  &quot; + msg));</span>
+<span class="fc" id="L122">        Path manifestPath = resolveManifest();</span>
+<span class="fc" id="L123">        ManifestReader.migrateLegacySchemaIfNeeded(</span>
+<span class="nc" id="L124">                manifestPath, msg -&gt; getLog().info(&quot;  &quot; + msg));</span>
 
-<span class="fc" id="L125">        WorkspaceGraph graph = loadGraph();</span>
-<span class="fc" id="L126">        File root = workspaceRoot();</span>
+<span class="fc" id="L126">        WorkspaceGraph graph = loadGraph();</span>
+<span class="fc" id="L127">        File root = workspaceRoot();</span>
 
-<span class="fc" id="L128">        getLog().info(&quot;&quot;);</span>
-<span class="fc" id="L129">        getLog().info(&quot;IKE Workspace Align — reconcile inter-subproject versions&quot;);</span>
-<span class="fc" id="L130">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
-<span class="fc bfc" id="L131" title="All 2 branches covered.">        if (draft) {</span>
-<span class="fc" id="L132">            getLog().info(&quot;  (draft — no files will be modified)&quot;);</span>
+<span class="fc" id="L129">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L130">        getLog().info(&quot;IKE Workspace Align — reconcile inter-subproject versions&quot;);</span>
+<span class="fc" id="L131">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+<span class="fc bfc" id="L132" title="All 2 branches covered.">        if (draft) {</span>
+<span class="fc" id="L133">            getLog().info(&quot;  (draft — no files will be modified)&quot;);</span>
         }
-<span class="fc" id="L134">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L135">        getLog().info(&quot;&quot;);</span>
 
         // POM alignment requires clean working trees (#132) so the
         // rewrite commit doesn't bundle unrelated edits.
-<span class="fc" id="L138">        List&lt;String&gt; sorted = graph.topologicalSort();</span>
-<span class="fc" id="L139">        PreflightResult preflight = Preflight.of(</span>
-<span class="fc" id="L140">                List.of(PreflightCondition.WORKING_TREE_CLEAN),</span>
-<span class="fc" id="L141">                PreflightContext.of(root, graph, sorted));</span>
-<span class="fc bfc" id="L142" title="All 2 branches covered.">        if (draft) {</span>
-<span class="fc" id="L143">            preflight.warnIfFailed(getLog(), WsGoal.ALIGN_PUBLISH);</span>
+<span class="fc" id="L139">        List&lt;String&gt; sorted = graph.topologicalSort();</span>
+<span class="fc" id="L140">        PreflightResult preflight = Preflight.of(</span>
+<span class="fc" id="L141">                List.of(PreflightCondition.WORKING_TREE_CLEAN),</span>
+<span class="fc" id="L142">                PreflightContext.of(root, graph, sorted));</span>
+        // Gate the REQUIRE_UNMODIFIED preflight (#780): draft previews;
+        // -Dallow-uncommitted relaxes it; -Ddefer-commit hands the clean-state
+        // guarantee to the cascade caller (which preflights + commits itself).
+<span class="fc bfc" id="L146" title="All 2 branches covered.">        WsGoal alignGoal = publish ? WsGoal.ALIGN_PUBLISH : WsGoal.ALIGN_DRAFT;</span>
+<span class="pc bpc" id="L147" title="1 of 6 branches missed.">        if (draft || allowUncommitted() || deferCommit()) {</span>
+<span class="fc" id="L148">            preflight.warnIfFailed(getLog(), alignGoal);</span>
         } else {
-<span class="fc" id="L145">            preflight.requirePassed(WsGoal.ALIGN_PUBLISH);</span>
+<span class="fc" id="L150">            preflight.requirePassed(alignGoal);</span>
         }
 
-<span class="fc" id="L148">        WorkspaceContext ctx = new WorkspaceContext(</span>
+<span class="fc" id="L153">        WorkspaceContext ctx = new WorkspaceContext(</span>
                 root, manifestPath, graph,
-<span class="fc" id="L150">                readReconcilerOptions(), getLog());</span>
-<span class="fc" id="L151">        AlignmentReconciler reconciler = new AlignmentReconciler();</span>
+<span class="fc" id="L155">                readReconcilerOptions(), getLog());</span>
+<span class="fc" id="L156">        AlignmentReconciler reconciler = new AlignmentReconciler();</span>
 
         String content;
-<span class="fc bfc" id="L154" title="All 2 branches covered.">        if (draft) {</span>
-<span class="fc" id="L155">            DriftReport report = reconciler.detect(ctx);</span>
-<span class="fc" id="L156">            printDriftReport(report);</span>
-<span class="fc" id="L157">            content = WORKING_SET_NOTE + report.toMarkdown();</span>
-<span class="fc" id="L158">        } else {</span>
+<span class="fc bfc" id="L159" title="All 2 branches covered.">        if (draft) {</span>
+<span class="fc" id="L160">            DriftReport report = reconciler.detect(ctx);</span>
+<span class="fc" id="L161">            printDriftReport(report);</span>
+<span class="fc" id="L162">            content = WORKING_SET_NOTE + report.toMarkdown();</span>
+<span class="fc" id="L163">        } else {</span>
             // #543: capture the drift plan BEFORE applying so the
             // publish report can list per-POM version changes (and
             // distinguish &quot;no-op, workspace already aligned&quot; from a
@@ -163,14 +168,61 @@ public class WsAlignDraftMojo extends AbstractWorkspaceMojo {
             // re-runs the same computePlan internally — same numbers,
             // some duplicated work, but the alternative would be a
             // bigger refactor of AlignmentReconciler.
-<span class="fc" id="L166">            DriftReport report = reconciler.detect(ctx);</span>
-<span class="fc" id="L167">            reconciler.apply(ctx);</span>
-<span class="fc" id="L168">            content = WORKING_SET_NOTE + report.toAppliedMarkdown();</span>
+<span class="fc" id="L171">            DriftReport report = reconciler.detect(ctx);</span>
+            // Capture the exact POMs the plan will rewrite BEFORE applying, so
+            // the commit below touches only align's own output (#780,
+            // IN_ISOLATION) — never a concurrently-modified file. After apply
+            // the drift is resolved and the plan would be empty. Skipped under
+            // -Ddefer-commit, where the cascade caller owns the commit.
+<span class="fc bfc" id="L177" title="All 2 branches covered.">            Map&lt;String, List&lt;String&gt;&gt; authoredPoms = deferCommit()</span>
+<span class="fc" id="L178">                    ? Map.of()</span>
+<span class="fc" id="L179">                    : reconciler.changedPomsBySubproject(ctx);</span>
+<span class="fc" id="L180">            reconciler.apply(ctx);</span>
+<span class="fc bfc" id="L181" title="All 2 branches covered.">            if (!deferCommit()) {</span>
+<span class="fc" id="L182">                commitAlignedPoms(root, authoredPoms);</span>
+            }
+<span class="fc" id="L184">            content = WORKING_SET_NOTE + report.toAppliedMarkdown();</span>
         }
-<span class="fc" id="L170">        getLog().info(&quot;&quot;);</span>
-<span class="fc" id="L171">        return new WorkspaceReportSpec(</span>
-<span class="fc bfc" id="L172" title="All 2 branches covered.">                publish ? WsGoal.ALIGN_PUBLISH : WsGoal.ALIGN_DRAFT, content);</span>
+<span class="fc" id="L186">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L187">        return new WorkspaceReportSpec(</span>
+<span class="fc bfc" id="L188" title="All 2 branches covered.">                publish ? WsGoal.ALIGN_PUBLISH : WsGoal.ALIGN_DRAFT, content);</span>
     }
+
+    /**
+     * Commit the POMs the reconciler rewrote, in isolation (#780,
+     * {@link AuthoredCommit#IN_ISOLATION}). Each owning subproject is its own
+     * git repo, so this commits per subproject, passing the EXACT relative POM
+     * paths the plan changed (captured before {@code apply}) to
+     * {@link VcsOperations#commitPaths} — never a {@code git status} re-scan, so
+     * a concurrently-modified file is never swept in. Per-repo failures warn
+     * (one bad repo must not strand the others). Under {@code -Ddefer-commit}
+     * the caller owns the commit and {@code authoredPoms} is empty.
+     *
+     * @param root         the workspace root
+     * @param authoredPoms subproject name → its changed POM relative paths
+     */
+    private void commitAlignedPoms(File root,
+                                   Map&lt;String, List&lt;String&gt;&gt; authoredPoms) {
+<span class="fc bfc" id="L206" title="All 2 branches covered.">        for (Map.Entry&lt;String, List&lt;String&gt;&gt; entry : authoredPoms.entrySet()) {</span>
+<span class="fc" id="L207">            String subproject = entry.getKey();</span>
+<span class="fc" id="L208">            File repo = new File(root, subproject);</span>
+<span class="pc bpc" id="L209" title="1 of 2 branches missed.">            if (!new File(repo, &quot;.git&quot;).exists()) {</span>
+<span class="nc" id="L210">                continue;</span>
+            }
+<span class="fc" id="L212">            List&lt;String&gt; poms = entry.getValue();</span>
+            try {
+<span class="fc" id="L214">                VcsOperations.commitPaths(repo, getLog(),</span>
+                        &quot;workspace: align inter-subproject versions&quot;
+                        + &quot;\n\nRefs: IKE-Network/ike-issues#780&quot;,
+<span class="fc" id="L217">                        poms.toArray(new String[0]));</span>
+<span class="fc" id="L218">                getLog().info(&quot;  ✓ committed &quot; + poms.size()</span>
+                        + &quot; aligned pom(s) in &quot; + subproject);
+<span class="nc" id="L220">            } catch (MojoException e) {</span>
+<span class="nc" id="L221">                getLog().warn(&quot;  could not commit aligned poms in &quot; + subproject</span>
+<span class="nc" id="L222">                        + &quot; — &quot; + e.getMessage());</span>
+<span class="fc" id="L223">            }</span>
+<span class="fc" id="L224">        }</span>
+<span class="fc" id="L225">    }</span>
 
     /**
      * Collect Maven system properties into a {@link ReconcilerOptions}
@@ -178,11 +230,11 @@ public class WsAlignDraftMojo extends AbstractWorkspaceMojo {
      * ({@code -DupdateAlignment=false}).
      */
     private static ReconcilerOptions readReconcilerOptions() {
-<span class="fc" id="L181">        Map&lt;String, String&gt; flags = new HashMap&lt;&gt;();</span>
-<span class="fc bfc" id="L182" title="All 2 branches covered.">        for (String name : System.getProperties().stringPropertyNames()) {</span>
-<span class="fc" id="L183">            flags.put(name, System.getProperty(name));</span>
-<span class="fc" id="L184">        }</span>
-<span class="fc" id="L185">        return new ReconcilerOptions(flags);</span>
+<span class="fc" id="L233">        Map&lt;String, String&gt; flags = new HashMap&lt;&gt;();</span>
+<span class="fc bfc" id="L234" title="All 2 branches covered.">        for (String name : System.getProperties().stringPropertyNames()) {</span>
+<span class="fc" id="L235">            flags.put(name, System.getProperty(name));</span>
+<span class="fc" id="L236">        }</span>
+<span class="fc" id="L237">        return new ReconcilerOptions(flags);</span>
     }
 
     /**
@@ -191,23 +243,23 @@ public class WsAlignDraftMojo extends AbstractWorkspaceMojo {
      * used by {@code ws:scaffold-draft}'s reconciler loop.
      */
     private void printDriftReport(DriftReport report) {
-<span class="pc bpc" id="L194" title="1 of 2 branches missed.">        if (!report.hasDrift()) {</span>
-<span class="nc" id="L195">            getLog().info(&quot;  ✓ &quot; + report.dimension());</span>
-<span class="nc" id="L196">            return;</span>
+<span class="pc bpc" id="L246" title="1 of 2 branches missed.">        if (!report.hasDrift()) {</span>
+<span class="nc" id="L247">            getLog().info(&quot;  ✓ &quot; + report.dimension());</span>
+<span class="nc" id="L248">            return;</span>
         }
-<span class="fc" id="L198">        getLog().info(&quot;  ⚠ &quot; + report.dimension());</span>
-<span class="pc bpc" id="L199" title="1 of 2 branches missed.">        if (!report.summary().isEmpty()) {</span>
-<span class="fc" id="L200">            getLog().info(&quot;     &quot; + report.summary());</span>
+<span class="fc" id="L250">        getLog().info(&quot;  ⚠ &quot; + report.dimension());</span>
+<span class="pc bpc" id="L251" title="1 of 2 branches missed.">        if (!report.summary().isEmpty()) {</span>
+<span class="fc" id="L252">            getLog().info(&quot;     &quot; + report.summary());</span>
         }
-<span class="fc bfc" id="L202" title="All 2 branches covered.">        for (String line : report.detailLines()) {</span>
-<span class="fc" id="L203">            getLog().info(&quot;       &quot; + line);</span>
-<span class="fc" id="L204">        }</span>
-<span class="pc bpc" id="L205" title="1 of 2 branches missed.">        if (!report.defaultAction().isEmpty()) {</span>
-<span class="fc" id="L206">            getLog().info(&quot;     Default: &quot; + report.defaultAction());</span>
+<span class="fc bfc" id="L254" title="All 2 branches covered.">        for (String line : report.detailLines()) {</span>
+<span class="fc" id="L255">            getLog().info(&quot;       &quot; + line);</span>
+<span class="fc" id="L256">        }</span>
+<span class="pc bpc" id="L257" title="1 of 2 branches missed.">        if (!report.defaultAction().isEmpty()) {</span>
+<span class="fc" id="L258">            getLog().info(&quot;     Default: &quot; + report.defaultAction());</span>
         }
-<span class="pc bpc" id="L208" title="1 of 2 branches missed.">        if (!report.optOutCommand().isEmpty()) {</span>
-<span class="fc" id="L209">            getLog().info(&quot;     Opt out: &quot; + report.optOutCommand());</span>
+<span class="pc bpc" id="L260" title="1 of 2 branches missed.">        if (!report.optOutCommand().isEmpty()) {</span>
+<span class="fc" id="L261">            getLog().info(&quot;     Opt out: &quot; + report.optOutCommand());</span>
         }
-<span class="fc" id="L211">    }</span>
+<span class="fc" id="L263">    }</span>
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

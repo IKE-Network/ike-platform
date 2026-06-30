@@ -70,7 +70,13 @@ public final class ReconcilerRegistry {
                 // reconciler's output and produces no further drift
                 // (IKE-Network/ike-issues#452). Before this entry,
                 // cheatsheets refreshed only on ws:scaffold-init.
-                new CheatsheetReconciler()
+                new CheatsheetReconciler(),
+                // Workspace-root CLAUDE.md regeneration — same pure-doc pass
+                // as the cheatsheets, left out when GOALS.md/WS-REFERENCE.md
+                // were promoted to continuous reconciliation, so older or
+                // renamed workspaces never got a CLAUDE.md
+                // (IKE-Network/ike-issues#790).
+                new WorkspaceClaudeMdReconciler()
                 // Future reconcilers added here in the order they
                 // should run (see #393 for the full migration plan).
         );

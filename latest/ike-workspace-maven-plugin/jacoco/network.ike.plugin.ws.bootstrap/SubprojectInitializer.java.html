@@ -612,8 +612,8 @@ public final class SubprojectInitializer {
                 ## Build
 
                 ```bash
-                mvn clean verify -DskipTests -T4   # compile + javadoc
-                mvn clean verify -T4                # full build with tests
+                mvn clean verify -DskipTests -T 1C   # compile + javadoc
+                mvn clean verify -T 1C               # full build with tests
                 ```
 
                 ## Key Conventions

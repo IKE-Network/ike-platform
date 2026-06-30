@@ -558,6 +558,11 @@ public final class WorkspaceBootstrap {
         gi.append("!README.adoc\n");
         gi.append("!GOALS.md\n");
         gi.append("!WS-REFERENCE.md\n");
+        // Generated workspace guidance + hand-authored notes — negated back
+        // in alongside the cheatsheets (the file ignores * by default) so
+        // they can actually be committed (IKE-Network/ike-issues#790).
+        gi.append("!CLAUDE.md\n");
+        gi.append("!CLAUDE-*.md\n");
         gi.append("!mvnw\n");
         gi.append("!mvnw.cmd\n\n");
         gi.append("# ── Whitelist workspace-owned directories ────────────────────────\n");

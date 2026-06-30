@@ -1,12 +1,12 @@
 ---
-date_published: 2026-06-28
-date_modified: 2026-06-28
+date_published: 2026-06-29
+date_modified: 2026-06-29
 canonical_url: https://ike.network/ike-platform/ike-workspace-maven-plugin/built-with.html
 ---
 
 # Built With
 
-Open-source software that `ike-workspace-maven-plugin` 126 depends on, links against, ships within, or invokes at runtime.
+Open-source software that `ike-workspace-maven-plugin` 127 depends on, links against, ships within, or invokes at runtime.
 
 Three layers of attribution ship with each release:
 

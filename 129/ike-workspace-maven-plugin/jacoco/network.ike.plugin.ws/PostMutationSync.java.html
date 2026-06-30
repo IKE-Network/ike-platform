@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>PostMutationSync.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">PostMutationSync.java</span></div><h1>PostMutationSync.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import org.apache.maven.api.plugin.Log;
+
+import java.io.File;
+
+/**
+ * Refresh workspace state derived from POMs and on-disk siblings.
+ * Called at the end of any goal whose effect can change which siblings
+ * are present on disk or what their POMs declare.
+ *
+ * &lt;p&gt;Currently one derivation:
+ * &lt;ul&gt;
+ *   &lt;li&gt;{@link YamlDepsSync} — re-derives each subproject's
+ *       {@code depends-on} edges from POM contents and rewrites
+ *       {@code workspace.yaml} when the graph has drifted.&lt;/li&gt;
+ * &lt;/ul&gt;
+ *
+ * &lt;p&gt;Earlier revisions also ran {@code IdeProfileSync} here to
+ * maintain a {@code -P?with-*} block in {@code .mvn/maven.config}
+ * (IKE-Network/ike-issues#276), so IntelliJ would activate the
+ * {@code with-*} profiles that scoped subprojects into the reactor.
+ * That whole mechanism was retired in
+ * {@code IKE-Network/ike-issues#460}: the
+ * {@code ike-workspace-extension} prunes non-existent
+ * {@code &lt;subprojects&gt;} from workspace POMs at model-read time, so
+ * IntelliJ sees the right reactor without any profile activation.
+ *
+ * &lt;p&gt;The step is idempotent — running this hook back-to-back produces
+ * no further changes. Failures are logged at WARN and do not abort
+ * the caller.
+ *
+ * &lt;p&gt;&lt;b&gt;Self-committing.&lt;/b&gt; {@code workspace.yaml} is machine-maintained,
+ * never hand-authored, so a re-derivation it produces must not be left as
+ * an uncommitted working-tree change — that strands the change for the
+ * next goal's clean-tree preflight to trip over (the reported failure mode
+ * in {@code IKE-Network/ike-issues#774}: {@code ws:commit} re-derived
+ * {@code depends-on} edges &lt;em&gt;after&lt;/em&gt; its commit loop, and the next
+ * {@code ws:push}/{@code ws:sync} then refused to run). When the
+ * re-derivation is the &lt;em&gt;sole&lt;/em&gt; pending change to {@code workspace.yaml}
+ * — i.e. the manifest was committed-clean when the hook ran — it is
+ * committed here in isolation. When the manifest already carried a
+ * caller's own edit (e.g. {@code ws:add} adding a subproject, which
+ * deliberately leaves the manifest staged for the user), the combined
+ * change is left for that caller's own commit policy and this hook does
+ * not commit.
+ *
+ * &lt;p&gt;Triggered from: {@code ws:add}, {@code ws:remove}, {@code ws:sync},
+ * {@code ws:pull}, {@code ws:commit-publish}, {@code ws:scaffold-init},
+ * {@code ws:feature-finish-merge-publish},
+ * {@code ws:feature-finish-squash-publish},
+ * {@code ws:align-publish}, {@code ws:scaffold-publish}
+ * (which subsumes the retired ws:set-parent).
+ *
+ * &lt;p&gt;See {@code IKE-Network/ike-issues#279} (origin) and
+ * {@code IKE-Network/ike-issues#460} (IdeProfileSync retirement).
+ */
+public final class PostMutationSync {
+
+    private PostMutationSync() {}
+
+    /** Path of the machine-maintained manifest, relative to the root. */
+    private static final String MANIFEST = &quot;workspace.yaml&quot;;
+
+    /**
+     * Run all post-mutation derivations against the workspace at
+     * {@code workspaceRoot}, committing a re-derived {@code workspace.yaml}
+     * in isolation when it is the sole pending change (see the class
+     * note on self-committing).
+     *
+     * @param workspaceRoot the workspace root directory
+     * @param log           plugin log for status messages
+     * @return {@code true} if a re-derived {@code workspace.yaml} was
+     *         committed by this call; {@code false} if nothing changed or
+     *         the change was left for the caller to commit
+     */
+    public static boolean refresh(File workspaceRoot, Log log) {
+        // Snapshot the manifest's state BEFORE the re-derivation. If it was
+        // unmodified, any change the derivation makes is attributable solely
+        // to it and is committed in isolation; if it already carried an edit
+        // (or there is no git state — e.g. .git excluded from Syncthing on a
+        // not-yet-bootstrapped sibling) it is excluded from the snapshot, so
+        // the combined change is left for the caller / bootstrapper (#774).
+<span class="fc" id="L84">        GoalAuthoredChanges authored =</span>
+<span class="fc" id="L85">                GoalAuthoredChanges.snapshot(workspaceRoot, log, MANIFEST);</span>
+
+<span class="fc bfc" id="L87" title="All 2 branches covered.">        if (!YamlDepsSync.run(workspaceRoot, log)) {</span>
+<span class="fc" id="L88">            return false;</span>
+        }
+<span class="fc" id="L90">        boolean committed = authored.commitAuthored(</span>
+                &quot;ws: re-derive depends-on edges\n\n&quot;
+                        + &quot;Re-derives workspace.yaml depends-on from POM &quot;
+                        + &quot;reality after a workspace mutation, so the &quot;
+                        + &quot;manifest is never left uncommitted.\n\n&quot;
+                        + &quot;Refs: IKE-Network/ike-issues#774\n&quot;
+                        + &quot;Refs: IKE-Network/ike-issues#279&quot;);
+<span class="fc bfc" id="L97" title="All 2 branches covered.">        if (committed) {</span>
+<span class="fc" id="L98">            log.info(&quot;  workspace.yaml: committed re-derived depends-on edges&quot;);</span>
+        }
+<span class="fc" id="L100">        return committed;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

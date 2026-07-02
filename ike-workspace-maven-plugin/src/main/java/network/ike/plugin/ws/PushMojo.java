@@ -125,11 +125,12 @@ public class PushMojo extends AbstractWorkspaceMojo {
             getLog().warn(Ansi.red("  ✗ ") + label + " — "
                     + e.getMessage());
             return PushRow.failure(label, "?", null, e.getMessage(),
-                    "git push " + remote);
+                    "git push " + remote, null);
         }
 
+        String bridgeNote = null;
         try {
-            VcsOperations.catchUp(dir, getLog());
+            bridgeNote = VcsOperations.catchUp(dir, getLog()).note();
 
             // Capture the pre-push state so we can express the SHA delta
             // even after the push has moved origin/<branch> forward.
@@ -146,7 +147,7 @@ public class PushMojo extends AbstractWorkspaceMojo {
                         + remote + "/" + branch
                         + " (already up-to-date)");
                 return PushRow.upToDate(label, branch, preHead, url,
-                        !VcsOperations.isClean(dir));
+                        !VcsOperations.isClean(dir), bridgeNote);
             }
 
             // Snapshot commits about to land BEFORE pushing so we can
@@ -199,7 +200,7 @@ public class PushMojo extends AbstractWorkspaceMojo {
             }
 
             return PushRow.pushed(label, branch, preRemote.orElse(null),
-                    preHead, commitCount, subjectsToPush, url, uncommitted);
+                    preHead, commitCount, subjectsToPush, url, uncommitted, bridgeNote);
         } catch (MojoException e) {
             String retry = buildRetryCommand(label, branch);
             if (failFast) {
@@ -207,7 +208,7 @@ public class PushMojo extends AbstractWorkspaceMojo {
                         + e.getMessage(), e);
             }
             getLog().warn(Ansi.red("  ✗ ") + label + " — " + e.getMessage());
-            return PushRow.failure(label, branch, null, e.getMessage(), retry);
+            return PushRow.failure(label, branch, null, e.getMessage(), retry, bridgeNote);
         }
     }
 
@@ -320,6 +321,20 @@ public class PushMojo extends AbstractWorkspaceMojo {
             }
         }
 
+        // Bridge-state notes (ike-issues#819) — e.g. a stale .ike/vcs-state
+        // checkpoint that was self-healed because origin-parity was already
+        // confirmed. Informational, not actionable, so it sits ahead of
+        // Failures rather than reading as alarming.
+        List<PushRow> withNotes = rows.stream()
+                .filter(r -> r.bridgeNote != null && !r.bridgeNote.isBlank())
+                .toList();
+        if (!withNotes.isEmpty()) {
+            report.section("Notes");
+            for (PushRow r : withNotes) {
+                report.bullet("**" + r.label + "** — " + r.bridgeNote);
+            }
+        }
+
         // Failures section — surface git stderr AND a copy-pasteable
         // retry block. The user shouldn't have to re-derive the
         // command from the failing subproject's name + branch.
@@ -360,31 +375,32 @@ public class PushMojo extends AbstractWorkspaceMojo {
             String remoteUrl,
             boolean uncommittedWorkLeft,
             String failureMessage,
-            String retryCommand) {
+            String retryCommand,
+            String bridgeNote) {
 
         static PushRow pushed(String label, String branch, String oldSha,
                               String newSha, int commits,
                               List<String> subjects, String remoteUrl,
-                              boolean uncommitted) {
+                              boolean uncommitted, String bridgeNote) {
             return new PushRow(label, branch, Outcome.PUSHED, oldSha, newSha,
-                    commits, subjects, remoteUrl, uncommitted, null, null);
+                    commits, subjects, remoteUrl, uncommitted, null, null, bridgeNote);
         }
 
         static PushRow upToDate(String label, String branch, String headSha,
-                                 String remoteUrl, boolean uncommitted) {
+                                 String remoteUrl, boolean uncommitted, String bridgeNote) {
             return new PushRow(label, branch, Outcome.UP_TO_DATE, headSha,
-                    headSha, 0, List.of(), remoteUrl, uncommitted, null, null);
+                    headSha, 0, List.of(), remoteUrl, uncommitted, null, null, bridgeNote);
         }
 
         static PushRow notCloned(String name) {
             return new PushRow(name, "—", Outcome.NOT_CLONED, null, null, 0,
-                    List.of(), "—", false, null, null);
+                    List.of(), "—", false, null, null, null);
         }
 
         static PushRow failure(String label, String branch, String oldSha,
-                                String message, String retry) {
+                                String message, String retry, String bridgeNote) {
             return new PushRow(label, branch, Outcome.FAILED, oldSha, null, 0,
-                    List.of(), "—", false, message, retry);
+                    List.of(), "—", false, message, retry, bridgeNote);
         }
     }
 

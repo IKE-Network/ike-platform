@@ -1,5 +1,7 @@
 package network.ike.plugin.ws;
 
+import network.ike.plugin.ws.vcs.VcsOperations;
+import network.ike.plugin.ws.vcs.VcsState;
 import org.apache.maven.api.plugin.MojoException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -87,6 +89,44 @@ class PushMojoReportTest {
         assertThat(report)
                 .as("the report should expose up-to-date explicitly")
                 .contains("up-to-date");
+    }
+
+    @Test
+    void workspace_pushWithStaleCheckpoint_selfHealsAndNotesIt() throws Exception {
+        // ike-issues#819: lib-a's .ike/vcs-state checkpoint is orphaned by a
+        // rewrite (here, `commit --amend`) that already landed on origin —
+        // catchUp must self-heal the checkpoint and surface a plain-language
+        // note in the report, not the "may not have completed" warning.
+        scaffoldWorkspace();
+
+        Path libA = tempDir.resolve("lib-a");
+        VcsOperations.writeVcsState(libA.toFile(), VcsState.Action.COMMIT);
+        String staleSha = VcsState.readFrom(libA).orElseThrow().sha();
+
+        exec(libA, "git", "commit", "--amend", "-m", "chore(lib-a): amended");
+        String amendedSha = VcsOperations.headSha(libA.toFile());
+        assertThat(amendedSha).isNotEqualTo(staleSha);
+        exec(libA, "git", "push", "--force", "origin", "main");
+
+        PushMojo mojo = TestLog.createMojo(PushMojo.class);
+        setField(mojo, "manifest", tempDir.resolve("workspace.yaml").toFile(),
+                AbstractWorkspaceMojo.class);
+        setField(mojo, "remote", "origin");
+        mojo.execute();
+
+        String report = readReport("push");
+        assertThat(report)
+                .as("a self-healed checkpoint must surface as a Notes entry")
+                .contains("Notes")
+                .contains("lib-a")
+                .doesNotContain("may not have completed");
+        assertThat(report)
+                .as("nothing was actually missing — lib-a is still up-to-date")
+                .contains("up-to-date");
+
+        VcsState healed = VcsState.readFrom(libA).orElseThrow();
+        assertThat(healed.sha()).isEqualTo(amendedSha);
+        assertThat(healed.action()).isEqualTo(VcsState.Action.SYNC);
     }
 
     @Test

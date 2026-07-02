@@ -12,6 +12,8 @@ import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -28,6 +30,10 @@ class VcsOperationsTest {
     /** A separate temp dir with no git repo above it — for failure tests. */
     @TempDir
     Path nonRepoDir;
+
+    /** A separate temp dir used as a bare "origin" remote for sync tests. */
+    @TempDir
+    Path originDir;
 
     private File repoDir;
     private final Log log = new TestLog();
@@ -220,6 +226,75 @@ class VcsOperationsTest {
     }
 
     @Test
+    void sync_originParityConfirmed_staleCheckpointSelfHealsAtInfoLevel()
+            throws Exception {
+        // ike-issues#819: local history was rewritten (here, `commit --amend`)
+        // after the checkpoint was written, orphaning its recorded sha — but
+        // origin already matches the rewritten HEAD, so nothing is missing.
+        execIn(originDir.toFile(), "git", "init", "--bare", "-b", "main");
+        exec("git", "remote", "add", "origin", originDir.toString());
+        exec("git", "push", "-u", "origin", "main");
+
+        Files.createDirectories(tempDir.resolve(".ike"));
+        VcsOperations.writeVcsState(repoDir, VcsState.Action.COMMIT);
+        String staleSha = VcsState.readFrom(tempDir).orElseThrow().sha();
+
+        exec("git", "commit", "--amend", "-m", "Initial commit (amended)");
+        String amendedSha = VcsOperations.headSha(repoDir);
+        assertThat(amendedSha).isNotEqualTo(staleSha);
+        exec("git", "push", "--force", "origin", "main");
+
+        RecordingLog recordingLog = new RecordingLog();
+        VcsOperations.SyncOutcome outcome = VcsOperations.sync(repoDir, recordingLog);
+
+        assertThat(outcome.selfHealed()).isTrue();
+        assertThat(outcome.note()).isNotNull()
+                .doesNotContain("may not have completed")
+                .contains("stale")
+                .contains("origin");
+        assertThat(recordingLog.warns).isEmpty();
+        assertThat(recordingLog.infos).anyMatch(line -> line.contains(outcome.note()));
+
+        VcsState healed = VcsState.readFrom(tempDir).orElseThrow();
+        assertThat(healed.sha()).isEqualTo(amendedSha);
+        assertThat(healed.action()).isEqualTo(VcsState.Action.SYNC);
+    }
+
+    @Test
+    void sync_localAheadOfOrigin_staleUnrelatedStateSha_keepsWarnWording()
+            throws Exception {
+        // Regression guard: when local is genuinely ahead of origin, a
+        // state-file mismatch is still a real signal (e.g. a missing push
+        // from another machine) — must keep warning, must not self-heal.
+        execIn(originDir.toFile(), "git", "init", "--bare", "-b", "main");
+        exec("git", "remote", "add", "origin", originDir.toString());
+        exec("git", "push", "-u", "origin", "main");
+
+        Files.writeString(tempDir.resolve("file.txt"), "hello v2",
+                StandardCharsets.UTF_8);
+        exec("git", "add", "file.txt");
+        exec("git", "commit", "-m", "Local, unpushed follow-up");
+
+        Files.createDirectories(tempDir.resolve(".ike"));
+        VcsState stale = new VcsState("2026-01-01T00:00:00Z", "other",
+                "main", "deadbeef", VcsState.Action.COMMIT);
+        VcsState.writeTo(tempDir, stale);
+
+        RecordingLog recordingLog = new RecordingLog();
+        VcsOperations.SyncOutcome outcome = VcsOperations.sync(repoDir, recordingLog);
+
+        assertThat(outcome.selfHealed()).isFalse();
+        assertThat(outcome.note()).isNull();
+        assertThat(recordingLog.warns)
+                .anyMatch(line -> line.contains("does not match state file"))
+                .anyMatch(line -> line.contains("may not have completed"))
+                .anyMatch(line -> line.contains("first, then retry sync"));
+
+        VcsState unchanged = VcsState.readFrom(tempDir).orElseThrow();
+        assertThat(unchanged.sha()).isEqualTo("deadbeef");
+    }
+
+    @Test
     void remoteSha_emptyForLocalRepo() throws MojoException {
         Optional<String> sha = VcsOperations.remoteSha(repoDir, "origin", "main");
         assertThat(sha).isEmpty();
@@ -338,6 +413,39 @@ class VcsOperationsTest {
     }
 
     // ── Helpers ──────────────────────────────────────────────────
+
+    /** Test double capturing log lines by level, for asserting on {@code sync()}'s output. */
+    private static final class RecordingLog extends TestLog {
+        final List<String> infos = new ArrayList<>();
+        final List<String> warns = new ArrayList<>();
+
+        @Override
+        public void info(CharSequence c) {
+            infos.add(c.toString());
+        }
+
+        @Override
+        public void warn(CharSequence c) {
+            warns.add(c.toString());
+        }
+    }
+
+    /** Like {@link #exec}, but runs in an arbitrary directory (e.g. a bare origin). */
+    private void execIn(File dir, String... command) throws Exception {
+        Process process = new ProcessBuilder(command)
+                .directory(dir)
+                .redirectErrorStream(true)
+                .start();
+        String output = new String(process.getInputStream().readAllBytes(),
+                StandardCharsets.UTF_8);
+        int exitCode = process.waitFor();
+        if (exitCode != 0) {
+            throw new RuntimeException(
+                    "Command failed (exit " + exitCode + "): "
+                            + String.join(" ", command)
+                            + (output.isBlank() ? "" : "\n" + output));
+        }
+    }
 
     private void exec(String... command) throws Exception {
         Process process = new ProcessBuilder(command)

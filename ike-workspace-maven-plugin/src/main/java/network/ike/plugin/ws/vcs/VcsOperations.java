@@ -1055,19 +1055,34 @@ public class VcsOperations {
     }
 
     /**
+     * Result of {@link #sync(File, Log)} / {@link #catchUp(File, Log)}: whether
+     * a stale-but-safe {@code .ike/vcs-state} checkpoint was self-healed, and a
+     * human-readable note for a goal's markdown report (ike-issues#819).
+     *
+     * @param selfHealed {@code true} when a stale checkpoint was rewritten to
+     *                   the current HEAD because origin-parity was already
+     *                   independently confirmed
+     * @param note       text worth surfacing in a caller's report, or
+     *                   {@code null} when there is nothing to report
+     */
+    public record SyncOutcome(boolean selfHealed, String note) {
+        static final SyncOutcome NONE = new SyncOutcome(false, null);
+    }
+
+    /**
      * Synchronize local git state to match the VCS state file.
      * Fetches from all remotes, switches branch if needed, and soft-resets.
      *
      * @param dir the repository root directory
      * @param log Maven logger
-     * @return the resulting HEAD SHA after sync
+     * @return the sync outcome — see {@link SyncOutcome}
      * @throws MojoException if a git command or state file read fails
      */
-    public static String sync(File dir, Log log) throws MojoException {
+    public static SyncOutcome sync(File dir, Log log) throws MojoException {
         Optional<VcsState> stateOpt = VcsState.readFrom(dir.toPath());
         if (stateOpt.isEmpty()) {
             log.info("  No VCS state file — nothing to sync.");
-            return headSha(dir);
+            return SyncOutcome.NONE;
         }
 
         VcsState state = stateOpt.get();
@@ -1088,7 +1103,7 @@ public class VcsOperations {
                             + state.machine() + " yet.");
                     log.warn("  Push from " + state.machine()
                             + " first, then retry sync.");
-                    return headSha(dir);
+                    return SyncOutcome.NONE;
                 }
                 // Create local tracking branch from remote
                 log.info("  Creating local branch from origin: " + state.branch());
@@ -1104,7 +1119,7 @@ public class VcsOperations {
         if (remoteRef.isEmpty()) {
             log.info("  No remote ref for " + state.branch()
                     + " on origin — branch is local-only, using local state.");
-            return headSha(dir);
+            return SyncOutcome.NONE;
         }
 
         // Evaluate the relationship between local branch tip and origin
@@ -1113,19 +1128,30 @@ public class VcsOperations {
         String localSha = headSha(dir);
         String remoteShaValue = remoteRef.get();
 
+        // Whether origin-parity is proven by the time we reach the
+        // state-file comparison below — used to tell a merely-stale
+        // bookkeeping checkpoint apart from a genuinely missing push
+        // (ike-issues#819).
+        boolean originParityConfirmed;
         if (localSha.equals(remoteShaValue)) {
             log.info("  Already at origin/" + state.branch()
                     + " — no reset needed.");
+            originParityConfirmed = true;
         } else if (isAncestor(dir, remoteShaValue, localSha)) {
             // Local is strictly ahead of origin. Preserve the unpushed
             // commits — the caller (usually ws:push) will push them.
+            // Origin parity is NOT confirmed here: if the state file
+            // also disagrees below, that's still a real signal worth
+            // a warning (e.g. a missing push from another machine).
             log.info("  Local " + state.branch()
                     + " is ahead of origin — keeping unpushed commits.");
+            originParityConfirmed = false;
         } else if (isAncestor(dir, localSha, remoteShaValue)) {
             // Local is strictly behind origin. Fast-forward is safe
             // (equivalent to git pull --ff-only).
             log.info("  Fast-forwarding " + state.branch() + " to origin.");
             resetSoft(dir, log, "origin/" + state.branch());
+            originParityConfirmed = true;
         } else {
             // Diverged — local and origin each have unique commits.
             // Refuse to silently pick a side; ask the human.
@@ -1142,7 +1168,7 @@ public class VcsOperations {
         String newSha = headSha(dir);
         if (newSha.equals(state.sha())) {
             log.info("  HEAD now matches state file: " + newSha);
-            return newSha;
+            return SyncOutcome.NONE;
         }
         // After fast-forward / no-op, HEAD may legitimately sit ahead
         // of state.sha — the state file is just stale relative to
@@ -1153,17 +1179,39 @@ public class VcsOperations {
             if (isAncestor(dir, state.sha(), newSha)) {
                 log.info("  HEAD (" + newSha + ") is ahead of state file ("
                         + state.sha() + ") — state file is stale, no action needed.");
-                return newSha;
+                return SyncOutcome.NONE;
             }
         } catch (MojoException ignored) {
-            // state.sha unreachable locally — fall through to warning.
+            // state.sha unreachable locally — fall through below.
         }
+
+        if (originParityConfirmed) {
+            // The state file disagrees, but we already proved origin/<branch>
+            // matches HEAD above — this is stale local bookkeeping (e.g. a
+            // rebase/amend rewrote the checkpoint commit, or a prior run
+            // found nothing to push and never refreshed it), not a missing
+            // push. Say so plainly, and self-heal so it stops recurring.
+            String note = "Local bookkeeping checkpoint (.ike/vcs-state) was stale "
+                    + "relative to " + state.branch() + "'s history, but origin/"
+                    + state.branch() + " already matched HEAD (" + newSha
+                    + ") — nothing to push, no action needed.";
+            log.info("  " + note);
+            try {
+                writeVcsState(dir, VcsState.Action.SYNC);
+                return new SyncOutcome(true, note);
+            } catch (MojoException e) {
+                log.debug("  Could not refresh .ike/vcs-state after bridge sync: "
+                        + e.getMessage());
+                return new SyncOutcome(false, note + " (checkpoint refresh failed — see debug log)");
+            }
+        }
+
         log.warn("  HEAD after sync (" + newSha + ") does not match state file ("
                 + state.sha() + ").");
         log.warn("  The push from " + state.machine() + " may not have completed.");
         log.warn("  Push from " + state.machine() + " first, then retry sync.");
 
-        return newSha;
+        return SyncOutcome.NONE;
     }
 
     /**
@@ -1172,16 +1220,19 @@ public class VcsOperations {
      *
      * @param dir the repository root directory
      * @param log Maven logger
+     * @return the sync outcome — see {@link SyncOutcome}; {@link SyncOutcome#NONE}
+     *         when nothing needed syncing
      * @throws MojoException if sync fails
      */
-    public static void catchUp(File dir, Log log) throws MojoException {
+    public static SyncOutcome catchUp(File dir, Log log) throws MojoException {
         if (!VcsState.isIkeManaged(dir.toPath())) {
-            return;
+            return SyncOutcome.NONE;
         }
         if (needsSync(dir)) {
             log.info("  VCS state is behind — catching up...");
-            sync(dir, log);
+            return sync(dir, log);
         }
+        return SyncOutcome.NONE;
     }
 
     // ── Internal helpers ─────────────────────────────────────────

@@ -47,7 +47,8 @@ public record VcsState(
         FEATURE_FINISH("feature-finish"),
         SWITCH("switch"),
         RELEASE("release"),
-        CHECKPOINT("checkpoint");
+        CHECKPOINT("checkpoint"),
+        SYNC("sync");
 
         private final String label;
 

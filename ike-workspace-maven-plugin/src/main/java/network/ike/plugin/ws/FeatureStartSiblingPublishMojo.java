@@ -311,7 +311,7 @@ public class FeatureStartSiblingPublishMojo extends AbstractWorkspaceMojo {
                 versionByName.put(name, newVersion);
                 support.setPomVersion(dir, effectiveVersion, newVersion);
                 ReleaseSupport.exec(dir, getLog(), "git", "add", "pom.xml");
-                ReleaseSupport.exec(dir, getLog(), "git", "commit", "-m",
+                support.commitIfStaged(dir,
                         "feature: set version " + newVersion + " for " + branchName);
                 getLog().info(Ansi.green("  ✓ ") + String.format("%-24s %s → %s",
                         name, effectiveVersion, newVersion));
@@ -343,8 +343,8 @@ public class FeatureStartSiblingPublishMojo extends AbstractWorkspaceMojo {
                         support.setPomVersion(siblingRoot, rootVersion, qualified);
                         ReleaseSupport.exec(siblingRoot, getLog(),
                                 "git", "add", "pom.xml");
-                        ReleaseSupport.exec(siblingRoot, getLog(), "git", "commit",
-                                "-m", "feature: set version " + qualified
+                        support.commitIfStaged(siblingRoot,
+                                "feature: set version " + qualified
                                         + " for " + branchName);
                         rootQualified = qualified;
                         getLog().info(Ansi.green("  ✓ ") + String.format(
@@ -368,7 +368,7 @@ public class FeatureStartSiblingPublishMojo extends AbstractWorkspaceMojo {
                 ManifestWriter.updateBranches(siblingManifest, branchUpdates);
                 ReleaseSupport.exec(siblingRoot, getLog(),
                         "git", "add", "workspace.yaml");
-                ReleaseSupport.exec(siblingRoot, getLog(), "git", "commit", "-m",
+                support.commitIfStaged(siblingRoot,
                         "workspace: update branches for " + branchName);
                 getLog().info("  Updated workspace.yaml branches for "
                         + branched.size() + " components");

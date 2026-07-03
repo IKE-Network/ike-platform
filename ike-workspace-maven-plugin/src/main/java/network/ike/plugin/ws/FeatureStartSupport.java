@@ -101,6 +101,31 @@ final class FeatureStartSupport {
         }
     }
 
+    /**
+     * Commit staged changes only when the index actually differs from HEAD.
+     *
+     * <p>The feature-start cascade stages a file then commits. In a BOM-managed
+     * workspace a cascade step can legitimately stage nothing, and an unguarded
+     * {@code git commit} then fails with "nothing to commit" (exit 1), aborting
+     * the whole goal before the aggregator is qualified (ike-issues#820, same
+     * class as #636). This checks {@code git diff --cached --name-only} and
+     * skips the commit when nothing is staged instead of failing.
+     *
+     * @param dir     the git working directory to commit in
+     * @param message the commit message
+     * @throws MojoException if the commit itself fails
+     */
+    void commitIfStaged(File dir, String message) throws MojoException {
+        String staged = ReleaseSupport.execCapture(
+                dir, "git", "diff", "--cached", "--name-only");
+        if (staged == null || staged.isBlank()) {
+            log.info("    (nothing staged in " + dir.getName()
+                    + " — commit skipped)");
+            return;
+        }
+        ReleaseSupport.exec(dir, log, "git", "commit", "-m", message);
+    }
+
     // ── Version-property cascade (declared in workspace.yaml) ────
 
     /**
@@ -171,7 +196,7 @@ final class FeatureStartSupport {
                             pomFile.toPath(), content,
                             StandardCharsets.UTF_8);
                     ReleaseSupport.exec(dir, log, "git", "add", "pom.xml");
-                    ReleaseSupport.exec(dir, log, "git", "commit", "-m",
+                    commitIfStaged(dir,
                             "feature: update dependency versions for " + branchName);
                 }
             } catch (IOException e) {
@@ -257,7 +282,7 @@ final class FeatureStartSupport {
                             pomFile.toPath(), content,
                             StandardCharsets.UTF_8);
                     ReleaseSupport.exec(dir, log, "git", "add", "pom.xml");
-                    ReleaseSupport.exec(dir, log, "git", "commit", "-m",
+                    commitIfStaged(dir,
                             "feature: update BOM properties for " + branchName);
                 }
             } catch (IOException e) {
@@ -364,8 +389,7 @@ final class FeatureStartSupport {
             if (pomChanged) {
                 try {
                     ReleaseSupport.exec(dir, log, "git", "add", "pom.xml");
-                    ReleaseSupport.exec(dir, log,
-                            "git", "commit", "-m",
+                    commitIfStaged(dir,
                             "feature: update BOM imports for " + branchName);
                 } catch (MojoException e) {
                     log.warn("    Could not commit BOM update in "
@@ -486,8 +510,7 @@ final class FeatureStartSupport {
 
                 if (anyChanged) {
                     ReleaseSupport.exec(subDir, log, "git", "add", "-A");
-                    ReleaseSupport.exec(subDir, log,
-                            "git", "commit", "-m",
+                    commitIfStaged(subDir,
                             "build: remove intra-reactor version pins");
                 }
             } catch (IOException e) {

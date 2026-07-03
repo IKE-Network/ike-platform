@@ -65,6 +65,23 @@ class FeatureStartSupportCommitGuardTest {
                 .isEqualTo("feature: bump");
     }
 
+    @Test
+    void commitsUnstagedTrackedChange() throws Exception {
+        // #821: a cascade writes a tracked POM but a prior `git add` may not
+        // register across rapid consecutive git calls; commitIfStaged must
+        // still commit the (unstaged) change and leave a clean tree.
+        int before = commitCount();
+        Files.writeString(repo.resolve("pom.xml"),
+                "<project><version>1-unstaged-SNAPSHOT</version></project>",
+                StandardCharsets.UTF_8);
+        // deliberately NOT staged
+        support.commitIfStaged(repo.toFile(), "feature: unstaged bump");
+        assertThat(commitCount()).isEqualTo(before + 1);
+        assertThat(execCapture("git", "log", "-1", "--pretty=%s"))
+                .isEqualTo("feature: unstaged bump");
+        assertThat(execCapture("git", "status", "--porcelain")).isBlank();
+    }
+
     private int commitCount() throws Exception {
         return Integer.parseInt(execCapture("git", "rev-list", "--count", "HEAD"));
     }

@@ -102,28 +102,37 @@ final class FeatureStartSupport {
     }
 
     /**
-     * Commit staged changes only when the index actually differs from HEAD.
+     * Commit the working tree's pending tracked changes in {@code dir}, or skip
+     * cleanly when there is nothing to commit.
      *
-     * <p>The feature-start cascade stages a file then commits. In a BOM-managed
-     * workspace a cascade step can legitimately stage nothing, and an unguarded
-     * {@code git commit} then fails with "nothing to commit" (exit 1), aborting
-     * the whole goal before the aggregator is qualified (ike-issues#820, same
-     * class as #636). This checks {@code git diff --cached --name-only} and
-     * skips the commit when nothing is staged instead of failing.
+     * <p>The feature-start cascade writes a POM then commits. Two failure modes
+     * must both be avoided: a genuine no-op must not abort the goal with
+     * "nothing to commit" (exit 1) before the aggregator is qualified
+     * (ike-issues#820, same class as #636); and a real cascade edit must not be
+     * silently left behind (ike-issues#821). Both stem from a prior
+     * {@code git add <file>} not reliably registering across the goal's rapid
+     * consecutive git invocations, so a {@code git diff --cached} check could
+     * read empty and drop a real change.
+     *
+     * <p>This is robust against that: it detects pending <em>tracked</em> changes
+     * with {@code git status --porcelain} (which reflects the working tree, not
+     * just the index) and commits with {@code git commit -a}, which stages
+     * tracked edits at commit time regardless of an earlier {@code git add}.
+     * Untracked files are excluded so a stray report file is never swept in.
      *
      * @param dir     the git working directory to commit in
      * @param message the commit message
      * @throws MojoException if the commit itself fails
      */
     void commitIfStaged(File dir, String message) throws MojoException {
-        String staged = ReleaseSupport.execCapture(
-                dir, "git", "diff", "--cached", "--name-only");
-        if (staged == null || staged.isBlank()) {
-            log.info("    (nothing staged in " + dir.getName()
-                    + " — commit skipped)");
+        String pending = ReleaseSupport.execCapture(
+                dir, "git", "status", "--porcelain", "--untracked-files=no");
+        if (pending == null || pending.isBlank()) {
+            log.info("    (nothing to commit in " + dir.getName()
+                    + " — skipped)");
             return;
         }
-        ReleaseSupport.exec(dir, log, "git", "commit", "-m", message);
+        ReleaseSupport.exec(dir, log, "git", "commit", "-a", "-m", message);
     }
 
     // ── Version-property cascade (declared in workspace.yaml) ────

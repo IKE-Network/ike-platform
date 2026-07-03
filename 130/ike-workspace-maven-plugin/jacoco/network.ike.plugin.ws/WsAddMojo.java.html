@@ -1,0 +1,1580 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>WsAddMojo.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">WsAddMojo.java</span></div><h1>WsAddMojo.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.plugin.ReleaseSupport;
+import network.ike.plugin.support.GoalReportBuilder;
+import network.ike.plugin.ws.preflight.Preflight;
+import network.ike.plugin.ws.preflight.PreflightCondition;
+import network.ike.plugin.ws.preflight.PreflightContext;
+import network.ike.plugin.ws.reconcile.FeatureVersionReconciler;
+import network.ike.plugin.ws.vcs.VcsOperations;
+import network.ike.workspace.Subproject;
+import network.ike.workspace.Dependency;
+import network.ike.workspace.Manifest;
+import network.ike.workspace.ManifestException;
+import network.ike.workspace.ManifestReader;
+import network.ike.workspace.PublishedArtifactSet;
+import network.ike.workspace.VersionSupport;
+
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
+
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+
+import javax.xml.parsers.DocumentBuilder;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
+/**
+ * Add a subproject repository to an existing workspace.
+ *
+ * &lt;p&gt;Given a git URL, this goal:
+ * &lt;ol&gt;
+ *   &lt;li&gt;Clones the repository into the workspace&lt;/li&gt;
+ *   &lt;li&gt;Derives the subproject name from the URL (or accepts
+ *       {@code -Dsubproject=&lt;name&gt;})&lt;/li&gt;
+ *   &lt;li&gt;Scans the POM to derive groupId and inter-subproject
+ *       dependencies (matching dependency/parent groupIds against
+ *       already-registered workspace subprojects)&lt;/li&gt;
+ *   &lt;li&gt;Appends a subproject entry to workspace.yaml&lt;/li&gt;
+ *   &lt;li&gt;Adds a top-level {@code &lt;subprojects&gt;} entry to the reactor POM
+ *       (IKE-Network/ike-issues#696; {@code SubprojectPruneTransformer}
+ *       prunes it at model-read time until the repo is cloned)&lt;/li&gt;
+ *   &lt;li&gt;Re-scans existing subprojects to discover any that depend
+ *       on the newly added subproject (backward resolution)&lt;/li&gt;
+ * &lt;/ol&gt;
+ *
+ * &lt;p&gt;The subproject name is derived from the last path segment of the
+ * URL with {@code .git} stripped. For example,
+ * {@code https://github.com/ikmdev/tinkar-core.git} becomes
+ * {@code tinkar-core}.
+ *
+ * &lt;pre&gt;{@code
+ * mvn ws:add -Drepo=https://github.com/ikmdev/tinkar-core.git
+ * mvn ws:add -Drepo=https://github.com/ikmdev/rocks-kb.git
+ * mvn ws:add -Drepo=https://github.com/ikmdev/komet.git
+ * }&lt;/pre&gt;
+ *
+ * @see WsScaffoldInitMojo for creating a new workspace or cloning all subprojects
+ */
+@Mojo(name = &quot;add&quot;, projectRequired = false, aggregator = true)
+public class WsAddMojo extends AbstractWorkspaceMojo {
+
+    /**
+     * Git repository URL. Prompted interactively if omitted.
+     */
+    @Parameter(property = &quot;repo&quot;)
+    private String repo;
+
+    /**
+     * Subproject name override. If omitted, derived from the repo URL
+     * (last path segment minus {@code .git}).
+     */
+    @Parameter(property = &quot;subproject&quot;)
+    private String subproject;
+
+    /**
+     * Short description of the subproject.
+     */
+    @Parameter(property = &quot;description&quot;)
+    private String description;
+
+    /**
+     * Branch to track. If omitted, the new subproject is placed on the
+     * workspace repo's current git branch (the workspace's active branch).
+     * If the workspace repo has no git state, falls back to the manifest's
+     * {@code defaults.branch}.
+     *
+     * &lt;p&gt;Passing an explicit {@code -Dbranch=} value that disagrees with
+     * the workspace repo's current branch is rejected — heterogeneous
+     * branch state across a workspace is not a supported configuration
+     * (see ike-issues#286).
+     */
+    @Parameter(property = &quot;branch&quot;)
+    private String branch;
+
+    /**
+     * Maven groupId for the subproject. If omitted, left as
+     * a placeholder in workspace.yaml.
+     */
+    @Parameter(property = &quot;groupId&quot;)
+    private String groupId;
+
+    /**
+     * Maven version for the subproject. If omitted, derived from
+     * the subproject's root POM. Written to workspace.yaml so that
+     * {@code ws:feature-start} can branch-qualify it.
+     */
+    @Parameter(property = &quot;version&quot;)
+    private String version;
+
+    /**
+     * Skip cloning — register the subproject in workspace.yaml without
+     * cloning. Dependencies cannot be derived without a POM to scan,
+     * so they will be empty. Use {@code ws:scaffold-init} to clone later.
+     */
+    @Parameter(property = &quot;skipClone&quot;, defaultValue = &quot;false&quot;)
+    private boolean skipClone;
+
+    /** Derived dependency with optional version-property name. */
+<span class="fc" id="L134">    record DerivedDep(String subproject, String versionProperty) {}</span>
+
+    /** Creates this goal instance. */
+<span class="fc" id="L137">    public WsAddMojo() {}</span>
+
+    @Override
+    protected WorkspaceReportSpec runGoal() throws MojoException {
+<span class="nc" id="L141">        repo = requireParam(repo, &quot;repo&quot;, &quot;Git repository URL&quot;);</span>
+
+        // Resolve workspace root
+<span class="nc" id="L144">        Path wsDir = findWorkspaceRoot();</span>
+<span class="nc" id="L145">        Path manifestPath = wsDir.resolve(&quot;workspace.yaml&quot;);</span>
+<span class="nc" id="L146">        Path pomPath = wsDir.resolve(&quot;pom.xml&quot;);</span>
+
+<span class="nc bnc" id="L148" title="All 2 branches missed.">        if (!Files.exists(manifestPath)) {</span>
+<span class="nc" id="L149">            throw new MojoException(</span>
+                    &quot;No workspace.yaml found in &quot; + wsDir
+<span class="nc" id="L151">                    + &quot;. Run &quot; + WsGoal.SCAFFOLD_INIT.qualified() + &quot; first.&quot;);</span>
+        }
+
+        // COORDINATING preflight (#780): the workspace-root tree must be
+        // unmodified so the add commit below is attributable solely to this
+        // goal. Root-only (empty subproject list) — the new clone carries its
+        // own branch WIP, and its version-alignment edits are intentionally
+        // left uncommitted. -Dallow-uncommitted bypasses; -Ddefer-commit (a
+        // cascade caller owns the commit) skips it too.
+<span class="nc bnc" id="L160" title="All 4 branches missed.">        if (!allowUncommitted() &amp;&amp; !deferCommit()) {</span>
+<span class="nc" id="L161">            Preflight.of(List.of(PreflightCondition.WORKING_TREE_CLEAN),</span>
+<span class="nc" id="L162">                    PreflightContext.of(wsDir.toFile(), null, List.of()))</span>
+<span class="nc" id="L163">                    .requirePassed(WsGoal.ADD);</span>
+        }
+
+        // Resolve the target branch up front: workspace repo HEAD is
+        // authoritative (ike-issues#286). The new subproject must land
+        // on the same branch as the rest of the workspace.
+<span class="nc" id="L169">        branch = resolveBranch(wsDir, manifestPath);</span>
+
+        // Derive subproject name from URL if not specified
+<span class="nc bnc" id="L172" title="All 4 branches missed.">        if (subproject == null || subproject.isBlank()) {</span>
+<span class="nc" id="L173">            subproject = deriveSubprojectName(repo);</span>
+        }
+        // Validate via SubprojectName (#295). The derived name comes
+        // from a git URL's last path segment which usually conforms,
+        // but explicit -Dsubproject= and odd repo URLs can fail.
+<span class="nc" id="L178">        validateSubprojectName(subproject);</span>
+
+        // Check if already registered — if so, re-derive and update
+        // rather than appending a duplicate (idempotent behavior)
+<span class="nc" id="L182">        boolean alreadyRegistered = false;</span>
+        try {
+<span class="nc" id="L184">            Manifest existing = ManifestReader.read(manifestPath);</span>
+<span class="nc" id="L185">            alreadyRegistered = existing.subprojects().containsKey(subproject);</span>
+<span class="nc" id="L186">        } catch (ManifestException e) {</span>
+            // Manifest may be empty/malformed on first add — continue
+<span class="nc" id="L188">        }</span>
+
+<span class="nc bnc" id="L190" title="All 4 branches missed.">        if (description == null || description.isBlank()) {</span>
+<span class="nc" id="L191">            description = subproject + &quot; subproject.&quot;;</span>
+        }
+
+        // Clone so we can scan the POM for groupId and dependencies
+<span class="nc" id="L195">        Path subprojectDir = wsDir.resolve(subproject);</span>
+<span class="nc" id="L196">        boolean cloned = false;</span>
+<span class="nc" id="L197">        List&lt;DerivedDep&gt; derivedDeps = null;</span>
+
+<span class="nc bnc" id="L199" title="All 4 branches missed.">        if (!skipClone &amp;&amp; !Files.exists(subprojectDir)) {</span>
+<span class="nc" id="L200">            cloneSubproject(wsDir);</span>
+<span class="nc" id="L201">            cloned = true;</span>
+        }
+
+<span class="nc" id="L204">        String detectedParent = null;</span>
+
+<span class="nc bnc" id="L206" title="All 2 branches missed.">        if (Files.exists(subprojectDir.resolve(&quot;pom.xml&quot;))) {</span>
+            // Derive groupId from POM if not explicitly specified
+<span class="nc bnc" id="L208" title="All 4 branches missed.">            if (groupId == null || groupId.isBlank()) {</span>
+<span class="nc" id="L209">                groupId = deriveGroupId(subprojectDir);</span>
+            }
+
+            // Derive version from POM if not explicitly specified
+<span class="nc bnc" id="L213" title="All 4 branches missed.">            if (version == null || version.isBlank()) {</span>
+                try {
+<span class="nc" id="L215">                    version = ReleaseSupport.readPomVersion(</span>
+<span class="nc" id="L216">                            subprojectDir.resolve(&quot;pom.xml&quot;).toFile());</span>
+<span class="nc" id="L217">                } catch (MojoException e) {</span>
+                    // Non-fatal — version will be null in manifest
+<span class="nc" id="L219">                }</span>
+            }
+
+            // Branch-qualify on a feature branch so the added subproject
+            // is isolated like the rest (IKE-Network/ike-issues#574).
+            // No-op on main; scaffold-publish's FeatureVersionReconciler
+            // self-heals if this is skipped, so failures are non-fatal.
+            try {
+<span class="nc" id="L227">                version = qualifyForBranch(subprojectDir, version, branch);</span>
+<span class="nc" id="L228">            } catch (IOException e) {</span>
+<span class="nc" id="L229">                getLog().warn(&quot;  Could not branch-qualify version: &quot;</span>
+<span class="nc" id="L230">                        + e.getMessage());</span>
+<span class="nc" id="L231">            }</span>
+
+            // Detect parent POM — record parent: only when the POM's
+            // &lt;parent&gt; matches a workspace subproject by full GA (groupId
+            // AND artifactId). An external parent that merely shares a
+            // groupId with a sibling (e.g. network.ike.platform:ike-parent
+            // alongside a network.ike.platform:* sibling) must not be
+            // recorded as that sibling — ike-issues#565.
+<span class="nc" id="L239">            PomParentSupport.ParentInfo parentInfo = null;</span>
+            try {
+<span class="nc" id="L241">                parentInfo = PomParentSupport.readParent(</span>
+<span class="nc" id="L242">                        subprojectDir.resolve(&quot;pom.xml&quot;));</span>
+<span class="nc" id="L243">                detectedParent = detectWorkspaceParent(</span>
+                        wsDir, manifestPath, parentInfo);
+<span class="nc" id="L245">            } catch (Exception e) {</span>
+                // Non-fatal — parent detection is best-effort
+<span class="nc" id="L247">            }</span>
+
+            // #324 parent coherence: if the new subproject's
+            // &lt;parent&gt; GA matches the workspace aggregator's own
+            // &lt;parent&gt; GA, enforce two rules:
+            //   1. Version coherence — same version as workspace
+            //   2. Cycle prevention — empty &lt;relativePath/&gt;
+            // Warn (not fail) at add time so an operator who hits
+            // either violation gets the heads-up before running
+            // mvn install. The matching ws:scaffold-draft check
+            // (which folds verify per #393) is authoritative —
+            // failure mode there is what blocks a release.
+<span class="nc bnc" id="L259" title="All 2 branches missed.">            if (parentInfo != null) {</span>
+<span class="nc" id="L260">                checkParentCoherenceAtAdd(wsDir, subprojectDir,</span>
+                        subproject, parentInfo);
+            }
+
+            // Derive dependencies by matching POM groupIds against
+            // already-registered workspace subprojects
+            try {
+<span class="nc" id="L267">                derivedDeps = deriveDependencies(wsDir, manifestPath,</span>
+                        subprojectDir, subproject);
+<span class="nc" id="L269">            } catch (IOException e) {</span>
+<span class="nc" id="L270">                getLog().warn(&quot;  Could not derive dependencies from POM: &quot;</span>
+<span class="nc" id="L271">                        + e.getMessage());</span>
+<span class="nc" id="L272">            }</span>
+<span class="nc bnc" id="L273" title="All 2 branches missed.">        } else if (!skipClone) {</span>
+<span class="nc" id="L274">            getLog().warn(&quot;  No pom.xml found — dependencies not derived&quot;);</span>
+        }
+
+<span class="nc" id="L277">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L278">        String wsName = readWorkspaceName(wsDir);</span>
+<span class="nc" id="L279">        getLog().info(wsName + &quot; — Add Subproject&quot;);</span>
+<span class="nc" id="L280">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+<span class="nc" id="L281">        getLog().info(&quot;  Subproject: &quot; + subproject);</span>
+<span class="nc" id="L282">        getLog().info(&quot;  Repo:       &quot; + repo);</span>
+<span class="nc bnc" id="L283" title="All 2 branches missed.">        if (branch != null) {</span>
+<span class="nc" id="L284">            getLog().info(&quot;  Branch:     &quot; + branch);</span>
+        }
+<span class="nc bnc" id="L286" title="All 4 branches missed.">        if (version != null &amp;&amp; !version.isBlank()) {</span>
+<span class="nc" id="L287">            getLog().info(&quot;  Version:    &quot; + version);</span>
+        }
+<span class="nc bnc" id="L289" title="All 4 branches missed.">        if (groupId != null &amp;&amp; !groupId.isBlank()) {</span>
+<span class="nc" id="L290">            getLog().info(&quot;  GroupId:    &quot; + groupId);</span>
+        }
+<span class="nc bnc" id="L292" title="All 2 branches missed.">        if (detectedParent != null) {</span>
+<span class="nc" id="L293">            getLog().info(&quot;  Parent:     &quot; + detectedParent + &quot; (detected from POM)&quot;);</span>
+        }
+<span class="nc bnc" id="L295" title="All 4 branches missed.">        if (derivedDeps != null &amp;&amp; !derivedDeps.isEmpty()) {</span>
+<span class="nc" id="L296">            String depNames = derivedDeps.stream()</span>
+<span class="nc" id="L297">                    .map(DerivedDep::subproject)</span>
+<span class="nc" id="L298">                    .collect(Collectors.joining(&quot;, &quot;));</span>
+<span class="nc" id="L299">            getLog().info(&quot;  Depends:    &quot; + depNames + &quot; (derived from POM)&quot;);</span>
+<span class="nc" id="L300">        } else {</span>
+<span class="nc" id="L301">            getLog().info(&quot;  Depends:    (none)&quot;);</span>
+        }
+<span class="nc bnc" id="L303" title="All 2 branches missed.">        if (alreadyRegistered) {</span>
+<span class="nc" id="L304">            getLog().info(&quot;  (already registered — re-validating dependencies)&quot;);</span>
+        }
+<span class="nc bnc" id="L306" title="All 2 branches missed.">        if (cloned) {</span>
+<span class="nc" id="L307">            getLog().info(Ansi.green(&quot;  ✓ &quot;) + &quot;Cloned &quot; + subproject);</span>
+        }
+<span class="nc" id="L309">        getLog().info(&quot;&quot;);</span>
+
+        // Snapshot the root files BEFORE editing them so the commit below is
+        // scoped to exactly what this goal authored (#780, IN_ISOLATION).
+<span class="nc" id="L313">        GoalAuthoredChanges authored = GoalAuthoredChanges.snapshot(</span>
+<span class="nc" id="L314">                wsDir.toFile(), getLog(), &quot;workspace.yaml&quot;, &quot;pom.xml&quot;);</span>
+        try {
+<span class="nc bnc" id="L316" title="All 2 branches missed.">            if (alreadyRegistered) {</span>
+                // Update existing entry's depends-on in workspace.yaml
+<span class="nc" id="L318">                updateSubprojectDependencies(manifestPath, subproject, derivedDeps);</span>
+<span class="nc" id="L319">                getLog().info(Ansi.green(&quot;  ✓ &quot;) + &quot;workspace.yaml updated (dependencies re-derived)&quot;);</span>
+            } else {
+                // Append new subproject to workspace.yaml
+<span class="nc" id="L322">                appendSubprojectToManifest(manifestPath, derivedDeps, detectedParent);</span>
+<span class="nc" id="L323">                getLog().info(Ansi.green(&quot;  ✓ &quot;) + &quot;workspace.yaml updated&quot;);</span>
+            }
+
+            // Reactor membership is a top-level &lt;subprojects&gt; entry now
+            // (#696); addSubprojectToPom is idempotent.
+<span class="nc" id="L328">            addSubprojectToPom(pomPath);</span>
+<span class="nc" id="L329">            getLog().info(Ansi.green(&quot;  ✓ &quot;) + &quot;pom.xml updated (subproject: &quot; + subproject + &quot;)&quot;);</span>
+
+<span class="nc" id="L331">        } catch (IOException e) {</span>
+<span class="nc" id="L332">            throw new MojoException(</span>
+<span class="nc" id="L333">                    &quot;Failed to update workspace files: &quot; + e.getMessage(), e);</span>
+<span class="nc" id="L334">        }</span>
+
+        // Backward resolution: check if any existing subprojects
+        // depend on the newly added subproject's groupId
+<span class="nc bnc" id="L338" title="All 2 branches missed.">        if (Files.exists(subprojectDir.resolve(&quot;pom.xml&quot;))) {</span>
+            try {
+<span class="nc" id="L340">                int backfilled = backfillDependencies(</span>
+                        wsDir, manifestPath, subproject, subprojectDir);
+<span class="nc bnc" id="L342" title="All 2 branches missed.">                if (backfilled &gt; 0) {</span>
+<span class="nc" id="L343">                    getLog().info(Ansi.green(&quot;  ✓ &quot;) + &quot;Updated &quot; + backfilled</span>
+                            + &quot; existing subproject(s) with dependency on &quot;
+                            + subproject);
+                }
+<span class="nc" id="L347">            } catch (IOException e) {</span>
+<span class="nc" id="L348">                getLog().warn(&quot;  Could not backfill dependencies: &quot;</span>
+<span class="nc" id="L349">                        + e.getMessage());</span>
+<span class="nc" id="L350">            }</span>
+        }
+
+        // Commit the root edits in isolation (#780, IN_ISOLATION): only the
+        // paths this goal authored (workspace.yaml + pom.xml), which the
+        // preflight guaranteed were clean. Skipped under -Ddefer-commit, where
+        // a cascade caller owns the commit.
+<span class="nc bnc" id="L357" title="All 2 branches missed.">        if (!deferCommit()) {</span>
+<span class="nc bnc" id="L358" title="All 2 branches missed.">            if (authored.commitAuthored(&quot;workspace: add &quot; + subproject</span>
+                    + &quot;\n\nRefs: IKE-Network/ike-issues#780&quot;)) {
+<span class="nc" id="L360">                getLog().info(Ansi.green(&quot;  ✓ &quot;) + &quot;committed workspace.yaml + pom.xml&quot;);</span>
+            }
+        }
+
+        // Version alignment: update dependency versions in the newly
+        // added subproject (and any backfilled subprojects) to match
+        // workspace SNAPSHOT versions. Changes are left uncommitted
+        // so the developer can review and fold them into a feature branch.
+<span class="nc bnc" id="L368" title="All 2 branches missed.">        if (Files.exists(subprojectDir.resolve(&quot;pom.xml&quot;))) {</span>
+            try {
+<span class="nc" id="L370">                Manifest updatedManifest = ManifestReader.read(manifestPath);</span>
+<span class="nc" id="L371">                int aligned = alignVersions(wsDir, subprojectDir, subproject,</span>
+                        updatedManifest);
+<span class="nc bnc" id="L373" title="All 2 branches missed.">                if (aligned &gt; 0) {</span>
+<span class="nc" id="L374">                    getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L375">                    getLog().info(Ansi.yellow(&quot;  ⚠ &quot;) + aligned + &quot; file(s) modified for version &quot;</span>
+                            + &quot;alignment (uncommitted)&quot;);
+<span class="nc" id="L377">                    getLog().info(&quot;    Review with 'git diff' in &quot; + subproject);</span>
+                }
+<span class="nc" id="L379">            } catch (IOException e) {</span>
+<span class="nc" id="L380">                getLog().warn(&quot;  Could not align versions: &quot; + e.getMessage());</span>
+<span class="nc" id="L381">            }</span>
+        }
+
+<span class="nc" id="L384">        getLog().info(&quot;&quot;);</span>
+<span class="nc bnc" id="L385" title="All 2 branches missed.">        if (cloned) {</span>
+<span class="nc" id="L386">            getLog().info(&quot;  Subproject added and cloned.&quot;);</span>
+        } else {
+<span class="nc" id="L388">            getLog().info(&quot;  Subproject added. Run 'mvn &quot;</span>
+<span class="nc" id="L389">                    + WsGoal.SCAFFOLD_INIT.qualified() + &quot;' to clone.&quot;);</span>
+        }
+<span class="nc" id="L391">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L392">        GoalReportBuilder report = new GoalReportBuilder();</span>
+<span class="nc" id="L393">        report.paragraph(&quot;Added subproject **&quot; + subproject + &quot;**&quot;);</span>
+<span class="nc" id="L394">        report.table(List.of(&quot;Field&quot;, &quot;Value&quot;), List.of(</span>
+                new String[]{&quot;Repo&quot;, repo},
+                new String[]{&quot;Cloned&quot;,
+<span class="nc bnc" id="L397" title="All 2 branches missed.">                        cloned ? &quot;yes&quot;</span>
+<span class="nc" id="L398">                               : &quot;no — run &quot; + WsGoal.SCAFFOLD_INIT.qualified()}));</span>
+<span class="nc" id="L399">        WorkspaceReportSpec spec = new WorkspaceReportSpec(WsGoal.ADD,</span>
+<span class="nc" id="L400">                report.build());</span>
+
+<span class="nc" id="L402">        PostMutationSync.refresh(workspaceRoot(), getLog());</span>
+<span class="nc" id="L403">        return spec;</span>
+    }
+
+    // ── Feature-branch version qualification (#574) ──────────────
+
+    /**
+     * On a feature branch, branch-qualify the added subproject's version
+     * and rewrite its POM so it is isolated like the rest of the
+     * workspace (IKE-Network/ike-issues#574). No-op on {@code main} and
+     * when already qualified ({@link VersionSupport#branchQualifiedVersion}
+     * is idempotent). {@code scaffold-publish}'s
+     * {@code FeatureVersionReconciler} self-heals if this is skipped, so
+     * the caller treats a rewrite failure as non-fatal. Package-private
+     * for tests.
+     *
+     * @param subprojectDir the cloned subproject directory
+     * @param version       the version about to be recorded (may be null)
+     * @param branch        the branch the subproject will track
+     * @return the version to record — branch-qualified on a feature branch
+     * @throws IOException if the subproject POM cannot be rewritten
+     */
+    static String qualifyForBranch(Path subprojectDir, String version,
+                                   String branch) throws IOException {
+<span class="pc bpc" id="L426" title="2 of 6 branches missed.">        if (version == null || version.isBlank()</span>
+<span class="pc bpc" id="L427" title="1 of 2 branches missed.">                || branch == null || branch.isBlank()</span>
+<span class="fc bfc" id="L428" title="All 2 branches covered.">                || &quot;main&quot;.equals(branch)) {</span>
+<span class="fc" id="L429">            return version;</span>
+        }
+<span class="fc" id="L431">        String qualified =</span>
+<span class="fc" id="L432">                VersionSupport.branchQualifiedVersion(version, branch);</span>
+<span class="fc bfc" id="L433" title="All 2 branches covered.">        if (!qualified.equals(version)) {</span>
+<span class="fc" id="L434">            Path pom = subprojectDir.resolve(&quot;pom.xml&quot;);</span>
+<span class="pc bpc" id="L435" title="1 of 2 branches missed.">            if (Files.exists(pom)) {</span>
+<span class="fc" id="L436">                FeatureVersionReconciler.rewriteOwnVersion(</span>
+                        pom, version, qualified);
+            }
+        }
+<span class="fc" id="L440">        return qualified;</span>
+    }
+
+    // ── YAML generation ──────────────────────────────────────────
+
+    void appendSubprojectToManifest(Path manifestPath, List&lt;DerivedDep&gt; derivedDeps,
+                                     String detectedParent)
+            throws IOException {
+<span class="nc" id="L448">        String yaml = Files.readString(manifestPath, StandardCharsets.UTF_8);</span>
+
+<span class="nc" id="L450">        StringBuilder entry = new StringBuilder();</span>
+<span class="nc" id="L451">        entry.append(&quot;\n  &quot;).append(subproject).append(&quot;:\n&quot;);</span>
+<span class="nc" id="L452">        entry.append(&quot;    description: &gt;\n&quot;);</span>
+<span class="nc" id="L453">        entry.append(&quot;      &quot;).append(description).append(&quot;\n&quot;);</span>
+<span class="nc" id="L454">        entry.append(&quot;    repo: &quot;).append(repo).append(&quot;\n&quot;);</span>
+<span class="nc bnc" id="L455" title="All 4 branches missed.">        if (branch != null &amp;&amp; !branch.isBlank()) {</span>
+<span class="nc" id="L456">            entry.append(&quot;    branch: &quot;).append(branch).append(&quot;\n&quot;);</span>
+        }
+<span class="nc bnc" id="L458" title="All 4 branches missed.">        if (version != null &amp;&amp; !version.isBlank()) {</span>
+<span class="nc" id="L459">            entry.append(&quot;    version: \&quot;&quot;).append(version).append(&quot;\&quot;\n&quot;);</span>
+        }
+<span class="nc bnc" id="L461" title="All 4 branches missed.">        if (groupId != null &amp;&amp; !groupId.isBlank()) {</span>
+<span class="nc" id="L462">            entry.append(&quot;    groupId: &quot;).append(groupId).append(&quot;\n&quot;);</span>
+        }
+<span class="nc bnc" id="L464" title="All 2 branches missed.">        if (detectedParent != null) {</span>
+<span class="nc" id="L465">            entry.append(&quot;    parent: &quot;).append(detectedParent).append(&quot;\n&quot;);</span>
+        }
+<span class="nc bnc" id="L467" title="All 4 branches missed.">        if (derivedDeps != null &amp;&amp; !derivedDeps.isEmpty()) {</span>
+<span class="nc" id="L468">            entry.append(&quot;    depends-on:\n&quot;);</span>
+<span class="nc bnc" id="L469" title="All 2 branches missed.">            for (DerivedDep dep : derivedDeps) {</span>
+<span class="nc" id="L470">                entry.append(&quot;      - subproject: &quot;).append(dep.subproject()).append(&quot;\n&quot;);</span>
+<span class="nc" id="L471">                entry.append(&quot;        relationship: build\n&quot;);</span>
+<span class="nc bnc" id="L472" title="All 2 branches missed.">                if (dep.versionProperty() != null) {</span>
+<span class="nc" id="L473">                    entry.append(&quot;        version-property: &quot;).append(dep.versionProperty()).append(&quot;\n&quot;);</span>
+                }
+<span class="nc" id="L475">            }</span>
+        } else {
+<span class="nc" id="L477">            entry.append(&quot;    depends-on: []\n&quot;);</span>
+        }
+
+        // Insert at the end of the subprojects: block, before any
+        // trailing top-level constructs (e.g. the `# ide:` template
+        // comment, or a future `ide:` key). #240
+<span class="nc" id="L483">        int insertAt = findSubprojectsBlockInsertionPoint(yaml);</span>
+<span class="nc bnc" id="L484" title="All 2 branches missed.">        if (insertAt &lt; 0) {</span>
+            // No subprojects: key found — append at EOF as fallback.
+<span class="nc" id="L486">            yaml = yaml + entry;</span>
+        } else {
+<span class="nc" id="L488">            yaml = yaml.substring(0, insertAt) + entry + yaml.substring(insertAt);</span>
+        }
+
+<span class="nc" id="L491">        Files.writeString(manifestPath, yaml, StandardCharsets.UTF_8);</span>
+<span class="nc" id="L492">    }</span>
+
+    /**
+     * Locate the position inside {@code workspace.yaml} where a new
+     * subproject entry should be inserted. The entry belongs at the
+     * end of the {@code subprojects:} block — after any existing
+     * subproject entries (and the placeholder comment) — and before
+     * any subsequent top-level construct such as a comment block or
+     * a sibling top-level key (e.g. {@code ide:}).
+     *
+     * &lt;p&gt;Operationally: find the {@code subprojects:} line, scan
+     * forward through indented and blank lines (which belong to the
+     * block), and stop at the first column-0 non-blank line. The
+     * insertion point is the byte offset right after the last
+     * non-blank line of the block.
+     *
+     * @param yaml the current manifest text
+     * @return offset to insert before, or {@code -1} if no
+     *         {@code subprojects:} key was found
+     */
+    static int findSubprojectsBlockInsertionPoint(String yaml) {
+        // Locate the subprojects: line.
+<span class="fc" id="L514">        int subprojectsLineStart = -1;</span>
+<span class="fc" id="L515">        int pos = 0;</span>
+<span class="fc bfc" id="L516" title="All 2 branches covered.">        while (pos &lt; yaml.length()) {</span>
+<span class="fc" id="L517">            int eol = yaml.indexOf('\n', pos);</span>
+<span class="pc bpc" id="L518" title="1 of 2 branches missed.">            if (eol &lt; 0) eol = yaml.length();</span>
+<span class="fc" id="L519">            String line = yaml.substring(pos, eol);</span>
+<span class="fc bfc" id="L520" title="All 2 branches covered.">            if (line.startsWith(&quot;subprojects:&quot;)) {</span>
+<span class="fc" id="L521">                subprojectsLineStart = pos;</span>
+<span class="pc bpc" id="L522" title="1 of 2 branches missed.">                pos = (eol &lt; yaml.length()) ? eol + 1 : eol;</span>
+<span class="fc" id="L523">                break;</span>
+            }
+<span class="pc bpc" id="L525" title="1 of 2 branches missed.">            pos = (eol &lt; yaml.length()) ? eol + 1 : eol;</span>
+<span class="fc" id="L526">        }</span>
+<span class="fc bfc" id="L527" title="All 2 branches covered.">        if (subprojectsLineStart &lt; 0) return -1;</span>
+
+        // Walk forward: indented and blank lines belong to the block;
+        // a column-0 non-blank line ends it. Track the end-offset of
+        // the last non-blank line so the insertion point is just after it.
+<span class="fc" id="L532">        int lastNonBlankEnd = pos;</span>
+<span class="fc bfc" id="L533" title="All 2 branches covered.">        while (pos &lt; yaml.length()) {</span>
+<span class="fc" id="L534">            int eol = yaml.indexOf('\n', pos);</span>
+<span class="pc bpc" id="L535" title="1 of 2 branches missed.">            boolean hasNewline = eol &gt;= 0;</span>
+<span class="pc bpc" id="L536" title="1 of 2 branches missed.">            if (eol &lt; 0) eol = yaml.length();</span>
+<span class="fc" id="L537">            String line = yaml.substring(pos, eol);</span>
+<span class="pc bpc" id="L538" title="1 of 2 branches missed.">            int nextStart = hasNewline ? eol + 1 : eol;</span>
+
+<span class="fc bfc" id="L540" title="All 2 branches covered.">            if (line.isBlank()) {</span>
+                // Could be inside the block or trailing — keep scanning.
+<span class="fc bfc" id="L542" title="All 2 branches covered.">            } else if (!Character.isWhitespace(line.charAt(0))) {</span>
+                // Reached the next top-level construct — stop.
+<span class="fc" id="L544">                return lastNonBlankEnd;</span>
+            } else {
+                // Indented content line — extend the block.
+<span class="fc" id="L547">                lastNonBlankEnd = nextStart;</span>
+            }
+<span class="fc" id="L549">            pos = nextStart;</span>
+<span class="pc bpc" id="L550" title="1 of 2 branches missed.">            if (!hasNewline) break;</span>
+<span class="fc" id="L551">        }</span>
+
+        // Hit EOF before another top-level construct.
+<span class="fc" id="L554">        return lastNonBlankEnd;</span>
+    }
+
+    /**
+     * Update the depends-on section for an existing subproject in
+     * workspace.yaml. Replaces the current depends-on block with
+     * the newly derived dependencies.
+     */
+    static void updateSubprojectDependencies(Path manifestPath, String subprojectName,
+                                             List&lt;DerivedDep&gt; derivedDeps) throws IOException {
+<span class="nc" id="L564">        String yaml = Files.readString(manifestPath, StandardCharsets.UTF_8);</span>
+<span class="nc" id="L565">        String updated = rewriteDependsOnBlock(yaml, subprojectName, derivedDeps);</span>
+<span class="nc bnc" id="L566" title="All 2 branches missed.">        if (!updated.equals(yaml)) {</span>
+<span class="nc" id="L567">            Files.writeString(manifestPath, updated, StandardCharsets.UTF_8);</span>
+        }
+<span class="nc" id="L569">    }</span>
+
+    /**
+     * Pure-string variant of {@link #updateSubprojectDependencies}: takes
+     * the current YAML and returns a new string with the named
+     * subproject's {@code depends-on} block replaced. Returns the input
+     * unchanged when the subproject is not present in the YAML.
+     */
+    static String rewriteDependsOnBlock(String yaml, String subprojectName,
+                                        List&lt;DerivedDep&gt; derivedDeps) {
+        // Build the new depends-on block
+<span class="fc" id="L580">        StringBuilder newDeps = new StringBuilder();</span>
+<span class="pc bpc" id="L581" title="1 of 4 branches missed.">        if (derivedDeps != null &amp;&amp; !derivedDeps.isEmpty()) {</span>
+<span class="fc" id="L582">            newDeps.append(&quot;    depends-on:\n&quot;);</span>
+<span class="fc bfc" id="L583" title="All 2 branches covered.">            for (DerivedDep dep : derivedDeps) {</span>
+<span class="fc" id="L584">                newDeps.append(&quot;      - subproject: &quot;).append(dep.subproject()).append(&quot;\n&quot;);</span>
+<span class="fc" id="L585">                newDeps.append(&quot;        relationship: build\n&quot;);</span>
+<span class="pc bpc" id="L586" title="1 of 2 branches missed.">                if (dep.versionProperty() != null) {</span>
+<span class="nc" id="L587">                    newDeps.append(&quot;        version-property: &quot;).append(dep.versionProperty()).append(&quot;\n&quot;);</span>
+                }
+<span class="fc" id="L589">            }</span>
+        } else {
+<span class="fc" id="L591">            newDeps.append(&quot;    depends-on: []\n&quot;);</span>
+        }
+
+        // Replace the existing depends-on block for this subproject.
+        // Match: &quot;    depends-on: []\n&quot; or &quot;    depends-on:\n      - ...\n&quot;
+        // within this subproject's section.
+<span class="fc" id="L597">        String escaped = Pattern.quote(subprojectName);</span>
+<span class="fc" id="L598">        Pattern depsPattern = Pattern.compile(</span>
+                &quot;(&quot; + escaped + &quot;:[\\s\\S]*?)(    depends-on:.*(?:\\n      .*)*\\n)&quot;,
+                Pattern.MULTILINE);
+<span class="fc" id="L601">        Matcher m = depsPattern.matcher(yaml);</span>
+<span class="pc bpc" id="L602" title="1 of 2 branches missed.">        if (m.find()) {</span>
+<span class="fc" id="L603">            return yaml.substring(0, m.start(2))</span>
+                    + newDeps
+<span class="fc" id="L605">                    + yaml.substring(m.end(2));</span>
+        }
+<span class="nc" id="L607">        return yaml;</span>
+    }
+
+    // ── POM generation ───────────────────────────────────────────
+
+    /**
+     * Add the subproject to the reactor POM's top-level
+     * {@code &lt;subprojects&gt;} block via the OpenRewrite-LST {@link ReactorPom}
+     * editor (no regex on POMs). Idempotent — a no-op when the entry is
+     * already declared. Any residual legacy {@code with-&lt;subproject&gt;}
+     * profile is dropped so {@code ws:add} never re-creates the pattern the
+     * #696 reconciler retires.
+     *
+     * @param pomPath the reactor POM path
+     * @throws IOException if the POM cannot be read or written
+     */
+    void addSubprojectToPom(Path pomPath) throws IOException {
+<span class="nc" id="L624">        String pom = Files.readString(pomPath, StandardCharsets.UTF_8);</span>
+<span class="nc" id="L625">        String updated = pom;</span>
+
+<span class="nc bnc" id="L627" title="All 2 branches missed.">        if (!ReactorPom.listSubprojects(updated).contains(subproject)) {</span>
+<span class="nc" id="L628">            List&lt;String&gt; names = new ArrayList&lt;&gt;(</span>
+<span class="nc" id="L629">                    ReactorPom.listSubprojects(updated));</span>
+<span class="nc" id="L630">            names.add(subproject);</span>
+<span class="nc" id="L631">            updated = ReactorPom.setSubprojects(updated, names);</span>
+        }
+        // Retire any legacy file-activated profile for this subproject.
+<span class="nc" id="L634">        updated = ReactorPom.removeProfile(updated, &quot;with-&quot; + subproject);</span>
+
+<span class="nc bnc" id="L636" title="All 2 branches missed.">        if (updated.equals(pom)) {</span>
+<span class="nc" id="L637">            getLog().info(&quot;  Subproject &quot; + subproject</span>
+                    + &quot; already in &lt;subprojects&gt;&quot;);
+<span class="nc" id="L639">            return;</span>
+        }
+<span class="nc" id="L641">        Files.writeString(pomPath, updated, StandardCharsets.UTF_8);</span>
+<span class="nc" id="L642">    }</span>
+
+    // ── Branch resolution ────────────────────────────────────────
+
+    /**
+     * Resolve the branch that the new subproject should land on.
+     *
+     * &lt;p&gt;Precedence (ike-issues#286):
+     * &lt;ol&gt;
+     *   &lt;li&gt;The workspace repo's current git branch is authoritative.
+     *       If {@code -Dbranch=} was given and disagrees, fail — that's
+     *       a request for heterogeneous branch state, which is not
+     *       supported.&lt;/li&gt;
+     *   &lt;li&gt;If the workspace dir is not a git repo (no {@code .git}),
+     *       use {@code -Dbranch=} if provided.&lt;/li&gt;
+     *   &lt;li&gt;Otherwise, fall back to the manifest's
+     *       {@code defaults.branch}.&lt;/li&gt;
+     * &lt;/ol&gt;
+     *
+     * @param wsDir        the workspace root directory
+     * @param manifestPath path to workspace.yaml
+     * @return the resolved branch name; never null or blank
+     * @throws MojoException if {@code -Dbranch} disagrees with the
+     *                       workspace repo's current branch, or if no
+     *                       branch can be resolved at all
+     */
+    private String resolveBranch(Path wsDir, Path manifestPath) throws MojoException {
+<span class="pc bpc" id="L669" title="1 of 4 branches missed.">        String requested = (branch != null &amp;&amp; !branch.isBlank()) ? branch : null;</span>
+<span class="fc" id="L670">        String wsBranch = workspaceHeadBranch(wsDir);</span>
+
+<span class="fc bfc" id="L672" title="All 2 branches covered.">        if (wsBranch != null) {</span>
+<span class="fc bfc" id="L673" title="All 4 branches covered.">            if (requested != null &amp;&amp; !requested.equals(wsBranch)) {</span>
+<span class="fc" id="L674">                throw new MojoException(</span>
+                        &quot;Requested branch '&quot; + requested + &quot;' disagrees with the &quot;
+                                + &quot;workspace repo's current branch '&quot; + wsBranch + &quot;'. &quot;
+                                + &quot;All subprojects in a workspace must track the same &quot;
+                                + &quot;branch (ike-issues#286). Either run on the matching &quot;
+                                + &quot;branch in the workspace repo, or omit -Dbranch= to &quot;
+                                + &quot;use the workspace's current branch.&quot;);
+            }
+<span class="fc" id="L682">            return wsBranch;</span>
+        }
+
+<span class="fc bfc" id="L685" title="All 2 branches covered.">        if (requested != null) return requested;</span>
+
+        // No workspace git state, no -Dbranch — fall back to defaults.branch.
+        try {
+<span class="fc" id="L689">            String def = ManifestReader.read(manifestPath).defaults().branch();</span>
+<span class="pc bpc" id="L690" title="2 of 4 branches missed.">            if (def != null &amp;&amp; !def.isBlank()) return def;</span>
+<span class="nc" id="L691">        } catch (ManifestException e) {</span>
+            // fall through to error below
+<span class="nc" id="L693">        }</span>
+<span class="nc" id="L694">        throw new MojoException(</span>
+                &quot;Cannot resolve a branch for the new subproject: workspace repo &quot;
+                        + &quot;has no git state, no -Dbranch was given, and &quot;
+                        + &quot;defaults.branch is unset in workspace.yaml.&quot;);
+    }
+
+    /**
+     * Read the workspace repo's current branch, or null if the workspace
+     * directory is not a git repository.
+     */
+    private static String workspaceHeadBranch(Path wsDir) {
+<span class="fc bfc" id="L705" title="All 2 branches covered.">        if (!Files.isDirectory(wsDir.resolve(&quot;.git&quot;))) return null;</span>
+        try {
+<span class="fc" id="L707">            String b = VcsOperations.currentBranch(wsDir.toFile());</span>
+<span class="pc bpc" id="L708" title="2 of 4 branches missed.">            return (b == null || b.isBlank()) ? null : b;</span>
+<span class="nc" id="L709">        } catch (MojoException e) {</span>
+<span class="nc" id="L710">            return null;</span>
+        }
+    }
+
+    // ── Clone ────────────────────────────────────────────────────
+
+    /**
+     * Clone the subproject onto the resolved workspace branch.
+     *
+     * &lt;p&gt;If the remote already has the branch, clones with {@code -b}.
+     * If the branch is absent on the remote, clones the remote's default
+     * branch and creates the workspace branch locally — mirroring what
+     * {@code ws:feature-start-publish} would have done if this subproject
+     * had been a workspace member at the time. The new branch is left
+     * unpushed; a subsequent {@code ws:push} promotes it to origin
+     * alongside the workspace.yaml change.
+     */
+    private void cloneSubproject(Path wsDir) throws MojoException {
+<span class="nc" id="L728">        boolean remoteHasBranch = remoteHasBranch(wsDir, repo, branch);</span>
+
+<span class="nc" id="L730">        List&lt;String&gt; cmd = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L731">        cmd.add(&quot;git&quot;);</span>
+<span class="nc" id="L732">        cmd.add(&quot;clone&quot;);</span>
+<span class="nc" id="L733">        cmd.add(&quot;--depth&quot;);</span>
+<span class="nc" id="L734">        cmd.add(&quot;1&quot;);</span>
+<span class="nc bnc" id="L735" title="All 2 branches missed.">        if (remoteHasBranch) {</span>
+<span class="nc" id="L736">            cmd.add(&quot;-b&quot;);</span>
+<span class="nc" id="L737">            cmd.add(branch);</span>
+        }
+<span class="nc" id="L739">        cmd.add(repo);</span>
+<span class="nc" id="L740">        cmd.add(subproject);</span>
+<span class="nc" id="L741">        ReleaseSupport.exec(wsDir.toFile(), getLog(), cmd.toArray(new String[0]));</span>
+
+<span class="nc bnc" id="L743" title="All 2 branches missed.">        if (!remoteHasBranch) {</span>
+<span class="nc" id="L744">            getLog().info(&quot;  Remote has no branch '&quot; + branch</span>
+                    + &quot;' — creating it locally from the remote's default.&quot;);
+<span class="nc" id="L746">            ReleaseSupport.exec(wsDir.resolve(subproject).toFile(), getLog(),</span>
+                    &quot;git&quot;, &quot;checkout&quot;, &quot;-b&quot;, branch);
+        }
+<span class="nc" id="L749">    }</span>
+
+    /**
+     * Probe whether {@code refs/heads/&lt;branch&gt;} exists on the given remote
+     * URL via {@code git ls-remote --heads}. Returns false on any failure
+     * (offline, auth, unknown repo) — the caller will surface the real
+     * error from the subsequent {@code git clone} attempt.
+     */
+    private static boolean remoteHasBranch(Path wsDir, String repoUrl, String branch) {
+        try {
+<span class="nc" id="L759">            ProcessBuilder pb = new ProcessBuilder(</span>
+                    &quot;git&quot;, &quot;ls-remote&quot;, &quot;--heads&quot;, repoUrl, branch)
+<span class="nc" id="L761">                    .directory(wsDir.toFile())</span>
+<span class="nc" id="L762">                    .redirectErrorStream(false);</span>
+<span class="nc" id="L763">            Process proc = pb.start();</span>
+<span class="nc" id="L764">            String stdout = new String(proc.getInputStream().readAllBytes(),</span>
+<span class="nc" id="L765">                    StandardCharsets.UTF_8).trim();</span>
+<span class="nc" id="L766">            int exit = proc.waitFor();</span>
+<span class="nc bnc" id="L767" title="All 4 branches missed.">            return exit == 0 &amp;&amp; !stdout.isEmpty();</span>
+<span class="nc" id="L768">        } catch (IOException | InterruptedException e) {</span>
+<span class="nc bnc" id="L769" title="All 2 branches missed.">            if (e instanceof InterruptedException) {</span>
+<span class="nc" id="L770">                Thread.currentThread().interrupt();</span>
+            }
+<span class="nc" id="L772">            return false;</span>
+        }
+    }
+
+    // ── POM-based dependency derivation ────────────────────────
+
+    /**
+     * Derive dependencies by scanning the new subproject's POMs for
+     * referenced {@code groupId:artifactId} pairs and matching them
+     * against the published artifact sets of already-registered
+     * workspace subprojects.
+     *
+     * &lt;p&gt;This is artifact-level matching, not groupId-level — it
+     * correctly handles subprojects that share a groupId (e.g.,
+     * tinkar-core and tinkar-composer both use {@code dev.ikm.tinkar}).
+     */
+    static List&lt;DerivedDep&gt; deriveDependencies(Path wsDir, Path manifestPath,
+                                                Path subprojectDir, String subprojectName)
+            throws IOException {
+        // Collect all groupId:artifactId pairs referenced by this subproject
+<span class="fc" id="L792">        Set&lt;String&gt; referencedArtifacts = extractReferencedArtifacts(</span>
+<span class="fc" id="L793">                subprojectDir.resolve(&quot;pom.xml&quot;));</span>
+<span class="fc bfc" id="L794" title="All 2 branches covered.">        if (referencedArtifacts.isEmpty()) return null;</span>
+
+        // Read the new subproject's &lt;properties&gt; for version-property detection
+        Map&lt;String, String&gt; newSubProperties;
+        try {
+<span class="fc" id="L799">            DocumentBuilder db = DBF.newDocumentBuilder();</span>
+<span class="fc" id="L800">            Document doc = db.parse(subprojectDir.resolve(&quot;pom.xml&quot;).toFile());</span>
+<span class="fc" id="L801">            newSubProperties = readProperties(doc.getDocumentElement());</span>
+<span class="nc" id="L802">        } catch (Exception e) {</span>
+<span class="nc" id="L803">            newSubProperties = Map.of();</span>
+<span class="fc" id="L804">        }</span>
+
+<span class="fc" id="L806">        Manifest manifest = ManifestReader.read(manifestPath);</span>
+<span class="fc" id="L807">        SubprojectResolver resolver = SubprojectResolver.scan(wsDir, manifest);</span>
+
+        // Map each referenced coordinate to the subproject that PRODUCES
+        // it (full groupId+artifactId; external coordinates resolve to
+        // empty and are skipped). Dedupe by producer, then emit in
+        // manifest order to keep derived-dependency ordering stable.
+<span class="fc" id="L813">        Map&lt;String, String&gt; versionPropertyByProducer = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc bfc" id="L814" title="All 2 branches covered.">        for (String coord : referencedArtifacts) {</span>
+<span class="fc" id="L815">            int colon = coord.indexOf(':');</span>
+<span class="pc bpc" id="L816" title="1 of 2 branches missed.">            if (colon &lt; 0) continue;</span>
+<span class="fc" id="L817">            Optional&lt;String&gt; producer = resolver.subprojectForCoordinate(</span>
+<span class="fc" id="L818">                    coord.substring(0, colon), coord.substring(colon + 1));</span>
+<span class="fc bfc" id="L819" title="All 2 branches covered.">            if (producer.isEmpty()) continue;                   // external</span>
+<span class="fc" id="L820">            String producerName = producer.get();</span>
+<span class="fc bfc" id="L821" title="All 2 branches covered.">            if (producerName.equals(subprojectName)) continue;  // never self</span>
+<span class="pc bpc" id="L822" title="1 of 2 branches missed.">            if (!versionPropertyByProducer.containsKey(producerName)) {</span>
+<span class="fc" id="L823">                versionPropertyByProducer.put(producerName,</span>
+<span class="fc" id="L824">                        detectVersionProperty(</span>
+<span class="fc" id="L825">                                manifest.subprojects().get(producerName),</span>
+                                newSubProperties));
+            }
+<span class="fc" id="L828">        }</span>
+
+<span class="fc" id="L830">        List&lt;DerivedDep&gt; matched = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L831" title="All 2 branches covered.">        for (String name : manifest.subprojects().keySet()) {</span>
+<span class="fc bfc" id="L832" title="All 2 branches covered.">            if (versionPropertyByProducer.containsKey(name)) {</span>
+<span class="fc" id="L833">                matched.add(new DerivedDep(</span>
+<span class="fc" id="L834">                        name, versionPropertyByProducer.get(name)));</span>
+            }
+<span class="fc" id="L836">        }</span>
+<span class="fc bfc" id="L837" title="All 2 branches covered.">        return matched.isEmpty() ? null : matched;</span>
+    }
+
+    /**
+     * Find a property declared in the newly added subproject whose value
+     * equals the producer subproject's version — the
+     * {@code version-property} hint recorded on a derived
+     * {@code depends-on} edge so {@code ws:align} can track the upstream
+     * version through a {@code ${...}} property. Returns null when the
+     * producer has no known version or no matching property exists.
+     *
+     * @param producer        the upstream (depended-on) subproject, or null
+     * @param newSubProperties the new subproject's {@code &lt;properties&gt;}
+     * @return the matching property name, or null
+     */
+    private static String detectVersionProperty(Subproject producer,
+                                                Map&lt;String, String&gt; newSubProperties) {
+<span class="pc bpc" id="L854" title="1 of 2 branches missed.">        if (producer == null) return null;</span>
+<span class="fc" id="L855">        String upstreamVersion = producer.version();</span>
+<span class="pc bpc" id="L856" title="1 of 4 branches missed.">        if (upstreamVersion == null || newSubProperties.isEmpty()) return null;</span>
+<span class="nc bnc" id="L857" title="All 2 branches missed.">        for (Map.Entry&lt;String, String&gt; prop : newSubProperties.entrySet()) {</span>
+<span class="nc bnc" id="L858" title="All 2 branches missed.">            if (upstreamVersion.equals(prop.getValue())) {</span>
+<span class="nc" id="L859">                return prop.getKey();</span>
+            }
+<span class="nc" id="L861">        }</span>
+<span class="nc" id="L862">        return null;</span>
+    }
+
+    /**
+     * Determine whether a new subproject's declared Maven {@code &lt;parent&gt;}
+     * is itself a workspace subproject, returning that subproject's name
+     * (its {@code workspace.yaml} key) for the {@code parent:} field.
+     *
+     * &lt;p&gt;Matching requires the parent's &lt;strong&gt;groupId AND
+     * artifactId&lt;/strong&gt; to match a workspace subproject's published
+     * artifact set. groupId alone is insufficient: an external parent
+     * such as {@code network.ike.platform:ike-parent} that merely shares
+     * a groupId with a sibling subproject must be treated as having no
+     * workspace parent, so no bogus {@code parent:} is recorded
+     * (ike-issues#565). This mirrors the artifact-level matching used by
+     * {@link #deriveDependencies} and the GA-matching rule the
+     * {@code ws:align} reconcilers apply (issue #241).
+     *
+     * @param wsDir        the workspace root directory
+     * @param manifestPath path to {@code workspace.yaml}
+     * @param parentInfo   the new subproject's declared parent, or null
+     *                     when the POM has no {@code &lt;parent&gt;} block
+     * @return the workspace subproject name whose published artifact set
+     *         contains the parent's {@code groupId:artifactId}, or null
+     *         when the parent is external / not a workspace member
+     * @throws IOException       if a candidate subproject's POM cannot be read
+     * @throws ManifestException if the manifest cannot be parsed
+     */
+    static String detectWorkspaceParent(Path wsDir, Path manifestPath,
+                                        PomParentSupport.ParentInfo parentInfo)
+            throws IOException, ManifestException {
+<span class="fc bfc" id="L893" title="All 2 branches covered.">        if (parentInfo == null) {</span>
+<span class="fc" id="L894">            return null;</span>
+        }
+<span class="fc" id="L896">        Manifest manifest = ManifestReader.read(manifestPath);</span>
+<span class="fc" id="L897">        return SubprojectResolver.scan(wsDir, manifest)</span>
+<span class="fc" id="L898">                .subprojectForCoordinate(</span>
+<span class="fc" id="L899">                        parentInfo.groupId(), parentInfo.artifactId())</span>
+<span class="fc" id="L900">                .orElse(null);</span>
+    }
+
+    /**
+     * Backward resolution: for each existing cloned subproject, check
+     * whether its POMs reference any artifact published by the newly
+     * added subproject. Uses artifact-level matching via
+     * {@link PublishedArtifactSet} to avoid false positives from
+     * shared groupIds.
+     */
+    private int backfillDependencies(Path wsDir, Path manifestPath,
+                                     String newSubproject, Path newSubprojectDir)
+            throws IOException {
+<span class="nc" id="L913">        String yaml = Files.readString(manifestPath, StandardCharsets.UTF_8);</span>
+<span class="nc" id="L914">        Manifest manifest = ManifestReader.read(manifestPath);</span>
+        // The new subproject is already registered by the time backfill
+        // runs, so the shared resolver maps its published coordinates
+        // back to it (full GA — no false positives from shared groupIds).
+<span class="nc" id="L918">        SubprojectResolver resolver = SubprojectResolver.scan(wsDir, manifest);</span>
+<span class="nc" id="L919">        int updated = 0;</span>
+
+<span class="nc bnc" id="L921" title="All 2 branches missed.">        for (Map.Entry&lt;String, Subproject&gt; entry : manifest.subprojects().entrySet()) {</span>
+<span class="nc" id="L922">            String existingName = entry.getKey();</span>
+<span class="nc" id="L923">            Subproject existing = entry.getValue();</span>
+
+            // Skip the newly added subproject itself
+<span class="nc bnc" id="L926" title="All 2 branches missed.">            if (existingName.equals(newSubproject)) continue;</span>
+
+            // Skip if already depends on the new subproject
+<span class="nc bnc" id="L929" title="All 2 branches missed.">            if (existing.dependsOn() != null</span>
+<span class="nc" id="L930">                    &amp;&amp; existing.dependsOn().stream()</span>
+<span class="nc bnc" id="L931" title="All 2 branches missed.">                    .anyMatch(d -&gt; newSubproject.equals(d.subproject()))) {</span>
+<span class="nc" id="L932">                continue;</span>
+            }
+
+            // Check if this existing subproject references any artifact
+            // produced by the new subproject (full GA via the resolver).
+<span class="nc" id="L937">            Path existingPom = wsDir.resolve(existingName).resolve(&quot;pom.xml&quot;);</span>
+<span class="nc bnc" id="L938" title="All 2 branches missed.">            if (!Files.exists(existingPom)) continue;</span>
+
+<span class="nc" id="L940">            boolean dependsOnNew = extractReferencedArtifacts(existingPom).stream()</span>
+<span class="nc" id="L941">                    .anyMatch(coord -&gt; resolvesTo(resolver, coord, newSubproject));</span>
+<span class="nc bnc" id="L942" title="All 2 branches missed.">            if (!dependsOnNew) continue;</span>
+
+<span class="nc" id="L944">            yaml = addDependencyEdge(yaml, existingName, newSubproject, null);</span>
+<span class="nc" id="L945">            updated++;</span>
+<span class="nc" id="L946">            getLog().info(Ansi.cyan(&quot;  → &quot;) + existingName + &quot; depends on &quot; + newSubproject);</span>
+<span class="nc" id="L947">        }</span>
+
+<span class="nc bnc" id="L949" title="All 2 branches missed.">        if (updated &gt; 0) {</span>
+<span class="nc" id="L950">            Files.writeString(manifestPath, yaml, StandardCharsets.UTF_8);</span>
+        }
+
+<span class="nc" id="L953">        return updated;</span>
+    }
+
+    /**
+     * Whether a {@code &quot;groupId:artifactId&quot;} coordinate resolves (full
+     * GA) to the named subproject via the shared resolver.
+     */
+    private static boolean resolvesTo(SubprojectResolver resolver,
+                                      String coord, String subprojectName) {
+<span class="nc" id="L962">        int colon = coord.indexOf(':');</span>
+<span class="nc bnc" id="L963" title="All 2 branches missed.">        if (colon &lt; 0) return false;</span>
+<span class="nc" id="L964">        return resolver.subprojectForCoordinate(</span>
+<span class="nc" id="L965">                coord.substring(0, colon), coord.substring(colon + 1))</span>
+<span class="nc" id="L966">                .map(subprojectName::equals).orElse(false);</span>
+    }
+
+    /**
+     * Add a depends-on edge for an existing subproject in workspace.yaml.
+     * Converts {@code depends-on: []} to a populated list, or appends
+     * to an existing list.
+     */
+    static String addDependencyEdge(String yaml, String subprojectName,
+                                    String dependsOnName, String versionProperty) {
+<span class="pc bpc" id="L976" title="1 of 2 branches missed.">        String versionPropertyLine = (versionProperty != null)</span>
+<span class="pc" id="L977">                ? &quot;        version-property: &quot; + versionProperty + &quot;\n&quot; : &quot;&quot;;</span>
+
+        // Case 1: depends-on: [] — replace with populated entry
+<span class="fc" id="L980">        String emptyDeps = &quot;(&quot; + subprojectName + &quot;:[\\s\\S]*?)(depends-on:\\s*\\[])&quot;;</span>
+<span class="fc" id="L981">        Pattern emptyPattern = Pattern.compile(emptyDeps);</span>
+<span class="fc" id="L982">        Matcher emptyMatcher = emptyPattern.matcher(yaml);</span>
+<span class="fc bfc" id="L983" title="All 2 branches covered.">        if (emptyMatcher.find()) {</span>
+<span class="fc" id="L984">            String replacement = emptyMatcher.group(1)</span>
+                    + &quot;depends-on:\n&quot;
+                    + &quot;      - subproject: &quot; + dependsOnName + &quot;\n&quot;
+                    + &quot;        relationship: build\n&quot;
+                    + versionPropertyLine;
+<span class="fc" id="L989">            return emptyMatcher.replaceFirst(Matcher.quoteReplacement(replacement));</span>
+        }
+
+        // Case 2: existing depends-on list — append before next subproject
+        // or section. Find the subproject's depends-on block and add an entry.
+<span class="fc" id="L994">        String existingDeps = &quot;(&quot; + subprojectName</span>
+                + &quot;:[\\s\\S]*?depends-on:\\n)((?:\\s+- subproject:.*\\n(?:\\s+relationship:.*\\n)(?:\\s+version-property:.*\\n)?)*)&quot;;
+<span class="fc" id="L996">        Pattern existingPattern = Pattern.compile(existingDeps);</span>
+<span class="fc" id="L997">        Matcher existingMatcher = existingPattern.matcher(yaml);</span>
+<span class="pc bpc" id="L998" title="1 of 2 branches missed.">        if (existingMatcher.find()) {</span>
+<span class="fc" id="L999">            String replacement = existingMatcher.group(1)</span>
+<span class="fc" id="L1000">                    + existingMatcher.group(2)</span>
+                    + &quot;      - subproject: &quot; + dependsOnName + &quot;\n&quot;
+                    + &quot;        relationship: build\n&quot;
+                    + versionPropertyLine;
+<span class="fc" id="L1004">            return existingMatcher.replaceFirst(Matcher.quoteReplacement(replacement));</span>
+        }
+
+<span class="nc" id="L1007">        return yaml;</span>
+    }
+
+    /**
+     * Extract all {@code groupId:artifactId} pairs referenced as
+     * build dependencies across the entire subproject (root POM +
+     * all submodules/subprojects).
+     *
+     * &lt;p&gt;Uses DOM parsing to correctly read XML structure and
+     * resolves Maven property references ({@code ${property.name}})
+     * from the POM's {@code &lt;properties&gt;} section.
+     *
+     * &lt;p&gt;Scans {@code &lt;parent&gt;}, {@code &lt;dependencies&gt;}, BOM imports
+     * inside {@code &lt;dependencyManagement&gt;} (entries with both
+     * {@code &lt;scope&gt;import&lt;/scope&gt;} and {@code &lt;type&gt;pom&lt;/type&gt;}), and
+     * build {@code &lt;plugins&gt;} (including {@code &lt;pluginManagement&gt;}).
+     * Profile-scoped versions of these are scanned as well, since any
+     * profile activation makes those dependencies real. Plain
+     * version-constraint entries inside {@code &lt;dependencyManagement&gt;}
+     * are excluded — they aren't build edges by themselves. (#239)
+     *
+     * @return set of &quot;groupId:artifactId&quot; strings
+     */
+    static Set&lt;String&gt; extractReferencedArtifacts(Path pomFile) throws IOException {
+<span class="fc" id="L1031">        Set&lt;String&gt; artifacts = new LinkedHashSet&lt;&gt;();</span>
+<span class="fc" id="L1032">        scanPomForArtifacts(pomFile, artifacts);</span>
+<span class="fc" id="L1033">        return artifacts;</span>
+    }
+
+    /**
+     * Recursively scan a POM and its submodules for referenced
+     * groupId:artifactId pairs using DOM parsing with property
+     * resolution.
+     */
+    static void scanPomForArtifacts(Path pomFile, Set&lt;String&gt; artifacts)
+            throws IOException {
+<span class="pc bpc" id="L1043" title="1 of 2 branches missed.">        if (!Files.exists(pomFile)) return;</span>
+
+        Document doc;
+        try {
+<span class="fc" id="L1047">            DocumentBuilder db = DBF.newDocumentBuilder();</span>
+<span class="fc" id="L1048">            doc = db.parse(pomFile.toFile());</span>
+<span class="nc" id="L1049">        } catch (Exception e) {</span>
+            // If we can't parse, skip this POM
+<span class="nc" id="L1051">            return;</span>
+<span class="fc" id="L1052">        }</span>
+
+<span class="fc" id="L1054">        Element project = doc.getDocumentElement();</span>
+
+        // Read &lt;properties&gt; for ${...} resolution
+<span class="fc" id="L1057">        Map&lt;String, String&gt; properties = readProperties(project);</span>
+
+        // Scan the project root for parent/deps/BOMs/plugins.
+<span class="fc" id="L1060">        collectArtifactsFromContainer(project, properties, artifacts);</span>
+
+        // Scan each profile body — a profile's deps/plugins become real
+        // when it activates, so they're legitimate build edges.
+<span class="fc" id="L1064">        Element profilesEl = firstChild(project, &quot;profiles&quot;);</span>
+<span class="fc bfc" id="L1065" title="All 2 branches covered.">        if (profilesEl != null) {</span>
+<span class="fc bfc" id="L1066" title="All 2 branches covered.">            for (Element profile : children(profilesEl, &quot;profile&quot;)) {</span>
+<span class="fc" id="L1067">                collectArtifactsFromContainer(profile, properties, artifacts);</span>
+<span class="fc" id="L1068">            }</span>
+        }
+
+        // Recurse into subprojects (Maven 4.1.0) and modules (Maven 4.0.0)
+<span class="fc" id="L1072">        Path pomDir = pomFile.getParent();</span>
+
+<span class="fc" id="L1074">        Element subprojects = firstChild(project, &quot;subprojects&quot;);</span>
+<span class="pc bpc" id="L1075" title="1 of 2 branches missed.">        if (subprojects != null) {</span>
+<span class="nc bnc" id="L1076" title="All 2 branches missed.">            for (Element sub : children(subprojects, &quot;subproject&quot;)) {</span>
+<span class="nc" id="L1077">                String name = sub.getTextContent().trim();</span>
+<span class="nc" id="L1078">                scanPomForArtifacts(pomDir.resolve(name).resolve(&quot;pom.xml&quot;), artifacts);</span>
+<span class="nc" id="L1079">            }</span>
+        }
+
+<span class="fc" id="L1082">        Element modules = firstChild(project, &quot;modules&quot;);</span>
+<span class="pc bpc" id="L1083" title="1 of 2 branches missed.">        if (modules != null) {</span>
+<span class="nc bnc" id="L1084" title="All 2 branches missed.">            for (Element mod : children(modules, &quot;module&quot;)) {</span>
+<span class="nc" id="L1085">                String name = mod.getTextContent().trim();</span>
+<span class="nc" id="L1086">                scanPomForArtifacts(pomDir.resolve(name).resolve(&quot;pom.xml&quot;), artifacts);</span>
+<span class="nc" id="L1087">            }</span>
+        }
+<span class="fc" id="L1089">    }</span>
+
+    /**
+     * Pull groupId:artifactId pairs out of a container element — either
+     * a {@code &lt;project&gt;} root or a {@code &lt;profile&gt;} body. Reads:
+     * &lt;ul&gt;
+     *   &lt;li&gt;{@code &lt;parent&gt;}&lt;/li&gt;
+     *   &lt;li&gt;{@code &lt;dependencies&gt;&lt;dependency&gt;}&lt;/li&gt;
+     *   &lt;li&gt;{@code &lt;dependencyManagement&gt;&lt;dependencies&gt;&lt;dependency&gt;} —
+     *       BOM imports only ({@code &lt;scope&gt;import&lt;/scope&gt;} with
+     *       {@code &lt;type&gt;pom&lt;/type&gt;})&lt;/li&gt;
+     *   &lt;li&gt;{@code &lt;build&gt;&lt;plugins&gt;&lt;plugin&gt;}&lt;/li&gt;
+     *   &lt;li&gt;{@code &lt;build&gt;&lt;pluginManagement&gt;&lt;plugins&gt;&lt;plugin&gt;}&lt;/li&gt;
+     * &lt;/ul&gt;
+     *
+     * @param container  the {@code &lt;project&gt;} or {@code &lt;profile&gt;} element
+     * @param properties resolved {@code &lt;properties&gt;} for {@code ${...}} references
+     * @param artifacts  accumulator for discovered &quot;groupId:artifactId&quot; strings
+     */
+    static void collectArtifactsFromContainer(
+            Element container,
+            Map&lt;String, String&gt; properties,
+            Set&lt;String&gt; artifacts) {
+
+        // &lt;parent&gt; — present on project root; profiles don't allow it.
+<span class="fc" id="L1114">        addArtifactCoords(firstChild(container, &quot;parent&quot;), properties, artifacts);</span>
+
+        // Direct build dependencies.
+<span class="fc" id="L1117">        Element depsEl = firstChild(container, &quot;dependencies&quot;);</span>
+<span class="fc bfc" id="L1118" title="All 2 branches covered.">        if (depsEl != null) {</span>
+<span class="fc bfc" id="L1119" title="All 2 branches covered.">            for (Element dep : children(depsEl, &quot;dependency&quot;)) {</span>
+<span class="fc" id="L1120">                addArtifactCoords(dep, properties, artifacts);</span>
+<span class="fc" id="L1121">            }</span>
+        }
+
+        // BOM imports — entries declared with scope=import + type=pom.
+        // Plain version-constraint entries are skipped (they don't bind
+        // anything until something else declares the dep).
+<span class="fc" id="L1127">        Element depMgmt = firstChild(container, &quot;dependencyManagement&quot;);</span>
+<span class="fc bfc" id="L1128" title="All 2 branches covered.">        if (depMgmt != null) {</span>
+<span class="fc" id="L1129">            Element dmDeps = firstChild(depMgmt, &quot;dependencies&quot;);</span>
+<span class="pc bpc" id="L1130" title="1 of 2 branches missed.">            if (dmDeps != null) {</span>
+<span class="fc bfc" id="L1131" title="All 2 branches covered.">                for (Element dep : children(dmDeps, &quot;dependency&quot;)) {</span>
+<span class="fc" id="L1132">                    String scope = resolve(childText(dep, &quot;scope&quot;), properties);</span>
+<span class="fc" id="L1133">                    String type = resolve(childText(dep, &quot;type&quot;), properties);</span>
+<span class="pc bpc" id="L1134" title="1 of 4 branches missed.">                    if (&quot;import&quot;.equals(scope) &amp;&amp; &quot;pom&quot;.equals(type)) {</span>
+<span class="fc" id="L1135">                        addArtifactCoords(dep, properties, artifacts);</span>
+                    }
+<span class="fc" id="L1137">                }</span>
+            }
+        }
+
+        // Build plugins — both top-level &lt;plugins&gt; and &lt;pluginManagement&gt;.
+<span class="fc" id="L1142">        Element build = firstChild(container, &quot;build&quot;);</span>
+<span class="fc bfc" id="L1143" title="All 2 branches covered.">        if (build != null) {</span>
+<span class="fc" id="L1144">            addPluginCoords(firstChild(build, &quot;plugins&quot;), properties, artifacts);</span>
+<span class="fc" id="L1145">            Element pluginMgmt = firstChild(build, &quot;pluginManagement&quot;);</span>
+<span class="pc bpc" id="L1146" title="1 of 2 branches missed.">            if (pluginMgmt != null) {</span>
+<span class="nc" id="L1147">                addPluginCoords(firstChild(pluginMgmt, &quot;plugins&quot;),</span>
+                        properties, artifacts);
+            }
+        }
+<span class="fc" id="L1151">    }</span>
+
+    /**
+     * Add every {@code &lt;plugin&gt;} child of the given {@code &lt;plugins&gt;}
+     * element to the artifact accumulator. No-op if {@code pluginsEl}
+     * is null.
+     *
+     * @param pluginsEl  the {@code &lt;plugins&gt;} element, or null
+     * @param properties resolved {@code &lt;properties&gt;} for property substitution
+     * @param artifacts  accumulator
+     */
+    private static void addPluginCoords(Element pluginsEl,
+                                        Map&lt;String, String&gt; properties,
+                                        Set&lt;String&gt; artifacts) {
+<span class="pc bpc" id="L1165" title="1 of 2 branches missed.">        if (pluginsEl == null) return;</span>
+<span class="fc bfc" id="L1166" title="All 2 branches covered.">        for (Element plugin : children(pluginsEl, &quot;plugin&quot;)) {</span>
+<span class="fc" id="L1167">            addArtifactCoords(plugin, properties, artifacts);</span>
+<span class="fc" id="L1168">        }</span>
+<span class="fc" id="L1169">    }</span>
+
+    /**
+     * Resolve an element's {@code &lt;groupId&gt;}/{@code &lt;artifactId&gt;} pair
+     * (with property substitution) and add it to the accumulator. No-op
+     * if {@code el} is null or either coord is missing.
+     *
+     * @param el         the element with groupId/artifactId children
+     * @param properties resolved {@code &lt;properties&gt;} for property substitution
+     * @param artifacts  accumulator
+     */
+    private static void addArtifactCoords(Element el,
+                                          Map&lt;String, String&gt; properties,
+                                          Set&lt;String&gt; artifacts) {
+<span class="fc bfc" id="L1183" title="All 2 branches covered.">        if (el == null) return;</span>
+<span class="fc" id="L1184">        String gid = resolve(childText(el, &quot;groupId&quot;), properties);</span>
+<span class="fc" id="L1185">        String aid = resolve(childText(el, &quot;artifactId&quot;), properties);</span>
+<span class="pc bpc" id="L1186" title="2 of 4 branches missed.">        if (gid != null &amp;&amp; aid != null) {</span>
+<span class="fc" id="L1187">            artifacts.add(gid + &quot;:&quot; + aid);</span>
+        }
+<span class="fc" id="L1189">    }</span>
+
+    // ── DOM helpers ─────────────────────────────────────────────
+
+    /**
+     * Extract the first match of a regex pattern's first group.
+     * Used by the version alignment code which operates on raw POM text.
+     */
+    private static String extractFirst(Pattern pattern, String text) {
+<span class="nc" id="L1198">        Matcher m = pattern.matcher(text);</span>
+<span class="nc bnc" id="L1199" title="All 2 branches missed.">        return m.find() ? m.group(1).trim() : null;</span>
+    }
+
+    private static final javax.xml.parsers.DocumentBuilderFactory DBF;
+    static {
+<span class="fc" id="L1204">        DBF = javax.xml.parsers.DocumentBuilderFactory.newInstance();</span>
+        try {
+<span class="fc" id="L1206">            DBF.setFeature(&quot;http://apache.org/xml/features/nonvalidating/load-external-dtd&quot;, false);</span>
+<span class="fc" id="L1207">            DBF.setFeature(&quot;http://xml.org/sax/features/external-general-entities&quot;, false);</span>
+<span class="fc" id="L1208">            DBF.setFeature(&quot;http://xml.org/sax/features/external-parameter-entities&quot;, false);</span>
+<span class="nc" id="L1209">        } catch (javax.xml.parsers.ParserConfigurationException e) {</span>
+            // Non-fatal
+<span class="fc" id="L1211">        }</span>
+    }
+
+    /**
+     * Read {@code &lt;properties&gt;} from a POM's project element into
+     * a map for {@code ${...}} resolution.
+     */
+    private static Map&lt;String, String&gt; readProperties(Element project) {
+<span class="fc" id="L1219">        Map&lt;String, String&gt; props = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc" id="L1220">        Element propsEl = firstChild(project, &quot;properties&quot;);</span>
+<span class="pc bpc" id="L1221" title="1 of 2 branches missed.">        if (propsEl != null) {</span>
+<span class="nc" id="L1222">            org.w3c.dom.NodeList children = propsEl.getChildNodes();</span>
+<span class="nc bnc" id="L1223" title="All 2 branches missed.">            for (int i = 0; i &lt; children.getLength(); i++) {</span>
+<span class="nc" id="L1224">                org.w3c.dom.Node node = children.item(i);</span>
+<span class="nc bnc" id="L1225" title="All 2 branches missed.">                if (node.getNodeType() == org.w3c.dom.Node.ELEMENT_NODE) {</span>
+<span class="nc" id="L1226">                    String value = node.getTextContent().trim();</span>
+<span class="nc bnc" id="L1227" title="All 2 branches missed.">                    if (!value.isEmpty()) {</span>
+<span class="nc" id="L1228">                        props.put(node.getNodeName(), value);</span>
+                    }
+                }
+            }
+        }
+<span class="fc" id="L1233">        return props;</span>
+    }
+
+    /**
+     * Resolve {@code ${property.name}} references in a string using
+     * the given property map. Returns the input unchanged if no
+     * property reference is present or if the property is not found.
+     */
+    private static String resolve(String value, Map&lt;String, String&gt; properties) {
+<span class="pc bpc" id="L1242" title="1 of 4 branches missed.">        if (value == null || !value.contains(&quot;${&quot;)) return value;</span>
+<span class="nc bnc" id="L1243" title="All 2 branches missed.">        for (Map.Entry&lt;String, String&gt; entry : properties.entrySet()) {</span>
+<span class="nc" id="L1244">            value = value.replace(&quot;${&quot; + entry.getKey() + &quot;}&quot;, entry.getValue());</span>
+<span class="nc" id="L1245">        }</span>
+        // If still contains unresolved references, return as-is
+<span class="nc" id="L1247">        return value;</span>
+    }
+
+    /**
+     * Get the text content of a direct child element, or null.
+     */
+    private static String childText(Element parent, String tagName) {
+<span class="fc" id="L1254">        Element child = firstChild(parent, tagName);</span>
+<span class="fc bfc" id="L1255" title="All 2 branches covered.">        if (child == null) return null;</span>
+<span class="fc" id="L1256">        String text = child.getTextContent().trim();</span>
+<span class="pc bpc" id="L1257" title="1 of 2 branches missed.">        return text.isEmpty() ? null : text;</span>
+    }
+
+    /**
+     * Get the first direct child element with the given tag name.
+     */
+    private static Element firstChild(Element parent, String tagName) {
+<span class="fc" id="L1264">        org.w3c.dom.NodeList children = parent.getChildNodes();</span>
+<span class="fc bfc" id="L1265" title="All 2 branches covered.">        for (int i = 0; i &lt; children.getLength(); i++) {</span>
+<span class="fc" id="L1266">            org.w3c.dom.Node node = children.item(i);</span>
+<span class="fc bfc" id="L1267" title="All 2 branches covered.">            if (node.getNodeType() == org.w3c.dom.Node.ELEMENT_NODE</span>
+<span class="fc bfc" id="L1268" title="All 2 branches covered.">                    &amp;&amp; tagName.equals(node.getNodeName())) {</span>
+<span class="fc" id="L1269">                return (Element) node;</span>
+            }
+        }
+<span class="fc" id="L1272">        return null;</span>
+    }
+
+    /**
+     * Get all direct child elements with the given tag name.
+     */
+    private static List&lt;Element&gt; children(Element parent, String tagName) {
+<span class="fc" id="L1279">        List&lt;Element&gt; result = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L1280">        org.w3c.dom.NodeList children = parent.getChildNodes();</span>
+<span class="fc bfc" id="L1281" title="All 2 branches covered.">        for (int i = 0; i &lt; children.getLength(); i++) {</span>
+<span class="fc" id="L1282">            org.w3c.dom.Node node = children.item(i);</span>
+<span class="fc bfc" id="L1283" title="All 2 branches covered.">            if (node.getNodeType() == org.w3c.dom.Node.ELEMENT_NODE</span>
+<span class="pc bpc" id="L1284" title="1 of 2 branches missed.">                    &amp;&amp; tagName.equals(node.getNodeName())) {</span>
+<span class="fc" id="L1285">                result.add((Element) node);</span>
+            }
+        }
+<span class="fc" id="L1288">        return result;</span>
+    }
+
+    // ── Version alignment ───────────────────────────────────────
+
+    /**
+     * Align dependency versions in the newly added subproject's POMs
+     * to match workspace SNAPSHOT versions. For each workspace subproject
+     * that this subproject depends on, find explicit version declarations
+     * and update them.
+     *
+     * @return the number of POM files modified
+     */
+    private int alignVersions(Path wsDir, Path subprojectDir,
+                               String subprojectName, Manifest manifest)
+            throws IOException {
+        // Build a map: groupId:artifactId → workspace version
+        // for all workspace subprojects (except the one being added)
+<span class="nc" id="L1306">        Map&lt;String, String&gt; artifactVersions = new LinkedHashMap&lt;&gt;();</span>
+<span class="nc bnc" id="L1307" title="All 2 branches missed.">        for (Map.Entry&lt;String, Subproject&gt; entry : manifest.subprojects().entrySet()) {</span>
+<span class="nc bnc" id="L1308" title="All 2 branches missed.">            if (entry.getKey().equals(subprojectName)) continue;</span>
+<span class="nc" id="L1309">            Subproject sub = entry.getValue();</span>
+<span class="nc bnc" id="L1310" title="All 2 branches missed.">            if (sub.version() == null) continue;</span>
+
+<span class="nc" id="L1312">            Path subDir = wsDir.resolve(entry.getKey());</span>
+<span class="nc bnc" id="L1313" title="All 2 branches missed.">            if (!Files.exists(subDir.resolve(&quot;pom.xml&quot;))) continue;</span>
+
+<span class="nc" id="L1315">            Set&lt;PublishedArtifactSet.Artifact&gt; published =</span>
+<span class="nc" id="L1316">                    PublishedArtifactSet.scan(subDir);</span>
+<span class="nc bnc" id="L1317" title="All 2 branches missed.">            for (PublishedArtifactSet.Artifact artifact : published) {</span>
+<span class="nc" id="L1318">                artifactVersions.put(</span>
+<span class="nc" id="L1319">                        artifact.groupId() + &quot;:&quot; + artifact.artifactId(),</span>
+<span class="nc" id="L1320">                        sub.version());</span>
+<span class="nc" id="L1321">            }</span>
+<span class="nc" id="L1322">        }</span>
+
+<span class="nc bnc" id="L1324" title="All 2 branches missed.">        if (artifactVersions.isEmpty()) return 0;</span>
+
+        // Walk all POM files in the new subproject and update versions
+<span class="nc" id="L1327">        int filesModified = 0;</span>
+<span class="nc" id="L1328">        List&lt;Path&gt; pomFiles = findAllPomFiles(subprojectDir);</span>
+
+<span class="nc bnc" id="L1330" title="All 2 branches missed.">        for (Path pomFile : pomFiles) {</span>
+<span class="nc" id="L1331">            String original = Files.readString(pomFile, StandardCharsets.UTF_8);</span>
+<span class="nc" id="L1332">            String updated = alignDependencyVersions(original, artifactVersions);</span>
+
+<span class="nc bnc" id="L1334" title="All 2 branches missed.">            if (!updated.equals(original)) {</span>
+<span class="nc" id="L1335">                Files.writeString(pomFile, updated, StandardCharsets.UTF_8);</span>
+<span class="nc" id="L1336">                filesModified++;</span>
+                // Log each change
+<span class="nc" id="L1338">                Path relative = subprojectDir.getParent().relativize(pomFile);</span>
+<span class="nc" id="L1339">                getLog().info(&quot;  Version alignment: &quot; + relative);</span>
+            }
+<span class="nc" id="L1341">        }</span>
+
+<span class="nc" id="L1343">        return filesModified;</span>
+    }
+
+    /**
+     * In a POM content string, find {@code &lt;dependency&gt;} blocks that
+     * reference a known workspace artifact and update their
+     * {@code &lt;version&gt;} to the workspace version. Skips dependencies
+     * inside {@code &lt;dependencyManagement&gt;}.
+     */
+    static String alignDependencyVersions(String pom,
+                                            Map&lt;String, String&gt; artifactVersions) {
+        // Strip dependencyManagement to avoid modifying BOM imports
+        // We'll process only dependencies outside of dependencyManagement
+<span class="nc" id="L1356">        StringBuilder result = new StringBuilder();</span>
+<span class="nc" id="L1357">        Matcher dmMatcher = DEP_MGMT_BLOCK.matcher(pom);</span>
+<span class="nc" id="L1358">        int lastEnd = 0;</span>
+
+<span class="nc bnc" id="L1360" title="All 2 branches missed.">        while (dmMatcher.find()) {</span>
+            // Process the segment before this dependencyManagement block
+<span class="nc" id="L1362">            String segment = pom.substring(lastEnd, dmMatcher.start());</span>
+<span class="nc" id="L1363">            result.append(alignDepsInSegment(segment, artifactVersions));</span>
+            // Append the dependencyManagement block unchanged
+<span class="nc" id="L1365">            result.append(dmMatcher.group());</span>
+<span class="nc" id="L1366">            lastEnd = dmMatcher.end();</span>
+<span class="nc" id="L1367">        }</span>
+        // Process remaining content after last dependencyManagement
+<span class="nc" id="L1369">        result.append(alignDepsInSegment(pom.substring(lastEnd), artifactVersions));</span>
+
+<span class="nc" id="L1371">        return result.toString();</span>
+    }
+
+    private static String alignDepsInSegment(String segment,
+                                              Map&lt;String, String&gt; artifactVersions) {
+<span class="nc" id="L1376">        Matcher depMatcher = DEPENDENCY_BLOCK.matcher(segment);</span>
+<span class="nc" id="L1377">        StringBuilder sb = new StringBuilder();</span>
+<span class="nc" id="L1378">        int lastEnd = 0;</span>
+
+<span class="nc bnc" id="L1380" title="All 2 branches missed.">        while (depMatcher.find()) {</span>
+<span class="nc" id="L1381">            sb.append(segment, lastEnd, depMatcher.start());</span>
+
+<span class="nc" id="L1383">            String depBlock = depMatcher.group();</span>
+<span class="nc" id="L1384">            String gid = extractFirst(GROUP_ID_PATTERN, depBlock);</span>
+<span class="nc" id="L1385">            String aid = extractFirst(ARTIFACT_ID_PATTERN, depBlock);</span>
+<span class="nc" id="L1386">            String key = gid + &quot;:&quot; + aid;</span>
+
+<span class="nc" id="L1388">            String targetVersion = artifactVersions.get(key);</span>
+<span class="nc bnc" id="L1389" title="All 2 branches missed.">            if (targetVersion != null) {</span>
+                // Update the version in this dependency block
+<span class="nc" id="L1391">                String currentVersion = extractFirst(VERSION_PATTERN, depBlock);</span>
+<span class="nc bnc" id="L1392" title="All 4 branches missed.">                if (currentVersion != null &amp;&amp; !currentVersion.equals(targetVersion)) {</span>
+<span class="nc" id="L1393">                    depBlock = depBlock.replaceFirst(</span>
+<span class="nc" id="L1394">                            &quot;&lt;version&gt;&quot; + Pattern.quote(currentVersion) + &quot;&lt;/version&gt;&quot;,</span>
+                            &quot;&lt;version&gt;&quot; + targetVersion + &quot;&lt;/version&gt;&quot;);
+                }
+            }
+
+<span class="nc" id="L1399">            sb.append(depBlock);</span>
+<span class="nc" id="L1400">            lastEnd = depMatcher.end();</span>
+<span class="nc" id="L1401">        }</span>
+
+<span class="nc" id="L1403">        sb.append(segment.substring(lastEnd));</span>
+<span class="nc" id="L1404">        return sb.toString();</span>
+    }
+
+    /**
+     * Find all pom.xml files in a subproject directory (root + submodules).
+     */
+    private List&lt;Path&gt; findAllPomFiles(Path subprojectDir) throws IOException {
+<span class="nc" id="L1411">        try (Stream&lt;Path&gt; stream = Files.walk(subprojectDir)) {</span>
+<span class="nc" id="L1412">            return stream</span>
+<span class="nc" id="L1413">                    .filter(p -&gt; p.getFileName().toString().equals(&quot;pom.xml&quot;))</span>
+<span class="nc bnc" id="L1414" title="All 2 branches missed.">                    .filter(p -&gt; !p.toString().contains(&quot;/target/&quot;))</span>
+<span class="nc" id="L1415">                    .toList();</span>
+        }
+    }
+
+<span class="fc" id="L1419">    private static final Pattern VERSION_PATTERN =</span>
+<span class="fc" id="L1420">            Pattern.compile(&quot;&lt;version&gt;([^&lt;]+)&lt;/version&gt;&quot;);</span>
+
+    /**
+     * Derive the Maven groupId from the subproject's root POM.
+     * Strips the parent block first; if no groupId is declared
+     * outside parent, falls back to the parent's groupId.
+     */
+    private String deriveGroupId(Path subprojectDir) {
+<span class="nc" id="L1428">        Path pomFile = subprojectDir.resolve(&quot;pom.xml&quot;);</span>
+<span class="nc bnc" id="L1429" title="All 2 branches missed.">        if (!Files.exists(pomFile)) return null;</span>
+
+        try {
+<span class="nc" id="L1432">            String content = Files.readString(pomFile, StandardCharsets.UTF_8);</span>
+
+            // Try groupId outside parent block first
+<span class="nc" id="L1435">            String stripped = PARENT_BLOCK.matcher(content).replaceFirst(&quot;&quot;);</span>
+<span class="nc" id="L1436">            Matcher gm = GROUP_ID_PATTERN.matcher(stripped);</span>
+<span class="nc bnc" id="L1437" title="All 2 branches missed.">            if (gm.find()) return gm.group(1).trim();</span>
+
+            // Fall back to parent groupId
+<span class="nc" id="L1440">            Matcher parentBlock = PARENT_BLOCK.matcher(content);</span>
+<span class="nc bnc" id="L1441" title="All 2 branches missed.">            if (parentBlock.find()) {</span>
+<span class="nc" id="L1442">                gm = GROUP_ID_PATTERN.matcher(parentBlock.group());</span>
+<span class="nc bnc" id="L1443" title="All 2 branches missed.">                if (gm.find()) return gm.group(1).trim();</span>
+            }
+<span class="nc" id="L1445">        } catch (IOException e) {</span>
+            // Non-fatal — groupId will be null in manifest
+<span class="nc" id="L1447">        }</span>
+<span class="nc" id="L1448">        return null;</span>
+    }
+
+<span class="fc" id="L1451">    private static final Pattern PARENT_BLOCK =</span>
+<span class="fc" id="L1452">            Pattern.compile(&quot;(?s)&lt;parent&gt;.*?&lt;/parent&gt;&quot;);</span>
+<span class="fc" id="L1453">    private static final Pattern GROUP_ID_PATTERN =</span>
+<span class="fc" id="L1454">            Pattern.compile(&quot;&lt;groupId&gt;([^&lt;]+)&lt;/groupId&gt;&quot;);</span>
+<span class="fc" id="L1455">    private static final Pattern ARTIFACT_ID_PATTERN =</span>
+<span class="fc" id="L1456">            Pattern.compile(&quot;&lt;artifactId&gt;([^&lt;]+)&lt;/artifactId&gt;&quot;);</span>
+<span class="fc" id="L1457">    private static final Pattern DEPENDENCY_BLOCK =</span>
+<span class="fc" id="L1458">            Pattern.compile(&quot;(?s)&lt;dependency&gt;.*?&lt;/dependency&gt;&quot;);</span>
+<span class="fc" id="L1459">    private static final Pattern DEP_MGMT_BLOCK =</span>
+<span class="fc" id="L1460">            Pattern.compile(&quot;(?s)&lt;dependencyManagement&gt;.*?&lt;/dependencyManagement&gt;&quot;);</span>
+<span class="fc" id="L1461">    private static final Pattern SUBPROJECT_PATTERN =</span>
+<span class="fc" id="L1462">            Pattern.compile(&quot;&lt;subproject&gt;([^&lt;]+)&lt;/subproject&gt;&quot;);</span>
+<span class="fc" id="L1463">    private static final Pattern MODULE_PATTERN =</span>
+<span class="fc" id="L1464">            Pattern.compile(&quot;&lt;module&gt;([^&lt;]+)&lt;/module&gt;&quot;);</span>
+
+    // ── Helpers ──────────────────────────────────────────────────
+
+    /**
+     * Derive a subproject name from a git URL.
+     * {@code https://github.com/ikmdev/tinkar-core.git} → {@code tinkar-core}
+     */
+    static String deriveSubprojectName(String repoUrl) {
+<span class="fc" id="L1473">        String name = repoUrl;</span>
+        // Strip trailing .git
+<span class="fc bfc" id="L1475" title="All 2 branches covered.">        if (name.endsWith(&quot;.git&quot;)) {</span>
+<span class="fc" id="L1476">            name = name.substring(0, name.length() - 4);</span>
+        }
+        // Strip trailing slash
+<span class="fc bfc" id="L1479" title="All 2 branches covered.">        if (name.endsWith(&quot;/&quot;)) {</span>
+<span class="fc" id="L1480">            name = name.substring(0, name.length() - 1);</span>
+        }
+        // Take last path segment
+<span class="fc" id="L1483">        int lastSlash = name.lastIndexOf('/');</span>
+<span class="pc bpc" id="L1484" title="1 of 2 branches missed.">        if (lastSlash &gt;= 0) {</span>
+<span class="fc" id="L1485">            name = name.substring(lastSlash + 1);</span>
+        }
+<span class="fc" id="L1487">        return name;</span>
+    }
+
+    private String readWorkspaceName(Path wsDir) {
+        try {
+<span class="nc" id="L1492">            return ReleaseSupport.readPomArtifactId(wsDir.resolve(&quot;pom.xml&quot;).toFile());</span>
+<span class="nc" id="L1493">        } catch (MojoException e) {</span>
+<span class="nc" id="L1494">            return &quot;Workspace&quot;;</span>
+        }
+    }
+
+    /**
+     * Apply ike-issues#324 parent-coherence rules to a freshly-added
+     * subproject. Warning-only at add time — the matching check in
+     * {@code ws:scaffold-draft} (which folds verify per #393) is the
+     * authoritative gate.
+     *
+     * @param wsDir          workspace root directory
+     * @param subprojectDir  subproject's checked-out directory
+     * @param subprojectName subproject name (workspace.yaml key)
+     * @param parentInfo     subproject's declared parent
+     */
+    private void checkParentCoherenceAtAdd(Path wsDir,
+                                            Path subprojectDir,
+                                            String subprojectName,
+                                            PomParentSupport.ParentInfo parentInfo) {
+        PomParentSupport.ParentInfo wsParent;
+        try {
+<span class="nc" id="L1515">            wsParent = PomParentSupport.readParent(wsDir.resolve(&quot;pom.xml&quot;));</span>
+<span class="nc" id="L1516">        } catch (Exception e) {</span>
+            // Workspace pom unreadable or no parent — nothing to enforce.
+<span class="nc" id="L1518">            return;</span>
+<span class="nc" id="L1519">        }</span>
+<span class="nc bnc" id="L1520" title="All 2 branches missed.">        if (wsParent == null</span>
+<span class="nc bnc" id="L1521" title="All 2 branches missed.">                || wsParent.groupId() == null</span>
+<span class="nc bnc" id="L1522" title="All 2 branches missed.">                || wsParent.artifactId() == null) {</span>
+<span class="nc" id="L1523">            return;</span>
+        }
+
+        // Decision matrix gate: same GA as workspace's parent?
+<span class="nc bnc" id="L1527" title="All 2 branches missed.">        if (!java.util.Objects.equals(wsParent.groupId(), parentInfo.groupId())</span>
+<span class="nc bnc" id="L1528" title="All 2 branches missed.">                || !java.util.Objects.equals(wsParent.artifactId(),</span>
+<span class="nc" id="L1529">                        parentInfo.artifactId())) {</span>
+<span class="nc" id="L1530">            return;</span>
+        }
+
+<span class="nc" id="L1533">        String coords = parentInfo.groupId() + &quot;:&quot; + parentInfo.artifactId();</span>
+
+        // Rule 2: version coherence
+<span class="nc bnc" id="L1536" title="All 2 branches missed.">        if (!java.util.Objects.equals(wsParent.version(), parentInfo.version())) {</span>
+<span class="nc" id="L1537">            getLog().warn(&quot;  WARN: &quot; + subprojectName + &quot; parent &quot;</span>
+<span class="nc" id="L1538">                    + coords + &quot;:&quot; + parentInfo.version()</span>
+<span class="nc" id="L1539">                    + &quot; != workspace &quot; + coords + &quot;:&quot; + wsParent.version()</span>
+                    + &quot; (#324 coherence violation — fix before &quot;
+<span class="nc" id="L1541">                    + WsGoal.RELEASE_PUBLISH.qualified() + &quot; or expect &quot;</span>
+<span class="nc" id="L1542">                    + WsGoal.SCAFFOLD_DRAFT.qualified()</span>
+                    + &quot; to flag it)&quot;);
+<span class="nc" id="L1544">            return;</span>
+        }
+
+        // Rule 1: cycle prevention
+        boolean hasEmptyRelativePath;
+        try {
+<span class="nc" id="L1550">            hasEmptyRelativePath = PomParentSupport.hasEmptyRelativePath(</span>
+<span class="nc" id="L1551">                    subprojectDir.resolve(&quot;pom.xml&quot;));</span>
+<span class="nc" id="L1552">        } catch (Exception e) {</span>
+<span class="nc" id="L1553">            return;</span>
+<span class="nc" id="L1554">        }</span>
+<span class="nc bnc" id="L1555" title="All 2 branches missed.">        if (!hasEmptyRelativePath) {</span>
+<span class="nc" id="L1556">            getLog().warn(&quot;  WARN: &quot; + subprojectName + &quot; parent &quot;</span>
+<span class="nc" id="L1557">                    + coords + &quot;:&quot; + parentInfo.version()</span>
+                    + &quot; matches workspace parent but is missing empty &quot;
+                    + &quot;&lt;relativePath/&gt; (#324 cycle prevention — Maven 4 &quot;
+                    + &quot;will fail with \&quot;parents form a cycle\&quot; once the &quot;
+                    + &quot;subproject participates in the reactor; add &quot;
+                    + &quot;&lt;relativePath/&gt; inside the &lt;parent&gt; block)&quot;);
+        }
+<span class="nc" id="L1564">    }</span>
+
+    private Path findWorkspaceRoot() throws MojoException {
+<span class="nc" id="L1567">        Path dir = Path.of(System.getProperty(&quot;user.dir&quot;));</span>
+<span class="nc bnc" id="L1568" title="All 2 branches missed.">        while (dir != null) {</span>
+<span class="nc bnc" id="L1569" title="All 2 branches missed.">            if (Files.exists(dir.resolve(&quot;workspace.yaml&quot;))) {</span>
+<span class="nc" id="L1570">                return dir;</span>
+            }
+<span class="nc" id="L1572">            dir = dir.getParent();</span>
+        }
+<span class="nc" id="L1574">        throw new MojoException(</span>
+                &quot;Cannot find workspace.yaml. Run from within a workspace &quot;
+<span class="nc" id="L1576">                + &quot;directory or use &quot; + WsGoal.SCAFFOLD_INIT.qualified()</span>
+                + &quot; first.&quot;);
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

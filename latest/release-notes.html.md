@@ -1,6 +1,6 @@
 ---
-date_published: 2026-06-29
-date_modified: 2026-06-29
+date_published: 2026-07-02
+date_modified: 2026-07-02
 canonical_url: https://ike.network/ike-platform/release-notes.html
 ---
 
@@ -37,47 +37,48 @@ canonical_url: https://ike.network/ike-platform/release-notes.html
 
 ### [Internal](#internal_3)
 
-- Unify visual theme across Maven site, JaCoCo, and Javadoc (currently three different themes per project) ([#518](https://github.com/IKE-Network/ike-issues/issues/518)[8])
+- Landing page left-nav and ike-base-parent README drift from FOUNDATION set; hand-maintained surfaces missing ike-java-support and ike-version-management-extension ([#520](https://github.com/IKE-Network/ike-issues/issues/520)[8])
+- Unify visual theme across Maven site, JaCoCo, and Javadoc (currently three different themes per project) ([#518](https://github.com/IKE-Network/ike-issues/issues/518)[9])
 
 ## [ike-tooling v208](#ike-tooling-v208)
 
 ### [Internal](#internal_4)
 
-- Configure maven-javadoc-plugin <links> for cross-module references across foundation apidocs ([#517](https://github.com/IKE-Network/ike-issues/issues/517)[9])
+- Configure maven-javadoc-plugin <links> for cross-module references across foundation apidocs ([#517](https://github.com/IKE-Network/ike-issues/issues/517)[10])
 
 ## [ike-base-parent v10](#ike-base-parent-v10)
 
 ### [Internal](#internal_5)
 
-- Release ike-base-parent v10 to propagate ike-java-support v1→v2 canonical pin ([#519](https://github.com/IKE-Network/ike-issues/issues/519)[10])
+- Release ike-base-parent v10 to propagate ike-java-support v1→v2 canonical pin ([#519](https://github.com/IKE-Network/ike-issues/issues/519)[11])
 
 ## [ike-tooling v207](#ike-tooling-v207)
 
 ### [Internal](#internal_6)
 
-- Clean up stale release-cascade.yaml content (drop unread version-property data; update X.version comments) ([#516](https://github.com/IKE-Network/ike-issues/issues/516)[11])
-- Publish Javadoc on ike-tooling and ike-java-support Maven sites ([#513](https://github.com/IKE-Network/ike-issues/issues/513)[12])
+- Clean up stale release-cascade.yaml content (drop unread version-property data; update X.version comments) ([#516](https://github.com/IKE-Network/ike-issues/issues/516)[12])
+- Publish Javadoc on ike-tooling and ike-java-support Maven sites ([#513](https://github.com/IKE-Network/ike-issues/issues/513)[13])
 
 ## [ike-java-support v2](#ike-java-support-v2)
 
 ### [Internal](#internal_7)
 
-- ike-java-support is missing src/main/cascade/release-cascade.yaml ([#515](https://github.com/IKE-Network/ike-issues/issues/515)[13])
+- ike-java-support is missing src/main/cascade/release-cascade.yaml ([#515](https://github.com/IKE-Network/ike-issues/issues/515)[14])
 
 ## [ike-tooling v206](#ike-tooling-v206)
 
 ### [Internal](#internal_8)
 
-- Landing page polish: Kroki dependency diagram + complete site/README for new foundation members ([#511](https://github.com/IKE-Network/ike-issues/issues/511)[14])
+- Landing page polish: Kroki dependency diagram + complete site/README for new foundation members ([#511](https://github.com/IKE-Network/ike-issues/issues/511)[15])
 
 ## [ike-tooling v198](#ike-tooling-v198)
 
 ### [Internal](#internal_9)
 
-- Async Maven Central deploy with sentinel-file status tracking ([#484](https://github.com/IKE-Network/ike-issues/issues/484)[15])
+- Async Maven Central deploy with sentinel-file status tracking ([#484](https://github.com/IKE-Network/ike-issues/issues/484)[16])
 
 ## [ike-tooling v196](#ike-tooling-v196)
 
 ### [Internal](#internal_10)
 
-- Nexus-first two-phase deploy with retries in ike:release-publish ([#482](https://github.com/IKE-Network/ike-issues/issues/482)[16])
+- Nexus-first two-phase deploy with retries in ike:release-publish ([#482](https://github.com/IKE-Network/ike-issues/issues/482)[17])

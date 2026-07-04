@@ -1,6 +1,6 @@
 ---
-date_published: 2026-07-02
-date_modified: 2026-07-02
+date_published: 2026-07-03
+date_modified: 2026-07-03
 canonical_url: https://ike.network/ike-platform/ike-parent/dependency-management.html
 ---
 
@@ -12,17 +12,17 @@ The following is a list of compile dependencies in the DependencyManagement of t
 
 | GroupId | ArtifactId | Version | Classifier | Type | License |
 | --- | --- | --- | --- | --- | --- |
-| network.ike.docs | [docbook-xsl](https://github.com/IKE-Network/ike-docbook-xsl)[1] | 88 | - | jar | [MIT License (DocBook XSL Stylesheets)](https://github.com/docbook/xslt10-stylesheets/blob/master/xsl/COPYING)[2], [Apache License 2.0 (IKE Customization Layer)](https://www.apache.org/licenses/LICENSE-2.0)[3] |
-| network.ike.docs | [ike-doc-resources](https://github.com/IKE-Network/ike-docs)[4] | 88 | - | jar | [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt)[5] |
-| network.ike.docs | [koncept-asciidoc-extension](https://github.com/IKE-Network/ike-docs)[4] | 88 | - | jar | [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt)[5] |
-| network.ike.docs | [minimal-fonts](https://github.com/IKE-Network/ike-minimal-fonts)[6] | 88 | - | zip | [SIL Open Font License 1.1](https://scripts.sil.org/OFL)[7] |
-| network.ike.tooling | [ike-build-standards](https://ike.network/ike-tooling/ike-build-standards/)[8] | 233 | asciidoctorconfig | zip | [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt)[5] |
-| network.ike.tooling | [ike-build-standards](https://ike.network/ike-tooling/ike-build-standards/)[8] | 233 | built-with | zip | [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt)[5] |
-| network.ike.tooling | [ike-build-standards](https://ike.network/ike-tooling/ike-build-standards/)[8] | 233 | claude | zip | [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt)[5] |
-| network.ike.tooling | [ike-build-standards](https://ike.network/ike-tooling/ike-build-standards/)[8] | 233 | config | zip | [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt)[5] |
-| network.ike.tooling | [ike-build-standards](https://ike.network/ike-tooling/ike-build-standards/)[8] | 233 | docs | zip | [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt)[5] |
-| network.ike.tooling | [ike-build-standards](https://ike.network/ike-tooling/ike-build-standards/)[8] | 233 | scaffold | zip | [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt)[5] |
-| network.ike.tooling | [ike-build-standards](https://ike.network/ike-tooling/ike-build-standards/)[8] | 233 | site-theme | zip | [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt)[5] |
+| network.ike.docs | [docbook-xsl](https://github.com/IKE-Network/ike-docbook-xsl)[1] | 89 | - | jar | [MIT License (DocBook XSL Stylesheets)](https://github.com/docbook/xslt10-stylesheets/blob/master/xsl/COPYING)[2], [Apache License 2.0 (IKE Customization Layer)](https://www.apache.org/licenses/LICENSE-2.0)[3] |
+| network.ike.docs | [ike-doc-resources](https://github.com/IKE-Network/ike-docs)[4] | 89 | - | jar | [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt)[5] |
+| network.ike.docs | [koncept-asciidoc-extension](https://github.com/IKE-Network/ike-docs)[4] | 89 | - | jar | [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt)[5] |
+| network.ike.docs | [minimal-fonts](https://github.com/IKE-Network/ike-minimal-fonts)[6] | 89 | - | zip | [SIL Open Font License 1.1](https://scripts.sil.org/OFL)[7] |
+| network.ike.tooling | [ike-build-standards](https://ike.network/ike-tooling/ike-build-standards/)[8] | 234 | asciidoctorconfig | zip | [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt)[5] |
+| network.ike.tooling | [ike-build-standards](https://ike.network/ike-tooling/ike-build-standards/)[8] | 234 | built-with | zip | [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt)[5] |
+| network.ike.tooling | [ike-build-standards](https://ike.network/ike-tooling/ike-build-standards/)[8] | 234 | claude | zip | [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt)[5] |
+| network.ike.tooling | [ike-build-standards](https://ike.network/ike-tooling/ike-build-standards/)[8] | 234 | config | zip | [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt)[5] |
+| network.ike.tooling | [ike-build-standards](https://ike.network/ike-tooling/ike-build-standards/)[8] | 234 | docs | zip | [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt)[5] |
+| network.ike.tooling | [ike-build-standards](https://ike.network/ike-tooling/ike-build-standards/)[8] | 234 | scaffold | zip | [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt)[5] |
+| network.ike.tooling | [ike-build-standards](https://ike.network/ike-tooling/ike-build-standards/)[8] | 234 | site-theme | zip | [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt)[5] |
 | org.asciidoctor | [asciidoctorj](https://github.com/asciidoctor/asciidoctorj)[9] | 3.0.1 | - | jar | [The Apache Software License, Version 2.0](http://www.apache.org/licenses/LICENSE-2.0.txt)[10] |
 | org.asciidoctor | [asciidoctorj-diagram](https://github.com/asciidoctor/asciidoctorj-diagram)[11] | 2.3.1 | - | jar | [The Apache Software License, Version 2.0](http://www.apache.org/licenses/LICENSE-2.0.txt)[10] |
 | org.asciidoctor | [asciidoctorj-pdf](https://github.com/asciidoctor/asciidoctorj-pdf)[12] | 2.3.23 | - | jar | [The Apache Software License, Version 2.0](http://www.apache.org/licenses/LICENSE-2.0.txt)[10] |

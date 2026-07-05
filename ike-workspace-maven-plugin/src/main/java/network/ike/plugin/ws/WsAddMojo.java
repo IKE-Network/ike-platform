@@ -1,5 +1,6 @@
 package network.ike.plugin.ws;
 
+import network.ike.plugin.PomRewriter;
 import network.ike.plugin.ReleaseSupport;
 import network.ike.plugin.support.GoalReportBuilder;
 import network.ike.plugin.ws.preflight.Preflight;
@@ -1190,15 +1191,6 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
 
     // ── DOM helpers ─────────────────────────────────────────────
 
-    /**
-     * Extract the first match of a regex pattern's first group.
-     * Used by the version alignment code which operates on raw POM text.
-     */
-    private static String extractFirst(Pattern pattern, String text) {
-        Matcher m = pattern.matcher(text);
-        return m.find() ? m.group(1).trim() : null;
-    }
-
     private static final javax.xml.parsers.DocumentBuilderFactory DBF;
     static {
         DBF = javax.xml.parsers.DocumentBuilderFactory.newInstance();
@@ -1292,122 +1284,168 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
 
     /**
      * Align dependency versions in the newly added subproject's POMs
-     * to match workspace SNAPSHOT versions. For each workspace subproject
-     * that this subproject depends on, find explicit version declarations
-     * and update them.
+     * to match the workspace reactor's versions. For each workspace
+     * subproject that this subproject depends on, literal version
+     * declarations are updated in place; property-referenced versions
+     * keep their {@code ${...}} indirection, with only stale property
+     * <em>values</em> updated where declared (IKE-Network/ike-issues#826).
      *
      * @return the number of POM files modified
      */
     private int alignVersions(Path wsDir, Path subprojectDir,
                                String subprojectName, Manifest manifest)
             throws IOException {
-        // Build a map: groupId:artifactId → workspace version
-        // for all workspace subprojects (except the one being added)
+        Map<String, String> artifactVersions =
+                collectWorkspaceArtifactVersions(wsDir, subprojectName, manifest);
+        if (artifactVersions.isEmpty()) return 0;
+        return alignSubprojectPoms(subprojectDir, artifactVersions, getLog());
+    }
+
+    /**
+     * Build the {@code groupId:artifactId} → version map for all
+     * workspace subprojects other than the one being added.
+     *
+     * <p>The version comes from each member's checked-out root POM, not
+     * from manifest metadata: on a feature branch the working tree
+     * carries the branch-qualified version (e.g.
+     * {@code 1.127.2-chronology-builder-SNAPSHOT}) while
+     * {@code workspace.yaml} may still record the main-line version —
+     * aligning to the latter silently links the added subproject
+     * against the wrong {@code .m2} jar (IKE-Network/ike-issues#826).
+     * The manifest version is used only when the POM cannot be read.
+     *
+     * @param wsDir          the workspace root directory
+     * @param subprojectName the subproject being added (excluded)
+     * @param manifest       the parsed workspace manifest
+     * @return map of produced {@code groupId:artifactId} coordinates to
+     *         the producing member's actual reactor version
+     * @throws IOException if a member's published artifact set cannot
+     *                     be scanned
+     */
+    static Map<String, String> collectWorkspaceArtifactVersions(
+            Path wsDir, String subprojectName, Manifest manifest)
+            throws IOException {
         Map<String, String> artifactVersions = new LinkedHashMap<>();
         for (Map.Entry<String, Subproject> entry : manifest.subprojects().entrySet()) {
             if (entry.getKey().equals(subprojectName)) continue;
-            Subproject sub = entry.getValue();
-            if (sub.version() == null) continue;
 
             Path subDir = wsDir.resolve(entry.getKey());
-            if (!Files.exists(subDir.resolve("pom.xml"))) continue;
+            Path memberPom = subDir.resolve("pom.xml");
+            if (!Files.exists(memberPom)) continue;
+
+            String memberVersion = null;
+            try {
+                memberVersion = ReleaseSupport.readPomVersion(memberPom.toFile());
+            } catch (MojoException e) {
+                // Unreadable POM — fall back to the manifest version below.
+            }
+            if (memberVersion == null || memberVersion.isBlank()) {
+                memberVersion = entry.getValue().version();
+            }
+            if (memberVersion == null || memberVersion.isBlank()) continue;
 
             Set<PublishedArtifactSet.Artifact> published =
                     PublishedArtifactSet.scan(subDir);
             for (PublishedArtifactSet.Artifact artifact : published) {
                 artifactVersions.put(
                         artifact.groupId() + ":" + artifact.artifactId(),
-                        sub.version());
+                        memberVersion);
             }
         }
-
-        if (artifactVersions.isEmpty()) return 0;
-
-        // Walk all POM files in the new subproject and update versions
-        int filesModified = 0;
-        List<Path> pomFiles = findAllPomFiles(subprojectDir);
-
-        for (Path pomFile : pomFiles) {
-            String original = Files.readString(pomFile, StandardCharsets.UTF_8);
-            String updated = alignDependencyVersions(original, artifactVersions);
-
-            if (!updated.equals(original)) {
-                Files.writeString(pomFile, updated, StandardCharsets.UTF_8);
-                filesModified++;
-                // Log each change
-                Path relative = subprojectDir.getParent().relativize(pomFile);
-                getLog().info("  Version alignment: " + relative);
-            }
-        }
-
-        return filesModified;
+        return artifactVersions;
     }
 
     /**
-     * In a POM content string, find {@code <dependency>} blocks that
-     * reference a known workspace artifact and update their
-     * {@code <version>} to the workspace version. Skips dependencies
-     * inside {@code <dependencyManagement>}.
+     * Walk every POM in the added subproject and align workspace
+     * dependency versions via {@link DependencyVersionAligner} (LST
+     * edits — no regex on POMs). Literal versions are rewritten in
+     * place; a dependency version held behind a {@code ${...}} property
+     * is never inlined — instead, a stale property value is updated in
+     * every POM that declares it, preserving the indirection
+     * (IKE-Network/ike-issues#826).
+     *
+     * @param subprojectDir    the added subproject's directory
+     * @param artifactVersions {@code groupId:artifactId} → reactor
+     *                         version for workspace-produced artifacts
+     * @param log              sink for per-file alignment messages
+     * @return the number of POM files modified
+     * @throws IOException if a POM cannot be read or written
      */
-    static String alignDependencyVersions(String pom,
-                                            Map<String, String> artifactVersions) {
-        // Strip dependencyManagement to avoid modifying BOM imports
-        // We'll process only dependencies outside of dependencyManagement
-        StringBuilder result = new StringBuilder();
-        Matcher dmMatcher = DEP_MGMT_BLOCK.matcher(pom);
-        int lastEnd = 0;
+    static int alignSubprojectPoms(Path subprojectDir,
+                                   Map<String, String> artifactVersions,
+                                   org.apache.maven.api.plugin.Log log)
+            throws IOException {
+        List<Path> pomFiles = findAllPomFiles(subprojectDir);
 
-        while (dmMatcher.find()) {
-            // Process the segment before this dependencyManagement block
-            String segment = pom.substring(lastEnd, dmMatcher.start());
-            result.append(alignDepsInSegment(segment, artifactVersions));
-            // Append the dependencyManagement block unchanged
-            result.append(dmMatcher.group());
-            lastEnd = dmMatcher.end();
+        Map<String, String> rootProperties = Map.of();
+        Path rootPom = subprojectDir.resolve("pom.xml");
+        if (Files.exists(rootPom)) {
+            rootProperties = PomRewriter.listProperties(
+                    Files.readString(rootPom, StandardCharsets.UTF_8));
         }
-        // Process remaining content after last dependencyManagement
-        result.append(alignDepsInSegment(pom.substring(lastEnd), artifactVersions));
 
-        return result.toString();
-    }
+        Set<Path> modified = new LinkedHashSet<>();
+        Map<String, String> propertyUpdates = new LinkedHashMap<>();
 
-    private static String alignDepsInSegment(String segment,
-                                              Map<String, String> artifactVersions) {
-        Matcher depMatcher = DEPENDENCY_BLOCK.matcher(segment);
-        StringBuilder sb = new StringBuilder();
-        int lastEnd = 0;
+        for (Path pomFile : pomFiles) {
+            String original = Files.readString(pomFile, StandardCharsets.UTF_8);
+            // Module properties override the root's, mirroring Maven's
+            // inheritance for the ${...} references this module declares.
+            Map<String, String> effective = new LinkedHashMap<>(rootProperties);
+            effective.putAll(PomRewriter.listProperties(original));
 
-        while (depMatcher.find()) {
-            sb.append(segment, lastEnd, depMatcher.start());
+            DependencyVersionAligner.Result result =
+                    DependencyVersionAligner.align(
+                            original, artifactVersions, effective);
+            if (!result.pom().equals(original)) {
+                Files.writeString(pomFile, result.pom(), StandardCharsets.UTF_8);
+                modified.add(pomFile);
+                log.info("  Version alignment: "
+                        + relativeToWorkspace(subprojectDir, pomFile));
+            }
+            result.propertyUpdates().forEach(propertyUpdates::putIfAbsent);
+        }
 
-            String depBlock = depMatcher.group();
-            String gid = extractFirst(GROUP_ID_PATTERN, depBlock);
-            String aid = extractFirst(ARTIFACT_ID_PATTERN, depBlock);
-            String key = gid + ":" + aid;
-
-            String targetVersion = artifactVersions.get(key);
-            if (targetVersion != null) {
-                // Update the version in this dependency block
-                String currentVersion = extractFirst(VERSION_PATTERN, depBlock);
-                if (currentVersion != null && !currentVersion.equals(targetVersion)) {
-                    depBlock = depBlock.replaceFirst(
-                            "<version>" + Pattern.quote(currentVersion) + "</version>",
-                            "<version>" + targetVersion + "</version>");
+        // Apply stale-property updates wherever the property is declared
+        // (usually the subproject root). The ${...} references themselves
+        // were left untouched above.
+        for (Map.Entry<String, String> update : propertyUpdates.entrySet()) {
+            for (Path pomFile : pomFiles) {
+                String content = Files.readString(pomFile, StandardCharsets.UTF_8);
+                String updated = PomRewriter.updateProperty(
+                        content, update.getKey(), update.getValue());
+                if (!updated.equals(content)) {
+                    Files.writeString(pomFile, updated, StandardCharsets.UTF_8);
+                    modified.add(pomFile);
+                    log.info("  Version alignment (property "
+                            + update.getKey() + "): "
+                            + relativeToWorkspace(subprojectDir, pomFile));
                 }
             }
-
-            sb.append(depBlock);
-            lastEnd = depMatcher.end();
         }
 
-        sb.append(segment.substring(lastEnd));
-        return sb.toString();
+        return modified.size();
+    }
+
+    /**
+     * Render a POM path relative to the workspace root (the added
+     * subproject's parent directory) for log messages.
+     *
+     * @param subprojectDir the added subproject's directory
+     * @param pomFile       the POM being reported
+     * @return the workspace-relative path, or the subproject-relative
+     *         path when the subproject has no parent directory
+     */
+    private static Path relativeToWorkspace(Path subprojectDir, Path pomFile) {
+        Path base = (subprojectDir.getParent() != null)
+                ? subprojectDir.getParent() : subprojectDir;
+        return base.relativize(pomFile);
     }
 
     /**
      * Find all pom.xml files in a subproject directory (root + submodules).
      */
-    private List<Path> findAllPomFiles(Path subprojectDir) throws IOException {
+    private static List<Path> findAllPomFiles(Path subprojectDir) throws IOException {
         try (Stream<Path> stream = Files.walk(subprojectDir)) {
             return stream
                     .filter(p -> p.getFileName().toString().equals("pom.xml"))
@@ -1415,9 +1453,6 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
                     .toList();
         }
     }
-
-    private static final Pattern VERSION_PATTERN =
-            Pattern.compile("<version>([^<]+)</version>");
 
     /**
      * Derive the Maven groupId from the subproject's root POM.
@@ -1452,16 +1487,6 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
             Pattern.compile("(?s)<parent>.*?</parent>");
     private static final Pattern GROUP_ID_PATTERN =
             Pattern.compile("<groupId>([^<]+)</groupId>");
-    private static final Pattern ARTIFACT_ID_PATTERN =
-            Pattern.compile("<artifactId>([^<]+)</artifactId>");
-    private static final Pattern DEPENDENCY_BLOCK =
-            Pattern.compile("(?s)<dependency>.*?</dependency>");
-    private static final Pattern DEP_MGMT_BLOCK =
-            Pattern.compile("(?s)<dependencyManagement>.*?</dependencyManagement>");
-    private static final Pattern SUBPROJECT_PATTERN =
-            Pattern.compile("<subproject>([^<]+)</subproject>");
-    private static final Pattern MODULE_PATTERN =
-            Pattern.compile("<module>([^<]+)</module>");
 
     // ── Helpers ──────────────────────────────────────────────────
 

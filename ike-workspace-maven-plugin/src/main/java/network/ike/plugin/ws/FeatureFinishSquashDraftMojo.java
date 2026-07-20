@@ -85,7 +85,7 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
     /**
      * Squash commit message. Optional — when omitted, an auto-generated
      * message is built from the feature-branch commit history of every
-     * eligible subproject (see {@link FeatureFinishSupport#generateFeatureMessage},
+     * eligible subproject (see {@code FeatureFinishSupport#generateFeatureMessage()},
      * matching the merge-variant behaviour and the {@code git merge
      * --squash} convention). Pass {@code -Dmessage="..."} to override.
      * Fixes #160 (pre-validation) and #531 (auto-generation).

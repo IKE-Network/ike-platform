@@ -68,7 +68,7 @@ public class WsRemoveMojo extends AbstractWorkspaceMojo {
     /**
      * Also remove the cloned subproject directory from disk. When set, the
      * clone is <b>parked</b> (its branch pushed to origin, then the clone
-     * removed), not {@code rm}-ed — see {@link ParkSupport#parkSubproject}.
+     * removed), not {@code rm}-ed — see {@code ParkSupport#parkSubproject()}.
      */
     @Parameter(property = "deleteDir", defaultValue = "false")
     private boolean deleteDir;

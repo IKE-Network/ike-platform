@@ -35,7 +35,7 @@ import java.util.Map;
  * <p>This goal also serves as the designated entry point for the
  * legacy schema migration ({@code components:} → {@code subprojects:},
  * #150): it calls
- * {@link ManifestReader#migrateLegacySchemaIfNeeded} before reading
+ * {@code ManifestReader#migrateLegacySchemaIfNeeded()} before reading
  * the graph so old manifests are rewritten in place.
  *
  * <p>Branch reconciliation (the rare "manifest ↔ git state" recovery

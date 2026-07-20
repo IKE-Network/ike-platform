@@ -363,25 +363,50 @@ public class WsScaffoldInitMojo implements Mojo {
 <span class="nc" id="L363">            String url = ReleaseSupport.execCapture(root,</span>
                     &quot;git&quot;, &quot;config&quot;, &quot;--get&quot;, &quot;remote.origin.url&quot;);
 <span class="nc bnc" id="L365" title="All 2 branches missed.">            if (url == null) return null;</span>
-<span class="nc" id="L366">            url = url.trim();</span>
-            // https://github.com/&lt;org&gt;/&lt;repo&gt;(.git)?
-<span class="nc" id="L368">            int idx = url.indexOf(&quot;github.com/&quot;);</span>
-<span class="nc bnc" id="L369" title="All 2 branches missed.">            if (idx &gt;= 0) {</span>
-<span class="nc" id="L370">                String tail = url.substring(idx + &quot;github.com/&quot;.length());</span>
-<span class="nc" id="L371">                int slash = tail.indexOf('/');</span>
-<span class="nc bnc" id="L372" title="All 2 branches missed.">                if (slash &gt; 0) return tail.substring(0, slash);</span>
-            }
-            // git@github.com:&lt;org&gt;/&lt;repo&gt;(.git)?
-<span class="nc" id="L375">            idx = url.indexOf(&quot;github.com:&quot;);</span>
-<span class="nc bnc" id="L376" title="All 2 branches missed.">            if (idx &gt;= 0) {</span>
-<span class="nc" id="L377">                String tail = url.substring(idx + &quot;github.com:&quot;.length());</span>
-<span class="nc" id="L378">                int slash = tail.indexOf('/');</span>
-<span class="nc bnc" id="L379" title="All 2 branches missed.">                if (slash &gt; 0) return tail.substring(0, slash);</span>
-            }
-<span class="fc" id="L381">        } catch (RuntimeException e) {</span>
+<span class="nc" id="L366">            return parseGitHubOrg(url.trim());</span>
+<span class="fc" id="L367">        } catch (RuntimeException e) {</span>
             // git not available or no remote — fall through.
-<span class="nc" id="L383">        }</span>
-<span class="fc" id="L384">        return null;</span>
+        }
+<span class="fc" id="L370">        return null;</span>
+    }
+
+    /**
+     * Extract the org segment from a GitHub remote URL. Recognizes both
+     * URL remotes ({@code scheme://[user@]host/org/repo(.git)}) and
+     * scp-style remotes ({@code [user@]host:org/repo(.git)}), including
+     * SSH host aliases of the form {@code github.com-&lt;account&gt;} used by
+     * multi-account setups (#916). Package-private for tests.
+     *
+     * @param url the trimmed remote URL
+     * @return the org, or {@code null} when the URL is not a recognized
+     *         GitHub form
+     */
+    static String parseGitHubOrg(String url) {
+<span class="fc bfc" id="L385" title="All 4 branches covered.">        if (url == null || url.isEmpty()) return null;</span>
+        String authority;
+        String path;
+<span class="fc" id="L388">        int schemeIdx = url.indexOf(&quot;://&quot;);</span>
+<span class="fc bfc" id="L389" title="All 2 branches covered.">        if (schemeIdx &gt;= 0) {</span>
+            // scheme://[user@]host/org/repo(.git)
+<span class="fc" id="L391">            String rest = url.substring(schemeIdx + 3);</span>
+<span class="fc" id="L392">            int slash = rest.indexOf('/');</span>
+<span class="pc bpc" id="L393" title="1 of 2 branches missed.">            if (slash &lt; 0) return null;</span>
+<span class="fc" id="L394">            authority = rest.substring(0, slash);</span>
+<span class="fc" id="L395">            path = rest.substring(slash + 1);</span>
+<span class="fc" id="L396">        } else {</span>
+            // [user@]host:org/repo(.git)
+<span class="fc" id="L398">            int colon = url.indexOf(':');</span>
+<span class="fc bfc" id="L399" title="All 2 branches covered.">            if (colon &lt; 0) return null;</span>
+<span class="fc" id="L400">            authority = url.substring(0, colon);</span>
+<span class="fc" id="L401">            path = url.substring(colon + 1);</span>
+        }
+<span class="fc" id="L403">        int at = authority.indexOf('@');</span>
+<span class="fc bfc" id="L404" title="All 2 branches covered.">        String host = at &gt;= 0 ? authority.substring(at + 1) : authority;</span>
+<span class="fc bfc" id="L405" title="All 4 branches covered.">        if (!host.equals(&quot;github.com&quot;) &amp;&amp; !host.startsWith(&quot;github.com-&quot;)) {</span>
+<span class="fc" id="L406">            return null;</span>
+        }
+<span class="fc" id="L408">        int slash = path.indexOf('/');</span>
+<span class="fc bfc" id="L409" title="All 2 branches covered.">        return slash &gt; 0 ? path.substring(0, slash) : null;</span>
     }
 
     /**
@@ -391,14 +416,14 @@ public class WsScaffoldInitMojo implements Mojo {
      */
     private static String resolveWorkspaceName(File root) {
         try {
-<span class="fc" id="L394">            File rootPom = new File(root, &quot;pom.xml&quot;);</span>
-<span class="pc bpc" id="L395" title="1 of 2 branches missed.">            if (rootPom.exists()) {</span>
-<span class="nc" id="L396">                return ReleaseSupport.readPomArtifactId(rootPom);</span>
+<span class="fc" id="L419">            File rootPom = new File(root, &quot;pom.xml&quot;);</span>
+<span class="pc bpc" id="L420" title="1 of 2 branches missed.">            if (rootPom.exists()) {</span>
+<span class="nc" id="L421">                return ReleaseSupport.readPomArtifactId(rootPom);</span>
             }
-<span class="nc" id="L398">        } catch (Exception e) {</span>
+<span class="nc" id="L423">        } catch (Exception e) {</span>
             // Fall through
-<span class="fc" id="L400">        }</span>
-<span class="fc" id="L401">        return &quot;Workspace&quot;;</span>
+<span class="fc" id="L425">        }</span>
+<span class="fc" id="L426">        return &quot;Workspace&quot;;</span>
     }
 
     // ── Helpers ──────────────────────────────────────────────────
@@ -409,39 +434,39 @@ public class WsScaffoldInitMojo implements Mojo {
      * pin the ike-parent version stamped into the generated POM.
      */
     private String loadBuildProperty(String key) {
-<span class="nc" id="L412">        try (InputStream is = getClass().getResourceAsStream(&quot;ws-plugin.properties&quot;)) {</span>
-<span class="nc bnc" id="L413" title="All 2 branches missed.">            if (is != null) {</span>
-<span class="nc" id="L414">                java.util.Properties props = new java.util.Properties();</span>
-<span class="nc" id="L415">                props.load(is);</span>
-<span class="nc" id="L416">                String value = props.getProperty(key);</span>
-<span class="nc bnc" id="L417" title="All 6 branches missed.">                if (value != null &amp;&amp; !value.isBlank() &amp;&amp; !value.startsWith(&quot;${&quot;)) {</span>
-<span class="nc" id="L418">                    return value;</span>
+<span class="nc" id="L437">        try (InputStream is = getClass().getResourceAsStream(&quot;ws-plugin.properties&quot;)) {</span>
+<span class="nc bnc" id="L438" title="All 2 branches missed.">            if (is != null) {</span>
+<span class="nc" id="L439">                java.util.Properties props = new java.util.Properties();</span>
+<span class="nc" id="L440">                props.load(is);</span>
+<span class="nc" id="L441">                String value = props.getProperty(key);</span>
+<span class="nc bnc" id="L442" title="All 6 branches missed.">                if (value != null &amp;&amp; !value.isBlank() &amp;&amp; !value.startsWith(&quot;${&quot;)) {</span>
+<span class="nc" id="L443">                    return value;</span>
                 }
             }
-<span class="nc bnc" id="L421" title="All 2 branches missed.">        } catch (IOException e) {</span>
+<span class="nc bnc" id="L446" title="All 2 branches missed.">        } catch (IOException e) {</span>
             // Fall through to fallback
-<span class="nc" id="L423">        }</span>
+<span class="nc" id="L448">        }</span>
         // Fallback: use JAR manifest version
-<span class="nc" id="L425">        String jarVersion = getClass().getPackage().getImplementationVersion();</span>
-<span class="nc bnc" id="L426" title="All 2 branches missed.">        return jarVersion != null ? jarVersion : &quot;66&quot;;</span>
+<span class="nc" id="L450">        String jarVersion = getClass().getPackage().getImplementationVersion();</span>
+<span class="nc bnc" id="L451" title="All 2 branches missed.">        return jarVersion != null ? jarVersion : &quot;66&quot;;</span>
     }
 
     private String promptParam(String propertyName, String label)
             throws MojoException {
-<span class="nc bnc" id="L431" title="All 2 branches missed.">        if (prompter == null) {</span>
+<span class="nc bnc" id="L456" title="All 2 branches missed.">        if (prompter == null) {</span>
             // No session (unit tests) or batch mode -&gt; not interactive,
             // so the prompter declines rather than blocking on stdin.
-<span class="nc bnc" id="L434" title="All 2 branches missed.">            boolean interactive = session != null</span>
-<span class="nc bnc" id="L435" title="All 2 branches missed.">                    &amp;&amp; session.getSettings().isInteractiveMode();</span>
-<span class="nc" id="L436">            prompter = new ConsoleIkePrompter(log, interactive);</span>
+<span class="nc bnc" id="L459" title="All 2 branches missed.">            boolean interactive = session != null</span>
+<span class="nc bnc" id="L460" title="All 2 branches missed.">                    &amp;&amp; session.getSettings().isInteractiveMode();</span>
+<span class="nc" id="L461">            prompter = new ConsoleIkePrompter(log, interactive);</span>
         }
-<span class="nc bnc" id="L438" title="All 2 branches missed.">        if (prompter.isInteractive()) {</span>
-<span class="nc" id="L439">            String input = prompter.prompt(label + &quot;: &quot;);</span>
-<span class="nc bnc" id="L440" title="All 4 branches missed.">            if (input != null &amp;&amp; !input.isBlank()) {</span>
-<span class="nc" id="L441">                return input.trim();</span>
+<span class="nc bnc" id="L463" title="All 2 branches missed.">        if (prompter.isInteractive()) {</span>
+<span class="nc" id="L464">            String input = prompter.prompt(label + &quot;: &quot;);</span>
+<span class="nc bnc" id="L465" title="All 4 branches missed.">            if (input != null &amp;&amp; !input.isBlank()) {</span>
+<span class="nc" id="L466">                return input.trim();</span>
             }
         }
-<span class="nc" id="L444">        throw new MojoException(</span>
+<span class="nc" id="L469">        throw new MojoException(</span>
                 propertyName + &quot; is required. Specify -D&quot; + propertyName
                         + &quot;=&lt;value&gt; or run interactively.&quot;);
     }

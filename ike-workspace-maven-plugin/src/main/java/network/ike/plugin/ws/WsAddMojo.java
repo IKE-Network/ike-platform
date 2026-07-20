@@ -200,6 +200,12 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
         if (!skipClone && !Files.exists(subprojectDir)) {
             cloneSubproject(wsDir);
             cloned = true;
+        } else if (Files.exists(subprojectDir.resolve(".git"))) {
+            // A pre-existing checkout must honor the same workspace-branch-coherence
+            // rule as a fresh clone — before this alignment, this path silently kept
+            // whatever branch the checkout happened to be on, and qualifyForBranch
+            // then edited the POM there (IKE-Network/ike-issues#902).
+            alignExistingCheckout(subprojectDir);
         }
 
         String detectedParent = null;
@@ -746,6 +752,97 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
                     + "' — creating it locally from the remote's default.");
             ReleaseSupport.exec(wsDir.resolve(subproject).toFile(), getLog(),
                     "git", "checkout", "-b", branch);
+        }
+    }
+
+    /**
+     * Aligns a pre-existing subproject checkout to the resolved workspace branch —
+     * the existing-directory counterpart of {@link #cloneSubproject(Path)}'s branch
+     * handling (IKE-Network/ike-issues#902). No-op when the checkout is already on
+     * the branch. Otherwise, in order: check out the existing local branch; fetch
+     * and track it when only the remote has it; create it from the current HEAD
+     * when nobody has it — exactly what the clone path would have produced. A
+     * modified worktree refuses loudly rather than switching branches under
+     * uncommitted changes: heterogeneous branch state across a workspace is not a
+     * supported configuration, and neither is silently carrying it forward.
+     *
+     * @param subprojectDir the pre-existing subproject checkout
+     * @throws MojoException if the worktree has uncommitted changes, or a git step fails
+     */
+    private void alignExistingCheckout(Path subprojectDir) throws MojoException {
+        String current = gitCapture(subprojectDir, "git", "rev-parse", "--abbrev-ref", "HEAD");
+        if (branch.equals(current)) {
+            getLog().info("  Existing checkout already on '" + branch + "'.");
+            return;
+        }
+        String dirty = gitCapture(subprojectDir, "git", "status", "--porcelain");
+        if (!dirty.isEmpty()) {
+            throw new MojoException("Pre-existing checkout of '" + subproject + "' is on '"
+                    + current + "' but the workspace branch is '" + branch
+                    + "', and the worktree has uncommitted changes — commit or stash them,"
+                    + " then re-run ws:add. Heterogeneous branch state across a workspace"
+                    + " is not a supported configuration (IKE-Network/ike-issues#902).");
+        }
+        boolean localHasBranch = gitSucceeds(subprojectDir,
+                "git", "rev-parse", "--verify", "--quiet", "refs/heads/" + branch);
+        if (localHasBranch) {
+            getLog().info("  Existing checkout on '" + current
+                    + "' — switching to existing local branch '" + branch + "'.");
+            ReleaseSupport.exec(subprojectDir.toFile(), getLog(), "git", "checkout", branch);
+            return;
+        }
+        if (gitSucceeds(subprojectDir, "git", "fetch", "origin",
+                "+refs/heads/" + branch + ":refs/remotes/origin/" + branch)) {
+            getLog().info("  Existing checkout on '" + current
+                    + "' — tracking remote branch '" + branch + "'.");
+            ReleaseSupport.exec(subprojectDir.toFile(), getLog(),
+                    "git", "checkout", "-b", branch, "origin/" + branch);
+            return;
+        }
+        getLog().info("  Existing checkout on '" + current + "' and no branch '" + branch
+                + "' anywhere — creating it from the current HEAD.");
+        ReleaseSupport.exec(subprojectDir.toFile(), getLog(), "git", "checkout", "-b", branch);
+    }
+
+    /**
+     * Runs a git command in {@code dir} and returns its trimmed stdout, or an empty
+     * string on any failure — callers treat absence of output as absence of the
+     * probed state.
+     */
+    private static String gitCapture(Path dir, String... cmd) {
+        try {
+            Process proc = new ProcessBuilder(cmd)
+                    .directory(dir.toFile())
+                    .redirectErrorStream(false)
+                    .start();
+            String stdout = new String(proc.getInputStream().readAllBytes(),
+                    StandardCharsets.UTF_8).trim();
+            int exit = proc.waitFor();
+            return exit == 0 ? stdout : "";
+        } catch (IOException | InterruptedException e) {
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            return "";
+        }
+    }
+
+    /**
+     * Runs a git command in {@code dir} for its exit status alone.
+     */
+    private static boolean gitSucceeds(Path dir, String... cmd) {
+        try {
+            Process proc = new ProcessBuilder(cmd)
+                    .directory(dir.toFile())
+                    .redirectErrorStream(true)
+                    .start();
+            proc.getInputStream().readAllBytes();
+            return proc.waitFor() == 0;
+        } catch (IOException | InterruptedException e) {
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            return false;
         }
     }
 

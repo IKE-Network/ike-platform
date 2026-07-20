@@ -674,7 +674,7 @@ public final class SubprojectInitializer {
                 ## Build
 
                 ```bash
-                mvn clean verify -DskipTests -T4
+                mvn clean verify -DskipTests -T 1C
                 ```
 
                 ## Key Facts

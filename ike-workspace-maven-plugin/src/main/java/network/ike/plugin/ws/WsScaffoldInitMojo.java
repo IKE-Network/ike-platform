@@ -363,25 +363,50 @@ public class WsScaffoldInitMojo implements Mojo {
             String url = ReleaseSupport.execCapture(root,
                     "git", "config", "--get", "remote.origin.url");
             if (url == null) return null;
-            url = url.trim();
-            // https://github.com/<org>/<repo>(.git)?
-            int idx = url.indexOf("github.com/");
-            if (idx >= 0) {
-                String tail = url.substring(idx + "github.com/".length());
-                int slash = tail.indexOf('/');
-                if (slash > 0) return tail.substring(0, slash);
-            }
-            // git@github.com:<org>/<repo>(.git)?
-            idx = url.indexOf("github.com:");
-            if (idx >= 0) {
-                String tail = url.substring(idx + "github.com:".length());
-                int slash = tail.indexOf('/');
-                if (slash > 0) return tail.substring(0, slash);
-            }
+            return parseGitHubOrg(url.trim());
         } catch (RuntimeException e) {
             // git not available or no remote — fall through.
         }
         return null;
+    }
+
+    /**
+     * Extract the org segment from a GitHub remote URL. Recognizes both
+     * URL remotes ({@code scheme://[user@]host/org/repo(.git)}) and
+     * scp-style remotes ({@code [user@]host:org/repo(.git)}), including
+     * SSH host aliases of the form {@code github.com-<account>} used by
+     * multi-account setups (#916). Package-private for tests.
+     *
+     * @param url the trimmed remote URL
+     * @return the org, or {@code null} when the URL is not a recognized
+     *         GitHub form
+     */
+    static String parseGitHubOrg(String url) {
+        if (url == null || url.isEmpty()) return null;
+        String authority;
+        String path;
+        int schemeIdx = url.indexOf("://");
+        if (schemeIdx >= 0) {
+            // scheme://[user@]host/org/repo(.git)
+            String rest = url.substring(schemeIdx + 3);
+            int slash = rest.indexOf('/');
+            if (slash < 0) return null;
+            authority = rest.substring(0, slash);
+            path = rest.substring(slash + 1);
+        } else {
+            // [user@]host:org/repo(.git)
+            int colon = url.indexOf(':');
+            if (colon < 0) return null;
+            authority = url.substring(0, colon);
+            path = url.substring(colon + 1);
+        }
+        int at = authority.indexOf('@');
+        String host = at >= 0 ? authority.substring(at + 1) : authority;
+        if (!host.equals("github.com") && !host.startsWith("github.com-")) {
+            return null;
+        }
+        int slash = path.indexOf('/');
+        return slash > 0 ? path.substring(0, slash) : null;
     }
 
     /**

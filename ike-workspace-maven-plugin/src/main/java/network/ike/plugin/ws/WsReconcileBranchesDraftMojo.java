@@ -3,6 +3,7 @@ package network.ike.plugin.ws;
 import network.ike.plugin.ReleaseSupport;
 import network.ike.plugin.support.GoalReportBuilder;
 import network.ike.plugin.ws.vcs.VcsOperations;
+import network.ike.plugin.ws.vcs.VcsState;
 import network.ike.workspace.ManifestWriter;
 import network.ike.workspace.Subproject;
 import network.ike.workspace.WorkingSet;
@@ -422,7 +423,27 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
             // Checkout reconciliation only applies to cloned subprojects.
             if (!new File(dir, ".git").exists()) continue;
             String actual = gitBranch(dir);
-            if (wsBranch.equals(actual)) continue;
+            if (wsBranch.equals(actual)) {
+                // Already on the authoritative branch — refresh a stale
+                // vcs-state that would make the bridge undo it (#903/#904).
+                String stale = staleStateBranch(dir, wsBranch);
+                if (stale != null) {
+                    checkoutsPlanned++;
+                    changes.add("`" + name + "` (vcs-state): `" + stale
+                            + "` → `" + wsBranch + "`");
+                    effects.merge(name, (draft
+                            ? "vcs-state refresh → `" : "vcs-state refreshed → `")
+                            + wsBranch + "`",
+                            (yaml, refresh) -> yaml + ", " + refresh);
+                    getLog().info("  vcs-state: " + name + ": " + stale
+                            + " → " + wsBranch + (draft ? " (draft)" : ""));
+                    if (!draft) {
+                        VcsOperations.refreshStaleBranchState(dir, getLog());
+                        checkoutsApplied++;
+                    }
+                }
+                continue;
+            }
 
             String status = gitStatus(dir);
             if (!status.isEmpty() && !force) {
@@ -455,6 +476,9 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
                     ReleaseSupport.exec(dir, getLog(),
                             "git", "checkout", "-b", wsBranch);
                 }
+                // Record the switch as a VCS action so the bridge carries
+                // it forward instead of undoing it (#903/#904).
+                VcsOperations.recordSwitch(dir, getLog());
                 checkoutsApplied++;
             }
         }
@@ -496,6 +520,24 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
     }
 
     /**
+     * The branch a member's {@code .ike/vcs-state} records when it disagrees
+     * with the member's declared branch, or {@code null} when there is no
+     * state file or it already agrees. The disagreeing value is what the
+     * VCS-bridge sync would restore — surfacing it by name makes the
+     * refresh line in the report/draft self-explanatory (#904).
+     *
+     * @param dir      the member repository directory
+     * @param declared the branch {@code workspace.yaml} declares
+     * @return the stale recorded branch, or {@code null} when coherent
+     */
+    private static String staleStateBranch(File dir, String declared) {
+        return VcsState.readFrom(dir.toPath())
+                .map(VcsState::branch)
+                .filter(recorded -> !recorded.equals(declared))
+                .orElse(null);
+    }
+
+    /**
      * Whether {@code refs/heads/<branch>} exists in the local repo.
      */
     private static boolean localBranchExists(File dir, String branch) {
@@ -529,6 +571,25 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
      * {@code git checkout} in each subproject whose current branch
      * differs. Subprojects with uncommitted changes are skipped unless
      * {@code -Dforce=true}.
+     *
+     * <p>This is the manifest→repo remediation direction
+     * (IKE-Network/ike-issues#904), so it must fully deliver a member onto
+     * its declared branch, not merely attempt a checkout:
+     * <ul>
+     *   <li>A declared branch that exists nowhere is created from the
+     *       member's current HEAD — the same fallback {@code ws:add}'s
+     *       alignment applies (ike-issues#902). A checkout that only origin
+     *       has resolves through git's standard tracking-branch path.</li>
+     *   <li>Every checkout performed is recorded as a VCS action
+     *       ({@link VcsOperations#recordSwitch}) so the VCS-bridge sync in
+     *       the next goal carries the remediation forward instead of
+     *       restoring the state-file branch (the ike-issues#903 revert).</li>
+     *   <li>A member already on its declared branch whose
+     *       {@code .ike/vcs-state} records a different branch gets the
+     *       state file refreshed ({@link VcsOperations#refreshStaleBranchState})
+     *       — otherwise the bridge would switch the checkout AWAY from the
+     *       declared branch at the very next goal.</li>
+     * </ul>
      */
     private BranchChanges alignBranchesFromManifest(WorkspaceGraph graph,
                                           File root, boolean draft) {
@@ -549,7 +610,26 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
             String declared = subproject.branch();
             if (declared == null) continue;
             String actual = gitBranch(dir);
-            if (actual.equals(declared)) continue;
+            if (actual.equals(declared)) {
+                // Checkout already correct — but a stale vcs-state naming
+                // another branch would make the bridge undo it (#903/#904).
+                String stale = staleStateBranch(dir, declared);
+                if (stale != null) {
+                    planned++;
+                    changes.add("`" + name + "` (vcs-state): `" + stale
+                            + "` → `" + declared + "`");
+                    effects.put(name, (draft
+                            ? "vcs-state refresh → `" : "vcs-state refreshed → `")
+                            + declared + "`");
+                    getLog().info("  vcs-state: " + name + ": " + stale
+                            + " → " + declared + (draft ? " (draft)" : ""));
+                    if (!draft) {
+                        VcsOperations.refreshStaleBranchState(dir, getLog());
+                        switched++;
+                    }
+                }
+                continue;
+            }
 
             String status = gitStatus(dir);
             if (!status.isEmpty() && !force) {
@@ -570,8 +650,18 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
                     + " → " + declared + (draft ? " (draft)" : ""));
 
             if (!draft) {
-                ReleaseSupport.exec(dir, getLog(),
-                        "git", "checkout", declared);
+                if (localBranchExists(dir, declared)
+                        || originBranchExists(dir, declared)) {
+                    ReleaseSupport.exec(dir, getLog(),
+                            "git", "checkout", declared);
+                } else {
+                    getLog().info("    " + name + " has no '" + declared
+                            + "' locally or on origin — creating from "
+                            + actual + ".");
+                    ReleaseSupport.exec(dir, getLog(),
+                            "git", "checkout", "-b", declared);
+                }
+                VcsOperations.recordSwitch(dir, getLog());
                 switched++;
             }
         }

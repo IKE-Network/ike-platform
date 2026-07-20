@@ -1,5 +1,8 @@
 package network.ike.plugin.ws;
 
+import network.ike.plugin.ws.vcs.VcsOperations;
+import network.ike.plugin.ws.vcs.VcsState;
+
 import org.apache.maven.api.plugin.MojoException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -182,6 +185,38 @@ class WsReconcileBranchesWorkspaceHeadIntegrationTest {
                 .contains("authority")
                 .contains("HEAD")
                 .contains("feature/Z");
+    }
+
+    @Test
+    void workspaceHead_recordsMemberVcsStateOnCheckout() throws Exception {
+        // A bridge-managed member: recording the checkout as a VCS action is
+        // what keeps the bridge from undoing this reconcile (#903/#904).
+        Files.writeString(tempDir.resolve("lib-a/.git/info/exclude"),
+                ".ike/\n", StandardCharsets.UTF_8);
+        VcsState.writeTo(tempDir.resolve("lib-a"), VcsState.create("main",
+                VcsOperations.headSha(tempDir.resolve("lib-a").toFile()),
+                VcsState.Action.COMMIT));
+
+        exec(tempDir, "git", "checkout", "-b", "feature/X");
+
+        WsReconcileBranchesDraftMojo mojo = TestLog.createMojo(WsReconcileBranchesDraftMojo.class);
+        mojo.manifest = helper.workspaceYaml().toFile();
+        mojo.scope = "branches";
+        mojo.from = "workspace-head";
+        mojo.publish = true;
+
+        mojo.execute();
+
+        java.util.Optional<VcsState> state =
+                VcsState.readFrom(tempDir.resolve("lib-a"));
+        assertThat(state).isPresent();
+        assertThat(state.get().branch()).isEqualTo("feature/X");
+        assertThat(state.get().action()).isEqualTo(VcsState.Action.SWITCH);
+
+        VcsOperations.catchUp(tempDir.resolve("lib-a").toFile(), new TestLog());
+        assertThat(execCapture(tempDir.resolve("lib-a"),
+                "git", "rev-parse", "--abbrev-ref", "HEAD"))
+                .isEqualTo("feature/X");
     }
 
     // ── Helpers ──────────────────────────────────────────────────────

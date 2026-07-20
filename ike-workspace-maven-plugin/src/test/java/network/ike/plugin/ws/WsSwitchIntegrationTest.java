@@ -1,5 +1,8 @@
 package network.ike.plugin.ws;
 
+import network.ike.plugin.ws.vcs.VcsOperations;
+import network.ike.plugin.ws.vcs.VcsState;
+
 import org.apache.maven.api.plugin.MojoException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -194,6 +197,73 @@ class WsSwitchIntegrationTest {
                 .isInstanceOf(MojoException.class)
                 .hasMessageContaining("branch is required")
                 .hasMessageContaining("-Dbranch");
+    }
+
+    // ── #904: per-member reconciliation + VCS-state recording ─────────
+
+    @Test
+    void switch_reconcilesSingleDeviatingMemberDespiteMajorityOnTarget()
+            throws Exception {
+        // All members are on feature/beta; one deviates back to main. The
+        // majority vote said "already on feature/beta — nothing to do" while
+        // the deviator sat wrong for a week (IKE-Network/ike-issues#904).
+        exec(tempDir.resolve("lib-b"), "git", "checkout", "main");
+
+        WsSwitchDraftMojo mojo = TestLog.createMojo(WsSwitchDraftMojo.class);
+        mojo.manifest = helper.workspaceYaml().toFile();
+        mojo.branch = "feature/beta";
+        mojo.publish = true;
+
+        mojo.execute();
+
+        for (String name : new String[]{"lib-a", "lib-b", "app-c"}) {
+            assertThat(execCapture(tempDir.resolve(name),
+                    "git", "rev-parse", "--abbrev-ref", "HEAD"))
+                    .as(name)
+                    .isEqualTo("feature/beta");
+        }
+    }
+
+    @Test
+    void switch_noopWhenEveryMemberAlreadyOnTarget() throws Exception {
+        // The true nothing-to-do case must still early-out.
+        WsSwitchDraftMojo mojo = TestLog.createMojo(WsSwitchDraftMojo.class);
+        mojo.manifest = helper.workspaceYaml().toFile();
+        mojo.branch = "feature/beta";
+        mojo.publish = true;
+
+        WorkspaceReportSpec spec = mojo.runGoal();
+
+        assertThat(spec.content()).contains("nothing to do");
+    }
+
+    @Test
+    void switch_recordsMemberVcsStateSoBridgeSyncKeepsTheBranch()
+            throws Exception {
+        // A bridge-managed member carries .ike/vcs-state naming the source
+        // branch; without recording the member's switch as a VCS action, the
+        // next goal's bridge sync would switch it straight back (#903/#904).
+        Path libA = tempDir.resolve("lib-a");
+        Files.writeString(libA.resolve(".git/info/exclude"), ".ike/\n",
+                StandardCharsets.UTF_8);
+        VcsState.writeTo(libA, VcsState.create("feature/beta",
+                VcsOperations.headSha(libA.toFile()), VcsState.Action.COMMIT));
+
+        WsSwitchDraftMojo mojo = TestLog.createMojo(WsSwitchDraftMojo.class);
+        mojo.manifest = helper.workspaceYaml().toFile();
+        mojo.branch = "feature/alpha";
+        mojo.publish = true;
+
+        mojo.execute();
+
+        java.util.Optional<VcsState> state = VcsState.readFrom(libA);
+        assertThat(state).isPresent();
+        assertThat(state.get().branch()).isEqualTo("feature/alpha");
+        assertThat(state.get().action()).isEqualTo(VcsState.Action.SWITCH);
+
+        VcsOperations.catchUp(libA.toFile(), new TestLog());
+        assertThat(execCapture(libA, "git", "rev-parse", "--abbrev-ref", "HEAD"))
+                .isEqualTo("feature/alpha");
     }
 
     // ── Helpers ──────────────────────────────────────────────────────

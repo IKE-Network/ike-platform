@@ -2,6 +2,7 @@ package network.ike.plugin.ws;
 
 import network.ike.plugin.ReleaseSupport;
 import network.ike.plugin.support.GoalReportBuilder;
+import network.ike.plugin.ws.vcs.VcsState;
 import network.ike.workspace.Subproject;
 import network.ike.workspace.WorkspaceGraph;
 import org.apache.maven.api.plugin.MojoException;
@@ -191,17 +192,26 @@ public class CheckBranchMojo extends AbstractWorkspaceMojo {
             File dir = new File(wsRoot, name);
 
             String declared = subproject.branch();
-            String actual = new File(dir, ".git").exists()
-                    ? gitBranch(dir) : null;
+            boolean cloned = new File(dir, ".git").exists();
+            String actual = cloned ? gitBranch(dir) : null;
+            // Third axis (#904): the VCS-bridge state file. The bridge
+            // enforces it OVER the manifest, so a recorded branch that
+            // disagrees is active drift, not bookkeeping trivia.
+            String recorded = cloned
+                    ? VcsState.readFrom(dir.toPath())
+                            .map(VcsState::branch).orElse(null)
+                    : null;
 
             boolean yamlDrift = declared == null || !declared.equals(wsBranch);
             boolean repoDrift = actual != null && !actual.equals(wsBranch);
-            if (yamlDrift || repoDrift) driftCount++;
+            boolean stateDrift = recorded != null && !recorded.equals(wsBranch);
+            if (yamlDrift || repoDrift || stateDrift) driftCount++;
 
             rows.add(new DriftRow(name,
                     declared == null ? "(unset)" : declared,
                     actual == null ? "(not cloned)" : actual,
-                    yamlDrift, repoDrift));
+                    recorded == null ? "(none)" : recorded,
+                    yamlDrift, repoDrift, stateDrift));
         }
 
         getLog().info("");
@@ -214,9 +224,10 @@ public class CheckBranchMojo extends AbstractWorkspaceMojo {
             getLog().info("  All subprojects agree with workspace HEAD  ✓");
         } else {
             for (DriftRow r : rows) {
-                if (!r.yamlDrift && !r.repoDrift) continue;
+                if (!r.yamlDrift && !r.repoDrift && !r.stateDrift) continue;
                 getLog().warn("  ⚠ " + r.name
-                        + " — yaml=" + r.declared + " repo=" + r.actual);
+                        + " — yaml=" + r.declared + " repo=" + r.actual
+                        + " vcs-state=" + r.recorded);
             }
             getLog().warn("");
             getLog().warn("  Repair with:");
@@ -234,15 +245,19 @@ public class CheckBranchMojo extends AbstractWorkspaceMojo {
 
         List<String[]> driftTableRows = new ArrayList<>();
         for (DriftRow r : rows) {
-            String status = (!r.yamlDrift && !r.repoDrift)
+            List<String> drifts = new ArrayList<>();
+            if (r.yamlDrift) drifts.add("yaml");
+            if (r.repoDrift) drifts.add("repo");
+            if (r.stateDrift) drifts.add("vcs-state");
+            String status = drifts.isEmpty()
                     ? "✓ aligned"
-                    : (r.yamlDrift && r.repoDrift
-                            ? "✗ yaml + repo drift"
-                            : (r.yamlDrift ? "✗ yaml drift" : "✗ repo drift"));
+                    : "✗ " + String.join(" + ", drifts) + " drift";
             driftTableRows.add(new String[]{r.name,
-                    "`" + r.declared + "`", "`" + r.actual + "`", status});
+                    "`" + r.declared + "`", "`" + r.actual + "`",
+                    "`" + r.recorded + "`", status});
         }
-        report.table(List.of("Subproject", "YAML branch", "Repo branch", "Status"),
+        report.table(List.of("Subproject", "YAML branch", "Repo branch",
+                        "vcs-state branch", "Status"),
                 driftTableRows);
         if (driftCount > 0) {
             report.paragraph("_Repair: `mvn "
@@ -252,9 +267,10 @@ public class CheckBranchMojo extends AbstractWorkspaceMojo {
         return new WorkspaceReportSpec(WsGoal.CHECK_BRANCH, report.build());
     }
 
-    /** One row of the workspace-scope drift table. */
+    /** One row of the workspace-scope drift table (#904: three axes). */
     private record DriftRow(String name, String declared, String actual,
-                            boolean yamlDrift, boolean repoDrift) {}
+                            String recorded, boolean yamlDrift,
+                            boolean repoDrift, boolean stateDrift) {}
 
     /**
      * Find which workspace subproject the CWD belongs to.

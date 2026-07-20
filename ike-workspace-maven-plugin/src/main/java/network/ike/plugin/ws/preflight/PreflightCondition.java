@@ -3,6 +3,9 @@ package network.ike.plugin.ws.preflight;
 import network.ike.plugin.ReleaseSupport;
 import network.ike.plugin.SnapshotScanner;
 import network.ike.plugin.ws.WsGoal;
+import network.ike.plugin.ws.vcs.VcsState;
+import network.ike.workspace.Subproject;
+import network.ike.workspace.WorkspaceGraph;
 
 import org.apache.maven.api.plugin.Log;
 import org.apache.maven.api.plugin.MojoException;
@@ -14,6 +17,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -548,6 +552,71 @@ public enum PreflightCondition {
             sb.append("  promotes it to a hard requirement.");
             return Optional.of(sb.toString());
         }
+    },
+
+    /**
+     * Every cloned subproject's three branch axes agree: the
+     * {@code workspace.yaml} {@code branch:} declaration, the on-disk
+     * checkout, and the {@code .ike/vcs-state} record. The three drifted
+     * silently for a week on ike-starter-set — manifest declared a feature
+     * branch while checkout and state file sat on {@code main}, and the
+     * VCS-bridge sync actively enforced the state file OVER the manifest
+     * (IKE-Network/ike-issues#904). Surfaced warn-only on every goal by
+     * {@code AbstractWorkspaceMojo}; {@code ws:lint} reports it with the
+     * rest of the conditions.
+     */
+    BRANCH_COHERENCE(
+            "workspace.yaml, checkout, and .ike/vcs-state agree on every "
+                    + "subproject's branch") {
+        @Override
+        public Optional<String> check(PreflightContext ctx) {
+            WorkspaceGraph graph = ctx.graph();
+            if (graph == null) return Optional.empty();
+            File root = ctx.workspaceRoot();
+
+            List<String> disagreements = new ArrayList<>();
+            for (Map.Entry<String, Subproject> entry
+                    : graph.manifest().subprojects().entrySet()) {
+                String name = entry.getKey();
+                String declared = entry.getValue().branch();
+                if (declared == null) continue;
+                File dir = new File(root, name);
+                if (!new File(dir, ".git").exists()) continue;
+                String checkout = currentBranchOf(dir);
+                if (checkout.isEmpty()) continue; // detached/unreadable — not this check's call
+                String recorded = VcsState.readFrom(dir.toPath())
+                        .map(VcsState::branch).orElse(null);
+
+                boolean coherent = declared.equals(checkout)
+                        && (recorded == null || recorded.equals(declared));
+                if (!coherent) {
+                    disagreements.add(name + ": yaml=" + declared
+                            + ", checkout=" + checkout
+                            + ", vcs-state="
+                            + (recorded == null ? "(none)" : recorded));
+                }
+            }
+
+            if (disagreements.isEmpty()) return Optional.empty();
+
+            StringBuilder sb = new StringBuilder();
+            sb.append(disagreements.size())
+                    .append(" subproject(s) disagree across workspace.yaml / ")
+                    .append("checkout / .ike/vcs-state:\n");
+            for (String d : disagreements) {
+                sb.append("    • ").append(d).append('\n');
+            }
+            sb.append("  The VCS bridge treats .ike/vcs-state as the branch of\n");
+            sb.append("  record: a checkout that disagrees with it is switched\n");
+            sb.append("  back by the next ws:* goal's sync, so silent drift\n");
+            sb.append("  compounds (ike-issues#904).\n");
+            sb.append("  Align checkouts AND bridge state to the manifest:\n");
+            sb.append("    mvn ").append(WsGoal.RECONCILE_BRANCHES_PUBLISH.qualified())
+                    .append(" -Dfrom=manifest\n");
+            sb.append("  Or accept the checkouts as truth and amend workspace.yaml:\n");
+            sb.append("    mvn ").append(WsGoal.RECONCILE_BRANCHES_PUBLISH.qualified());
+            return Optional.of(sb.toString());
+        }
     };
 
     /** Special marker used when the workspace root itself has uncommitted changes. */
@@ -579,6 +648,24 @@ public enum PreflightCondition {
         try {
             return ReleaseSupport.execCapture(dir,
                     "git", "status", "--porcelain").trim();
+        } catch (MojoException e) {
+            return "";
+        }
+    }
+
+    /**
+     * The current branch of the repository at {@code dir}, or an empty
+     * string when HEAD is detached or the branch cannot be read — callers
+     * treat absence of a branch name as nothing to compare.
+     *
+     * @param dir the repository root directory
+     * @return the current branch name, or {@code ""} when unreadable
+     */
+    static String currentBranchOf(File dir) {
+        try {
+            String out = ReleaseSupport.execCapture(dir,
+                    "git", "branch", "--show-current");
+            return out == null ? "" : out.trim();
         } catch (MojoException e) {
             return "";
         }

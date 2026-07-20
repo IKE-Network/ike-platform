@@ -15,6 +15,8 @@ import network.ike.workspace.WorkingSetResolver;
 import network.ike.workspace.WorkspaceGraph;
 import network.ike.plugin.support.ConsoleIkePrompter;
 import network.ike.plugin.support.IkePrompter;
+import network.ike.plugin.ws.preflight.PreflightCondition;
+import network.ike.plugin.ws.preflight.PreflightContext;
 import org.apache.maven.api.Session;
 import org.apache.maven.api.di.Inject;
 import org.apache.maven.api.plugin.Log;
@@ -513,12 +515,49 @@ abstract class AbstractWorkspaceMojo implements Mojo {
      */
     @Override
     public final void execute() throws MojoException {
+        surfaceBranchIncoherence();
         WorkspaceReportSpec report = runGoal();
         try {
             WorkspaceReport.write(workspaceRoot().toPath(),
                     report.goal().qualified(), report.content(), getLog());
         } catch (MojoException e) {
             getLog().debug("Could not resolve workspace root for report: "
+                    + e.getMessage());
+        }
+    }
+
+    /**
+     * Warn — never fail — when any subproject's three branch axes disagree:
+     * the {@code workspace.yaml} declaration, the on-disk checkout, and the
+     * {@code .ike/vcs-state} record. Runs before every goal from this final
+     * {@code execute()} template, because the ike-starter-set deviation ran
+     * silent for a week of commit/push cycles while the VCS-bridge sync
+     * actively enforced the state file OVER the manifest — three-way
+     * disagreement must be loud on every goal, with the copy-pasteable fix
+     * in hand (IKE-Network/ike-issues#904). Remediation goals themselves
+     * must still run against an incoherent workspace, so this never blocks;
+     * {@code ws:lint} and the release preflights decide severity.
+     *
+     * <p>Outside a workspace (or with an unreadable manifest) the advisory
+     * stays quiet — the goal itself owns surfacing real resolution errors.
+     */
+    private void surfaceBranchIncoherence() {
+        try {
+            WorkspaceGraph graph = loadGraph();
+            File root = workspaceRoot();
+            PreflightCondition.BRANCH_COHERENCE
+                    .check(PreflightContext.of(root, graph,
+                            List.copyOf(graph.manifest().subprojects().keySet())))
+                    .ifPresent(msg -> {
+                        getLog().warn("");
+                        getLog().warn("⚠ Branch coherence:");
+                        for (String line : msg.split("\n")) {
+                            getLog().warn(line);
+                        }
+                        getLog().warn("");
+                    });
+        } catch (RuntimeException e) {
+            getLog().debug("Branch-coherence advisory skipped: "
                     + e.getMessage());
         }
     }

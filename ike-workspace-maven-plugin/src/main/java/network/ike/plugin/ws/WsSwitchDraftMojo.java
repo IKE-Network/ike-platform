@@ -146,10 +146,32 @@ public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
         }
 
         if (branch.equals(currentBranch)) {
-            getLog().info("Already on " + currentBranch + " — nothing to do.");
-            return new WorkspaceReportSpec(
-                    publish ? WsGoal.SWITCH_PUBLISH : WsGoal.SWITCH_DRAFT,
-                    "Already on `" + currentBranch + "` — nothing to do.\n");
+            // The majority vote alone is not "nothing to do": a single member
+            // deviating from the target went unnoticed here for a week while
+            // the majority (and the workspace root) sat on the target —
+            // ike-starter-set on main under a feature/chronology-builder
+            // workspace (IKE-Network/ike-issues#904). Early-out only when
+            // every cloned member AND the workspace root are on the target;
+            // otherwise fall through and reconcile per-member.
+            List<String> deviators = new ArrayList<>();
+            for (String name : sorted) {
+                File dir = new File(root, name);
+                if (!new File(dir, ".git").exists()) continue;
+                if (!branch.equals(gitBranch(dir))) deviators.add(name);
+            }
+            if (new File(root, ".git").exists()
+                    && !branch.equals(gitBranch(root))) {
+                deviators.add(root.getName());
+            }
+            if (deviators.isEmpty()) {
+                getLog().info("Already on " + currentBranch + " — nothing to do.");
+                return new WorkspaceReportSpec(
+                        publish ? WsGoal.SWITCH_PUBLISH : WsGoal.SWITCH_DRAFT,
+                        "Already on `" + currentBranch + "` — nothing to do.\n");
+            }
+            getLog().info("Majority already on " + branch + ", but "
+                    + deviators + " deviate" + (deviators.size() == 1 ? "s" : "")
+                    + " — reconciling per-member (IKE-Network/ike-issues#904).");
         }
 
         // Validate the target branch exists somewhere (or is main)
@@ -247,7 +269,20 @@ public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
 
             if (compBranch.equals(branch)) {
                 getLog().info("  " + Ansi.green("✓ ") + name + " — already on " + branch);
-                effects.put(name, "already on `" + branch + "`");
+                // A stale .ike/vcs-state naming another branch would make the
+                // bridge switch this member AWAY from the target at the next
+                // goal — refresh it while confirming the branch (#903/#904).
+                boolean staleState = VcsState.readFrom(dir.toPath())
+                        .map(s -> !branch.equals(s.branch()))
+                        .orElse(false);
+                if (staleState && !draft) {
+                    VcsOperations.refreshStaleBranchState(dir, getLog());
+                }
+                effects.put(name, "already on `" + branch + "`"
+                        + (staleState
+                                ? (draft ? " — would refresh stale vcs-state"
+                                         : " — vcs-state refreshed")
+                                : ""));
                 switched++;
                 continue;
             }
@@ -298,6 +333,11 @@ public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
             // ── Checkout target ──────────────────────────────────
             getLog().info("  " + Ansi.cyan("→ ") + name + ": " + compBranch + " → " + branch);
             VcsOperations.checkout(dir, getLog(), branch);
+            // Record the member's switch as a VCS action — without it, the
+            // bridge sync in the next goal restores the member's state-file
+            // branch and undoes this switch (#903/#904). The workspace root
+            // gets the same treatment in switchWorkspaceRepo.
+            VcsOperations.recordSwitch(dir, getLog());
             switched++;
 
             // ── Arrive flow: apply stash on target branch if any ─

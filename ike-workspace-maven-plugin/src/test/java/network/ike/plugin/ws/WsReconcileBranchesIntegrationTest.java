@@ -1,5 +1,8 @@
 package network.ike.plugin.ws;
 
+import network.ike.plugin.ws.vcs.VcsOperations;
+import network.ike.plugin.ws.vcs.VcsState;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -7,6 +10,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -407,7 +411,132 @@ class WsReconcileBranchesIntegrationTest {
         }
     }
 
+    // ── from=manifest completion (#904): create + record + refresh ───
+
+    @Test
+    void fromManifest_createsDeclaredBranchWhenAbsentEverywhere() throws Exception {
+        // The ike-starter-set incident shape: yaml declares a feature branch
+        // the checkout has never had — the old plain `git checkout` failed;
+        // the remediation direction must create it from HEAD (#904).
+        String yaml = Files.readString(helper.workspaceYaml(), StandardCharsets.UTF_8);
+        yaml = yaml.replaceFirst(
+                "(lib-a:\\s+type: software\\s+description: [^\\n]+\\s+repo: [^\\n]+\\s+branch: )main",
+                "$1feature/chronology-builder");
+        Files.writeString(helper.workspaceYaml(), yaml, StandardCharsets.UTF_8);
+
+        WsReconcileBranchesDraftMojo mojo = TestLog.createMojo(WsReconcileBranchesDraftMojo.class);
+        mojo.manifest = helper.workspaceYaml().toFile();
+        mojo.scope = "branches";
+        mojo.from = "manifest";
+        mojo.publish = true;
+
+        mojo.execute();
+
+        assertThat(execCapture(tempDir.resolve("lib-a"),
+                "git", "rev-parse", "--abbrev-ref", "HEAD"))
+                .isEqualTo("feature/chronology-builder");
+    }
+
+    @Test
+    void fromManifest_recordsVcsStateSoBridgeSyncKeepsTheBranch() throws Exception {
+        // A bridge-managed member: state file (like the checkout) on main,
+        // manifest declaring develop. Without recording the switch as a VCS
+        // action, the next goal's bridge sync restores main (#903/#904).
+        exec(tempDir.resolve("lib-a"), "git", "checkout", "-b", "develop");
+        exec(tempDir.resolve("lib-a"), "git", "checkout", "main");
+        writeState(tempDir.resolve("lib-a"), "main");
+
+        String yaml = Files.readString(helper.workspaceYaml(), StandardCharsets.UTF_8);
+        yaml = yaml.replaceFirst(
+                "(lib-a:\\s+type: software\\s+description: [^\\n]+\\s+repo: [^\\n]+\\s+branch: )main",
+                "$1develop");
+        Files.writeString(helper.workspaceYaml(), yaml, StandardCharsets.UTF_8);
+
+        WsReconcileBranchesDraftMojo mojo = TestLog.createMojo(WsReconcileBranchesDraftMojo.class);
+        mojo.manifest = helper.workspaceYaml().toFile();
+        mojo.scope = "branches";
+        mojo.from = "manifest";
+        mojo.publish = true;
+
+        mojo.execute();
+
+        Optional<VcsState> state = VcsState.readFrom(tempDir.resolve("lib-a"));
+        assertThat(state).isPresent();
+        assertThat(state.get().branch()).isEqualTo("develop");
+        assertThat(state.get().action()).isEqualTo(VcsState.Action.SWITCH);
+
+        // The remediation survives a simulated bridge sync.
+        VcsOperations.catchUp(tempDir.resolve("lib-a").toFile(), new TestLog());
+        assertThat(execCapture(tempDir.resolve("lib-a"),
+                "git", "rev-parse", "--abbrev-ref", "HEAD"))
+                .isEqualTo("develop");
+    }
+
+    @Test
+    void fromManifest_refreshesStaleStateWhenCheckoutAlreadyDeclared() throws Exception {
+        // Checkout already matches the manifest, but the state file remembers
+        // another branch — the bridge would switch the checkout AWAY at the
+        // next goal. from=manifest must refresh the state file (#904).
+        exec(tempDir.resolve("lib-a"), "git", "checkout", "-b", "feature/old");
+        exec(tempDir.resolve("lib-a"), "git", "checkout", "main");
+        writeState(tempDir.resolve("lib-a"), "feature/old");
+
+        WsReconcileBranchesDraftMojo mojo = TestLog.createMojo(WsReconcileBranchesDraftMojo.class);
+        mojo.manifest = helper.workspaceYaml().toFile();
+        mojo.scope = "branches";
+        mojo.from = "manifest";
+        mojo.publish = true;
+
+        mojo.execute();
+
+        Optional<VcsState> state = VcsState.readFrom(tempDir.resolve("lib-a"));
+        assertThat(state).isPresent();
+        assertThat(state.get().branch()).isEqualTo("main");
+
+        VcsOperations.catchUp(tempDir.resolve("lib-a").toFile(), new TestLog());
+        assertThat(execCapture(tempDir.resolve("lib-a"),
+                "git", "rev-parse", "--abbrev-ref", "HEAD"))
+                .isEqualTo("main");
+    }
+
+    @Test
+    void fromManifest_draft_previewsStateRefreshWithoutWriting() throws Exception {
+        // Draft previews the vcs-state refresh in the report but writes
+        // nothing (ws draft/publish semantic).
+        exec(tempDir.resolve("lib-a"), "git", "checkout", "-b", "feature/old");
+        exec(tempDir.resolve("lib-a"), "git", "checkout", "main");
+        writeState(tempDir.resolve("lib-a"), "feature/old");
+        String stateBefore = Files.readString(
+                tempDir.resolve("lib-a/.ike/vcs-state"), StandardCharsets.UTF_8);
+
+        WsReconcileBranchesDraftMojo mojo = TestLog.createMojo(WsReconcileBranchesDraftMojo.class);
+        mojo.manifest = helper.workspaceYaml().toFile();
+        mojo.scope = "branches";
+        mojo.from = "manifest";
+        mojo.publish = false; // draft
+
+        WorkspaceReportSpec spec = mojo.runGoal();
+
+        assertThat(spec.content()).contains("vcs-state refresh");
+        assertThat(Files.readString(
+                tempDir.resolve("lib-a/.ike/vcs-state"), StandardCharsets.UTF_8))
+                .isEqualTo(stateBefore);
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────
+
+    /**
+     * Writes a hook-style {@code .ike/vcs-state} recording the given branch
+     * at the repo's current HEAD, excluding {@code .ike/} from git the way
+     * production machines do via the global gitignore (which the hermetic
+     * surefire git config deliberately strips).
+     */
+    private static void writeState(Path repo, String branch) throws Exception {
+        Files.writeString(repo.resolve(".git/info/exclude"), ".ike/\n",
+                StandardCharsets.UTF_8);
+        VcsState.writeTo(repo, VcsState.create(
+                branch, VcsOperations.headSha(repo.toFile()), VcsState.Action.COMMIT));
+    }
 
     private void exec(Path workDir, String... command) throws Exception {
         Process process = new ProcessBuilder(command)

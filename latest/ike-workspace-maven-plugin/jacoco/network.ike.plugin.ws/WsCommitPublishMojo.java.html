@@ -60,7 +60,7 @@ public class WsCommitPublishMojo extends AbstractWorkspaceMojo {
     /**
      * Commit message. Required. When omitted on the command line, the
      * goal prompts interactively (terminal or IntelliJ Maven runner)
-     * via {@link AbstractWorkspaceMojo#requireParam}. Throws a clear
+     * via {@code AbstractWorkspaceMojo#requireParam()}. Throws a clear
      * error when running in a non-interactive context (CI, piped
      * input). The same resolved message is used for every repo in the
      * workspace iteration.

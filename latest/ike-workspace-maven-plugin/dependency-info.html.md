@@ -1,6 +1,6 @@
 ---
-date_published: 2026-07-03
-date_modified: 2026-07-03
+date_published: 2026-07-19
+date_modified: 2026-07-19
 canonical_url: https://ike.network/ike-platform/ike-workspace-maven-plugin/dependency-info.html
 ---
 
@@ -12,6 +12,6 @@ canonical_url: https://ike.network/ike-platform/ike-workspace-maven-plugin/depen
 <plugin>
   <groupId>network.ike.platform</groupId>
   <artifactId>ike-workspace-maven-plugin</artifactId>
-  <version>132</version>
+  <version>133</version>
 </plugin>
 ```

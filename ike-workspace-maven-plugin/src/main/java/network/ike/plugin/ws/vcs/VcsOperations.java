@@ -1000,6 +1000,57 @@ public class VcsOperations {
     }
 
     /**
+     * Record a branch switch this goal just performed in {@code dir} as a
+     * VCS action, exactly as the state-writing goals do, so the VCS-bridge
+     * sync in subsequent goals carries the new branch forward instead of
+     * restoring the branch the state file remembered
+     * (IKE-Network/ike-issues#903, #904). No-op for repositories without an
+     * {@code .ike/} directory — the bridge ignores those entirely, so there
+     * is nothing to record and no directory to invent.
+     *
+     * @param dir the repository root directory whose branch was switched
+     * @param log Maven logger
+     * @throws MojoException if writing the state file fails
+     */
+    public static void recordSwitch(File dir, Log log) throws MojoException {
+        if (!VcsState.isIkeManaged(dir.toPath())) {
+            return;
+        }
+        writeVcsState(dir, VcsState.Action.SWITCH);
+        log.info("  Recorded branch alignment in .ike/vcs-state (action=switch).");
+    }
+
+    /**
+     * Refresh a stale {@code .ike/vcs-state} whose recorded branch disagrees
+     * with the current checkout, when a goal has just confirmed the checkout
+     * as the aligned branch. Without the refresh, the bridge sync in the next
+     * goal would switch the checkout AWAY from the branch the goal just
+     * confirmed (IKE-Network/ike-issues#903, #904). A missing state file, or
+     * one already naming the current branch, is left untouched — a clean
+     * no-op stays a no-op, and this never invents bridge state.
+     *
+     * @param dir the repository root directory whose checkout was confirmed
+     * @param log Maven logger
+     * @return {@code true} when the state file was refreshed
+     * @throws MojoException if reading git state or writing the file fails
+     */
+    public static boolean refreshStaleBranchState(File dir, Log log)
+            throws MojoException {
+        Optional<VcsState> state = VcsState.readFrom(dir.toPath());
+        if (state.isEmpty()) {
+            return false;
+        }
+        String current = currentBranch(dir);
+        if (state.get().branch().equals(current)) {
+            return false;
+        }
+        log.info("  Refreshing stale .ike/vcs-state (recorded '"
+                + state.get().branch() + "', checkout on '" + current + "').");
+        writeVcsState(dir, VcsState.Action.SWITCH);
+        return true;
+    }
+
+    /**
      * Check whether the local HEAD has fallen behind the VCS state
      * file written by a coordinated workspace operation. Returns
      * {@code false} when the state file is simply stale relative to

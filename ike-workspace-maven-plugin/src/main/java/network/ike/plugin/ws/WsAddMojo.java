@@ -766,6 +766,12 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
      * uncommitted changes: heterogeneous branch state across a workspace is not a
      * supported configuration, and neither is silently carrying it forward.
      *
+     * <p>Every path that changes (or confirms) the branch also records the
+     * alignment in {@code .ike/vcs-state} via {@link #recordAlignment(Path)} —
+     * without that record, the VCS-bridge sync in the very next {@code ws:*}
+     * goal restores the state-file branch and silently undoes the alignment
+     * (IKE-Network/ike-issues#903).
+     *
      * @param subprojectDir the pre-existing subproject checkout
      * @throws MojoException if the worktree has uncommitted changes, or a git step fails
      */
@@ -773,6 +779,11 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
         String current = gitCapture(subprojectDir, "git", "rev-parse", "--abbrev-ref", "HEAD");
         if (branch.equals(current)) {
             getLog().info("  Existing checkout already on '" + branch + "'.");
+            // Even with the checkout already correct, a stale state file
+            // naming a different branch would make the next goal's bridge
+            // sync switch the checkout AWAY from the workspace branch.
+            // Refresh it; a clean no-op stays a no-op.
+            VcsOperations.refreshStaleBranchState(subprojectDir.toFile(), getLog());
             return;
         }
         String dirty = gitCapture(subprojectDir, "git", "status", "--porcelain");
@@ -789,6 +800,7 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
             getLog().info("  Existing checkout on '" + current
                     + "' — switching to existing local branch '" + branch + "'.");
             ReleaseSupport.exec(subprojectDir.toFile(), getLog(), "git", "checkout", branch);
+            recordAlignment(subprojectDir);
             return;
         }
         if (gitSucceeds(subprojectDir, "git", "fetch", "origin",
@@ -797,11 +809,27 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
                     + "' — tracking remote branch '" + branch + "'.");
             ReleaseSupport.exec(subprojectDir.toFile(), getLog(),
                     "git", "checkout", "-b", branch, "origin/" + branch);
+            recordAlignment(subprojectDir);
             return;
         }
         getLog().info("  Existing checkout on '" + current + "' and no branch '" + branch
                 + "' anywhere — creating it from the current HEAD.");
         ReleaseSupport.exec(subprojectDir.toFile(), getLog(), "git", "checkout", "-b", branch);
+        recordAlignment(subprojectDir);
+    }
+
+    /**
+     * Records a completed branch alignment as a VCS action in
+     * {@code .ike/vcs-state} via {@link VcsOperations#recordSwitch}, so the
+     * VCS-bridge sync in subsequent goals carries the aligned branch forward
+     * instead of restoring the branch the state file remembered
+     * (IKE-Network/ike-issues#903).
+     *
+     * @param subprojectDir the aligned subproject checkout
+     * @throws MojoException if writing the state file fails
+     */
+    private void recordAlignment(Path subprojectDir) throws MojoException {
+        VcsOperations.recordSwitch(subprojectDir.toFile(), getLog());
     }
 
     /**

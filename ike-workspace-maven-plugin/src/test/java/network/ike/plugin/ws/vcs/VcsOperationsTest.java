@@ -412,6 +412,62 @@ class VcsOperationsTest {
         }
     }
 
+    // ── recordSwitch / refreshStaleBranchState (#903/#904) ────────
+
+    @Test
+    void recordSwitch_noopWithoutIkeDirectory() throws Exception {
+        VcsOperations.recordSwitch(repoDir, log);
+
+        assertThat(tempDir.resolve(".ike")).doesNotExist();
+    }
+
+    @Test
+    void recordSwitch_writesSwitchStateAtCurrentBranchAndSha() throws Exception {
+        Files.createDirectories(tempDir.resolve(".ike"));
+        exec("git", "checkout", "-b", "feature/x");
+
+        VcsOperations.recordSwitch(repoDir, log);
+
+        Optional<VcsState> state = VcsState.readFrom(tempDir);
+        assertThat(state).isPresent();
+        assertThat(state.get().branch()).isEqualTo("feature/x");
+        assertThat(state.get().sha()).isEqualTo(VcsOperations.headSha(repoDir));
+        assertThat(state.get().action()).isEqualTo(VcsState.Action.SWITCH);
+    }
+
+    @Test
+    void refreshStaleBranchState_falseWithoutStateFile() throws Exception {
+        assertThat(VcsOperations.refreshStaleBranchState(repoDir, log)).isFalse();
+        assertThat(tempDir.resolve(".ike")).doesNotExist();
+    }
+
+    @Test
+    void refreshStaleBranchState_falseWhenStateAgrees() throws Exception {
+        VcsOperations.writeVcsState(repoDir, VcsState.Action.COMMIT);
+        String before = Files.readString(tempDir.resolve(".ike/vcs-state"),
+                StandardCharsets.UTF_8);
+
+        assertThat(VcsOperations.refreshStaleBranchState(repoDir, log)).isFalse();
+        assertThat(Files.readString(tempDir.resolve(".ike/vcs-state"),
+                StandardCharsets.UTF_8)).isEqualTo(before);
+    }
+
+    @Test
+    void refreshStaleBranchState_refreshesWhenStateNamesAnotherBranch()
+            throws Exception {
+        VcsOperations.writeVcsState(repoDir, VcsState.Action.COMMIT);
+        exec("git", "checkout", "-b", "feature/y");
+
+        assertThat(VcsOperations.refreshStaleBranchState(repoDir, log)).isTrue();
+
+        Optional<VcsState> state = VcsState.readFrom(tempDir);
+        assertThat(state).isPresent();
+        assertThat(state.get().branch()).isEqualTo("feature/y");
+        assertThat(state.get().action()).isEqualTo(VcsState.Action.SWITCH);
+        // A refreshed state file agrees with the checkout — no sync needed.
+        assertThat(VcsOperations.needsSync(repoDir)).isFalse();
+    }
+
     // ── Helpers ──────────────────────────────────────────────────
 
     /** Test double capturing log lines by level, for asserting on {@code sync()}'s output. */

@@ -1,5 +1,8 @@
 package network.ike.plugin.ws;
 
+import network.ike.plugin.ws.vcs.VcsOperations;
+import network.ike.plugin.ws.vcs.VcsState;
+
 import org.apache.maven.api.plugin.MojoException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -10,6 +13,7 @@ import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -21,6 +25,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * the existing-directory path silently kept whatever branch the checkout happened to
  * be on, which is exactly how ike-starter-set's checkout stayed on {@code main} while
  * its workspace.yaml entry declared {@code feature/chronology-builder}.
+ *
+ * <p>The state-file scenarios cover IKE-Network/ike-issues#903: an alignment that
+ * does not record itself in {@code .ike/vcs-state} is undone by the VCS-bridge sync
+ * in the very next {@code ws:*} goal, which restores the state-file branch.
  */
 class WsAddExistingCheckoutAlignmentTest {
 
@@ -88,7 +96,99 @@ class WsAddExistingCheckoutAlignmentTest {
         assertThat(currentBranch(sub)).isEqualTo("main");
     }
 
+    @Test
+    void alignment_records_a_switch_action_in_the_state_file() throws Exception {
+        // The ike-starter-set case with the bridge active: checkout on main,
+        // state file (written by hooks) also on main, workspace branch elsewhere.
+        Path sub = repoOnBranch("main");
+        writeState(sub, "main");
+
+        align(mojo("feature/chronology-builder"), sub);
+
+        assertThat(currentBranch(sub)).isEqualTo("feature/chronology-builder");
+        Optional<VcsState> state = VcsState.readFrom(sub);
+        assertThat(state).isPresent();
+        assertThat(state.get().branch()).isEqualTo("feature/chronology-builder");
+        assertThat(state.get().action()).isEqualTo(VcsState.Action.SWITCH);
+        assertThat(state.get().sha())
+                .isEqualTo(VcsOperations.headSha(sub.toFile()));
+    }
+
+    @Test
+    void alignment_survives_a_simulated_bridge_sync() throws Exception {
+        // The #903 regression proper: before the fix, catchUp() saw a state
+        // file naming main, declared the repo out of sync, and switched the
+        // freshly aligned checkout straight back — the exact "Switching
+        // branch: feature/chronology-builder → main" observed in the wild.
+        Path sub = repoOnBranch("main");
+        writeState(sub, "main");
+
+        align(mojo("feature/chronology-builder"), sub);
+        VcsOperations.catchUp(sub.toFile(), new TestLog());
+
+        assertThat(currentBranch(sub)).isEqualTo("feature/chronology-builder");
+    }
+
+    @Test
+    void refreshes_a_stale_state_file_when_already_on_the_workspace_branch() throws Exception {
+        // Checkout already correct but the state file remembers another
+        // branch — without a refresh, the next goal's bridge sync would
+        // switch the checkout AWAY from the workspace branch.
+        Path sub = repoOnBranch("feature/chronology-builder");
+        writeState(sub, "main");
+
+        align(mojo("feature/chronology-builder"), sub);
+        VcsOperations.catchUp(sub.toFile(), new TestLog());
+
+        assertThat(currentBranch(sub)).isEqualTo("feature/chronology-builder");
+        Optional<VcsState> state = VcsState.readFrom(sub);
+        assertThat(state).isPresent();
+        assertThat(state.get().branch()).isEqualTo("feature/chronology-builder");
+    }
+
+    @Test
+    void does_not_invent_state_for_a_checkout_without_an_ike_directory() throws Exception {
+        // Non-bridge repos have no .ike/ — alignment must not create one.
+        Path sub = repoOnBranch("main");
+
+        align(mojo("feature/chronology-builder"), sub);
+
+        assertThat(currentBranch(sub)).isEqualTo("feature/chronology-builder");
+        assertThat(sub.resolve(".ike")).doesNotExist();
+    }
+
+    @Test
+    void noop_leaves_an_agreeing_state_file_untouched() throws Exception {
+        // Already on the branch, state file agrees — a pure no-op must not
+        // rewrite the file (timestamp/machine churn would dirty the worktree).
+        Path sub = repoOnBranch("feature/chronology-builder");
+        writeState(sub, "feature/chronology-builder");
+        String before = Files.readString(
+                sub.resolve(".ike/vcs-state"), StandardCharsets.UTF_8);
+
+        align(mojo("feature/chronology-builder"), sub);
+
+        String after = Files.readString(
+                sub.resolve(".ike/vcs-state"), StandardCharsets.UTF_8);
+        assertThat(after).isEqualTo(before);
+    }
+
     // ── Helpers ──────────────────────────────────────────────────
+
+    /**
+     * Writes a hook-style {@code .ike/vcs-state} recording the given branch at
+     * the repo's current HEAD — the state a bridge-managed repo carries before
+     * any alignment. Also excludes {@code .ike/} from git the way production
+     * machines do via the global gitignore (which the hermetic surefire git
+     * config deliberately strips) — without it, the state file itself would
+     * trip the alignment's dirty-worktree refusal.
+     */
+    private static void writeState(Path repo, String branch) throws Exception {
+        Files.writeString(repo.resolve(".git/info/exclude"), ".ike/\n",
+                StandardCharsets.UTF_8);
+        VcsState.writeTo(repo, VcsState.create(
+                branch, VcsOperations.headSha(repo.toFile()), VcsState.Action.COMMIT));
+    }
 
     /** A real repo with one commit, HEAD on the named branch. */
     private Path repoOnBranch(String branch) throws Exception {

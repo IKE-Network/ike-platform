@@ -308,25 +308,6 @@ public enum PreflightCondition {
     },
 
     /**
-     * When a subproject's {@code <parent>} declares the same GA as the
-     * workspace aggregator's own {@code <parent>}, enforce the two
-     * coherence rules from #324:
-     *
-     * <ol>
-     *   <li>{@code <parent><version>} matches the workspace's.</li>
-     *   <li>{@code <parent>} block includes an empty
-     *       {@code <relativePath/>} to prevent the Maven 4
-     *       parent-cycle error.</li>
-     * </ol>
-     *
-     * <p>This preflight is the release-gate analog of
-     * {@code ws:scaffold-draft}'s coherence check (#324; folded
-     * from the retired {@code ws:verify} per #393). The scaffold-draft
-     * check warns; the preflight blocks. Composed via Preflight so
-     * release-draft surfaces it as a warning and release-publish
-     * promotes it to a hard error.
-     */
-    /**
      * No on-disk gh-pages-style site output leaks at
      * {@code <projectDir>/<artifactId>/<artifactId>/index.html} —
      * whether or not git tracks them.
@@ -478,6 +459,25 @@ public enum PreflightCondition {
         }
     },
 
+    /**
+     * When a subproject's {@code <parent>} declares the same GA as the
+     * workspace aggregator's own {@code <parent>}, enforce the two
+     * coherence rules from #324:
+     *
+     * <ol>
+     *   <li>{@code <parent><version>} matches the workspace's.</li>
+     *   <li>{@code <parent>} block includes an empty
+     *       {@code <relativePath/>} to prevent the Maven 4
+     *       parent-cycle error.</li>
+     * </ol>
+     *
+     * <p>This preflight is the release-gate analog of
+     * {@code ws:scaffold-draft}'s coherence check (#324; folded
+     * from the retired {@code ws:verify} per #393). The scaffold-draft
+     * check warns; the preflight blocks. Composed via Preflight so
+     * release-draft surfaces it as a warning and release-publish
+     * promotes it to a hard error.
+     */
     PARENT_COHERENCE(
             "Subprojects sharing the workspace's parent GA have "
                     + "matching version + <relativePath/>") {

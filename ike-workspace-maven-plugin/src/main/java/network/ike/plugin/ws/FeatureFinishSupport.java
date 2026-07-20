@@ -95,6 +95,17 @@ class FeatureFinishSupport {
     }
 
     /**
+     * Sentinel returned by {@link #validateComponent} when a subproject's
+     * local checkout is on the target branch but workspace.yaml still
+     * names the feature branch. Indicates the subproject was processed
+     * by a prior, partially-failed invocation (its squash/merge already
+     * landed) and the only remaining work is to bring workspace.yaml in
+     * line. Callers should auto-reconcile the yaml rather than skip.
+     * IKE-Network/ike-issues#535.
+     */
+    static final String ALREADY_DONE = "ALREADY_DONE";
+
+    /**
      * Validate that a subproject is eligible for feature-finish.
      *
      * <p>Checks three consistency requirements:
@@ -109,25 +120,17 @@ class FeatureFinishSupport {
      * is not supported. The build fails with a diagnostic rather than
      * silently proceeding with inconsistent state.
      *
-     * @param root       workspace root directory
-     * @param name       subproject name
-     * @param branchName expected git branch (e.g., "feature/my-work")
-     * @param subproject  the workspace.yaml subproject record
-     * @param mojo       the calling mojo (for git operations)
+     * @param root         workspace root directory
+     * @param name         subproject name
+     * @param branchName   expected git branch (e.g., "feature/my-work")
+     * @param targetBranch branch the feature merges into (e.g., "main");
+     *                     used to recognize prior partially-completed runs
+     * @param subproject   the workspace.yaml subproject record
+     * @param mojo         the calling mojo (for git operations)
      * @return null if eligible, "MODIFIED" for uncommitted changes,
+     *         {@link #ALREADY_DONE} for a prior partially-completed run,
      *         or a descriptive skip/error reason string
      */
-    /**
-     * Sentinel returned by {@link #validateComponent} when a subproject's
-     * local checkout is on the target branch but workspace.yaml still
-     * names the feature branch. Indicates the subproject was processed
-     * by a prior, partially-failed invocation (its squash/merge already
-     * landed) and the only remaining work is to bring workspace.yaml in
-     * line. Callers should auto-reconcile the yaml rather than skip.
-     * IKE-Network/ike-issues#535.
-     */
-    static final String ALREADY_DONE = "ALREADY_DONE";
-
     static String validateComponent(File root, String name, String branchName,
                                      String targetBranch,
                                      Subproject subproject,

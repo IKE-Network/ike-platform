@@ -516,7 +516,29 @@ abstract class AbstractWorkspaceMojo implements Mojo {
     @Override
     public final void execute() throws MojoException {
         surfaceBranchIncoherence();
-        WorkspaceReportSpec report = runGoal();
+        WorkspaceReportSpec report;
+        try {
+            report = runGoal();
+        } catch (WorkspaceReportException e) {
+            // #935: the goal failed but still produced findings worth
+            // recording. Persist its report (stamped by WorkspaceReport with
+            // this run's timestamp) before the failure propagates, so a stale
+            // prior report can never masquerade as the current one.
+            writeReport(e.report());
+            throw e;
+        }
+        writeReport(report);
+    }
+
+    /**
+     * Write one {@code ws:*} goal report to its per-goal file at the
+     * workspace root, swallowing a missing-workspace-root resolution error
+     * to a debug line (the goal's own failure, if any, has already been
+     * surfaced).
+     *
+     * @param report the report to persist
+     */
+    private void writeReport(WorkspaceReportSpec report) {
         try {
             WorkspaceReport.write(workspaceRoot().toPath(),
                     report.goal().qualified(), report.content(), getLog());
@@ -573,7 +595,12 @@ abstract class AbstractWorkspaceMojo implements Mojo {
      * (IKE-Network/ike-issues#413 / #407).
      *
      * <p>On failure, throw {@link MojoException} as usual — a failed
-     * goal produces no report, and Maven surfaces the exception.
+     * goal produces no report, and Maven surfaces the exception. When a
+     * goal fails <em>after</em> gathering findings worth recording (a
+     * partial multi-subproject walk, say), throw a
+     * {@link WorkspaceReportException} instead: {@code execute()} persists
+     * its carried report before propagating the failure, so a stale prior
+     * report cannot masquerade as the current one (IKE-Network/ike-issues#935).
      *
      * @return the report this goal produced (never {@code null})
      * @throws MojoException if the goal fails

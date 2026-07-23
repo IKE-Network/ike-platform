@@ -7,6 +7,10 @@ import network.ike.plugin.ws.reconcile.Reconciler;
 import network.ike.plugin.ws.reconcile.ReconcilerOptions;
 import network.ike.plugin.ws.reconcile.ReconcilerRegistry;
 import network.ike.plugin.ws.reconcile.WorkspaceContext;
+import network.ike.plugin.ws.preflight.Preflight;
+import network.ike.plugin.ws.preflight.PreflightCondition;
+import network.ike.plugin.ws.preflight.PreflightContext;
+import network.ike.plugin.ws.vcs.VcsOperations;
 import network.ike.plugin.ws.verify.WorkspaceVerifier;
 import network.ike.workspace.Subproject;
 import network.ike.workspace.WorkspaceGraph;
@@ -97,12 +101,22 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
         WorkspaceGraph graph = loadGraph();
         File root = workspaceRoot();
         String goal = publish ? "ike:scaffold-publish" : "ike:scaffold-draft";
-        String goalLabel = (publish ? WsGoal.SCAFFOLD_PUBLISH
-                                    : WsGoal.SCAFFOLD_DRAFT).qualified();
+        WsGoal goalEnum = publish ? WsGoal.SCAFFOLD_PUBLISH
+                                  : WsGoal.SCAFFOLD_DRAFT;
+        String goalLabel = goalEnum.qualified();
 
         getLog().info("");
         getLog().info(goalLabel);
         getLog().info("══════════════════════════════════════════════════════════════");
+
+        // #919: in publish mode, require clean working trees up front — before
+        // the reconcilers below rewrite POMs — so any dirtiness observed after
+        // reconciliation is provably this goal's own and can be committed under
+        // a goal-owned message without sweeping user WIP into it. Mirrors the
+        // #537 precedent in ws:checkpoint-publish (requireCleanUserState).
+        if (publish) {
+            requireCleanTreesForPublish(graph, root);
+        }
 
         // Accumulate the markdown report alongside the console output
         // (IKE-Network/ike-issues#407) so the goal writes its
@@ -131,6 +145,17 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
                 ? "Workspace reconcilers applied"
                 : "Workspace reconciler drift");
         runWorkspaceReconcilers(graph, root, report);
+
+        // #919: the reconcilers just rewrote each subproject's POM (parent
+        // version cascade, alignment, …), dirtying every tree. Commit those
+        // goal-owned edits now, under a goal-owned message, so the
+        // per-subproject ike:scaffold-publish fan-out below sees a clean tree
+        // and does not reject the goal on changes it produced itself (the #537
+        // contract). Each subproject's ike:scaffold-publish then authors and
+        // commits its own scaffold output in isolation, as before.
+        if (publish) {
+            commitReconcilerEdits(graph, root, report);
+        }
 
         // #417: foundation currency — discover whether a newer parent
         // has been released and offer a deterministic upgrade command.
@@ -218,16 +243,27 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
         }
 
         if (failed > 0) {
-            throw new MojoException(
-                    (publish ? WsGoal.SCAFFOLD_PUBLISH : WsGoal.SCAFFOLD_DRAFT)
-                            .qualified()
-                    + " saw " + failed + " per-subproject failure(s); "
-                    + "see logs above.");
+            // #935: this run failed, but it still gathered per-subproject
+            // results and any newly surfaced sections (e.g. a #417 foundation
+            // upgrade). Persist the report — prefixed with a failure banner so
+            // a partial/failed report cannot be mistaken for a clean current
+            // one — before failing. WorkspaceReportException routes through the
+            // base class's write-then-propagate path so the on-disk
+            // ws꞉scaffold-*.md always reflects this run.
+            int walked = processed + failed;
+            String banner = "> ⚠️ **Run failed** — " + failed + " of " + walked
+                    + " target(s) failed. This report reflects that failed "
+                    + "run; see the failures under **Subprojects walked** "
+                    + "below.\n\n";
+            WorkspaceReportSpec failedSpec = new WorkspaceReportSpec(
+                    goalEnum, banner + report.build());
+            throw new WorkspaceReportException(
+                    goalEnum.qualified() + " saw " + failed
+                            + " per-subproject failure(s); see logs above.",
+                    failedSpec);
         }
 
-        return new WorkspaceReportSpec(
-                publish ? WsGoal.SCAFFOLD_PUBLISH : WsGoal.SCAFFOLD_DRAFT,
-                report.build());
+        return new WorkspaceReportSpec(goalEnum, report.build());
     }
 
     // ── Bare mode: single-repo scaffold (no workspace.yaml) ──────────
@@ -513,6 +549,103 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
             body.append("  - `").append(line.strip()).append("`\n");
         }
         return true;
+    }
+
+    /**
+     * Commit message for the goal-owned reconciliation edits committed before
+     * the per-subproject fan-out (IKE-Network/ike-issues#919).
+     */
+    static final String RECONCILE_COMMIT_MESSAGE =
+            "ws:scaffold-publish: commit reconciliation edits\n\n"
+            + "Parent-version cascade and other workspace reconciler output,\n"
+            + "committed by the goal so the per-subproject ike:scaffold-publish\n"
+            + "fan-out runs against a clean tree (#537 self-trip contract).\n\n"
+            + "Refs: IKE-Network/ike-issues#919";
+
+    /**
+     * Require every working tree clean before publish-mode reconciliation
+     * (IKE-Network/ike-issues#919). Runs {@link
+     * PreflightCondition#WORKING_TREE_CLEAN} across the workspace so that any
+     * dirtiness observed after the reconcilers run originates from the goal's
+     * own writes — never from user WIP that {@link #commitReconcilerEdits}
+     * would otherwise sweep into a goal-owned commit. Mirrors {@code
+     * ws:checkpoint-publish}'s pre-alignment preflight (#537).
+     *
+     * @param graph the workspace graph
+     * @param root  the workspace root directory
+     * @throws MojoException if any working tree has uncommitted changes
+     */
+    void requireCleanTreesForPublish(WorkspaceGraph graph, File root) {
+        Preflight.of(
+                List.of(PreflightCondition.WORKING_TREE_CLEAN),
+                PreflightContext.of(root, graph, graph.topologicalSort()))
+                .requirePassed(WsGoal.SCAFFOLD_PUBLISH);
+    }
+
+    /**
+     * Commit the goal-owned edits the workspace reconcilers just produced — the
+     * parent-version cascade and any alignment/field writes — under {@link
+     * #RECONCILE_COMMIT_MESSAGE}, in the workspace root and each subproject
+     * (IKE-Network/ike-issues#919). Without this, the reconcilers dirty every
+     * POM and the per-subproject {@code ike:scaffold-publish} fan-out rejects
+     * the very changes this run produced (a #537-class self-trip). A no-op per
+     * repo the reconcilers left clean; per-repo failures are warnings so one
+     * bad subproject does not abort the walk (the fan-out's own preflight still
+     * fails loudly on anything left dirty).
+     *
+     * <p>The preflight in {@link #requireCleanTreesForPublish} guaranteed each
+     * tree was clean before reconciliation, so staging picks up only the
+     * reconcilers' output.
+     *
+     * @param graph  the workspace graph
+     * @param root   the workspace root directory
+     * @param report the goal report being accumulated
+     */
+    void commitReconcilerEdits(WorkspaceGraph graph, File root,
+            GoalReportBuilder report) {
+        List<String> committed = new ArrayList<>();
+        if (new File(root, ".git").exists()
+                && commitIfDirty(root, "(workspace root)")) {
+            committed.add("(workspace root)");
+        }
+        for (String name : graph.topologicalSort()) {
+            File dir = new File(root, name);
+            if (new File(dir, ".git").exists() && commitIfDirty(dir, name)) {
+                committed.add(name);
+            }
+        }
+        if (!committed.isEmpty()) {
+            report.section("Reconciliation edits committed")
+                    .paragraph("Committed goal-owned reconciler output in "
+                            + committed.size() + " repo(s) before the "
+                            + "per-subproject scaffold fan-out "
+                            + "(IKE-Network/ike-issues#919): `"
+                            + String.join("`, `", committed) + "`.");
+        }
+    }
+
+    /**
+     * Commit every change in {@code dir} under {@link #RECONCILE_COMMIT_MESSAGE}
+     * when the tree is dirty; a no-op when clean.
+     *
+     * @param dir   the repo directory
+     * @param label the repo label for logs
+     * @return {@code true} if a commit was made
+     */
+    private boolean commitIfDirty(File dir, String label) {
+        if (VcsOperations.isClean(dir)) {
+            return false;
+        }
+        try {
+            VcsOperations.addAll(dir, getLog());
+            VcsOperations.commit(dir, getLog(), RECONCILE_COMMIT_MESSAGE);
+            getLog().info("  Committed reconciliation edits in " + label);
+            return true;
+        } catch (MojoException e) {
+            getLog().warn("Could not commit reconciliation edits in " + label
+                    + ": " + e.getMessage());
+            return false;
+        }
     }
 
     /**

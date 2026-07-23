@@ -554,40 +554,101 @@ public final class SubprojectInitializer {
 
     private void writeSubprojectClaudeMd(Path subprojectDir, Subproject subproject) {
 <span class="fc" id="L556">        Path file = subprojectDir.resolve(&quot;CLAUDE.md&quot;);</span>
+<span class="fc" id="L557">        String generated = generateComponentClaudeMd(subproject);</span>
         try {
-<span class="fc" id="L558">            Files.writeString(file, generateComponentClaudeMd(subproject),</span>
+<span class="fc bfc" id="L559" title="All 2 branches covered.">            String existing = Files.exists(file)</span>
+<span class="fc" id="L560">                    ? Files.readString(file, StandardCharsets.UTF_8) : null;</span>
+            // Regenerate without destroying content the template does not own:
+            // ike-managed regions are preserved verbatim (#920) and any
+            // hand-authored ## sections are rescued to CLAUDE-&lt;name&gt;.md rather
+            // than dropped (#917).
+<span class="fc" id="L565">            ClaudeMdMerge.Result merged = ClaudeMdMerge.merge(existing, generated);</span>
+<span class="pc bpc" id="L566" title="1 of 2 branches missed.">            if (!merged.rescued().isEmpty()) {</span>
+<span class="nc" id="L567">                rescueSectionsToNotes(subprojectDir, subproject.name(),</span>
+<span class="nc" id="L568">                        merged.rescued());</span>
+            }
+<span class="fc" id="L570">            Files.writeString(file, merged.claudeMd(), StandardCharsets.UTF_8);</span>
+<span class="nc" id="L571">        } catch (IOException e) {</span>
+<span class="nc" id="L572">            log.debug(&quot;Could not write CLAUDE.md for &quot; + subproject.name()</span>
+<span class="nc" id="L573">                    + &quot;: &quot; + e.getMessage());</span>
+<span class="fc" id="L574">        }</span>
+<span class="fc" id="L575">    }</span>
+
+    /**
+     * Preserve hand-authored sections that {@link #writeSubprojectClaudeMd}
+     * would otherwise drop when it regenerates {@code CLAUDE.md}, by appending
+     * them to {@code CLAUDE-&lt;name&gt;.md} — the file the scaffold never overwrites
+     * (IKE-Network/ike-issues#917). Idempotent: a section already present in the
+     * notes file (e.g. copied there by {@link #ensureClaudeNotes} on the first
+     * migration) is not appended again, so repeat scaffold runs never duplicate
+     * it. Warns loudly, naming each rescued section, so the move is never silent.
+     *
+     * @param dir      the subproject directory
+     * @param name     the subproject name (drives the {@code CLAUDE-&lt;name&gt;.md} file)
+     * @param sections the non-template sections to preserve
+     */
+    private void rescueSectionsToNotes(Path dir, String name,
+            List&lt;ClaudeMdMerge.Section&gt; sections) {
+<span class="nc" id="L592">        Path notesFile = dir.resolve(&quot;CLAUDE-&quot; + name + &quot;.md&quot;);</span>
+        try {
+<span class="nc bnc" id="L594" title="All 2 branches missed.">            String notes = Files.exists(notesFile)</span>
+<span class="nc" id="L595">                    ? Files.readString(notesFile, StandardCharsets.UTF_8) : &quot;&quot;;</span>
+<span class="nc" id="L596">            StringBuilder appended = new StringBuilder(notes);</span>
+<span class="nc" id="L597">            List&lt;String&gt; rescuedTitles = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L598" title="All 2 branches missed.">            for (ClaudeMdMerge.Section section : sections) {</span>
+<span class="nc bnc" id="L599" title="All 2 branches missed.">                if (notes.contains(section.text().strip())) {</span>
+<span class="nc" id="L600">                    continue;  // already preserved (e.g. by first-run migration)</span>
+                }
+<span class="nc bnc" id="L602" title="All 2 branches missed.">                if (appended.length() &gt; 0</span>
+<span class="nc bnc" id="L603" title="All 2 branches missed.">                        &amp;&amp; appended.charAt(appended.length() - 1) != '\n') {</span>
+<span class="nc" id="L604">                    appended.append('\n');</span>
+                }
+<span class="nc" id="L606">                appended.append(&quot;\n&lt;!-- Preserved from CLAUDE.md by &quot;</span>
+                                + &quot;ws:scaffold-init &quot;
+                                + &quot;(IKE-Network/ike-issues#917). --&gt;\n&quot;)
+<span class="nc" id="L609">                        .append(section.text().stripTrailing()).append('\n');</span>
+<span class="nc" id="L610">                rescuedTitles.add(section.title());</span>
+<span class="nc" id="L611">            }</span>
+<span class="nc bnc" id="L612" title="All 2 branches missed.">            if (rescuedTitles.isEmpty()) {</span>
+<span class="nc" id="L613">                return;</span>
+            }
+<span class="nc" id="L615">            Files.writeString(notesFile, appended.toString(),</span>
                     StandardCharsets.UTF_8);
-<span class="nc" id="L560">        } catch (IOException e) {</span>
-<span class="nc" id="L561">            log.debug(&quot;Could not write CLAUDE.md for &quot; + subproject.name()</span>
-<span class="nc" id="L562">                    + &quot;: &quot; + e.getMessage());</span>
-<span class="fc" id="L563">        }</span>
-<span class="fc" id="L564">    }</span>
+<span class="nc" id="L617">            log.warn(Ansi.yellow(&quot;  ⚠ &quot;) + name + &quot; — preserved &quot;</span>
+<span class="nc" id="L618">                    + rescuedTitles.size() + &quot; hand-authored CLAUDE.md &quot;</span>
+                    + &quot;section(s) into CLAUDE-&quot; + name + &quot;.md: &quot;
+<span class="nc" id="L620">                    + String.join(&quot;, &quot;, rescuedTitles));</span>
+<span class="nc" id="L621">        } catch (IOException e) {</span>
+<span class="nc" id="L622">            log.warn(&quot;    Could not preserve hand-authored CLAUDE.md sections &quot;</span>
+<span class="nc" id="L623">                    + &quot;for &quot; + name + &quot;: &quot; + e.getMessage());</span>
+<span class="nc" id="L624">        }</span>
+<span class="nc" id="L625">    }</span>
 
     private void ensureClaudeNotes(Path dir, String name) {
-<span class="fc" id="L567">        Path notesFile = dir.resolve(&quot;CLAUDE-&quot; + name + &quot;.md&quot;);</span>
-<span class="fc bfc" id="L568" title="All 2 branches covered.">        if (Files.exists(notesFile)) {</span>
-<span class="fc" id="L569">            return;</span>
+<span class="fc" id="L628">        Path notesFile = dir.resolve(&quot;CLAUDE-&quot; + name + &quot;.md&quot;);</span>
+<span class="fc bfc" id="L629" title="All 2 branches covered.">        if (Files.exists(notesFile)) {</span>
+<span class="fc" id="L630">            return;</span>
         }
         try {
-<span class="fc" id="L572">            Path existingClaudeMd = dir.resolve(&quot;CLAUDE.md&quot;);</span>
-<span class="pc bpc" id="L573" title="1 of 2 branches missed.">            if (Files.exists(existingClaudeMd)) {</span>
-<span class="nc" id="L574">                String existing = Files.readString(existingClaudeMd, StandardCharsets.UTF_8);</span>
-<span class="nc" id="L575">                String migrated = &quot;# &quot; + name + &quot; — Project Notes\n\n&quot;</span>
+<span class="fc" id="L633">            Path existingClaudeMd = dir.resolve(&quot;CLAUDE.md&quot;);</span>
+<span class="pc bpc" id="L634" title="1 of 2 branches missed.">            if (Files.exists(existingClaudeMd)) {</span>
+<span class="nc" id="L635">                String existing = Files.readString(existingClaudeMd, StandardCharsets.UTF_8);</span>
+<span class="nc" id="L636">                String migrated = &quot;# &quot; + name + &quot; — Project Notes\n\n&quot;</span>
                         + &quot;&lt;!-- Migrated from CLAUDE.md by ws:scaffold-init.\n&quot;
                         + &quot;     This file is for hand-authored, project-specific information.\n&quot;
                         + &quot;     Commit this file to git. --&gt;\n\n&quot;
                         + existing;
-<span class="nc" id="L580">                Files.writeString(notesFile, migrated, StandardCharsets.UTF_8);</span>
-<span class="nc" id="L581">                log.info(&quot;    Migrated CLAUDE.md → CLAUDE-&quot; + name + &quot;.md&quot;);</span>
-<span class="nc" id="L582">            } else {</span>
-<span class="fc" id="L583">                Files.writeString(notesFile, generateClaudeNotes(name),</span>
+<span class="nc" id="L641">                Files.writeString(notesFile, migrated, StandardCharsets.UTF_8);</span>
+<span class="nc" id="L642">                log.info(&quot;    Migrated CLAUDE.md → CLAUDE-&quot; + name + &quot;.md&quot;);</span>
+<span class="nc" id="L643">            } else {</span>
+<span class="fc" id="L644">                Files.writeString(notesFile, generateClaudeNotes(name),</span>
                         StandardCharsets.UTF_8);
-<span class="fc" id="L585">                log.info(&quot;    Created CLAUDE-&quot; + name + &quot;.md (template)&quot;);</span>
+<span class="fc" id="L646">                log.info(&quot;    Created CLAUDE-&quot; + name + &quot;.md (template)&quot;);</span>
             }
-<span class="nc" id="L587">        } catch (IOException e) {</span>
-<span class="nc" id="L588">            log.debug(&quot;Could not create CLAUDE-&quot; + name + &quot;.md: &quot; + e.getMessage());</span>
-<span class="fc" id="L589">        }</span>
-<span class="fc" id="L590">    }</span>
+<span class="nc" id="L648">        } catch (IOException e) {</span>
+<span class="nc" id="L649">            log.debug(&quot;Could not create CLAUDE-&quot; + name + &quot;.md: &quot; + e.getMessage());</span>
+<span class="fc" id="L650">        }</span>
+<span class="fc" id="L651">    }</span>
 
     /**
      * Generate {@code CLAUDE.md} for the workspace root. Static so the
@@ -600,10 +661,10 @@ public final class SubprojectInitializer {
      * @return the markdown content
      */
     public static String generateWorkspaceClaudeMd(String wsName, WorkspaceGraph graph) {
-<span class="fc" id="L603">        StringBuilder sb = new StringBuilder();</span>
-<span class="fc" id="L604">        sb.append(&quot;# &quot;).append(wsName).append(&quot;\n\n&quot;);</span>
+<span class="fc" id="L664">        StringBuilder sb = new StringBuilder();</span>
+<span class="fc" id="L665">        sb.append(&quot;# &quot;).append(wsName).append(&quot;\n\n&quot;);</span>
 
-<span class="fc" id="L606">        sb.append(&quot;&quot;&quot;</span>
+<span class="fc" id="L667">        sb.append(&quot;&quot;&quot;</span>
                 ## First Steps
 
                 Run `mvn ws:scaffold-init` to clone components, then `mvn validate` to unpack
@@ -643,12 +704,12 @@ public final class SubprojectInitializer {
 
                 &quot;&quot;&quot;);
 
-<span class="fc" id="L646">        sb.append(&quot;See `WS-REFERENCE.md` for complete workspace goal documentation.\n&quot;);</span>
-<span class="fc" id="L647">        sb.append(&quot;See `CLAUDE-&quot;).append(wsName)</span>
-<span class="fc" id="L648">                .append(&quot;.md` for workspace-specific information.\n&quot;);</span>
-<span class="fc" id="L649">        sb.append(&quot;See `.claude/standards/` (after `mvn validate`) for full build standards.\n&quot;);</span>
+<span class="fc" id="L707">        sb.append(&quot;See `WS-REFERENCE.md` for complete workspace goal documentation.\n&quot;);</span>
+<span class="fc" id="L708">        sb.append(&quot;See `CLAUDE-&quot;).append(wsName)</span>
+<span class="fc" id="L709">                .append(&quot;.md` for workspace-specific information.\n&quot;);</span>
+<span class="fc" id="L710">        sb.append(&quot;See `.claude/standards/` (after `mvn validate`) for full build standards.\n&quot;);</span>
 
-<span class="fc" id="L651">        return sb.toString();</span>
+<span class="fc" id="L712">        return sb.toString();</span>
     }
 
     /**
@@ -659,14 +720,14 @@ public final class SubprojectInitializer {
      * @return the markdown content
      */
     public static String generateComponentClaudeMd(Subproject subproject) {
-<span class="fc" id="L662">        StringBuilder sb = new StringBuilder();</span>
-<span class="fc" id="L663">        sb.append(&quot;# &quot;).append(subproject.name()).append(&quot;\n\n&quot;);</span>
+<span class="fc" id="L723">        StringBuilder sb = new StringBuilder();</span>
+<span class="fc" id="L724">        sb.append(&quot;# &quot;).append(subproject.name()).append(&quot;\n\n&quot;);</span>
 
-<span class="pc bpc" id="L665" title="1 of 4 branches missed.">        if (subproject.description() != null &amp;&amp; !subproject.description().isBlank()) {</span>
-<span class="fc" id="L666">            sb.append(subproject.description().strip()).append(&quot;\n\n&quot;);</span>
+<span class="pc bpc" id="L726" title="1 of 4 branches missed.">        if (subproject.description() != null &amp;&amp; !subproject.description().isBlank()) {</span>
+<span class="fc" id="L727">            sb.append(subproject.description().strip()).append(&quot;\n\n&quot;);</span>
         }
 
-<span class="fc" id="L669">        sb.append(&quot;&quot;&quot;</span>
+<span class="fc" id="L730">        sb.append(&quot;&quot;&quot;</span>
                 ## Build Standards
 
                 Files in `.claude/standards/` are build artifacts unpacked from `ike-build-standards`. DO NOT edit or commit them. See the workspace root CLAUDE.md for details.
@@ -681,16 +742,16 @@ public final class SubprojectInitializer {
 
                 &quot;&quot;&quot;);
 
-<span class="pc bpc" id="L684" title="1 of 2 branches missed.">        if (subproject.groupId() != null) {</span>
-<span class="fc" id="L685">            sb.append(&quot;- GroupId: `&quot;).append(subproject.groupId()).append(&quot;`\n&quot;);</span>
+<span class="pc bpc" id="L745" title="1 of 2 branches missed.">        if (subproject.groupId() != null) {</span>
+<span class="fc" id="L746">            sb.append(&quot;- GroupId: `&quot;).append(subproject.groupId()).append(&quot;`\n&quot;);</span>
         }
-<span class="pc bpc" id="L687" title="1 of 2 branches missed.">        if (subproject.version() != null) {</span>
-<span class="fc" id="L688">            sb.append(&quot;- Version: `&quot;).append(subproject.version()).append(&quot;`\n&quot;);</span>
+<span class="pc bpc" id="L748" title="1 of 2 branches missed.">        if (subproject.version() != null) {</span>
+<span class="fc" id="L749">            sb.append(&quot;- Version: `&quot;).append(subproject.version()).append(&quot;`\n&quot;);</span>
         }
-<span class="fc" id="L690">        sb.append(&quot;- Uses `--enable-preview` (Java 25)\n&quot;);</span>
-<span class="fc" id="L691">        sb.append(&quot;- BOM: imports `dev.ikm.ike:ike-bom` for dependency version management\n&quot;);</span>
+<span class="fc" id="L751">        sb.append(&quot;- Uses `--enable-preview` (Java 25)\n&quot;);</span>
+<span class="fc" id="L752">        sb.append(&quot;- BOM: imports `dev.ikm.ike:ike-bom` for dependency version management\n&quot;);</span>
 
-<span class="fc" id="L693">        sb.append(&quot;&quot;&quot;</span>
+<span class="fc" id="L754">        sb.append(&quot;&quot;&quot;</span>
 
                 ## Prohibited Patterns
 
@@ -701,11 +762,11 @@ public final class SubprojectInitializer {
 
                 &quot;&quot;&quot;);
 
-<span class="fc" id="L704">        sb.append(&quot;See `.claude/standards/` (after `mvn validate`) for full standards.\n&quot;);</span>
-<span class="fc" id="L705">        sb.append(&quot;See `CLAUDE-&quot;).append(subproject.name())</span>
-<span class="fc" id="L706">                .append(&quot;.md` for project-specific notes.\n&quot;);</span>
+<span class="fc" id="L765">        sb.append(&quot;See `.claude/standards/` (after `mvn validate`) for full standards.\n&quot;);</span>
+<span class="fc" id="L766">        sb.append(&quot;See `CLAUDE-&quot;).append(subproject.name())</span>
+<span class="fc" id="L767">                .append(&quot;.md` for project-specific notes.\n&quot;);</span>
 
-<span class="fc" id="L708">        return sb.toString();</span>
+<span class="fc" id="L769">        return sb.toString();</span>
     }
 
     /**
@@ -716,7 +777,7 @@ public final class SubprojectInitializer {
      * @return the markdown content
      */
     public static String generateClaudeNotes(String name) {
-<span class="fc" id="L719">        return &quot;# &quot; + name + &quot; — Project Notes\n\n&quot;</span>
+<span class="fc" id="L780">        return &quot;# &quot; + name + &quot; — Project Notes\n\n&quot;</span>
                 + &quot;&lt;!-- This file is for hand-authored, project-specific information.\n&quot;
                 + &quot;     It is created by ws:scaffold-init but never overwritten.\n&quot;
                 + &quot;     Commit this file to git. --&gt;\n\n&quot;
@@ -728,15 +789,15 @@ public final class SubprojectInitializer {
     // ── GOALS.md and WS-REFERENCE.md generation ─────────────────
 
     private void writeGoalCheatsheet(Path wsRoot) {
-<span class="fc" id="L731">        Path goalsFile = wsRoot.resolve(&quot;GOALS.md&quot;);</span>
+<span class="fc" id="L792">        Path goalsFile = wsRoot.resolve(&quot;GOALS.md&quot;);</span>
         try {
-<span class="fc" id="L733">            Files.writeString(goalsFile, generateGoalCheatsheet(),</span>
+<span class="fc" id="L794">            Files.writeString(goalsFile, generateGoalCheatsheet(),</span>
                     StandardCharsets.UTF_8);
-<span class="fc" id="L735">            log.info(&quot;  Updated GOALS.md&quot;);</span>
-<span class="nc" id="L736">        } catch (IOException e) {</span>
-<span class="nc" id="L737">            log.debug(&quot;Could not write GOALS.md: &quot; + e.getMessage());</span>
-<span class="fc" id="L738">        }</span>
-<span class="fc" id="L739">    }</span>
+<span class="fc" id="L796">            log.info(&quot;  Updated GOALS.md&quot;);</span>
+<span class="nc" id="L797">        } catch (IOException e) {</span>
+<span class="nc" id="L798">            log.debug(&quot;Could not write GOALS.md: &quot; + e.getMessage());</span>
+<span class="fc" id="L799">        }</span>
+<span class="fc" id="L800">    }</span>
 
     /**
      * Generate the workspace goal cheatsheet ({@code GOALS.md}). Static
@@ -745,7 +806,7 @@ public final class SubprojectInitializer {
      * @return the markdown content
      */
     public static String generateGoalCheatsheet() {
-<span class="fc" id="L748">        return &quot;&quot;&quot;</span>
+<span class="fc" id="L809">        return &quot;&quot;&quot;</span>
                 # Workspace Goals
 
                 All goals are available in IntelliJ's Maven tool window
@@ -857,15 +918,15 @@ public final class SubprojectInitializer {
     }
 
     private void writeWorkspaceReference(Path wsRoot) {
-<span class="fc" id="L860">        Path refFile = wsRoot.resolve(&quot;WS-REFERENCE.md&quot;);</span>
+<span class="fc" id="L921">        Path refFile = wsRoot.resolve(&quot;WS-REFERENCE.md&quot;);</span>
         try {
-<span class="fc" id="L862">            Files.writeString(refFile, generateWorkspaceReference(),</span>
+<span class="fc" id="L923">            Files.writeString(refFile, generateWorkspaceReference(),</span>
                     StandardCharsets.UTF_8);
-<span class="fc" id="L864">            log.info(&quot;  Updated WS-REFERENCE.md&quot;);</span>
-<span class="nc" id="L865">        } catch (IOException e) {</span>
-<span class="nc" id="L866">            log.debug(&quot;Could not write WS-REFERENCE.md: &quot; + e.getMessage());</span>
-<span class="fc" id="L867">        }</span>
-<span class="fc" id="L868">    }</span>
+<span class="fc" id="L925">            log.info(&quot;  Updated WS-REFERENCE.md&quot;);</span>
+<span class="nc" id="L926">        } catch (IOException e) {</span>
+<span class="nc" id="L927">            log.debug(&quot;Could not write WS-REFERENCE.md: &quot; + e.getMessage());</span>
+<span class="fc" id="L928">        }</span>
+<span class="fc" id="L929">    }</span>
 
     /**
      * Generate the long-form workspace goal reference
@@ -874,7 +935,7 @@ public final class SubprojectInitializer {
      * @return the markdown content
      */
     public static String generateWorkspaceReference() {
-<span class="fc" id="L877">        return &quot;&quot;&quot;</span>
+<span class="fc" id="L938">        return &quot;&quot;&quot;</span>
                 # Workspace Goals Reference
 
                 Complete reference for `ws:` goals. Quick overview: [GOALS.md](GOALS.md).
@@ -1033,25 +1094,25 @@ public final class SubprojectInitializer {
     // ── Report ──────────────────────────────────────────────────
 
     private String buildInitMarkdownReport(Result result) {
-<span class="fc" id="L1036">        StringBuilder sb = new StringBuilder();</span>
-<span class="fc" id="L1037">        sb.append(result.cloned()).append(&quot; cloned, &quot;)</span>
-<span class="fc" id="L1038">                .append(result.syncthing()).append(&quot; Syncthing-initialized, &quot;)</span>
-<span class="fc" id="L1039">                .append(result.updated()).append(&quot; updated, &quot;)</span>
-<span class="fc" id="L1040">                .append(result.skipped()).append(&quot; skipped&quot;);</span>
-<span class="pc bpc" id="L1041" title="1 of 2 branches missed.">        if (result.wrappers() &gt; 0) {</span>
-<span class="nc" id="L1042">            sb.append(&quot;, &quot;).append(result.wrappers()).append(&quot; Maven wrappers updated&quot;);</span>
+<span class="fc" id="L1097">        StringBuilder sb = new StringBuilder();</span>
+<span class="fc" id="L1098">        sb.append(result.cloned()).append(&quot; cloned, &quot;)</span>
+<span class="fc" id="L1099">                .append(result.syncthing()).append(&quot; Syncthing-initialized, &quot;)</span>
+<span class="fc" id="L1100">                .append(result.updated()).append(&quot; updated, &quot;)</span>
+<span class="fc" id="L1101">                .append(result.skipped()).append(&quot; skipped&quot;);</span>
+<span class="pc bpc" id="L1102" title="1 of 2 branches missed.">        if (result.wrappers() &gt; 0) {</span>
+<span class="nc" id="L1103">            sb.append(&quot;, &quot;).append(result.wrappers()).append(&quot; Maven wrappers updated&quot;);</span>
         }
-<span class="fc" id="L1044">        sb.append(&quot;.\n\n&quot;);</span>
-<span class="fc" id="L1045">        sb.append(&quot;| Subproject | Action | URL | Status |\n&quot;);</span>
-<span class="fc" id="L1046">        sb.append(&quot;|-----------|--------|-----|--------|\n&quot;);</span>
-<span class="fc bfc" id="L1047" title="All 2 branches covered.">        for (String[] row : result.rows()) {</span>
-<span class="fc" id="L1048">            sb.append(&quot;| &quot;).append(row[0])</span>
-<span class="fc" id="L1049">                    .append(&quot; | &quot;).append(row[1])</span>
-<span class="fc" id="L1050">                    .append(&quot; | &quot;).append(row[2])</span>
-<span class="fc" id="L1051">                    .append(&quot; | &quot;).append(row[3])</span>
-<span class="fc" id="L1052">                    .append(&quot; |\n&quot;);</span>
-<span class="fc" id="L1053">        }</span>
-<span class="fc" id="L1054">        return sb.toString();</span>
+<span class="fc" id="L1105">        sb.append(&quot;.\n\n&quot;);</span>
+<span class="fc" id="L1106">        sb.append(&quot;| Subproject | Action | URL | Status |\n&quot;);</span>
+<span class="fc" id="L1107">        sb.append(&quot;|-----------|--------|-----|--------|\n&quot;);</span>
+<span class="fc bfc" id="L1108" title="All 2 branches covered.">        for (String[] row : result.rows()) {</span>
+<span class="fc" id="L1109">            sb.append(&quot;| &quot;).append(row[0])</span>
+<span class="fc" id="L1110">                    .append(&quot; | &quot;).append(row[1])</span>
+<span class="fc" id="L1111">                    .append(&quot; | &quot;).append(row[2])</span>
+<span class="fc" id="L1112">                    .append(&quot; | &quot;).append(row[3])</span>
+<span class="fc" id="L1113">                    .append(&quot; |\n&quot;);</span>
+<span class="fc" id="L1114">        }</span>
+<span class="fc" id="L1115">        return sb.toString();</span>
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

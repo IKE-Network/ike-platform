@@ -516,15 +516,37 @@ import java.util.List;
     @Override
     public final void execute() throws MojoException {
 <span class="fc" id="L518">        surfaceBranchIncoherence();</span>
-<span class="fc" id="L519">        WorkspaceReportSpec report = runGoal();</span>
+        WorkspaceReportSpec report;
         try {
-<span class="fc" id="L521">            WorkspaceReport.write(workspaceRoot().toPath(),</span>
-<span class="fc" id="L522">                    report.goal().qualified(), report.content(), getLog());</span>
-<span class="fc" id="L523">        } catch (MojoException e) {</span>
-<span class="fc" id="L524">            getLog().debug(&quot;Could not resolve workspace root for report: &quot;</span>
-<span class="fc" id="L525">                    + e.getMessage());</span>
-<span class="fc" id="L526">        }</span>
-<span class="fc" id="L527">    }</span>
+<span class="fc" id="L521">            report = runGoal();</span>
+<span class="fc" id="L522">        } catch (WorkspaceReportException e) {</span>
+            // #935: the goal failed but still produced findings worth
+            // recording. Persist its report (stamped by WorkspaceReport with
+            // this run's timestamp) before the failure propagates, so a stale
+            // prior report can never masquerade as the current one.
+<span class="fc" id="L527">            writeReport(e.report());</span>
+<span class="fc" id="L528">            throw e;</span>
+<span class="fc" id="L529">        }</span>
+<span class="fc" id="L530">        writeReport(report);</span>
+<span class="fc" id="L531">    }</span>
+
+    /**
+     * Write one {@code ws:*} goal report to its per-goal file at the
+     * workspace root, swallowing a missing-workspace-root resolution error
+     * to a debug line (the goal's own failure, if any, has already been
+     * surfaced).
+     *
+     * @param report the report to persist
+     */
+    private void writeReport(WorkspaceReportSpec report) {
+        try {
+<span class="fc" id="L543">            WorkspaceReport.write(workspaceRoot().toPath(),</span>
+<span class="fc" id="L544">                    report.goal().qualified(), report.content(), getLog());</span>
+<span class="fc" id="L545">        } catch (MojoException e) {</span>
+<span class="fc" id="L546">            getLog().debug(&quot;Could not resolve workspace root for report: &quot;</span>
+<span class="fc" id="L547">                    + e.getMessage());</span>
+<span class="fc" id="L548">        }</span>
+<span class="fc" id="L549">    }</span>
 
     /**
      * Warn — never fail — when any subproject's three branch axes disagree:
@@ -543,24 +565,24 @@ import java.util.List;
      */
     private void surfaceBranchIncoherence() {
         try {
-<span class="fc" id="L546">            WorkspaceGraph graph = loadGraph();</span>
-<span class="fc" id="L547">            File root = workspaceRoot();</span>
-<span class="fc" id="L548">            PreflightCondition.BRANCH_COHERENCE</span>
-<span class="fc" id="L549">                    .check(PreflightContext.of(root, graph,</span>
-<span class="fc" id="L550">                            List.copyOf(graph.manifest().subprojects().keySet())))</span>
-<span class="fc" id="L551">                    .ifPresent(msg -&gt; {</span>
-<span class="fc" id="L552">                        getLog().warn(&quot;&quot;);</span>
-<span class="fc" id="L553">                        getLog().warn(&quot;⚠ Branch coherence:&quot;);</span>
-<span class="fc bfc" id="L554" title="All 2 branches covered.">                        for (String line : msg.split(&quot;\n&quot;)) {</span>
-<span class="fc" id="L555">                            getLog().warn(line);</span>
+<span class="fc" id="L568">            WorkspaceGraph graph = loadGraph();</span>
+<span class="fc" id="L569">            File root = workspaceRoot();</span>
+<span class="fc" id="L570">            PreflightCondition.BRANCH_COHERENCE</span>
+<span class="fc" id="L571">                    .check(PreflightContext.of(root, graph,</span>
+<span class="fc" id="L572">                            List.copyOf(graph.manifest().subprojects().keySet())))</span>
+<span class="fc" id="L573">                    .ifPresent(msg -&gt; {</span>
+<span class="fc" id="L574">                        getLog().warn(&quot;&quot;);</span>
+<span class="fc" id="L575">                        getLog().warn(&quot;⚠ Branch coherence:&quot;);</span>
+<span class="fc bfc" id="L576" title="All 2 branches covered.">                        for (String line : msg.split(&quot;\n&quot;)) {</span>
+<span class="fc" id="L577">                            getLog().warn(line);</span>
                         }
-<span class="fc" id="L557">                        getLog().warn(&quot;&quot;);</span>
-<span class="fc" id="L558">                    });</span>
-<span class="fc" id="L559">        } catch (RuntimeException e) {</span>
-<span class="fc" id="L560">            getLog().debug(&quot;Branch-coherence advisory skipped: &quot;</span>
-<span class="fc" id="L561">                    + e.getMessage());</span>
-<span class="fc" id="L562">        }</span>
-<span class="fc" id="L563">    }</span>
+<span class="fc" id="L579">                        getLog().warn(&quot;&quot;);</span>
+<span class="fc" id="L580">                    });</span>
+<span class="fc" id="L581">        } catch (RuntimeException e) {</span>
+<span class="fc" id="L582">            getLog().debug(&quot;Branch-coherence advisory skipped: &quot;</span>
+<span class="fc" id="L583">                    + e.getMessage());</span>
+<span class="fc" id="L584">        }</span>
+<span class="fc" id="L585">    }</span>
 
     /**
      * Run this goal's work and return the report it produced.
@@ -573,7 +595,12 @@ import java.util.List;
      * (IKE-Network/ike-issues#413 / #407).
      *
      * &lt;p&gt;On failure, throw {@link MojoException} as usual — a failed
-     * goal produces no report, and Maven surfaces the exception.
+     * goal produces no report, and Maven surfaces the exception. When a
+     * goal fails &lt;em&gt;after&lt;/em&gt; gathering findings worth recording (a
+     * partial multi-subproject walk, say), throw a
+     * {@link WorkspaceReportException} instead: {@code execute()} persists
+     * its carried report before propagating the failure, so a stale prior
+     * report cannot masquerade as the current one (IKE-Network/ike-issues#935).
      *
      * @return the report this goal produced (never {@code null})
      * @throws MojoException if the goal fails

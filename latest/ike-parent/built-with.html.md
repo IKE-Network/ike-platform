@@ -1,12 +1,12 @@
 ---
-date_published: 2026-07-21
-date_modified: 2026-07-21
+date_published: 2026-07-22
+date_modified: 2026-07-22
 canonical_url: https://ike.network/ike-platform/ike-parent/built-with.html
 ---
 
 # Built With
 
-Open-source software that `ike-parent` 135 depends on, links against, ships within, or invokes at runtime.
+Open-source software that `ike-parent` 136 depends on, links against, ships within, or invokes at runtime.
 
 Three layers of attribution ship with each release:
 
@@ -88,7 +88,8 @@ Direct dependencies of this module, grouped by SPDX expression. Generated from `
 | SPDX Expression | Components |
 | --- | --- |
 | `Apache-2.0` | 6 |
-| **Total** | **6** |
+| `MIT` | 1 |
+| **Total** | **7** |
 
 For full per-component detail (group, artifact, version, hashes, transitive deps), see [bom.json](bom.json)[1] or [licenses.html](licenses.html)[2].
 

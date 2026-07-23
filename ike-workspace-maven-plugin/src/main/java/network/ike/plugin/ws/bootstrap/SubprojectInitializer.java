@@ -554,12 +554,73 @@ public final class SubprojectInitializer {
 
     private void writeSubprojectClaudeMd(Path subprojectDir, Subproject subproject) {
         Path file = subprojectDir.resolve("CLAUDE.md");
+        String generated = generateComponentClaudeMd(subproject);
         try {
-            Files.writeString(file, generateComponentClaudeMd(subproject),
-                    StandardCharsets.UTF_8);
+            String existing = Files.exists(file)
+                    ? Files.readString(file, StandardCharsets.UTF_8) : null;
+            // Regenerate without destroying content the template does not own:
+            // ike-managed regions are preserved verbatim (#920) and any
+            // hand-authored ## sections are rescued to CLAUDE-<name>.md rather
+            // than dropped (#917).
+            ClaudeMdMerge.Result merged = ClaudeMdMerge.merge(existing, generated);
+            if (!merged.rescued().isEmpty()) {
+                rescueSectionsToNotes(subprojectDir, subproject.name(),
+                        merged.rescued());
+            }
+            Files.writeString(file, merged.claudeMd(), StandardCharsets.UTF_8);
         } catch (IOException e) {
             log.debug("Could not write CLAUDE.md for " + subproject.name()
                     + ": " + e.getMessage());
+        }
+    }
+
+    /**
+     * Preserve hand-authored sections that {@link #writeSubprojectClaudeMd}
+     * would otherwise drop when it regenerates {@code CLAUDE.md}, by appending
+     * them to {@code CLAUDE-<name>.md} — the file the scaffold never overwrites
+     * (IKE-Network/ike-issues#917). Idempotent: a section already present in the
+     * notes file (e.g. copied there by {@link #ensureClaudeNotes} on the first
+     * migration) is not appended again, so repeat scaffold runs never duplicate
+     * it. Warns loudly, naming each rescued section, so the move is never silent.
+     *
+     * @param dir      the subproject directory
+     * @param name     the subproject name (drives the {@code CLAUDE-<name>.md} file)
+     * @param sections the non-template sections to preserve
+     */
+    private void rescueSectionsToNotes(Path dir, String name,
+            List<ClaudeMdMerge.Section> sections) {
+        Path notesFile = dir.resolve("CLAUDE-" + name + ".md");
+        try {
+            String notes = Files.exists(notesFile)
+                    ? Files.readString(notesFile, StandardCharsets.UTF_8) : "";
+            StringBuilder appended = new StringBuilder(notes);
+            List<String> rescuedTitles = new ArrayList<>();
+            for (ClaudeMdMerge.Section section : sections) {
+                if (notes.contains(section.text().strip())) {
+                    continue;  // already preserved (e.g. by first-run migration)
+                }
+                if (appended.length() > 0
+                        && appended.charAt(appended.length() - 1) != '\n') {
+                    appended.append('\n');
+                }
+                appended.append("\n<!-- Preserved from CLAUDE.md by "
+                                + "ws:scaffold-init "
+                                + "(IKE-Network/ike-issues#917). -->\n")
+                        .append(section.text().stripTrailing()).append('\n');
+                rescuedTitles.add(section.title());
+            }
+            if (rescuedTitles.isEmpty()) {
+                return;
+            }
+            Files.writeString(notesFile, appended.toString(),
+                    StandardCharsets.UTF_8);
+            log.warn(Ansi.yellow("  ⚠ ") + name + " — preserved "
+                    + rescuedTitles.size() + " hand-authored CLAUDE.md "
+                    + "section(s) into CLAUDE-" + name + ".md: "
+                    + String.join(", ", rescuedTitles));
+        } catch (IOException e) {
+            log.warn("    Could not preserve hand-authored CLAUDE.md sections "
+                    + "for " + name + ": " + e.getMessage());
         }
     }
 

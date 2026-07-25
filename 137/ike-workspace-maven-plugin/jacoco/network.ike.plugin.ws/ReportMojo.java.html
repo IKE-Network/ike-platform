@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ReportMojo.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">ReportMojo.java</span></div><h1>ReportMojo.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
+import java.util.Comparator;
+import java.util.List;
+import java.util.stream.Stream;
+
+/**
+ * List and open the {@code ws꞉*.md} goal reports at the workspace root.
+ *
+ * &lt;p&gt;Each {@code ws:*} goal writes its latest output to a per-goal file
+ * alongside {@code workspace.yaml} and the aggregator {@code pom.xml}
+ * (for example {@code ws꞉overview.md}, {@code ws꞉release-draft.md}).
+ * This goal lists those reports newest-first and opens the workspace
+ * root in the default file manager so you can browse them.
+ *
+ * &lt;p&gt;&lt;strong&gt;Single repo (no {@code workspace.yaml})&lt;/strong&gt;: lists the
+ * {@code ws꞉*.md} reports at the current repository's root — a working set
+ * of one (IKE-Network/ike-issues#704).
+ *
+ * &lt;p&gt;Usage:
+ * &lt;pre&gt;
+ *   mvn ws:report                    # list and open
+ *   mvn ws:report -Dws.report.printOnly=true   # list only
+ * &lt;/pre&gt;
+ */
+@Mojo(name = &quot;report&quot;, projectRequired = false, aggregator = true)
+public class ReportMojo extends AbstractWorkspaceMojo {
+
+    /** Prefix shared by every {@code ws:*} goal report filename. */
+    private static final String REPORT_PREFIX = &quot;ws\uA789&quot;;
+    /** Suffix shared by every {@code ws:*} goal report filename. */
+    private static final String REPORT_SUFFIX = &quot;.md&quot;;
+
+    /** Creates this goal instance. */
+<span class="fc" id="L43">    public ReportMojo() {}</span>
+
+    /**
+     * Skip opening the file manager; just print the paths.
+     */
+    @Parameter(property = &quot;ws.report.printOnly&quot;, defaultValue = &quot;false&quot;)
+    private boolean printOnly;
+
+    @Override
+    protected WorkspaceReportSpec runGoal() throws MojoException {
+        // Scope the report scan to the working set's root — the workspace
+        // root, or a single repository (a working set of one). Previously
+        // anchored on workspaceRoot(), which threw outside a workspace
+        // (IKE-Network/ike-issues#704).
+<span class="fc" id="L57">        Path root = resolveWorkingSet().root();</span>
+<span class="fc" id="L58">        List&lt;Path&gt; reports = findReports(root);</span>
+
+<span class="fc bfc" id="L60" title="All 2 branches covered.">        if (reports.isEmpty()) {</span>
+<span class="fc" id="L61">            getLog().info(&quot;No ws꞉*.md reports at &quot; + root</span>
+                    + &quot;. Run a ws: goal first.&quot;);
+<span class="fc" id="L63">            return new WorkspaceReportSpec(WsGoal.REPORT,</span>
+                    &quot;No `ws꞉*.md` goal reports at the workspace root yet.\n&quot;);
+        }
+
+<span class="fc" id="L67">        getLog().info(&quot;Workspace reports at &quot; + root + &quot;:&quot;);</span>
+<span class="fc" id="L68">        StringBuilder body = new StringBuilder();</span>
+<span class="fc" id="L69">        body.append(reports.size()).append(&quot; goal report(s) at the workspace root, &quot;</span>
+                + &quot;newest first:\n\n&quot;);
+<span class="fc bfc" id="L71" title="All 2 branches covered.">        for (Path report : reports) {</span>
+<span class="fc" id="L72">            getLog().info(&quot;  &quot; + root.relativize(report));</span>
+<span class="fc" id="L73">            body.append(&quot;- `&quot;).append(root.relativize(report)).append(&quot;`\n&quot;);</span>
+<span class="fc" id="L74">        }</span>
+
+<span class="pc bpc" id="L76" title="1 of 2 branches missed.">        if (!printOnly) {</span>
+<span class="nc" id="L77">            boolean opened = WorkspaceReport.openInBrowser(root, getLog());</span>
+<span class="nc bnc" id="L78" title="All 2 branches missed.">            if (opened) {</span>
+<span class="nc" id="L79">                getLog().info(&quot;Opened workspace root in file manager.&quot;);</span>
+            } else {
+<span class="nc" id="L81">                getLog().info(&quot;Could not open file manager — browse directly: &quot;</span>
+                        + root);
+            }
+        }
+
+<span class="fc" id="L86">        return new WorkspaceReportSpec(WsGoal.REPORT, body.toString());</span>
+    }
+
+    /**
+     * List {@code ws꞉*.md} files at the workspace root sorted newest-first.
+     *
+     * @param root the workspace root directory
+     * @return reports sorted by modification time, newest first; empty if
+     *         the directory is missing or contains no matching files
+     */
+    private static List&lt;Path&gt; findReports(Path root) {
+<span class="pc bpc" id="L97" title="1 of 2 branches missed.">        if (!Files.isDirectory(root)) return List.of();</span>
+<span class="fc" id="L98">        try (Stream&lt;Path&gt; entries = Files.list(root)) {</span>
+<span class="fc" id="L99">            return entries</span>
+<span class="fc" id="L100">                    .filter(Files::isRegularFile)</span>
+<span class="fc" id="L101">                    .filter(ReportMojo::isReportFile)</span>
+<span class="fc" id="L102">                    .sorted(Comparator.comparing(ReportMojo::lastModified)</span>
+<span class="fc" id="L103">                            .reversed())</span>
+<span class="fc" id="L104">                    .toList();</span>
+<span class="nc" id="L105">        } catch (IOException e) {</span>
+<span class="nc" id="L106">            return List.of();</span>
+        }
+    }
+
+    private static boolean isReportFile(Path path) {
+<span class="fc" id="L111">        String name = path.getFileName().toString();</span>
+<span class="pc bpc" id="L112" title="2 of 4 branches missed.">        return name.startsWith(REPORT_PREFIX) &amp;&amp; name.endsWith(REPORT_SUFFIX);</span>
+    }
+
+    private static FileTime lastModified(Path path) {
+        try {
+<span class="nc" id="L117">            return Files.getLastModifiedTime(path);</span>
+<span class="nc" id="L118">        } catch (IOException e) {</span>
+<span class="nc" id="L119">            return FileTime.fromMillis(0L);</span>
+        }
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

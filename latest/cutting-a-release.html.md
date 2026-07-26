@@ -1,6 +1,6 @@
 ---
-date_published: 2026-07-24
-date_modified: 2026-07-24
+date_published: 2026-07-25
+date_modified: 2026-07-25
 canonical_url: https://ike.network/ike-platform/cutting-a-release.html
 ---
 

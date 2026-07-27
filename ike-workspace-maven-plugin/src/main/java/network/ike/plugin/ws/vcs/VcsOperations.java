@@ -396,6 +396,30 @@ public class VcsOperations {
         return List.of(output.split("\n"));
     }
 
+    /**
+     * Raw {@code git log --name-status} output for a rev range, each commit
+     * introduced by a {@code commit}+{@code U+0001} marker followed by
+     * {@code <short-sha><TAB><subject>}. The machine-parseable input of
+     * {@link network.ike.plugin.ws.GoalCommitLedger}
+     * (IKE-Network/ike-issues#954). The marker deliberately does not
+     * <em>start</em> with the control character: {@code capture()} trims
+     * the subprocess output, and {@link String#trim} strips every char
+     * ≤ {@code U+0020} — a bare leading {@code U+0001} on the first
+     * header line would vanish.
+     *
+     * @param dir   the repository root directory
+     * @param range the rev range (e.g. {@code "abc12345..HEAD"}, or
+     *              {@code "HEAD"} for the whole history)
+     * @return the raw log output; empty when the range holds no commits
+     * @throws MojoException if the git command fails (e.g. an unborn
+     *                       {@code HEAD})
+     */
+    public static String nameStatusLog(File dir, String range)
+            throws MojoException {
+        return captureRead(dir, "git", "log", "--name-status",
+                "--no-decorate", "--format=commit%x01%h%x09%s", range);
+    }
+
     // ── Git operations ───────────────────────────────────────────
 
     /**

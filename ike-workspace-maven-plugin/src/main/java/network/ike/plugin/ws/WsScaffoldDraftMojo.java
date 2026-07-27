@@ -29,6 +29,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
@@ -114,8 +115,13 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
         // reconciliation is provably this goal's own and can be committed under
         // a goal-owned message without sweeping user WIP into it. Mirrors the
         // #537 precedent in ws:checkpoint-publish (requireCleanUserState).
+        // #954: record each repo's HEAD right behind that guarantee — the
+        // committed-work ledger at the end of the run reports everything in
+        // baseline..HEAD as this goal's own, fan-out subprocesses included.
+        Map<String, String> ledgerBaselines = Map.of();
         if (publish) {
             requireCleanTreesForPublish(graph, root);
+            ledgerBaselines = captureLedgerBaselines(graph, root);
         }
 
         // Accumulate the markdown report alongside the console output
@@ -154,7 +160,7 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
         // contract). Each subproject's ike:scaffold-publish then authors and
         // commits its own scaffold output in isolation, as before.
         if (publish) {
-            commitReconcilerEdits(graph, root, report);
+            commitReconcilerEdits(graph, root);
         }
 
         // #417: foundation currency — discover whether a newer parent
@@ -235,11 +241,12 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
                 + "subproject's own `ike꞉scaffold-"
                 + (publish ? "publish" : "draft") + ".md` report.");
 
-        // ws:scaffold-publish edits POMs and scaffold files in place
-        // without committing — surface the resulting uncommitted state
-        // so the operator can see what to review (#431).
+        // #954: end the publish with the committed-work ledger — every
+        // commit this run authored (directly, or via the fan-out's
+        // subprocesses), from git truth, plus the push-next hint. Runs on
+        // the failure path too, so a partial run still shows what landed.
         if (publish) {
-            reportUncommittedState(root, targets, walkRoot, report);
+            reportGoalChanges(root, ledgerBaselines, report);
         }
 
         if (failed > 0) {
@@ -481,74 +488,115 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
         }
     }
 
+    /** Report label for the workspace root repository. */
+    static final String WORKSPACE_ROOT_LABEL = "(workspace root)";
+
     /**
-     * Append an "Uncommitted changes" section listing the files
-     * {@code ws:scaffold-publish} left modified and uncommitted, per
-     * repo (IKE-Network/ike-issues#431).
+     * Record each repository's {@code HEAD} immediately after the publish
+     * preflight, keyed by report label — the committed-work ledger
+     * baselines of IKE-Network/ike-issues#954. Because
+     * {@link #requireCleanTreesForPublish} has just proven every tree free
+     * of uncommitted changes, every commit later found in
+     * {@code baseline..HEAD} is goal-authored — including the ones made
+     * inside the per-subproject {@code ike:scaffold-publish} subprocesses.
      *
-     * <p>The goal edits POMs and scaffold files in place and does not
-     * commit, so this section is the operator's checklist of what to
-     * review and commit, and in which repo.
+     * <p>Subprojects appear in topological order with the workspace root
+     * last, mirroring the walk. Repositories without a {@code .git} are
+     * absent; a {@code null} value marks a repository with no commits yet.
      *
-     * @param root     the workspace root directory
-     * @param targets  the subproject names that were walked
-     * @param walkRoot whether the workspace root itself was walked
-     * @param report   the goal report being accumulated
+     * @param graph the workspace graph
+     * @param root  the workspace root directory
+     * @return insertion-ordered map of repo label → baseline {@code HEAD}
+     *         short SHA
      */
-    private void reportUncommittedState(File root, List<String> targets,
-            boolean walkRoot, GoalReportBuilder report) {
-        report.section("Uncommitted changes");
-        StringBuilder body = new StringBuilder();
-        boolean any = false;
-        for (String name : targets) {
-            any |= appendRepoStatus(name, new File(root, name), body);
+    Map<String, String> captureLedgerBaselines(WorkspaceGraph graph,
+            File root) {
+        Map<String, String> baselines = new LinkedHashMap<>();
+        for (String name : graph.topologicalSort()) {
+            File dir = new File(root, name);
+            if (new File(dir, ".git").exists()) {
+                baselines.put(name, GoalCommitLedger.baselineSha(dir));
+            }
         }
-        if (walkRoot) {
-            any |= appendRepoStatus("(workspace root)", root, body);
+        if (new File(root, ".git").exists()) {
+            baselines.put(WORKSPACE_ROOT_LABEL,
+                    GoalCommitLedger.baselineSha(root));
         }
-        if (any) {
-            report.paragraph("`" + WsGoal.SCAFFOLD_PUBLISH.qualified()
-                    + "` edits files in place "
-                    + "and does not commit. Review and commit per repo:");
-            report.raw(body.toString());
-        } else {
-            report.paragraph("No files were modified.");
-        }
+        return baselines;
     }
 
     /**
-     * Append one repo's {@code git status --porcelain} to {@code body}
-     * as a Markdown bullet listing its changed files.
+     * Append the committed-work ledger: what this run committed, per
+     * repository, derived from git truth — and surface any uncommitted
+     * residue as the anomaly it is (IKE-Network/ike-issues#954).
      *
-     * @param label the repo label shown in the report
-     * @param dir   the repo directory
-     * @param body  the Markdown buffer to append to
-     * @return {@code true} if the repo had uncommitted changes
+     * <p>Replaces the #431-era "Uncommitted changes" checklist, which
+     * #919's goal-owned commits made permanently misleading: with every
+     * goal-authored change committed, a working-tree status check printed
+     * "No files were modified." precisely when the goal had done the most
+     * work. Each ledger entry lists the goal-authored commits in
+     * {@code baseline..HEAD} with subject, short SHA, and changed files —
+     * covering the reconciler commit and the per-subproject scaffold
+     * commits alike — and the section states the transport status
+     * explicitly: committed, not pushed, with the {@code ws:push} command
+     * to run next. Residue after a publish indicates a failed goal commit
+     * or an interrupted run, and is rendered as a warning.
+     *
+     * @param root      the workspace root directory
+     * @param baselines repo label → baseline {@code HEAD} from
+     *                  {@link #captureLedgerBaselines}
+     * @param report    the goal report being accumulated
      */
-    private boolean appendRepoStatus(String label, File dir,
-            StringBuilder body) {
-        if (!new File(dir, ".git").isDirectory()) {
-            return false;
+    void reportGoalChanges(File root, Map<String, String> baselines,
+            GoalReportBuilder report) {
+        List<GoalCommitLedger.RepoChanges> repos = new ArrayList<>();
+        for (Map.Entry<String, String> entry : baselines.entrySet()) {
+            File dir = WORKSPACE_ROOT_LABEL.equals(entry.getKey())
+                    ? root : new File(root, entry.getKey());
+            repos.add(GoalCommitLedger.collect(entry.getKey(), dir,
+                    entry.getValue()));
         }
-        String status;
-        try {
-            status = ReleaseSupport.execCapture(dir,
-                    "git", "status", "--porcelain");
-        } catch (RuntimeException e) {
-            getLog().debug("  " + label + ": git status failed — "
-                    + e.getMessage());
-            return false;
+        boolean anyCommits = repos.stream()
+                .anyMatch(GoalCommitLedger.RepoChanges::hasCommits);
+        boolean anyResidue = repos.stream()
+                .anyMatch(GoalCommitLedger.RepoChanges::hasResidue);
+        String pushCommand = "mvn " + WsGoal.PUSH.qualified();
+
+        report.section("Committed by this goal");
+        getLog().info("");
+        if (anyCommits) {
+            report.paragraph("This work is committed, not pushed. To push:");
+            report.codeBlock("bash", pushCommand);
+            report.raw(GoalCommitLedger.commitsToMarkdown(repos));
+            getLog().info("  Committed by this goal (not pushed):");
+            for (GoalCommitLedger.RepoChanges repo : repos) {
+                for (GoalCommitLedger.Commit commit : repo.commits()) {
+                    getLog().info("    " + repo.label() + ": "
+                            + commit.sha() + " " + commit.subject()
+                            + " (" + commit.files().size() + " file(s))");
+                }
+            }
+            getLog().info("  To push: " + pushCommand);
+        } else {
+            report.paragraph("No changes were needed — every repository "
+                    + "already matched; nothing was committed.");
+            getLog().info("  No changes were needed; nothing was committed.");
         }
-        if (status == null || status.isBlank()) {
-            return false;
+        if (anyResidue) {
+            report.section("⚠ Left uncommitted");
+            report.paragraph("A publish run ends fully committed "
+                    + "(IKE-Network/ike-issues#919) — leftover files here "
+                    + "mean a goal commit failed or the run was "
+                    + "interrupted. Review and commit per repo:");
+            report.raw(GoalCommitLedger.residueToMarkdown(repos));
+            for (GoalCommitLedger.RepoChanges repo : repos) {
+                if (repo.hasResidue()) {
+                    getLog().warn("  ⚠ " + repo.label() + ": "
+                            + repo.residue().size()
+                            + " file(s) left uncommitted");
+                }
+            }
         }
-        List<String> lines = status.strip().lines().toList();
-        body.append("- **").append(label).append("** — ")
-                .append(lines.size()).append(" file(s)\n");
-        for (String line : lines) {
-            body.append("  - `").append(line.strip()).append("`\n");
-        }
-        return true;
     }
 
     /**
@@ -586,41 +634,32 @@ public class WsScaffoldDraftMojo extends AbstractWorkspaceMojo {
      * Commit the goal-owned edits the workspace reconcilers just produced — the
      * parent-version cascade and any alignment/field writes — under {@link
      * #RECONCILE_COMMIT_MESSAGE}, in the workspace root and each subproject
-     * (IKE-Network/ike-issues#919). Without this, the reconcilers dirty every
+     * (IKE-Network/ike-issues#919). Without this, the reconcilers modify every
      * POM and the per-subproject {@code ike:scaffold-publish} fan-out rejects
      * the very changes this run produced (a #537-class self-trip). A no-op per
-     * repo the reconcilers left clean; per-repo failures are warnings so one
-     * bad subproject does not abort the walk (the fan-out's own preflight still
-     * fails loudly on anything left dirty).
+     * repo the reconcilers left unchanged; per-repo failures are warnings so
+     * one bad subproject does not abort the walk (the fan-out's own preflight
+     * still fails loudly on anything left uncommitted).
      *
      * <p>The preflight in {@link #requireCleanTreesForPublish} guaranteed each
-     * tree was clean before reconciliation, so staging picks up only the
-     * reconcilers' output.
+     * tree carried no uncommitted changes before reconciliation, so staging
+     * picks up only the reconcilers' output. The end-of-run ledger
+     * ({@link #reportGoalChanges}, #954) reports these commits — repo,
+     * subject, SHA, files — so this method writes no report section of its
+     * own.
      *
-     * @param graph  the workspace graph
-     * @param root   the workspace root directory
-     * @param report the goal report being accumulated
+     * @param graph the workspace graph
+     * @param root  the workspace root directory
      */
-    void commitReconcilerEdits(WorkspaceGraph graph, File root,
-            GoalReportBuilder report) {
-        List<String> committed = new ArrayList<>();
-        if (new File(root, ".git").exists()
-                && commitIfDirty(root, "(workspace root)")) {
-            committed.add("(workspace root)");
+    void commitReconcilerEdits(WorkspaceGraph graph, File root) {
+        if (new File(root, ".git").exists()) {
+            commitIfDirty(root, WORKSPACE_ROOT_LABEL);
         }
         for (String name : graph.topologicalSort()) {
             File dir = new File(root, name);
-            if (new File(dir, ".git").exists() && commitIfDirty(dir, name)) {
-                committed.add(name);
+            if (new File(dir, ".git").exists()) {
+                commitIfDirty(dir, name);
             }
-        }
-        if (!committed.isEmpty()) {
-            report.section("Reconciliation edits committed")
-                    .paragraph("Committed goal-owned reconciler output in "
-                            + committed.size() + " repo(s) before the "
-                            + "per-subproject scaffold fan-out "
-                            + "(IKE-Network/ike-issues#919): `"
-                            + String.join("`, `", committed) + "`.");
         }
     }
 

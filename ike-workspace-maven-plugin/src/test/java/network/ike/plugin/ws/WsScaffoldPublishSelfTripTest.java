@@ -1,6 +1,5 @@
 package network.ike.plugin.ws;
 
-import network.ike.plugin.support.GoalReportBuilder;
 import network.ike.workspace.WorkspaceGraph;
 import org.apache.maven.api.plugin.MojoException;
 import org.junit.jupiter.api.Test;
@@ -44,7 +43,7 @@ class WsScaffoldPublishSelfTripTest {
                         .replace("1-SNAPSHOT", "2-SNAPSHOT"),
                 StandardCharsets.UTF_8);
 
-        mojo.commitReconcilerEdits(graph, root, new GoalReportBuilder());
+        mojo.commitReconcilerEdits(graph, root);
 
         assertThat(execCapture(tempDir, "git", "status", "--porcelain").strip())
                 .as("goal-owned commit must leave a clean tree for the fan-out")
@@ -61,8 +60,7 @@ class WsScaffoldPublishSelfTripTest {
         WorkspaceGraph graph = mojo.loadGraph();
         String headBefore = execCapture(tempDir, "git", "rev-parse", "HEAD").strip();
 
-        mojo.commitReconcilerEdits(graph, mojo.workspaceRoot(),
-                new GoalReportBuilder());
+        mojo.commitReconcilerEdits(graph, mojo.workspaceRoot());
 
         assertThat(execCapture(tempDir, "git", "rev-parse", "HEAD").strip())
                 .as("nothing to commit → no new commit")

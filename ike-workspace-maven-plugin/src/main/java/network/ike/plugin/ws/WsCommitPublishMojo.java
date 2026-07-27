@@ -122,7 +122,13 @@ public class WsCommitPublishMojo extends AbstractWorkspaceMojo {
         int committed = 0;
         int skippedClean = 0;
         int skippedUnstaged = 0;
-        int failed = 0;
+        // #841: commit failures and push failures are DIFFERENT states with
+        // different recoveries — a repo whose commit landed but whose push
+        // failed must never be reported as a failed commit (the natural
+        // response to that message — inspect or redo the commit — is the
+        // wrong move on a repo whose commit is fine).
+        List<RepoFailure> commitFailures = new java.util.ArrayList<>();
+        List<RepoFailure> pushFailures = new java.util.ArrayList<>();
 
         for (WorkingSet.Member member : workingSet.members()) {
             File dir = member.directory().toFile();
@@ -134,11 +140,12 @@ public class WsCommitPublishMojo extends AbstractWorkspaceMojo {
             String label = workingSet.isWorkspace()
                     && member.directory().equals(workingSet.root())
                     ? "workspace root" : member.name();
-            CommitOutcome outcome = commitOne(dir, label);
-            committed += outcome.committed;
-            skippedClean += outcome.skippedClean;
-            skippedUnstaged += outcome.skippedUnstaged;
-            failed += outcome.failed;
+            switch (commitOne(dir, label, commitFailures, pushFailures)) {
+                case COMMITTED -> committed++;
+                case SKIPPED_CLEAN -> skippedClean++;
+                case SKIPPED_UNSTAGED -> skippedUnstaged++;
+                case FAILED -> { /* recorded in the failure lists */ }
+            }
         }
 
         getLog().info("");
@@ -151,8 +158,13 @@ public class WsCommitPublishMojo extends AbstractWorkspaceMojo {
             summary.append(", ").append(skippedUnstaged)
                     .append(" skipped (uncommitted — drop -DstagedOnly to include)");
         }
-        if (failed > 0) {
-            summary.append(", ").append(failed).append(" failed");
+        if (!commitFailures.isEmpty()) {
+            summary.append(", ").append(commitFailures.size())
+                    .append(" commit failed");
+        }
+        if (!pushFailures.isEmpty()) {
+            summary.append(", ").append(pushFailures.size())
+                    .append(" push failed (committed, local only)");
         }
         getLog().info("  Done: " + summary);
         getLog().info("");
@@ -164,31 +176,96 @@ public class WsCommitPublishMojo extends AbstractWorkspaceMojo {
             // The refresh runs after the commit loop, so a manifest commit
             // it makes is not covered by this goal's own push. When the
             // caller asked to push, push the root again so the re-derived
-            // manifest reaches origin too (#774).
+            // manifest reaches origin too (#774). A failure here is a PUSH
+            // failure of the root — never reported as a commit failure (#841).
             if (manifestCommitted && push) {
-                VcsOperations.push(root, getLog(), "origin",
-                        VcsOperations.currentBranch(root));
+                try {
+                    VcsOperations.push(root, getLog(), "origin",
+                            VcsOperations.currentBranch(root));
+                } catch (MojoException e) {
+                    pushFailures.add(new RepoFailure("workspace root",
+                            shortHead(root), e.getMessage()));
+                }
             }
         }
 
-        if (failed > 0) {
-            throw new MojoException(failed
-                    + " commit(s) failed — check output above for details.");
+        // #841: name the operation, the member repo, and the cause — and
+        // when only pushes failed, say plainly that every commit is sound
+        // and hand over the copy-pasteable completion command.
+        if (!commitFailures.isEmpty() || !pushFailures.isEmpty()) {
+            StringBuilder sb = new StringBuilder();
+            for (RepoFailure f : commitFailures) {
+                sb.append(f.label()).append(" — commit failed: ")
+                        .append(f.cause()).append("\n");
+            }
+            for (RepoFailure f : pushFailures) {
+                sb.append(f.label()).append(" — push failed (commit ")
+                        .append(f.sha()).append(" is committed, local only): ")
+                        .append(f.cause()).append("\n");
+            }
+            if (commitFailures.isEmpty()) {
+                sb.append("\nEvery commit succeeded — only pushes failed. ")
+                        .append("Finish with:\n  ./mvnw ")
+                        .append(WsGoal.PUSH.qualified());
+            }
+            throw new MojoException(sb.toString().stripTrailing());
         }
 
         return new WorkspaceReportSpec(WsGoal.COMMIT_PUBLISH, summary + "\n");
     }
 
+    /**
+     * A member repo's failure record for the end-of-run report (#841):
+     * which repo, which commit (for push failures — the commit that is
+     * now local-only), and the underlying git error.
+     *
+     * @param label the member label ("workspace root" or subproject name)
+     * @param sha   short SHA of the local commit (push failures), or ""
+     * @param cause the underlying git error message
+     */
+    private record RepoFailure(String label, String sha, String cause) {}
+
+    /** Per-repo outcome classification; failures carry detail separately. */
+    private enum Outcome {COMMITTED, SKIPPED_CLEAN, SKIPPED_UNSTAGED, FAILED}
 
     /**
-     * Commit a single repository, returning a tally for aggregation. The
-     * tally always sums to one — exactly one of {committed, skippedClean,
-     * skippedUnstaged, failed} is set.
+     * Best-effort short HEAD SHA for failure reporting; empty when
+     * unreadable.
+     *
+     * @param dir the repository root directory
+     * @return the 8-char short SHA, or {@code ""}
      */
-    private CommitOutcome commitOne(File dir, String label) {
+    private static String shortHead(File dir) {
         try {
-            int modCount = VcsOperations.modifiedTrackedCount(dir);
-            List<String> newFiles = VcsOperations.untrackedFiles(dir);
+            return VcsOperations.headSha(dir);
+        } catch (MojoException e) {
+            return "";
+        }
+    }
+
+
+    /**
+     * Commit (and optionally push) a single repository, classifying the
+     * outcome. Commit failures and push failures are recorded separately
+     * with the member label and underlying git error (#841): a push
+     * failure leaves the repo COMMITTED (the commit is sound, merely
+     * local-only) and is counted as such, never as a failed commit. A
+     * transient push error is retried once before being recorded.
+     *
+     * @param dir            the repository root directory
+     * @param label          the member label for reporting
+     * @param commitFailures out-param collecting commit failures
+     * @param pushFailures   out-param collecting push failures
+     * @return the outcome classification
+     */
+    private Outcome commitOne(File dir, String label,
+                              List<RepoFailure> commitFailures,
+                              List<RepoFailure> pushFailures) {
+        int modCount;
+        List<String> newFiles;
+        try {
+            modCount = VcsOperations.modifiedTrackedCount(dir);
+            newFiles = VcsOperations.untrackedFiles(dir);
 
             // catch-up if there's nothing to commit yet — preserves
             // the historical behavior where commit also serves as the
@@ -212,7 +289,7 @@ public class WsCommitPublishMojo extends AbstractWorkspaceMojo {
             if (!VcsOperations.hasStagedChanges(dir)
                     && VcsOperations.isClean(dir)) {
                 getLog().debug(label + " — clean, skipping");
-                return CommitOutcome.SKIPPED_CLEAN;
+                return Outcome.SKIPPED_CLEAN;
             }
 
             if (!VcsOperations.hasStagedChanges(dir)) {
@@ -225,24 +302,56 @@ public class WsCommitPublishMojo extends AbstractWorkspaceMojo {
                 getLog().warn(Ansi.yellow("  ⚠ ") + label
                         + " — skipped (" + suffix + ")");
                 getLog().warn("    Drop -DstagedOnly to stage and commit");
-                return CommitOutcome.SKIPPED_UNSTAGED;
+                return Outcome.SKIPPED_UNSTAGED;
             }
 
             VcsOperations.commit(dir, getLog(), message);
             VcsOperations.writeVcsState(dir, VcsState.Action.COMMIT);
-
-            if (push) {
-                String branch = VcsOperations.currentBranch(dir);
-                VcsOperations.push(dir, getLog(), "origin", branch);
-                VcsOperations.writeVcsState(dir, VcsState.Action.PUSH);
-            }
-
-            getLog().info(Ansi.green("  ✓ ") + label
-                    + " — " + previewSummary(modCount, newFiles));
-            return CommitOutcome.COMMITTED;
         } catch (MojoException e) {
-            getLog().warn(Ansi.red("  ✗ ") + label + " — " + e.getMessage());
-            return CommitOutcome.FAILED;
+            getLog().warn(Ansi.red("  ✗ ") + label + " — commit failed: "
+                    + e.getMessage());
+            commitFailures.add(new RepoFailure(label, "", e.getMessage()));
+            return Outcome.FAILED;
+        }
+
+        if (push) {
+            try {
+                pushWithOneRetry(dir, label);
+                VcsOperations.writeVcsState(dir, VcsState.Action.PUSH);
+            } catch (MojoException e) {
+                getLog().warn(Ansi.red("  ✗ ") + label + " — push failed"
+                        + " (commit " + shortHead(dir)
+                        + " is committed, local only): " + e.getMessage());
+                pushFailures.add(new RepoFailure(
+                        label, shortHead(dir), e.getMessage()));
+                // The COMMIT succeeded — count it as committed; the push
+                // failure is reported separately (#841).
+                return Outcome.COMMITTED;
+            }
+        }
+
+        getLog().info(Ansi.green("  ✓ ") + label
+                + " — " + previewSummary(modCount, newFiles));
+        return Outcome.COMMITTED;
+    }
+
+    /**
+     * Push the current branch, retrying once on failure — the #841
+     * incident was a transient ssh-agent hiccup that a single retry
+     * would have absorbed.
+     *
+     * @param dir   the repository root directory
+     * @param label the member label (for the retry log line)
+     * @throws MojoException when the push fails twice
+     */
+    private void pushWithOneRetry(File dir, String label) throws MojoException {
+        String branch = VcsOperations.currentBranch(dir);
+        try {
+            VcsOperations.push(dir, getLog(), "origin", branch);
+        } catch (MojoException first) {
+            getLog().info("  " + label + " — push failed once ("
+                    + first.getMessage() + "); retrying...");
+            VcsOperations.push(dir, getLog(), "origin", branch);
         }
     }
 
@@ -307,12 +416,4 @@ public class WsCommitPublishMojo extends AbstractWorkspaceMojo {
     }
 
 
-    /** Per-repo outcome tally. Exactly one counter is set per repo. */
-    private record CommitOutcome(int committed, int skippedClean,
-                                 int skippedUnstaged, int failed) {
-        static final CommitOutcome COMMITTED = new CommitOutcome(1, 0, 0, 0);
-        static final CommitOutcome SKIPPED_CLEAN = new CommitOutcome(0, 1, 0, 0);
-        static final CommitOutcome SKIPPED_UNSTAGED = new CommitOutcome(0, 0, 1, 0);
-        static final CommitOutcome FAILED = new CommitOutcome(0, 0, 0, 1);
-    }
 }

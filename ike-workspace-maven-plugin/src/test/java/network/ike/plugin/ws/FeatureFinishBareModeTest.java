@@ -498,6 +498,9 @@ class FeatureFinishBareModeTest {
         mojo.targetBranch = "main";
         mojo.message = "Soft-fail test";
         mojo.publish = true;
+        // #858: deletion is gated on a confirmed push of main (the
+        // runtime default; direct instantiation skips @Parameter defaults).
+        mojo.push = true;
 
         mojo.execute(); // must not throw
 
@@ -543,6 +546,9 @@ class FeatureFinishBareModeTest {
         mojo.message = "Keep remote";
         mojo.publish = true;
         mojo.keepRemoteBranch = true;
+        // #858: deletion is gated on a confirmed push of main (the
+        // runtime default; direct instantiation skips @Parameter defaults).
+        mojo.push = true;
 
         mojo.execute(); // must not throw
 

@@ -54,6 +54,21 @@ public class VcsOperations {
     }
 
     /**
+     * Get the 8-character short SHA of a local branch tip (without
+     * checking it out). Same width as {@link #remoteSha}, so the two are
+     * directly comparable for push verification.
+     *
+     * @param dir    the repository root directory
+     * @param branch the local branch name
+     * @return the branch tip's short SHA
+     * @throws MojoException if the branch does not resolve
+     */
+    public static String branchSha(File dir, String branch) throws MojoException {
+        return captureRead(dir, "git", "rev-parse", "--short=8",
+                "refs/heads/" + branch);
+    }
+
+    /**
      * Get the current branch name.
      *
      * @param dir the repository root directory
@@ -739,6 +754,30 @@ public class VcsOperations {
     public static boolean localBranchExists(File dir, String branch) {
         try {
             String output = capture(dir, "git", "branch", "--list", branch);
+            return !output.trim().isEmpty();
+        } catch (MojoException e) {
+            return false;
+        }
+    }
+
+    /**
+     * Check whether the remote-tracking ref {@code refs/remotes/<remote>/<branch>}
+     * exists in the local repository. Distinct from {@link #remoteSha}: this
+     * asks what the local clone can <em>see</em>, not what exists on the
+     * remote. A clone created with a narrowed fetch refspec (e.g.
+     * {@code git clone --single-branch}) can have the branch present on the
+     * remote yet unresolvable locally — the silent-wrong-comparison hazard of
+     * IKE-Network/ike-issues#947.
+     *
+     * @param dir    the repository root directory
+     * @param remote the remote name (e.g., "origin")
+     * @param branch the branch name to test
+     * @return true if the remote-tracking ref resolves locally
+     */
+    public static boolean remoteTrackingExists(File dir, String remote, String branch) {
+        try {
+            String output = capture(dir, "git", "rev-parse", "--verify",
+                    "--quiet", "refs/remotes/" + remote + "/" + branch);
             return !output.trim().isEmpty();
         } catch (MojoException e) {
             return false;

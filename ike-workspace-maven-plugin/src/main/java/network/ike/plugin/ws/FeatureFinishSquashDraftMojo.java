@@ -94,10 +94,17 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
     String message;
 
     /**
-     * Push merged target branch to origin after merge. Default is false
-     * because checkpoint is the natural CI handoff point, not feature-finish.
+     * Push the merged target branch to origin after merge, verifying each
+     * member's push against the remote before any feature branch is
+     * deleted (the two-phase contract of IKE-Network/ike-issues#858).
+     * Default is true: a finish lands the feature on
+     * {@code origin/<targetBranch>} — leaving squashes stranded on local
+     * {@code main} is the #858 data-safety hazard. With
+     * {@code -Dpush=false} the squashes stay local AND every feature
+     * branch is kept, because deletion is only permitted after a
+     * confirmed push.
      */
-    @Parameter(property = "push", defaultValue = "false")
+    @Parameter(property = "push", defaultValue = "true")
     boolean push;
 
     /** Show plan without executing. */
@@ -215,12 +222,17 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
 
         // Refresh local main from origin/main before squash-merging the
         // feature branch in. Avoids shipping the feature on top of stale
-        // main. In draft, preview read-only — never mutate local main
-        // (#570). See ike-issues#284.
+        // main. Includes the workspace root repo — its origin/main moves
+        // between machines exactly like a subproject's, and leaving it
+        // out is how the root push ends rejected non-fast-forward
+        // (#857/#858). In draft, preview read-only — never mutate local
+        // main (#570). See ike-issues#284.
         if (publish) {
-            RefreshMainSupport.refreshOrThrow(root, eligible, targetBranch, getLog());
+            RefreshMainSupport.refreshOrThrowWithRoot(
+                    root, eligible, targetBranch, getLog());
         } else {
-            RefreshMainSupport.previewRefresh(root, eligible, targetBranch, getLog());
+            RefreshMainSupport.previewRefreshWithRoot(
+                    root, eligible, targetBranch, getLog());
         }
 
         // #531: auto-generate the squash commit message from per-subproject
@@ -257,8 +269,13 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
                 // version bump, which publish strips before merging —
                 // leaving nothing to commit. The publish path remains
                 // authoritative. Empty diff → also a no-op.
+                // #857: assess against origin/<target> (fetched by the
+                // preview above) rather than possibly-stale local main —
+                // the draft must never classify from a base the real
+                // mainline has moved past.
                 List<String> changed = VcsOperations.changedFiles(
-                        dir, targetBranch, branchName);
+                        dir, RefreshMainSupport.assessmentRef(dir, targetBranch),
+                        branchName);
                 boolean versionOnly = changed.stream().allMatch(
                         p -> p.equals("pom.xml") || p.endsWith("/pom.xml"));
                 squashKind.put(name, versionOnly
@@ -301,9 +318,6 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
                     if (VcsOperations.hasStagedChanges(dir)) {
                         VcsOperations.commit(dir, getLog(), effectiveMessage);
                         FeatureFinishSupport.verifyAndFixQualifiers(dir, branchName, getLog());
-                        if (push) {
-                            VcsOperations.pushIfRemoteExists(dir, getLog(), "origin", targetBranch);
-                        }
                         kind = SquashKind.CONTENT_SQUASHED;
                     } else {
                         getLog().info("    no changes after squash (version-only branch) — skipping commit");
@@ -313,19 +327,16 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
                         VcsOperations.resetHard(dir, getLog(), "HEAD");
                         kind = SquashKind.VERSION_ONLY_NOOP;
                     }
+                    // #858: no push and no branch deletion here — pushing is
+                    // a dedicated verified phase after every member has
+                    // merged (and after the aggregator's reconciliation
+                    // commit, #791), and deletion only follows a fully
+                    // confirmed push phase.
                     squashKind.put(name, kind);
                     try {
                         targetSha.put(name, VcsOperations.headSha(dir));
                     } catch (MojoException ignored) {
                         // Best-effort enrichment; report tolerates absence.
-                    }
-
-                    if (!keepBranch) {
-                        String remoteFailReason = FeatureFinishSupport.deleteBranch(
-                                dir, getLog(), branchName, keepRemoteBranch);
-                        if (remoteFailReason != null) {
-                            undeletedRemote.put(name, remoteFailReason);
-                        }
                     }
 
                     VcsOperations.writeVcsState(dir, VcsState.Action.FEATURE_FINISH);
@@ -366,27 +377,75 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
             }
         }
 
-        // Clean up sites (only for what we actually touched this run)
-        if (merged > 0 && publish) {
+        // Clean up sites (only for what we actually touched this run).
+        // The workspace-repo merge also runs on a pure re-run (merged==0
+        // but already-done members present): a prior crash may have left
+        // the root un-merged, and the re-run must complete it (#858).
+        if (publish && (merged > 0 || !alreadyDone.isEmpty())) {
             FeatureFinishSupport.cleanFeatureSites(root, eligible, branchName, getLog());
             FeatureFinishSupport.mergeWorkspaceRepo(
-                    manifestPath, branchName, targetBranch, keepBranch, push, getLog());
+                    manifestPath, branchName, targetBranch, getLog());
         }
 
         // YAML reconciliation runs regardless of whether anything was
         // squashed THIS invocation — a re-run after a partial failure
         // may have nothing to squash but still need to clear stale
-        // branch fields for the already-done subprojects.
+        // branch fields for the already-done subprojects. It runs BEFORE
+        // the push phase so the aggregator's reconciliation commit is
+        // included in the root push rather than left behind (#791).
         if (publish && !needsYamlReconcile.isEmpty()) {
             FeatureFinishSupport.updateWorkspaceYaml(
                     manifestPath, needsYamlReconcile, targetBranch, feature, getLog());
         }
 
+        // ── Push phase (#858/#791): push every member's target branch —
+        // subprojects squashed this run, subprojects landed by a prior
+        // partial run (their squashes may still be local-only), and the
+        // workspace root — verifying each push against the remote. No
+        // branch is deleted until every push is confirmed.
+        List<FeatureFinishSupport.PushResult> pushResults = List.of();
+        if (publish && push && (merged > 0 || !alreadyDone.isEmpty())) {
+            getLog().info("");
+            getLog().info("  " + Ansi.cyan("→ ") + "Pushing " + targetBranch
+                    + " for every member (verified)...");
+            java.util.LinkedHashMap<String, File> memberDirs =
+                    new java.util.LinkedHashMap<>();
+            for (String name : needsYamlReconcile) {
+                memberDirs.put(name, new File(root, name));
+            }
+            memberDirs.put(RefreshMainSupport.ROOT_LABEL, root);
+            pushResults = FeatureFinishSupport.pushTargetsVerified(
+                    memberDirs, targetBranch, getLog());
+        }
+        List<FeatureFinishSupport.PushResult> pushFailures = pushResults.stream()
+                .filter(r -> !r.pushed()).toList();
+
+        // ── Delete phase (#858): gated on the push phase. Feature
+        // branches are deleted only when every member's target push is
+        // confirmed (or no member has a remote to strand against); with
+        // -Dpush=false against a remote-backed working set, or any push
+        // failure, they are kept so no squash can ever exist on no remote.
+        String branchesKeptReason = null;
+        if (publish) {
+            branchesKeptReason = FeatureFinishSupport.deletePhase(
+                    root, needsYamlReconcile, branchName, targetBranch,
+                    keepBranch, push, !pushFailures.isEmpty(),
+                    keepRemoteBranch, undeletedRemote, getLog());
+        }
+
         // Offer stale branch cleanup (#100)
-        if (publish && merged > 0) {
+        if (publish && merged > 0 && pushFailures.isEmpty()) {
             FeatureFinishSupport.promptStaleBranchCleanup(
                     root, eligible, branchName, targetBranch,
                     getPrompter(), getLog());
+        }
+
+        // A failed push phase is a build failure — after the state above
+        // is safe (branches kept, nothing deleted). The message names
+        // the stranded members and the exact recovery (#858).
+        if (!pushFailures.isEmpty()) {
+            throw new MojoException(FeatureFinishSupport.pushPhaseFailureMessage(
+                    pushFailures, targetBranch));
         }
 
         getLog().info("");
@@ -395,7 +454,16 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
             getLog().info("  Already-done from prior run: " + alreadyDone.size()
                     + " (workspace.yaml reconciled)");
         }
-        if (!keepBranch) {
+        if (publish && push && !pushResults.isEmpty()) {
+            getLog().info("  Pushed " + targetBranch + ": "
+                    + pushResults.stream().filter(
+                            FeatureFinishSupport.PushResult::pushed).count()
+                    + "/" + pushResults.size() + " members verified");
+        }
+        if (branchesKeptReason != null) {
+            getLog().info("  Branch kept: " + branchName
+                    + " (" + branchesKeptReason + ")");
+        } else if (!keepBranch) {
             getLog().info("  Branch deleted: " + branchName);
         }
         if (!undeletedRemote.isEmpty()) {
@@ -423,7 +491,8 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
                         eligible, branchName, targetBranch, merged, draft,
                         keepBranch, effectiveMessage,
                         message == null || message.isBlank(),
-                        undeletedRemote, alreadyDone, squashKind, targetSha));
+                        undeletedRemote, alreadyDone, squashKind, targetSha,
+                        pushResults, branchesKeptReason));
     }
 
     private static String shorten(String sha) {
@@ -478,6 +547,11 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
      * @param undeletedRemote     subproject → git error for any remote
      *                            feature branch that the soft-fail step
      *                            could not delete (#532)
+     * @param pushResults         verified push-phase outcomes (#858); empty
+     *                            in draft or when the phase did not run
+     * @param branchesKeptReason  why feature branches were kept instead of
+     *                            deleted (#858 delete gate), or null when
+     *                            deletion ran normally
      */
     private String buildSquashReport(List<String> components, String branch,
                                       String target, int merged,
@@ -487,7 +561,9 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
                                       java.util.Map<String, String> undeletedRemote,
                                       List<String> alreadyDone,
                                       java.util.Map<String, SquashKind> squashKind,
-                                      java.util.Map<String, String> targetSha) {
+                                      java.util.Map<String, String> targetSha,
+                                      List<FeatureFinishSupport.PushResult> pushResults,
+                                      String branchesKeptReason) {
         GoalReportBuilder report = new GoalReportBuilder();
         report.paragraph("**Branch:** `" + branch + "` → `" + target + "`  \n"
                 + "**Strategy:** squash-merge");
@@ -565,7 +641,22 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
                                 + "from a prior run (workspace.yaml "
                                 + (isDraft ? "would be" : "was")
                                 + " reconciled)")
-                + ". Branch " + (kept ? "kept" : "deleted") + ".");
+                + ". Branch "
+                + (branchesKeptReason != null
+                        ? "kept (" + branchesKeptReason + ")"
+                        : (kept ? "kept" : "deleted"))
+                + ".");
+
+        // #858: the verified push phase is part of the finish contract —
+        // surface every member's outcome so the reviewer can see the
+        // feature actually landed on origin before branches were deleted.
+        if (!pushResults.isEmpty()) {
+            report.section("Pushes (verified against origin)");
+            for (FeatureFinishSupport.PushResult r : pushResults) {
+                report.bullet((r.pushed() ? "✓ " : "✗ ") + "**" + r.member()
+                        + "** — " + r.detail());
+            }
+        }
 
         report.section("Commit message");
         report.paragraph(messageAutoGenerated
@@ -713,22 +804,51 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
         if (VcsOperations.hasStagedChanges(dir)) {
             VcsOperations.commit(dir, getLog(), effectiveMessage);
             FeatureFinishSupport.verifyAndFixQualifiers(dir, branchName, getLog());
-            if (push) {
-                VcsOperations.pushIfRemoteExists(dir, getLog(), "origin", targetBranch);
-            }
         } else {
             getLog().info("  No changes after squash — skipping commit");
             // #162: see executeWorkspaceMode for rationale.
             VcsOperations.resetHard(dir, getLog(), "HEAD");
         }
 
+        // #858: push (verified) BEFORE any branch deletion; with
+        // -Dpush=false or a failed push the branch is kept.
+        List<FeatureFinishSupport.PushResult> barePush = List.of();
+        if (push) {
+            java.util.LinkedHashMap<String, File> one =
+                    new java.util.LinkedHashMap<>();
+            one.put(dir.getName(), dir);
+            barePush = FeatureFinishSupport.pushTargetsVerified(
+                    one, targetBranch, getLog());
+        }
+        boolean pushConfirmed = push
+                && barePush.stream().allMatch(
+                        FeatureFinishSupport.PushResult::pushed);
+
         String remoteFailReason = null;
-        if (!keepBranch) {
+        String bareKeptReason = null;
+        if (keepBranch) {
+            bareKeptReason = "-DkeepBranch=true";
+        } else if (!push && FeatureFinishSupport.anyHasOriginRemote(List.of(dir))) {
+            bareKeptReason = "-Dpush=false — the branch is only deleted "
+                    + "after a confirmed push of " + targetBranch;
+        } else if (push && !pushConfirmed) {
+            bareKeptReason = "push failure (see below)";
+        } else {
             remoteFailReason = FeatureFinishSupport.deleteBranch(
                     dir, getLog(), branchName, keepRemoteBranch);
         }
+        if (bareKeptReason != null) {
+            getLog().info("  Branch kept: " + branchName
+                    + " (" + bareKeptReason + ")");
+        }
 
         VcsOperations.writeVcsState(dir, VcsState.Action.FEATURE_FINISH);
+
+        if (push && !pushConfirmed) {
+            throw new MojoException(FeatureFinishSupport.pushPhaseFailureMessage(
+                    barePush.stream().filter(r -> !r.pushed()).toList(),
+                    targetBranch));
+        }
 
         getLog().info("");
         if (remoteFailReason != null) {

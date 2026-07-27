@@ -485,11 +485,23 @@ class FeatureFinishSupport {
     /**
      * Merge the workspace aggregator repo from the feature branch to the
      * target branch. Mirrors the per-subproject merge: checkout target,
-     * no-ff merge, push.
+     * no-ff merge.
+     *
+     * <p>Deliberately performs <em>no push and no branch deletion</em>:
+     * pushing belongs to the verified push phase that runs after the
+     * workspace.yaml reconciliation commit (so the reconciliation commit
+     * is never left behind, IKE-Network/ike-issues#791), and branch
+     * deletion belongs to the delete phase that runs only after every
+     * member's target push is confirmed (IKE-Network/ike-issues#858).
+     *
+     * @param manifestPath path to workspace.yaml
+     * @param branchName   the feature branch being finished
+     * @param targetBranch branch the feature merges into (e.g. "main")
+     * @param log          Maven logger
+     * @throws MojoException if the merge sequence fails
      */
     static void mergeWorkspaceRepo(Path manifestPath, String branchName,
-                                     String targetBranch, boolean keepBranch,
-                                     boolean push, Log log)
+                                     String targetBranch, Log log)
             throws MojoException {
         File wsRoot = manifestPath.getParent().toFile();
         if (!new File(wsRoot, ".git").exists()) return;
@@ -511,23 +523,217 @@ class FeatureFinishSupport {
             VcsOperations.checkout(wsRoot, log, targetBranch);
             VcsOperations.mergeNoFf(wsRoot, log, branchName,
                     "Merge " + branchName + " into " + targetBranch);
-            if (push) {
-                VcsOperations.pushIfRemoteExists(wsRoot, log, "origin", targetBranch);
-            }
-        }
-
-        if (!keepBranch) {
-            try {
-                deleteBranch(wsRoot, log, branchName);
-            } catch (MojoException e) {
-                log.warn("  Could not delete ws branch: " + e.getMessage());
-            }
         }
 
         // Write state file for ws
         if (VcsState.isIkeManaged(wsRoot.toPath())) {
             VcsOperations.writeVcsState(wsRoot, VcsState.Action.FEATURE_FINISH);
         }
+    }
+
+    // ── Verified push phase + gated delete phase (#858/#791/#857) ──
+
+    /**
+     * Outcome of one member's verified target-branch push in the push
+     * phase. {@code pushed} is {@code true} only when the push command
+     * succeeded AND {@code origin/<target>} was confirmed (via
+     * {@code ls-remote}) to be at the local target SHA afterwards.
+     * A repo with no {@code origin} remote is vacuously satisfied
+     * ({@code pushed=true}, reason {@code "no remote"}) — there is no
+     * remote to strand work against.
+     *
+     * @param member the working-set member name (or
+     *               {@link RefreshMainSupport#ROOT_LABEL})
+     * @param pushed whether the push is confirmed on the remote
+     * @param detail human-readable outcome detail (SHA, or failure reason)
+     */
+    record PushResult(String member, boolean pushed, String detail) {}
+
+    /**
+     * Push {@code targetBranch} for every given member directory and
+     * verify each push against the remote ({@code ls-remote}), never
+     * aborting mid-loop — every member gets its push attempt, and the
+     * caller decides how to act on failures. Phase 1 of the two-phase
+     * finish contract of IKE-Network/ike-issues#858: branch deletion is
+     * only permitted once every result reports {@code pushed}.
+     *
+     * @param memberDirs   member name → repository directory, in push order
+     * @param targetBranch the branch to push (e.g. "main")
+     * @param log          Maven logger
+     * @return one result per member, in iteration order
+     */
+    static List<PushResult> pushTargetsVerified(Map<String, File> memberDirs,
+                                                String targetBranch, Log log) {
+        List<PushResult> results = new ArrayList<>();
+        for (Map.Entry<String, File> entry : memberDirs.entrySet()) {
+            String member = entry.getKey();
+            File dir = entry.getValue();
+            if (!new File(dir, ".git").exists()) {
+                results.add(new PushResult(member, true, "no git repo"));
+                continue;
+            }
+            if (!network.ike.plugin.ReleaseSupport.hasRemote(dir, "origin")) {
+                log.info("    " + member + " — no origin remote; local only");
+                results.add(new PushResult(member, true, "no remote"));
+                continue;
+            }
+            try {
+                VcsOperations.push(dir, log, "origin", targetBranch);
+                String localSha = VcsOperations.branchSha(dir, targetBranch);
+                Optional<String> remote = VcsOperations.remoteSha(
+                        dir, "origin", targetBranch);
+                if (remote.isPresent() && localSha.equals(remote.get())) {
+                    log.info("    " + Ansi.green("✓ ") + member + " — "
+                            + targetBranch + " pushed (" + localSha + ")");
+                    results.add(new PushResult(member, true, localSha));
+                } else {
+                    String seen = remote.map(s -> "origin/" + targetBranch
+                            + " is at " + s).orElse("origin/" + targetBranch
+                            + " is unreadable");
+                    log.warn("    " + Ansi.red("✗ ") + member
+                            + " — push verification failed: " + seen);
+                    results.add(new PushResult(member, false,
+                            "verification failed: " + seen));
+                }
+            } catch (MojoException e) {
+                log.warn("    " + Ansi.red("✗ ") + member + " — push failed: "
+                        + e.getMessage());
+                results.add(new PushResult(member, false, e.getMessage()));
+            }
+        }
+        return results;
+    }
+
+    /**
+     * Whether any of the given directories has an {@code origin} remote.
+     * The #858 stranding hazard only exists when a remote exists — a
+     * purely local working set can delete feature branches without a
+     * push phase (the squash already lives on local {@code target}).
+     *
+     * @param dirs directories to test
+     * @return true if at least one has an {@code origin} remote
+     */
+    static boolean anyHasOriginRemote(Iterable<File> dirs) {
+        for (File dir : dirs) {
+            if (new File(dir, ".git").exists()
+                    && network.ike.plugin.ReleaseSupport.hasRemote(dir, "origin")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * The gated delete phase of the two-phase finish (#858): delete the
+     * feature branch (local + remote) for every member and the workspace
+     * root — but only when it is safe. Deletion is skipped entirely
+     * (returning the reason) when {@code keepBranch} is set, when any
+     * push in the push phase failed, or when {@code push=false} while at
+     * least one member has an {@code origin} remote (deleting remote
+     * feature branches with unpushed target commits is exactly how work
+     * ends up on no remote). A fully local working set — no member has
+     * an {@code origin} — deletes freely with {@code push=false}.
+     *
+     * @param root             workspace root directory
+     * @param members          member names whose branches to delete
+     * @param branchName       the feature branch to delete
+     * @param targetBranch     the merge target (for the kept-reason text)
+     * @param keepBranch       {@code -DkeepBranch=true}
+     * @param push             whether the push phase ran ({@code -Dpush})
+     * @param anyPushFailure   whether any push-phase result failed
+     * @param keepRemoteBranch {@code -DkeepRemoteBranch=true} (#532)
+     * @param undeletedRemote  out-param: member → git error for remote
+     *                         deletions that soft-failed (#532)
+     * @param log              Maven logger
+     * @return the reason branches were kept, or {@code null} when the
+     *         deletion ran
+     */
+    static String deletePhase(File root, List<String> members,
+                              String branchName, String targetBranch,
+                              boolean keepBranch, boolean push,
+                              boolean anyPushFailure, boolean keepRemoteBranch,
+                              Map<String, String> undeletedRemote, Log log) {
+        if (keepBranch) {
+            return "-DkeepBranch=true";
+        }
+        if (anyPushFailure) {
+            return "push failures (see below)";
+        }
+        List<File> dirs = new ArrayList<>();
+        for (String name : members) {
+            dirs.add(new File(root, name));
+        }
+        dirs.add(root);
+        if (!push && anyHasOriginRemote(dirs)) {
+            return "-Dpush=false — branches are only deleted after a "
+                    + "confirmed push of " + targetBranch + "; run "
+                    + WsGoal.PUSH.qualified() + ", then "
+                    + WsGoal.CLEANUP_PUBLISH.qualified();
+        }
+        for (String name : members) {
+            File dir = new File(root, name);
+            if (!new File(dir, ".git").exists()
+                    || !VcsOperations.localBranchExists(dir, branchName)) {
+                continue;   // already gone (prior run / never created)
+            }
+            try {
+                String remoteFailReason = deleteBranch(
+                        dir, log, branchName, keepRemoteBranch);
+                if (remoteFailReason != null) {
+                    undeletedRemote.put(name, remoteFailReason);
+                }
+            } catch (MojoException e) {
+                log.warn("    could not delete " + name + "/" + branchName
+                        + ": " + e.getMessage());
+            }
+        }
+        if (new File(root, ".git").exists()
+                && VcsOperations.localBranchExists(root, branchName)) {
+            try {
+                deleteBranch(root, log, branchName, keepRemoteBranch);
+            } catch (MojoException e) {
+                log.warn("  Could not delete ws branch: " + e.getMessage());
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Build the failure message thrown when the push phase left members
+     * stranded (commit on local {@code target} only). Names each stranded
+     * member with its reason, states explicitly that <em>no feature
+     * branch was deleted</em> (the #858 safety contract), and emits the
+     * copy-pasteable recovery: {@code ws:push} to land the stranded
+     * targets, then {@code ws:cleanup-publish} to collect the kept
+     * feature branches (workspace.yaml is already reconciled by the time
+     * the push phase runs, so a finish re-run would read the members as
+     * plain skips — cleanup is the sanctioned deletion path).
+     *
+     * @param failures     the failed push results
+     * @param targetBranch the target branch that could not be fully pushed
+     * @return the formatted failure message
+     */
+    static String pushPhaseFailureMessage(List<PushResult> failures,
+                                          String targetBranch) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("Feature-finish stopped: ").append(failures.size())
+                .append(" member(s) failed to push ").append(targetBranch)
+                .append(" — their merge commits exist on local ")
+                .append(targetBranch).append(" only:\n");
+        for (PushResult r : failures) {
+            sb.append("  ").append(r.member()).append(" — ")
+                    .append(r.detail()).append("\n");
+        }
+        sb.append("\nNo feature branch was deleted (branches are only "
+                + "deleted after every ").append(targetBranch)
+                .append(" push is confirmed).\n\n");
+        sb.append("Recover with:\n");
+        sb.append("  ./mvnw ").append(WsGoal.PUSH.qualified())
+                .append("               # lands the stranded ")
+                .append(targetBranch).append(" commits\n");
+        sb.append("  ./mvnw ").append(WsGoal.CLEANUP_PUBLISH.qualified())
+                .append("    # collects the kept feature branches");
+        return sb.toString();
     }
 
     /**

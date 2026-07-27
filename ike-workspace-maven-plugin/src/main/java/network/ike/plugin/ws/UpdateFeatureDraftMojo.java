@@ -215,33 +215,53 @@ public class UpdateFeatureDraftMojo extends AbstractWorkspaceMojo {
         }
 
         // Refresh local main from origin/main across eligible components
-        // before any feature-side comparison or merge. In draft, preview
-        // read-only — never mutate local main (#570). See ike-issues#284.
-        if (publish) {
-            RefreshMainSupport.refreshOrThrow(root, eligible, targetBranch, getLog());
+        // before any feature-side comparison or merge. Workspace mode also
+        // covers the workspace root repo (#857/#858); bare mode has no
+        // root beyond the repo itself. In draft, preview read-only — never
+        // mutate local main (#570). See ike-issues#284.
+        if (workingSet.isWorkspace()) {
+            if (publish) {
+                RefreshMainSupport.refreshOrThrowWithRoot(
+                        root, eligible, targetBranch, getLog());
+            } else {
+                RefreshMainSupport.previewRefreshWithRoot(
+                        root, eligible, targetBranch, getLog());
+            }
         } else {
-            RefreshMainSupport.previewRefresh(root, eligible, targetBranch, getLog());
+            if (publish) {
+                RefreshMainSupport.refreshOrThrow(root, eligible, targetBranch, getLog());
+            } else {
+                RefreshMainSupport.previewRefresh(root, eligible, targetBranch, getLog());
+            }
         }
 
         // Show how far behind each subproject is + record its effect. The
         // working-set report (below) reads these effects per member; the
         // -draft variant phrases them as PLANNED, -publish as APPLIED.
+        // #857: a draft never mutates local main, so its behind/ahead and
+        // conflict assessment compare against origin/<target> (fetched by
+        // the preview above) — never a possibly-stale local branch. The
+        // publish path just refreshed local main, so it compares locally.
         for (String name : eligible) {
             File dir = new File(root, name);
+            String assessRef = publish
+                    ? targetBranch
+                    : RefreshMainSupport.assessmentRef(dir, targetBranch);
             try {
                 List<String> behind = VcsOperations.commitLog(
-                        dir, branchName, targetBranch);
+                        dir, branchName, assessRef);
                 List<String> ahead = VcsOperations.commitLog(
-                        dir, targetBranch, branchName);
+                        dir, assessRef, branchName);
 
                 if (behind.isEmpty()) {
                     getLog().info("  " + Ansi.green("✓ ") + name
                             + " — up to date with " + targetBranch);
                     effects.put(name, "up to date with `" + targetBranch + "`");
                 } else if (draft) {
-                    // Predict conflicts without touching working tree
+                    // Predict conflicts without touching working tree —
+                    // against the same assessment ref (#857).
                     List<String> predicted = VcsOperations.predictConflicts(
-                            dir, branchName, targetBranch);
+                            dir, branchName, assessRef);
 
                     if (predicted.isEmpty()) {
                         getLog().info("  " + Ansi.green("✓ ") + name + " — "

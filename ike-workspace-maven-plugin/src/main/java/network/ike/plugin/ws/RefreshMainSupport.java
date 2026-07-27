@@ -54,7 +54,39 @@ final class RefreshMainSupport {
     /** Default git remote name used for the {@code origin/main} comparison. */
     static final String DEFAULT_REMOTE = "origin";
 
+    /**
+     * Outcome label for the workspace root repo in the
+     * {@code *WithRoot} orchestrators (IKE-Network/ike-issues#857, #858).
+     */
+    static final String ROOT_LABEL = "workspace root";
+
     private RefreshMainSupport() {}
+
+    /**
+     * The ref a <em>read-only</em> (draft) assessment should compare the
+     * feature branch against: {@code origin/<targetBranch>} when the
+     * remote-tracking ref resolves, else the local branch.
+     *
+     * <p>A draft never mutates local {@code main} (#570), so after
+     * {@link #previewRefresh} has fetched, the remote-tracking ref — not
+     * the possibly-stale local branch — is the source of truth for
+     * behind/ahead counts, changed-file lists, and conflict prediction.
+     * Comparing against stale local {@code main} is how a draft reports
+     * "up to date with main" while the real mainline has moved on
+     * (IKE-Network/ike-issues#857).
+     *
+     * @param dir          the repository root directory
+     * @param targetBranch the conceptual target branch (e.g. {@code "main"})
+     * @return {@code origin/<targetBranch>} when resolvable, else
+     *         {@code targetBranch}
+     */
+    static String assessmentRef(File dir, String targetBranch) {
+        if (network.ike.plugin.ReleaseSupport.hasRemote(dir, DEFAULT_REMOTE)
+                && VcsOperations.remoteTrackingExists(dir, DEFAULT_REMOTE, targetBranch)) {
+            return DEFAULT_REMOTE + "/" + targetBranch;
+        }
+        return targetBranch;
+    }
 
     // ── Outcome model ───────────────────────────────────────────
 
@@ -141,6 +173,25 @@ final class RefreshMainSupport {
         VcsOperations.fetch(subprojectDir, log);
 
         String remoteRef = remote + "/" + mainBranch;
+
+        // #947: a narrowed fetch refspec (single-branch clone) leaves the
+        // remote-tracking ref unresolvable even though the branch exists
+        // on the remote — every comparison below would then run against
+        // nothing and read as affirmatively wrong ("no local main; would
+        // create from origin/main") rather than incomplete. Fail loudly
+        // with the exact repair instead.
+        if (!VcsOperations.remoteTrackingExists(subprojectDir, remote, mainBranch)
+                && VcsOperations.remoteSha(subprojectDir, remote, mainBranch).isPresent()) {
+            throw new MojoException(component + ": this clone cannot see "
+                    + remoteRef + " — its fetch refspec is narrowed "
+                    + "(single-branch clone), so " + mainBranch
+                    + " exists on the remote but is invisible locally "
+                    + "(IKE-Network/ike-issues#947). Repair with:\n"
+                    + "  (cd " + subprojectDir.getName()
+                    + " && git config remote." + remote + ".fetch"
+                    + " '+refs/heads/*:refs/remotes/" + remote + "/*'"
+                    + " && git fetch " + remote + ")");
+        }
 
         // Fresh-clone case: local main does not exist yet.
         if (!VcsOperations.localBranchExists(subprojectDir, mainBranch)) {
@@ -250,10 +301,47 @@ final class RefreshMainSupport {
                                         List<String> components,
                                         String mainBranch,
                                         Log log) throws MojoException {
+        return refreshOrThrow(workspaceRoot, components, mainBranch, log, false);
+    }
+
+    /**
+     * Variant of {@link #refreshOrThrow(File, List, String, Log)} that also
+     * refreshes the <em>workspace root repo itself</em> (labelled
+     * {@value #ROOT_LABEL}) after the subprojects. The root repo has the
+     * same per-machine-{@code .git} staleness exposure as any subproject —
+     * checkpoint commits and parent bumps land on its {@code origin/main}
+     * from other machines — and leaving it out of the refresh is exactly
+     * how a feature-finish ends in a rejected non-fast-forward root push
+     * (IKE-Network/ike-issues#857, #858).
+     *
+     * @param workspaceRoot workspace root directory (its own git repo)
+     * @param components    subproject names to refresh, in order
+     * @param mainBranch    the conceptual main branch (e.g. {@code "main"})
+     * @param log           Maven logger
+     * @return outcomes: one per subproject, then one for the root
+     * @throws MojoException if any conflicts arise, with file-level detail
+     */
+    static List<Outcome> refreshOrThrowWithRoot(File workspaceRoot,
+                                                List<String> components,
+                                                String mainBranch,
+                                                Log log) throws MojoException {
+        return refreshOrThrow(workspaceRoot, components, mainBranch, log, true);
+    }
+
+    private static List<Outcome> refreshOrThrow(File workspaceRoot,
+                                                List<String> components,
+                                                String mainBranch,
+                                                Log log,
+                                                boolean includeRoot)
+            throws MojoException {
         log.info("  " + Ansi.cyan("→ ") + "Refreshing local " + mainBranch
                 + " from " + DEFAULT_REMOTE + "/" + mainBranch + "...");
-        List<Outcome> outcomes = refreshAll(workspaceRoot, components,
-                mainBranch, DEFAULT_REMOTE, log, false);
+        List<Outcome> outcomes = new ArrayList<>(refreshAll(workspaceRoot,
+                components, mainBranch, DEFAULT_REMOTE, log, false));
+        if (includeRoot) {
+            outcomes.add(refresh(workspaceRoot, ROOT_LABEL, mainBranch,
+                    DEFAULT_REMOTE, log, false));
+        }
         for (Outcome o : outcomes) {
             log.info("    " + describe(o));
         }
@@ -304,11 +392,44 @@ final class RefreshMainSupport {
                                         List<String> components,
                                         String mainBranch,
                                         Log log) throws MojoException {
+        return previewRefresh(workspaceRoot, components, mainBranch, log, false);
+    }
+
+    /**
+     * Variant of {@link #previewRefresh(File, List, String, Log)} that also
+     * classifies the workspace root repo itself (labelled
+     * {@value #ROOT_LABEL}) — the read-only counterpart of
+     * {@link #refreshOrThrowWithRoot}. See IKE-Network/ike-issues#857, #858.
+     *
+     * @param workspaceRoot workspace root directory (its own git repo)
+     * @param components    subproject names to inspect, in order
+     * @param mainBranch    the conceptual main branch (e.g. {@code "main"})
+     * @param log           Maven logger
+     * @return outcomes: one per subproject, then one for the root
+     * @throws MojoException if a git operation fails for an unexpected reason
+     */
+    static List<Outcome> previewRefreshWithRoot(File workspaceRoot,
+                                                List<String> components,
+                                                String mainBranch,
+                                                Log log) throws MojoException {
+        return previewRefresh(workspaceRoot, components, mainBranch, log, true);
+    }
+
+    private static List<Outcome> previewRefresh(File workspaceRoot,
+                                                List<String> components,
+                                                String mainBranch,
+                                                Log log,
+                                                boolean includeRoot)
+            throws MojoException {
         log.info("  " + Ansi.cyan("→ ") + "Checking local " + mainBranch
                 + " vs " + DEFAULT_REMOTE + "/" + mainBranch
                 + " (read-only — no changes)...");
-        List<Outcome> outcomes = refreshAll(workspaceRoot, components,
-                mainBranch, DEFAULT_REMOTE, log, true);
+        List<Outcome> outcomes = new ArrayList<>(refreshAll(workspaceRoot,
+                components, mainBranch, DEFAULT_REMOTE, log, true));
+        if (includeRoot) {
+            outcomes.add(refresh(workspaceRoot, ROOT_LABEL, mainBranch,
+                    DEFAULT_REMOTE, log, true));
+        }
         for (Outcome o : outcomes) {
             log.info("    " + describe(o, true));
         }

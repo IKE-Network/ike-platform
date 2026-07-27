@@ -913,8 +913,8 @@ public final class SubprojectInitializer {
 
                 | Goal | Description |
                 |------|-------------|
-                | `ws:cleanup-draft` | List merged/stale feature branches |
-                | `ws:cleanup-publish` | Delete merged feature branches |
+                | `ws:cleanup-draft` | List finished (merged + squash-merged) feature branches |
+                | `ws:cleanup-publish` | Delete finished feature branches, local and remote |
 
                 ## Build Goals (ike:)
 
@@ -1063,7 +1063,7 @@ public final class SubprojectInitializer {
                 | `ws:commit-publish` | Commit across the working set (`-Dpush=true -Dmessage="..."`) |
                 | `ws:push` | Push the working set (warns about uncommitted changes) |
                 | `ws:sync` | Pull then push across the working set |
-                | `ws:cleanup-draft` / `-publish` | List/delete merged feature branches |
+                | `ws:cleanup-draft` / `-publish` | List/delete finished (merged + squash-merged) branches |
 
                 ---
 

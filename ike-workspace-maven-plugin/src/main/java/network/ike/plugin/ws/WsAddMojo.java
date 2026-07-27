@@ -24,6 +24,7 @@ import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 
 import javax.xml.parsers.DocumentBuilder;
+import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -732,26 +733,47 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
      * alongside the workspace.yaml change.
      */
     private void cloneSubproject(Path wsDir) throws MojoException {
-        boolean remoteHasBranch = remoteHasBranch(wsDir, repo, branch);
+        cloneSubprojectFull(wsDir, repo, subproject, branch, getLog());
+    }
 
-        List<String> cmd = new ArrayList<>();
-        cmd.add("git");
-        cmd.add("clone");
-        cmd.add("--depth");
-        cmd.add("1");
-        if (remoteHasBranch) {
-            cmd.add("-b");
-            cmd.add(branch);
+    /**
+     * Clone a subproject with a <em>full</em> clone — never {@code --depth}
+     * or {@code --single-branch} — and check out the requested branch.
+     *
+     * <p>#947: a shallow or refspec-narrowed clone blinds every downstream
+     * {@code origin/<target>} comparison (behind/ahead, merge ancestry,
+     * finish-draft classification reads "no local main; would create from
+     * origin/main" against repos that have in fact diverged, and shallow
+     * history makes merge-base report unrelated histories). Branch
+     * selection governs only the checkout, never the refspec or depth.
+     *
+     * @param wsDir      the workspace root directory to clone under
+     * @param repo       the repository URL
+     * @param subproject the target directory / subproject name
+     * @param branch     the branch to check out after cloning
+     * @param log        Maven logger
+     * @throws MojoException if the clone or checkout fails
+     */
+    static void cloneSubprojectFull(Path wsDir, String repo, String subproject,
+                                    String branch,
+                                    org.apache.maven.api.plugin.Log log)
+            throws MojoException {
+        ReleaseSupport.exec(wsDir.toFile(), log,
+                "git", "clone", repo, subproject);
+
+        File dir = wsDir.resolve(subproject).toFile();
+        String defaultBranch = VcsOperations.currentBranch(dir);
+        if (defaultBranch.equals(branch)) {
+            return;
         }
-        cmd.add(repo);
-        cmd.add(subproject);
-        ReleaseSupport.exec(wsDir.toFile(), getLog(), cmd.toArray(new String[0]));
-
-        if (!remoteHasBranch) {
-            getLog().info("  Remote has no branch '" + branch
+        if (remoteHasBranch(wsDir, repo, branch)) {
+            // Plain checkout DWIMs a local tracking branch from
+            // origin/<branch> — the full refspec guarantees it resolves.
+            ReleaseSupport.exec(dir, log, "git", "checkout", branch);
+        } else {
+            log.info("  Remote has no branch '" + branch
                     + "' — creating it locally from the remote's default.");
-            ReleaseSupport.exec(wsDir.resolve(subproject).toFile(), getLog(),
-                    "git", "checkout", "-b", branch);
+            ReleaseSupport.exec(dir, log, "git", "checkout", "-b", branch);
         }
     }
 

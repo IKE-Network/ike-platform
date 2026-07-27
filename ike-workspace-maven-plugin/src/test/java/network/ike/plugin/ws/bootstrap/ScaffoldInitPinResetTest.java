@@ -66,14 +66,13 @@ class ScaffoldInitPinResetTest {
     // ── Tests ─────────────────────────────────────────────────────
 
     /**
-     * Core bug: a stale (default-mode) clone reaches the pin. Before the
-     * {@code checkoutSha} fix this FAILS — the bare {@code checkout} of the
-     * unfetched C2 throws {@code unable to read tree} and is swallowed, so
-     * HEAD stays at C1. After the fix the missing commit is fetched first,
-     * so the checkout lands on C2.
+     * #949: the interactive default mode never moves the working tree
+     * onto the pin — pins are checkpoint-restore state, honored only in
+     * {@code resetToPin} mode. A stale clone stays wherever its branch
+     * tip is (here C1); the pin is merely noted.
      */
     @Test
-    void defaultMode_staleClone_reachesPin() throws Exception {
+    void defaultMode_staleClone_staysOnBranchTip_pinNotedOnly() throws Exception {
         scaffold(/*resetToPin*/ false);
 
         // Dirty with an UNTRACKED file: makes run() skip its fetch/rebase
@@ -87,12 +86,84 @@ class ScaffoldInitPinResetTest {
 
         SubState state = snapshot().get(PINNED);
         assertThat(state.headSha())
-                .as("default-mode scaffold-init must fetch the pinned commit "
-                        + "and check it out (ike-issues#685); HEAD should be C2")
-                .isEqualTo(c2);
+                .as("default-mode scaffold-init must NOT move onto the pin "
+                        + "(ike-issues#949); HEAD stays at the branch tip C1")
+                .isEqualTo(c1);
         assertThat(libA.toPath().resolve("scratch-untracked.txt"))
-                .as("an untracked file is not WIP and must survive the checkout")
+                .as("an untracked file is not WIP and must survive")
                 .exists();
+    }
+
+    /**
+     * #949 core incident: a declared-but-missing subproject whose pin is
+     * STALE (an old commit) must clone at the branch tip, attached —
+     * never detached at the historical pin.
+     */
+    @Test
+    void defaultMode_freshClone_landsAttachedOnBranchTip_notThePin()
+            throws Exception {
+        scaffold(/*resetToPin*/ false);
+
+        // The manifest pins C2, but rewrite it to pin the OLD C1 —
+        // simulating a stale checkpoint-managed pin — and delete the
+        // clone so init must re-clone it.
+        rewritePinnedSha(c1);
+        deleteRecursively(new File(tempDir.toFile(), PINNED).toPath());
+
+        runInit(/*resetToPin*/ false);
+
+        File libA = new File(tempDir.toFile(), PINNED);
+        SubState state = snapshot().get(PINNED);
+        assertThat(state.headSha())
+                .as("fresh clone must follow the branch tip (C2), not the "
+                        + "stale C1 pin (ike-issues#949)")
+                .isEqualTo(c2);
+        assertThat(currentBranchOf(libA))
+                .as("fresh clone must be ATTACHED on the declared branch, "
+                        + "never a detached HEAD (ike-issues#949)")
+                .isEqualTo("main");
+    }
+
+    /**
+     * #949(b): even in {@code resetToPin} (CI / checkpoint-restore) mode
+     * a fresh clone reaches the pin with the branch CHECKED OUT — the
+     * branch ref points at the pin; no detached HEAD.
+     */
+    @Test
+    void resetMode_freshClone_reachesPinAttached() throws Exception {
+        scaffold(/*resetToPin*/ true);
+
+        rewritePinnedSha(c1);
+        deleteRecursively(new File(tempDir.toFile(), PINNED).toPath());
+
+        runInit(/*resetToPin*/ true);
+
+        File libA = new File(tempDir.toFile(), PINNED);
+        SubState state = snapshot().get(PINNED);
+        assertThat(state.headSha())
+                .as("reset mode must reach the pin deterministically (#685)")
+                .isEqualTo(c1);
+        assertThat(currentBranchOf(libA))
+                .as("reaching the pin must leave the branch checked out, "
+                        + "not a detached HEAD (ike-issues#949)")
+                .isEqualTo("main");
+    }
+
+    private static String currentBranchOf(File dir) throws Exception {
+        Process p = new ProcessBuilder("git", "branch", "--show-current")
+                .directory(dir).redirectErrorStream(true).start();
+        String out = new String(p.getInputStream().readAllBytes(),
+                StandardCharsets.UTF_8).trim();
+        p.waitFor();
+        return out;
+    }
+
+    private static void deleteRecursively(Path root) throws Exception {
+        if (!Files.exists(root)) return;
+        try (var stream = Files.walk(root)) {
+            stream.sorted(java.util.Comparator.reverseOrder())
+                    .forEach(p -> p.toFile().delete());
+        }
     }
 
     /**

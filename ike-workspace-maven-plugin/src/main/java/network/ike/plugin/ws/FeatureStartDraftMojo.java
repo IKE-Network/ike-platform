@@ -167,12 +167,14 @@ public class FeatureStartDraftMojo extends AbstractWorkspaceMojo {
         getLog().info("");
 
         // Refresh local main from origin/main before branching, so the new
-        // feature branch starts from current main. In draft, preview
-        // read-only — never mutate local main (#570). See ike-issues#284.
+        // feature branch starts from current main. Covers the workspace
+        // root repo too (#857 — it branches from its own local main). In
+        // draft, preview read-only — never mutate local main (#570). See
+        // ike-issues#284.
         if (publish) {
-            RefreshMainSupport.refreshOrThrow(root, sorted, "main", getLog());
+            RefreshMainSupport.refreshOrThrowWithRoot(root, sorted, "main", getLog());
         } else {
-            RefreshMainSupport.previewRefresh(root, sorted, "main", getLog());
+            RefreshMainSupport.previewRefreshWithRoot(root, sorted, "main", getLog());
         }
 
         // Analyze BOM cascade issues and prompt for confirmation
@@ -356,9 +358,25 @@ public class FeatureStartDraftMojo extends AbstractWorkspaceMojo {
         // aggregator's own pom — feature-start branches the top, so its version
         // gets the same qualifier as every subproject (ike-issues#721). Runs for
         // newly-created OR repaired branches; draft just previews.
-        if (!versioned.isEmpty() && publish) {
+        //
+        // #948: the workspace root is a first-class working-set member. A
+        // working set with ZERO declared subprojects is the legitimate
+        // genesis state of every new workspace — the root must still get
+        // its feature branch (and qualified aggregator version), or the
+        // canonical bootstrap sequence `feature-start → ws:add -Dbranch`
+        // deadlocks on the #286 branch-coherence check.
+        boolean genesis = sorted.isEmpty();
+        if (publish && (!versioned.isEmpty() || genesis)) {
+            if (genesis) {
+                getLog().info("  No subprojects declared (genesis working set)"
+                        + " — branching the workspace root only.");
+            }
             branchWorkspaceRepo(branchName, versioned);
-        } else if (!versioned.isEmpty() && !skipVersion) {
+        } else if (!skipVersion && (!versioned.isEmpty() || genesis)) {
+            if (genesis) {
+                getLog().info("  No subprojects declared (genesis working set)"
+                        + " — would branch the workspace root only.");
+            }
             previewWorkspaceRootQualify(branchName);
         }
 

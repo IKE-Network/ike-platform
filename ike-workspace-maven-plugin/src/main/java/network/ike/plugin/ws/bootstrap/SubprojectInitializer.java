@@ -302,28 +302,31 @@ public final class SubprojectInitializer {
     }
 
     /**
-     * Move a subproject's working tree onto the {@code sha} pinned in
-     * {@code workspace.yaml}, if any.
+     * Honor a subproject's pinned {@code sha} from {@code workspace.yaml} —
+     * in {@link #resetToPin} (CI / checkpoint-restore) mode only.
      *
-     * <p>Deterministically reaches the pin (IKE-Network/ike-issues#685):
+     * <p>In the interactive default mode this is a <em>no-op beyond an
+     * informational line</em>: ordinary bootstrap follows the entry's
+     * {@code branch:} tip, attached (IKE-Network/ike-issues#949). The
+     * {@code sha:} pin is checkpoint-managed state that can be
+     * arbitrarily stale — historically a fresh clone was checked out
+     * detached at the pin, and the next reactor build silently installed
+     * feature-era artifacts from a workspace that read as "on main".
+     *
+     * <p>In {@code resetToPin} mode the pin is reached deterministically
+     * (IKE-Network/ike-issues#685):
      * <ol>
      *   <li>No pin → nothing to do.</li>
      *   <li>Already at the pin (by prefix match) → nothing to do.</li>
      *   <li><b>Ensure the commit is present locally</b> — a stale clone
-     *       may not have the pinned object yet. When absent, run a
-     *       read-only {@code git fetch origin}; this is done in
-     *       <em>both</em> modes and is what fixes the original
-     *       "unable to read tree {@code <sha>}" failure that used to be
-     *       swallowed to a warning.</li>
-     *   <li>Reach the pin: {@code git reset --hard <sha>} when
-     *       {@link #resetToPin} (deterministic even over a dirty tree),
-     *       otherwise the lenient {@code git checkout <sha>} (which
-     *       refuses to clobber uncommitted work).</li>
+     *       may not have the pinned object yet; fetch when absent.</li>
+     *   <li>{@code git reset --hard <sha>} — the branch stays checked
+     *       out (attached) pointing at the pin, never a detached HEAD,
+     *       and a WARN says so (#949).</li>
      * </ol>
      *
-     * <p>On failure, CI/force mode ({@code resetToPin == true})
-     * <em>rethrows</em> — a stale pin must never build — while the
-     * interactive default warns and proceeds, preserving local WIP.
+     * <p>On failure, CI/force mode <em>rethrows</em> — a stale pin must
+     * never build.
      *
      * @param dir        the subproject working directory
      * @param subproject the subproject definition (its {@link Subproject#sha()}
@@ -343,26 +346,38 @@ public final class SubprojectInitializer {
                 return; // already at the right commit
             }
 
+            String sha8 = sha.substring(0, Math.min(8, sha.length()));
+
+            // #949: ordinary (interactive) bootstrap follows the branch
+            // tip, attached. The sha: pin records checkpoint state — it
+            // can be arbitrarily stale (checkpoint-managed), and moving a
+            // workspace onto it produces a detached HEAD at a possibly
+            // feature-era commit whose next reactor build silently
+            // installs stale artifacts. Pins are reached only in
+            // resetToPin (CI / checkpoint-restore) mode.
+            if (!resetToPin) {
+                log.info("    pin " + sha8 + " recorded (checkpoint state)"
+                        + " — working tree stays on the branch tip;"
+                        + " pass -Dws.scaffold.resetToPin=true to reach pins");
+                return;
+            }
+
             // A stale clone may lack the pinned object. Fetch (read-only)
             // before trying to reach it — this is the core #685 fix.
             if (!commitPresent(dir, sha)) {
-                log.info("    Fetching pinned commit "
-                        + sha.substring(0, Math.min(8, sha.length())));
+                log.info("    Fetching pinned commit " + sha8);
                 ReleaseSupport.exec(dir, log,
                         "git", "fetch", "origin", "--quiet");
             }
 
-            if (resetToPin) {
-                log.info("    Resetting to pinned SHA: "
-                        + sha.substring(0, Math.min(8, sha.length())));
-                ReleaseSupport.exec(dir, log,
-                        "git", "reset", "--hard", sha);
-            } else {
-                log.info("    Checking out SHA: "
-                        + sha.substring(0, Math.min(8, sha.length())));
-                ReleaseSupport.exec(dir, log,
-                        "git", "checkout", sha);
-            }
+            log.info("    Resetting to pinned SHA: " + sha8);
+            ReleaseSupport.exec(dir, log,
+                    "git", "reset", "--hard", sha);
+            // #949(a): reaching a pin is loud — the branch now points at
+            // checkpoint state, which may be behind origin.
+            log.warn("    " + subproject.name() + ": branch reset to pinned "
+                    + sha8 + " (checkpoint-restore semantics) — may be"
+                    + " behind origin/" + subproject.branch());
         } catch (MojoException e) {
             if (resetToPin) {
                 // CI/force mode must never build silently-stale code:

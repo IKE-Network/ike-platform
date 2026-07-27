@@ -814,6 +814,36 @@ public class VcsOperations {
      * @param prefix the branch name prefix to filter (e.g., "feature/")
      * @return list of branch names
      */
+    /**
+     * Whether {@code branch}'s tip TREE equals the tree of some recent
+     * commit on {@code targetRef} — the squash-merge detector of
+     * IKE-Network/ike-issues#946. A squash commit is not an ancestor
+     * relation (so {@code git branch --merged} never sees it) and its
+     * single patch-id rarely matches any individual feature commit (so
+     * {@code git cherry} misses it too); but the feature-finish flow
+     * lands exactly the feature tip's tree on the target, so tree
+     * equivalence identifies content-landed branches reliably.
+     *
+     * @param dir       the repository root directory
+     * @param branch    the feature branch to test
+     * @param targetRef the target ref whose recent commits to scan
+     *                  (e.g. {@code "origin/main"})
+     * @param limit     how many recent target commits to compare against
+     * @return true when the branch tip's tree appears on the target
+     */
+    public static boolean branchTreeLandedOn(File dir, String branch,
+                                             String targetRef, int limit) {
+        try {
+            String branchTree = capture(dir,
+                    "git", "rev-parse", branch + "^{tree}");
+            String targetTrees = capture(dir,
+                    "git", "log", "-" + limit, "--format=%T", targetRef);
+            return targetTrees.lines().anyMatch(t -> t.equals(branchTree));
+        } catch (MojoException e) {
+            return false;
+        }
+    }
+
     public static List<String> localBranches(File dir, String prefix) {
         try {
             String output = capture(dir, "git", "branch");

@@ -1,6 +1,6 @@
 ---
-date_published: 2026-07-25
-date_modified: 2026-07-25
+date_published: 2026-07-26
+date_modified: 2026-07-26
 canonical_url: https://ike.network/ike-platform/ike-bom/summary.html
 ---
 
@@ -27,5 +27,5 @@ canonical_url: https://ike.network/ike-platform/ike-bom/summary.html
 | --- | --- |
 | GroupId | network.ike.platform |
 | ArtifactId | ike-bom |
-| Version | 140 |
+| Version | 141 |
 | Type | pom |

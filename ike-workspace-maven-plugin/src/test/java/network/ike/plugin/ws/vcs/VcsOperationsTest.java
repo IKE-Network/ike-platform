@@ -367,26 +367,39 @@ class VcsOperationsTest {
         // holds .git/index.lock when `git add -A` starts, but releases
         // it before the single retry fires. Attempt 1 exits 128, the
         // backoff elapses, attempt 2 stages normally.
+        //
+        // Coordination is DETERMINISTIC via the #691 command-interceptor
+        // seam — the lock is removed exactly when the retry attempt is
+        // about to run. The previous sleep-based releaser thread lost
+        // the race on loaded CI agents (release 2716) and failed the
+        // verify preflight spuriously.
         Files.writeString(tempDir.resolve("new.txt"), "new", StandardCharsets.UTF_8);
         Path lock = tempDir.resolve(".git").resolve("index.lock");
         Files.writeString(lock, "", StandardCharsets.UTF_8);
 
-        Thread releaser = new Thread(() -> {
-            try {
-                Thread.sleep(50);
-                Files.deleteIfExists(lock);
-            } catch (Exception ignored) {
-                // deletion failure leaves the lock in place; the test
-                // then fails loudly in addAll below
+        java.util.concurrent.atomic.AtomicInteger addAttempts =
+                new java.util.concurrent.atomic.AtomicInteger();
+        VcsOperations.setCommandInterceptor((dir, cmd) -> {
+            if (String.join(" ", cmd).equals("git add -A")
+                    && addAttempts.incrementAndGet() == 2) {
+                try {
+                    Files.deleteIfExists(lock);
+                } catch (java.io.IOException e) {
+                    throw new MojoException(
+                            "test: could not release index.lock: "
+                                    + e.getMessage(), e);
+                }
             }
         });
-        releaser.start();
         try {
             VcsOperations.addAll(repoDir, log);
         } finally {
-            releaser.join();
+            VcsOperations.setCommandInterceptor(null);
         }
 
+        assertThat(addAttempts.get())
+                .as("attempt 1 must fail on the lock; attempt 2 succeeds")
+                .isEqualTo(2);
         String staged = execCapture("git", "diff", "--cached", "--name-only");
         assertThat(staged).contains("new.txt");
     }

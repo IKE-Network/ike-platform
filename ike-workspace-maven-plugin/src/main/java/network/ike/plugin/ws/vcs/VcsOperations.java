@@ -1489,6 +1489,11 @@ public class VcsOperations {
      */
     private static String capture(File workDir, String... command)
             throws MojoException {
+        // #691 seam: capture-path commands (reads AND idempotent
+        // mutations like `git add -A`) are interceptable too, so tests
+        // can coordinate deterministically with the retry engine instead
+        // of sleeping (the addAll index.lock retry test).
+        commandInterceptor.beforeCommand(workDir, command);
         try {
             Process proc = new ProcessBuilder(command)
                     .directory(workDir)

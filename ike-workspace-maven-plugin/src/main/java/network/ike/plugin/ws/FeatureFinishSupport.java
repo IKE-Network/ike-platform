@@ -698,6 +698,140 @@ class FeatureFinishSupport {
         return null;
     }
 
+    // ── Parent-workspace sync (#934) ──────────────────────────────
+
+    /**
+     * The sibling-clone separator (U+A789 {@code ꞉}) between a workspace
+     * name and its feature suffix: {@code <workspace>꞉<feature>}.
+     */
+    static final char SIBLING_SEPARATOR = '꞉';
+
+    /**
+     * Derive the parent workspace a sibling clone was cut from, by the
+     * naming convention {@code <parent>꞉<feature>} — siblings are created
+     * as filesystem siblings of their parent (ws:feature-start-sibling).
+     * Convention-derived on purpose (settled #934): no marker file to go
+     * stale, and it works for siblings created before this feature.
+     *
+     * @param wsRoot the (possibly sibling) workspace root directory
+     * @return the parent directory, or empty when {@code wsRoot} is not a
+     *         sibling clone or the derived parent does not exist
+     */
+    static Optional<File> deriveParentWorkspace(File wsRoot) {
+        String name = wsRoot.getName();
+        int idx = name.indexOf(SIBLING_SEPARATOR);
+        if (idx <= 0) {
+            return Optional.empty();
+        }
+        File parent = new File(wsRoot.getParentFile(), name.substring(0, idx));
+        if (!parent.isDirectory() || !new File(parent, ".git").exists()) {
+            return Optional.empty();
+        }
+        return Optional.of(parent);
+    }
+
+    /**
+     * Propagate a finished feature back to the parent workspace the
+     * sibling was cut from (IKE-Network/ike-issues#934, settled
+     * 2026-07-27): fast-forward-only refresh of {@code targetBranch}
+     * across the parent working set — root repo and every subproject.
+     *
+     * <p>Runs only after the verified push phase has confirmed every
+     * member's target push, so {@code origin/<target>} is current and the
+     * parent update is a pure FF in the common case. Semantics per
+     * member: fast-forward applied (ref-only when checked out elsewhere);
+     * local-ahead left alone; divergence warned and skipped — never a
+     * stash, never a merge, never a touched working tree. Best-effort
+     * throughout: any failure warns and returns; the finish never fails
+     * on parent propagation.
+     *
+     * @param wsRoot       the sibling workspace root the finish ran in
+     * @param targetBranch the branch that was finished into (e.g. "main")
+     * @param log          Maven logger
+     */
+    static void propagateToParent(File wsRoot, String targetBranch, Log log) {
+        try {
+            Optional<File> derived = deriveParentWorkspace(wsRoot);
+            if (derived.isEmpty()) {
+                return;   // not a sibling clone — nothing to sync
+            }
+            File parent = derived.get();
+            log.info("");
+            log.info("  " + Ansi.cyan("→ ") + "Syncing parent workspace '"
+                    + parent.getName() + "' (" + targetBranch
+                    + ", fast-forward only; -DsyncParent=false to skip)...");
+
+            Map<String, File> memberDirs = new LinkedHashMap<>();
+            Path parentManifest = parent.toPath().resolve("workspace.yaml");
+            if (Files.exists(parentManifest)) {
+                for (String name : network.ike.workspace.ManifestReader
+                        .read(parentManifest).subprojects().keySet()) {
+                    memberDirs.put(name, new File(parent, name));
+                }
+            }
+            memberDirs.put(RefreshMainSupport.ROOT_LABEL, parent);
+
+            for (Map.Entry<String, File> entry : memberDirs.entrySet()) {
+                String label = entry.getKey();
+                File dir = entry.getValue();
+                if (!new File(dir, ".git").exists()) {
+                    continue;
+                }
+                try {
+                    RefreshMainSupport.Outcome outcome = RefreshMainSupport
+                            .refresh(dir, label, targetBranch,
+                                    RefreshMainSupport.DEFAULT_REMOTE, log, true);
+                    switch (outcome) {
+                        case RefreshMainSupport.FastForwarded(String c, int n) -> {
+                            RefreshMainSupport.applyFastForward(
+                                    dir, targetBranch, log);
+                            log.info("    " + Ansi.green("✓ ") + c
+                                    + " — fast-forwarded (" + n + " commit"
+                                    + (n == 1 ? "" : "s") + ")");
+                        }
+                        case RefreshMainSupport.CreatedFromRemote(String c) -> {
+                            RefreshMainSupport.applyFastForward(
+                                    dir, targetBranch, log);
+                            log.info("    " + Ansi.green("✓ ") + c
+                                    + " — " + targetBranch
+                                    + " created from origin");
+                        }
+                        case RefreshMainSupport.UpToDate(String c) ->
+                                log.info("    " + c + " — up to date");
+                        case RefreshMainSupport.AheadOnly(String c, int n) ->
+                                log.info("    " + c + " — local "
+                                        + targetBranch + " has " + n
+                                        + " unpushed commit"
+                                        + (n == 1 ? "" : "s") + "; left alone");
+                        case RefreshMainSupport.AutoResolved(
+                                String c, int l, int r) ->
+                                log.warn("    " + Ansi.yellow("⚠ ") + c
+                                        + " — diverged from origin/"
+                                        + targetBranch + "; skipped — run "
+                                        + WsGoal.PULL.qualified()
+                                        + " in the parent to reconcile");
+                        case RefreshMainSupport.Conflicts(
+                                String c, List<String> files) ->
+                                log.warn("    " + Ansi.yellow("⚠ ") + c
+                                        + " — diverged with " + files.size()
+                                        + " conflicting file"
+                                        + (files.size() == 1 ? "" : "s")
+                                        + "; skipped — resolve in the parent");
+                        case RefreshMainSupport.Skipped(String c, String r) ->
+                                log.debug("    " + c + " — skipped (" + r + ")");
+                    }
+                } catch (MojoException e) {
+                    log.warn("    " + Ansi.yellow("⚠ ") + label
+                            + " — parent sync skipped: " + e.getMessage());
+                }
+            }
+        } catch (Exception e) {
+            // Best-effort by contract (#934): the finish never fails on
+            // parent propagation.
+            log.warn("  Parent workspace sync skipped: " + e.getMessage());
+        }
+    }
+
     /**
      * Build the failure message thrown when the push phase left members
      * stranded (commit on local {@code target} only). Names each stranded

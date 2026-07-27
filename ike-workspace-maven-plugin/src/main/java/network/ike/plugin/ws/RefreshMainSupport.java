@@ -499,6 +499,35 @@ final class RefreshMainSupport {
         };
     }
 
+    /**
+     * Apply a fast-forward of local {@code mainBranch} to
+     * {@code <remote>/<mainBranch>} — the FF-only application half of a
+     * {@link FastForwarded} (or {@link CreatedFromRemote}) outcome
+     * classified in preview mode. Used by the #934 parent-workspace sync,
+     * whose settled semantics are strictly fast-forward: callers classify
+     * with {@code preview=true} and apply ONLY the FF-safe outcomes,
+     * leaving diverged/ahead members untouched.
+     *
+     * <p>Ref-only when the repo is checked out elsewhere
+     * ({@code git fetch origin main:main} — fails on non-FF rather than
+     * discarding work); updates the working tree only when {@code
+     * mainBranch} is the checked-out branch.
+     *
+     * @param dir        the repository root directory
+     * @param mainBranch the conceptual main branch (e.g. {@code "main"})
+     * @param log        Maven logger
+     * @throws MojoException if the fast-forward fails
+     */
+    static void applyFastForward(File dir, String mainBranch, Log log)
+            throws MojoException {
+        if (!VcsOperations.localBranchExists(dir, mainBranch)) {
+            VcsOperations.fetchRef(dir, log, DEFAULT_REMOTE, mainBranch);
+            return;
+        }
+        fastForwardLocalMain(dir, log, mainBranch, DEFAULT_REMOTE,
+                DEFAULT_REMOTE + "/" + mainBranch);
+    }
+
     // ── Internal git mechanics ──────────────────────────────────
 
     /**

@@ -107,6 +107,16 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
     @Parameter(property = "push", defaultValue = "true")
     boolean push;
 
+    /**
+     * After a fully confirmed push phase, fast-forward the parent
+     * workspace this sibling was cut from (derived from the
+     * {@code <parent>꞉<feature>} naming convention) — root and every
+     * subproject, FF-only, best-effort. No-op for non-sibling
+     * workspaces. IKE-Network/ike-issues#934.
+     */
+    @Parameter(property = "syncParent", defaultValue = "true")
+    boolean syncParent;
+
     /** Show plan without executing. */
     @Parameter(property = "publish", defaultValue = "false")
     boolean publish;
@@ -438,6 +448,24 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
             FeatureFinishSupport.promptStaleBranchCleanup(
                     root, eligible, branchName, targetBranch,
                     getPrompter(), getLog());
+        }
+
+        // #934: propagate the finished target back to the parent
+        // workspace this sibling was cut from — only after the push
+        // phase confirmed every member (origin is current), FF-only,
+        // best-effort. Draft previews the intent.
+        if (syncParent && push) {
+            if (publish && pushFailures.isEmpty()
+                    && (merged > 0 || !alreadyDone.isEmpty())) {
+                FeatureFinishSupport.propagateToParent(
+                        root, targetBranch, getLog());
+            } else if (draft) {
+                FeatureFinishSupport.deriveParentWorkspace(root).ifPresent(
+                        parent -> getLog().info("  Parent workspace '"
+                                + parent.getName() + "' will be fast-forwarded"
+                                + " after pushes confirm"
+                                + " (-DsyncParent=false to skip)."));
+            }
         }
 
         // A failed push phase is a build failure — after the state above

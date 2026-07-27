@@ -26,8 +26,8 @@ Draft / publish split Most state-mutating goals come in two forms — `**-draft*
 | [ws:check-branch — defensive git hook](#check-branch) | hooks | Defensive post-checkout hook — warn on out-of-band branch ops |
 | [checkpoint](#checkpoint-draft) | release | Tag every member at HEAD without releasing (preview) |
 | [ws:checkpoint — tag without releasing](#checkpoint-publish) | release | Apply the checkpoint tags |
-| [cleanup](#cleanup-draft) | cleanup | List merged feature branches across the workspace |
-| [ws:cleanup-publish — interactive cleanup](#cleanup-publish) | cleanup | Delete merged feature branches interactively |
+| [cleanup](#cleanup-draft) | cleanup | List finished feature branches (merged + squash-merged) across the workspace |
+| [ws:cleanup-publish — delete finished branches](#cleanup-publish) | cleanup | Delete finished feature branches, local and remote |
 | [commit](#commit-draft) | sync | Preview what would be committed across the working set (read-only) |
 | [ws:commit-publish — stage + commit workspace-wide](#commit-publish) | sync | Stage + commit across the working set with VCS-bridge preamble |
 | [feature-abandon](#feature-abandon-draft) | feature | Preview deletion of a feature branch workspace-wide |
@@ -294,34 +294,41 @@ mvn ws:feature-start-publish -Dfeature=my-feature     # execute
 
 Update the current feature branch by incorporating changes from main. For long-lived feature branches, main may advance significantly. This goal brings the feature branch up to date, surfacing merge conflicts incrementally rather than at feature-finish time.
 
-Uses merge (not rebase) by default to incorporate main — this preserves all commit hashes and is safe for branches shared via Syncthing or pushed to origin. Pass `-Dstrategy=rebase` for a linear history when no one else has pulled the branch.
+Uses merge (not rebase) to incorporate main — this preserves all commit hashes and is safe for branches shared via Syncthing or pushed to origin. Rebase is deliberately not supported.
+
+Both variants refresh local main from `origin/main` first (workspace root included). The draft assesses behind/ahead counts and predicted conflicts against `origin/main` itself, so a stale local main can never report a feature as "up to date" while the real mainline has moved on (ike-issues#857).
 
 ```
-mvn ws:update-feature-draft                       # preview
-mvn ws:update-feature-publish                     # merge (default)
-mvn ws:update-feature-publish -Dstrategy=rebase   # rebase
+mvn ws:update-feature-draft                       # preview vs origin/main
+mvn ws:update-feature-publish                     # merge main into the feature
 ```
 
 ### [#ws-feature-finish-squash--squash-merge-back-to-mai](#ws-feature-finish-squash--squash-merge-back-to-mai)ws:feature-finish-squash — squash-merge back to main
 
-Squash-merge a feature branch back to the target branch. **The default and recommended strategy for finishing features.** The feature branch’s full commit history is compressed into a single commit on the target branch. The feature branch is deleted after merge because squash creates divergent history — continuing on the branch would cause conflicts.
+Squash-merge a feature branch back to the target branch. **The default and recommended strategy for finishing features.** The feature branch’s full commit history is compressed into a single commit on the target branch. The feature branch is deleted after the finish because squash creates divergent history — continuing on the branch would cause conflicts — but only once the push phase below has confirmed the squashes are on origin.
 
 Pass `-DkeepBranch=true` only if you understand that the branch can no longer be cleanly merged again.
 
-Before squash-merging, refreshes local `main` from `origin/main` so the feature is not landed on top of stale main (ike-issues#284). If the refresh would conflict, the goal hard-errors before touching any feature branch.
+Before squash-merging, refreshes local `main` from `origin/main` — subprojects **and the workspace root repo** — so the feature is not landed on top of stale main (ike-issues#284, #857). Draft assessments compare against `origin/main` itself, never a possibly-stale local ref. If the refresh would conflict, the goal hard-errors before touching any feature branch.
+
+Landing is **two-phase** (ike-issues#858): after every member’s squash — and the workspace root’s merge plus its `workspace.yaml` reconciliation commit (#791) — a verified push phase pushes the target branch for every member and confirms each against origin. Feature branches (local **and** remote) are deleted only after every push is confirmed. `-Dpush` defaults to `true`; with `-Dpush=false` the squashes stay local and every feature branch is kept, because deletion is only permitted after a confirmed push — land them later with `ws:push`, then collect the branches with `ws:cleanup-publish`. A push failure likewise keeps all branches and names the stranded members with that same recovery.
+
+In a sibling workspace (`<parent>꞉<feature>`), a fully confirmed finish also fast-forwards the parent workspace it was cut from — FF-only, best-effort, never touching parent WIP or diverged members; `-DsyncParent=false` opts out (ike-issues#934).
 
 When to use Most features. Feature branch history is disposable. Target branch gets one clean commit.
 
 ```
 mvn ws:feature-finish-squash-draft -Dfeature=done
 mvn ws:feature-finish-squash-publish -Dfeature=done -Dmessage="Ship it"
+mvn ws:feature-finish-squash-publish -Dfeature=done -Dpush=false        # stay local; branches kept
+mvn ws:feature-finish-squash-publish -Dfeature=done -DsyncParent=false  # skip parent-workspace sync
 ```
 
 ### [#ws-feature-finish-merge--no-fast-forward-merge](#ws-feature-finish-merge--no-fast-forward-merge)ws:feature-finish-merge — no-fast-forward merge
 
 No-fast-forward merge of a feature branch, preserving full history. Creates a merge commit on the target branch containing the complete feature branch history. The feature branch is **kept alive** by default because histories stay connected — the branch can continue to receive work and be merged again later.
 
-Same `origin/main` refresh preamble as `feature-finish-squash` (ike-issues#284).
+Same `origin/main` refresh preamble (workspace root included) and the same two-phase contract as `feature-finish-squash`: a verified push phase with `-Dpush` defaulting to `true`, branch deletion gated on every confirmed push, and the FF-only sibling parent-workspace sync (ike-issues#284, #857, #858, #934).
 
 When to use Long-lived feature branches that periodically merge intermediate work to the target branch. Use when you need traceability of individual feature commits on the target branch.
 
@@ -482,22 +489,27 @@ mvn ws:scaffold-publish -DupdateFields=false -DupdateParent=false  # alignment-o
 
 ## [#cleanup-goals](#cleanup-goals)Cleanup Goals
 
-### [#ws-cleanup-draft--list-merged-feature-branches](#ws-cleanup-draft--list-merged-feature-branches)ws:cleanup-draft — list merged feature branches
+### [#ws-cleanup-draft--list-finished-feature-branches](#ws-cleanup-draft--list-finished-feature-branches)ws:cleanup-draft — list finished feature branches
 
-Scan the whole working set for merged feature branches and report them. Lists feature branches across every member, classifies each as merged (into the target branch) or active, and displays last-commit timestamps. Read-only; the publish variant does the deletion.
+Scan the whole working set — every subproject **and the workspace root repo** — for finished feature branches and report them. Each `feature/*` branch is classified three ways (ike-issues#946):
+
+- **merged** — an ancestor of the target (no-ff merges);
+- **squash-merged** — not an ancestor, but its tip’s tree equals a recent target commit’s tree: the content landed via the recommended `feature-finish-squash` strategy, which ancestry classification can never see;
+- **active** — genuinely unmerged work.
+
+Classification runs against `origin/<targetBranch>` after a fetch — the same source-of-truth doctrine as the feature-lifecycle goals (#857) — so a finish landed from another machine is recognized, and deleting the matching remote branches is provably safe. Read-only; the publish variant does the deletion.
 
 ```
 mvn ws:cleanup-draft                           # list (default target=main)
 mvn ws:cleanup-draft -DtargetBranch=develop    # check against develop
 ```
 
-### [#ws-cleanup-publish--interactive-cleanup](#ws-cleanup-publish--interactive-cleanup)ws:cleanup-publish — interactive cleanup
+### [#ws-cleanup-publish--delete-finished-branches](#ws-cleanup-publish--delete-finished-branches)ws:cleanup-publish — delete finished branches
 
-Execute workspace cleanup — delete merged feature branches. Prompts interactively for each candidate.
+Execute workspace cleanup — delete the merged **and** squash-merged feature branches, local and remote (remote deletion soft-fails when branch protection forbids it). This is the sanctioned collection path after a `-Dpush=false` or push-interrupted feature-finish left branches in place.
 
 ```
 mvn ws:cleanup-publish
-mvn ws:cleanup-publish -Dforce=true            # delete without prompting
 ```
 
 ## [#see-also](#see-also)See also

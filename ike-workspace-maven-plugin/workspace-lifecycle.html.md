@@ -85,6 +85,10 @@ mvn ws:update-feature-publish
 mvn ws:feature-finish-squash-publish -Dfeature=my-thing -Dmessage="Ship it"
 # OR for long-lived branches:
 mvn ws:feature-finish-merge-publish -Dfeature=my-thing
+# The finish pushes every member's main (verified against origin) BEFORE
+# deleting any feature branch; -Dpush=false keeps everything local and
+# keeps the branches. From a sibling workspace it also fast-forwards the
+# parent workspace it was cut from (-DsyncParent=false to skip).
 ```
 
 Squash is the default and the recommended path for most features — the feature branch’s commit history is disposable, and main gets one clean commit. Use `feature-finish-merge` only for long-lived feature branches where you want individual commits visible on main.

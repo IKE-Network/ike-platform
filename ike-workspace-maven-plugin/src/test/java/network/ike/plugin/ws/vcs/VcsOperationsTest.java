@@ -86,6 +86,42 @@ class VcsOperationsTest {
     }
 
     @Test
+    void mutation_failure_carriesCommandDirectoryAndGitOutput() {
+        // The mutating counterpart of the read-query test above: no
+        // 'origin' is configured, so `git push` exits non-zero with
+        // "fatal: 'origin' does not appear to be a git repository".
+        // Before ike-issues#959 that output was logged at debug only and
+        // the exception was a bare "Command failed (exit 128)".
+        assertThatThrownBy(() -> VcsOperations.push(repoDir, log, "origin", "main"))
+                .isInstanceOf(MojoException.class)
+                .hasMessageContaining("git push origin main")
+                .hasMessageContaining(repoDir.toString())
+                .hasMessageContaining("fatal")
+                .hasMessageNotContaining("Command failed");
+    }
+
+    @Test
+    void push_rejectedNonFastForward_carriesGitRejectionInMessage() throws Exception {
+        // The shape a feature-finish push phase actually hits
+        // (ike-issues#858/#959): local main diverges from origin/main, so
+        // the push is rejected. The operator needs git's reason — not an
+        // exit code — to tell a non-fast-forward apart from a denied
+        // permission or an unreachable remote.
+        execIn(originDir.toFile(), "git", "init", "--bare", "-b", "main");
+        exec("git", "remote", "add", "origin", originDir.toString());
+        exec("git", "push", "-u", "origin", "main");
+        // Rewrite the pushed commit so local main is no longer a
+        // descendant of origin/main.
+        exec("git", "commit", "--amend", "-m", "Rewritten locally");
+
+        assertThatThrownBy(() -> VcsOperations.push(repoDir, log, "origin", "main"))
+                .isInstanceOf(MojoException.class)
+                .hasMessageContaining("git push origin main")
+                .hasMessageContaining("rejected")
+                .hasMessageNotContaining("Command failed");
+    }
+
+    @Test
     void isClean_trueOnCleanRepo() {
         assertThat(VcsOperations.isClean(repoDir)).isTrue();
     }

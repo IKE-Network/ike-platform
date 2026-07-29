@@ -1401,6 +1401,15 @@ public class VcsOperations {
     /**
      * Run a command with output routed through the Maven logger.
      * Optionally sets environment variables.
+     *
+     * <p>On non-zero exit the thrown {@link MojoException} carries the
+     * full command, the working directory, the exit code, <em>and</em>
+     * git's output — so a failed mutation (a denied push, a rejected
+     * non-fast-forward, an unresolvable ref) is self-diagnosing instead
+     * of a bare exit code (ike-issues#959, the mutating-path counterpart
+     * of the {@link #capture} fix in ike-issues#602). stderr is merged
+     * into stdout here, so the captured text holds git's {@code fatal:}
+     * and {@code remote:} lines.
      */
     private static void run(File workDir, Log log, Map<String, String> env,
                             String... command) throws MojoException {
@@ -1414,23 +1423,33 @@ public class VcsOperations {
                 pb.environment().putAll(env);
             }
             Process proc = pb.start();
+            List<String> output = new ArrayList<>();
             try (BufferedReader reader = new BufferedReader(
                     new InputStreamReader(proc.getInputStream(),
                             StandardCharsets.UTF_8))) {
                 String line;
                 while ((line = reader.readLine()) != null) {
                     log.debug("  " + line);
+                    output.add(line);
                 }
             }
             int exit = proc.waitFor();
             if (exit != 0) {
+                String detail = String.join("\n", output).trim();
                 throw new MojoException(
-                        "Command failed (exit " + exit + "): "
-                                + String.join(" ", command));
+                        String.join(" ", command) + " in " + workDir
+                                + " failed (exit " + exit + ")"
+                                + (detail.isEmpty() ? "" : ":\n" + detail));
             }
-        } catch (IOException | InterruptedException e) {
+        } catch (IOException e) {
             throw new MojoException(
-                    "Failed to execute: " + String.join(" ", command), e);
+                    "Failed to execute " + String.join(" ", command)
+                            + " in " + workDir + ": " + e.getMessage(), e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new MojoException(
+                    "Interrupted while executing " + String.join(" ", command)
+                            + " in " + workDir, e);
         }
     }
 

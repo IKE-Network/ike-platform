@@ -3,6 +3,7 @@ package network.ike.plugin.ws.preflight;
 import network.ike.plugin.ReleaseSupport;
 import network.ike.plugin.SnapshotScanner;
 import network.ike.plugin.ws.WsGoal;
+import network.ike.plugin.ws.vcs.VcsOperations;
 import network.ike.plugin.ws.vcs.VcsState;
 import network.ike.workspace.Subproject;
 import network.ike.workspace.WorkspaceGraph;
@@ -16,6 +17,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -617,10 +619,122 @@ public enum PreflightCondition {
             sb.append("    mvn ").append(WsGoal.RECONCILE_BRANCHES_PUBLISH.qualified());
             return Optional.of(sb.toString());
         }
+    },
+
+    /**
+     * Every member with an {@code origin} remote — and the workspace root
+     * itself — must accept a push from this operator, established by a
+     * {@code git push --dry-run} that transfers nothing and creates no
+     * refs (IKE-Network/ike-issues#960).
+     *
+     * <p>Every other condition here inspects local state. This one alone
+     * asks the remote a question only the remote can answer, because a
+     * goal that ends in "push every member" can otherwise discover
+     * unwritability only after it has already squashed, rewritten
+     * {@code workspace.yaml}, committed, and pushed the members it
+     * <em>could</em> write — which is exactly how a
+     * {@code feature-finish-squash-publish} against {@code ike-komet-wsr}
+     * stranded a half-landed working set. A mixed-org working set
+     * (members under one org, the root under another) makes
+     * partial-permission the normal case, not an exotic one.
+     *
+     * <p>Read probes cannot substitute: {@code ls-remote} and the
+     * {@code remoteSha()} calls already in the finish path authenticate
+     * and prove <em>read</em> access, which on a public repo succeeds for
+     * an operator who cannot write — reporting green on a run that cannot
+     * complete.
+     *
+     * <p>Costs one network round-trip per member, so it belongs on goals
+     * that are about to do far more network work anyway.
+     */
+    PUSH_ACCESS("Every member's origin accepts a push from this operator") {
+        @Override
+        public Optional<String> check(PreflightContext ctx) {
+            File root = ctx.workspaceRoot();
+            Map<String, File> targets = new LinkedHashMap<>();
+            if (ctx.subprojects() != null) {
+                for (String name : ctx.subprojects()) {
+                    targets.put(name, new File(root, name));
+                }
+            }
+            targets.put(WORKSPACE_ROOT_NAME, root);
+
+            List<String> denied = new ArrayList<>();
+            List<String> undetermined = new ArrayList<>();
+            for (Map.Entry<String, File> entry : targets.entrySet()) {
+                File dir = entry.getValue();
+                if (!new File(dir, ".git").exists()) continue;
+                if (!ReleaseSupport.hasRemote(dir, DEFAULT_REMOTE)) continue;
+                String branch = currentBranchOf(dir);
+                if (branch.isEmpty()) continue; // detached — nothing to probe
+                VcsOperations.PushAccess access =
+                        VcsOperations.probePushAccess(dir, DEFAULT_REMOTE, branch);
+                String label = entry.getKey() + " (" + branch + ")";
+                switch (access.status()) {
+                    case WRITABLE -> { }
+                    case DENIED -> denied.add(label + ":\n"
+                            + indent(access.detail()));
+                    case UNDETERMINED -> undetermined.add(label + ":\n"
+                            + indent(access.detail()));
+                }
+            }
+
+            if (denied.isEmpty() && undetermined.isEmpty()) {
+                return Optional.empty();
+            }
+
+            StringBuilder sb = new StringBuilder();
+            if (!denied.isEmpty()) {
+                sb.append(denied.size())
+                        .append(" member(s) refuse a push from this operator:\n");
+                for (String d : denied) {
+                    sb.append("    • ").append(d).append('\n');
+                }
+            }
+            if (!undetermined.isEmpty()) {
+                sb.append(undetermined.size())
+                        .append(" member(s) could not be probed ")
+                        .append("(offline, or an unrecognized git error):\n");
+                for (String u : undetermined) {
+                    sb.append("    • ").append(u).append('\n');
+                }
+            }
+            sb.append("  Nothing has been mutated — this check runs before\n");
+            sb.append("  any squash, commit, or push, so the working set is\n");
+            sb.append("  still coherent.\n");
+            if (!denied.isEmpty()) {
+                sb.append("  To resolve, for each member above either:\n");
+                sb.append("    • have an admin grant write access to the\n");
+                sb.append("      repository (a read-only collaborator can\n");
+                sb.append("      fetch and clone but not push), or\n");
+                sb.append("    • check the remote URL and the SSH identity it\n");
+                sb.append("      selects — `git -C <member> remote -v` — since\n");
+                sb.append("      a host alias can route to the wrong account.\n");
+            }
+            return Optional.of(sb.toString().stripTrailing());
+        }
     };
 
     /** Special marker used when the workspace root itself has uncommitted changes. */
     public static final String WORKSPACE_ROOT_NAME = "workspace root";
+
+    /** The remote every push-oriented condition probes. */
+    static final String DEFAULT_REMOTE = "origin";
+
+    /**
+     * Indent a possibly multi-line git message so it nests under a
+     * bullet in a remediation block.
+     *
+     * @param text the raw message
+     * @return the message with every line indented, never {@code null}
+     */
+    static String indent(String text) {
+        if (text == null || text.isBlank()) return "        (no output)";
+        return text.lines()
+                .map(l -> "        " + l.strip())
+                .reduce((a, b) -> a + "\n" + b)
+                .orElse("");
+    }
 
     private final String description;
 

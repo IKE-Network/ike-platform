@@ -101,6 +101,100 @@ class VcsOperationsTest {
     }
 
     @Test
+    void classifyPushProbe_cleanDryRun_isWritable() {
+        VcsOperations.PushAccess a = VcsOperations.classifyPushProbe(
+                0, "To github.com:o/r.git\n * [new branch]      main -> probe");
+        assertThat(a.status())
+                .isEqualTo(VcsOperations.PushAccessStatus.WRITABLE);
+    }
+
+    @Test
+    void classifyPushProbe_permissionDenied_isDenied() {
+        // Verbatim output captured from a live `git push --dry-run` over
+        // SSH against a repository the authenticated account cannot
+        // write (ike-issues#960).
+        String real = """
+                ERROR: Permission to octocat/Hello-World.git denied to knowledge-graphlet.
+                fatal: Could not read from remote repository.
+
+                Please make sure you have the correct access rights
+                and the repository exists.""";
+
+        VcsOperations.PushAccess a = VcsOperations.classifyPushProbe(128, real);
+
+        assertThat(a.status())
+                .isEqualTo(VcsOperations.PushAccessStatus.DENIED);
+        // The operator must see git's own words, not a paraphrase.
+        assertThat(a.detail()).contains("Permission to octocat/Hello-World.git denied");
+    }
+
+    @Test
+    void classifyPushProbe_httpsForbidden_isDenied() {
+        VcsOperations.PushAccess a = VcsOperations.classifyPushProbe(128,
+                "remote: Permission to o/r.git denied to user.\n"
+                        + "fatal: unable to access 'https://github.com/o/r.git/': "
+                        + "The requested URL returned error: 403");
+        assertThat(a.status())
+                .isEqualTo(VcsOperations.PushAccessStatus.DENIED);
+    }
+
+    @Test
+    void classifyPushProbe_nonFastForward_isWritableNotDenied() {
+        // Reaching a ref-state rejection proves the remote accepted us as
+        // a writer — the divergence is the calling goal's problem (its
+        // refresh resolves it), not an access failure. Misreading this as
+        // DENIED would block every finish whose local main is behind.
+        VcsOperations.PushAccess a = VcsOperations.classifyPushProbe(1,
+                " ! [rejected]        main -> main (non-fast-forward)\n"
+                        + "error: failed to push some refs to 'github.com:o/r.git'\n"
+                        + "hint: Updates were rejected because the tip of your "
+                        + "current branch is behind");
+
+        assertThat(a.status())
+                .isEqualTo(VcsOperations.PushAccessStatus.WRITABLE);
+    }
+
+    @Test
+    void classifyPushProbe_unknownFailure_isUndetermined() {
+        // Never silently pass a check that could not be run.
+        VcsOperations.PushAccess a = VcsOperations.classifyPushProbe(128,
+                "ssh: Could not resolve hostname github.com: nodename nor "
+                        + "servname provided, or not known");
+        assertThat(a.status())
+                .isEqualTo(VcsOperations.PushAccessStatus.UNDETERMINED);
+        assertThat(a.detail()).contains("Could not resolve hostname");
+    }
+
+    @Test
+    void probePushAccess_localWritableRemote_isWritableAndCreatesNothing()
+            throws Exception {
+        execIn(originDir.toFile(), "git", "init", "--bare", "-b", "main");
+        exec("git", "remote", "add", "origin", originDir.toString());
+
+        VcsOperations.PushAccess a = VcsOperations.probePushAccess(
+                repoDir, "origin", "main");
+
+        assertThat(a.status())
+                .isEqualTo(VcsOperations.PushAccessStatus.WRITABLE);
+        // The safety property the whole check rests on: a probe must not
+        // publish anything. main must NOT exist on the remote afterwards.
+        assertThat(VcsOperations.remoteSha(repoDir, "origin", "main"))
+                .isEmpty();
+    }
+
+    @Test
+    void probePushAccess_missingRemotePath_isUndetermined() throws Exception {
+        exec("git", "remote", "add", "origin",
+                nonRepoDir.resolve("definitely-not-a-repo").toString());
+
+        VcsOperations.PushAccess a = VcsOperations.probePushAccess(
+                repoDir, "origin", "main");
+
+        assertThat(a.status())
+                .isNotEqualTo(VcsOperations.PushAccessStatus.WRITABLE);
+    }
+
+    @Test
     void push_rejectedNonFastForward_carriesGitRejectionInMessage() throws Exception {
         // The shape a feature-finish push phase actually hits
         // (ike-issues#858/#959): local main diverges from origin/main, so

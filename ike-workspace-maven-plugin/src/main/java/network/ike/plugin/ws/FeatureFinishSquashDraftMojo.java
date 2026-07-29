@@ -5,6 +5,10 @@ import network.ike.workspace.WorkingSet;
 import network.ike.workspace.WorkspaceGraph;
 import network.ike.plugin.ReleaseSupport;
 import network.ike.plugin.support.GoalReportBuilder;
+import network.ike.plugin.ws.preflight.Preflight;
+import network.ike.plugin.ws.preflight.PreflightCondition;
+import network.ike.plugin.ws.preflight.PreflightContext;
+import network.ike.plugin.ws.preflight.PreflightResult;
 import network.ike.plugin.ws.vcs.VcsOperations;
 import network.ike.plugin.ws.vcs.VcsState;
 import org.apache.maven.api.plugin.MojoException;
@@ -228,6 +232,29 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
                     publish ? WsGoal.FEATURE_FINISH_SQUASH_PUBLISH
                             : WsGoal.FEATURE_FINISH_SQUASH_DRAFT,
                     "No components on `" + branchName + "` — nothing to do.\n");
+        }
+
+        // ── Push-access gate (#960): the LAST point at which nothing has
+        // been mutated. Everything below this line — the refresh, the
+        // squashes, the workspace.yaml rewrite, the reconcile commit —
+        // is state the operator has to unpick by hand if the push phase
+        // then turns out to be impossible. A read probe cannot stand in
+        // for this: on a public repo an operator without write access
+        // fetches happily and only the push is refused, which is exactly
+        // how a finish against ike-komet-wsr stranded a half-landed
+        // working set. Draft warns, publish stops.
+        if (push) {
+            List<String> pushTargets = new ArrayList<>(eligible);
+            pushTargets.addAll(alreadyDone);
+            PreflightResult access = Preflight.of(
+                    List.of(PreflightCondition.PUSH_ACCESS),
+                    PreflightContext.of(root, null, pushTargets));
+            if (publish) {
+                access.requirePassed(WsGoal.FEATURE_FINISH_SQUASH_PUBLISH);
+            } else {
+                access.warnIfFailed(getLog(),
+                        WsGoal.FEATURE_FINISH_SQUASH_DRAFT);
+            }
         }
 
         // Refresh local main from origin/main before squash-merging the

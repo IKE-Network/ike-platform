@@ -405,4 +405,89 @@ class PreflightConditionTest {
         assertThat(PreflightCondition.containsScpexeSiteUrl(null))
                 .isFalse();
     }
+
+    // ── PUSH_ACCESS (ike-issues#960) ──────────────────────────────
+
+    @TempDir
+    Path pushTempDir;
+
+    @Test
+    void pushAccess_allMembersWritable_passes() throws Exception {
+        Path root = Files.createDirectories(pushTempDir.resolve("ws"));
+        initRepoWithOrigin(root, pushTempDir.resolve("origin-root"));
+        Path sub = Files.createDirectories(root.resolve("sub-a"));
+        initRepoWithOrigin(sub, pushTempDir.resolve("origin-sub"));
+
+        assertThat(PreflightCondition.PUSH_ACCESS.check(
+                PreflightContext.of(root.toFile(), null, List.of("sub-a"))))
+                .isEmpty();
+    }
+
+    @Test
+    void pushAccess_probeDoesNotPublishAnything() throws Exception {
+        // The property the whole gate depends on: running the check must
+        // leave the remote exactly as it was.
+        Path root = Files.createDirectories(pushTempDir.resolve("ws2"));
+        Path origin = pushTempDir.resolve("origin-root2");
+        initRepoWithOrigin(root, origin);
+
+        PreflightCondition.PUSH_ACCESS.check(
+                PreflightContext.of(root.toFile(), null, List.of()));
+
+        // The bare origin must still have no refs at all.
+        String refs = run(origin.toFile(), "git", "for-each-ref");
+        assertThat(refs).isEmpty();
+    }
+
+    @Test
+    void pushAccess_memberWithoutOrigin_isSkippedNotFailed() throws Exception {
+        Path root = Files.createDirectories(pushTempDir.resolve("ws3"));
+        initRepoWithOrigin(root, pushTempDir.resolve("origin-root3"));
+        // A subproject that is a git repo but has no remote at all: there
+        // is nothing to strand work against, so it must not fail the gate.
+        Path sub = Files.createDirectories(root.resolve("local-only"));
+        initRepo(sub);
+
+        assertThat(PreflightCondition.PUSH_ACCESS.check(
+                PreflightContext.of(root.toFile(), null,
+                        List.of("local-only"))))
+                .isEmpty();
+    }
+
+    // ── helpers ───────────────────────────────────────────────────
+
+    private void initRepo(Path dir) throws Exception {
+        run(dir.toFile(), "git", "init", "-q", "-b", "main");
+        // Hermetic: never inherit the host's hooks or signing config.
+        run(dir.toFile(), "git", "config", "core.hooksPath",
+                dir.resolve(".nohooks").toString());
+        run(dir.toFile(), "git", "config", "commit.gpgsign", "false");
+        run(dir.toFile(), "git", "config", "user.email", "test@example.com");
+        run(dir.toFile(), "git", "config", "user.name", "Test");
+        Files.writeString(dir.resolve("f.txt"), "x");
+        run(dir.toFile(), "git", "add", "f.txt");
+        run(dir.toFile(), "git", "commit", "-q", "-m", "init");
+    }
+
+    private void initRepoWithOrigin(Path dir, Path origin) throws Exception {
+        Files.createDirectories(origin);
+        run(origin.toFile(), "git", "init", "-q", "--bare", "-b", "main");
+        initRepo(dir);
+        run(dir.toFile(), "git", "remote", "add", "origin", origin.toString());
+    }
+
+    private String run(File dir, String... command) throws Exception {
+        Process p = new ProcessBuilder(command)
+                .directory(dir)
+                .redirectErrorStream(true)
+                .start();
+        String out = new String(p.getInputStream().readAllBytes(),
+                java.nio.charset.StandardCharsets.UTF_8).trim();
+        int exit = p.waitFor();
+        if (exit != 0) {
+            throw new IllegalStateException(String.join(" ", command)
+                    + " failed (" + exit + "): " + out);
+        }
+        return out;
+    }
 }

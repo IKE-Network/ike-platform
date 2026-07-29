@@ -11,6 +11,7 @@ import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Collectors;
@@ -665,6 +666,121 @@ public class VcsOperations {
         } catch (MojoException e) {
             log.warn("  Push failed (non-fatal): " + e.getMessage());
         }
+    }
+
+    /**
+     * Whether the operator can write to a remote, as established by a
+     * non-mutating probe.
+     */
+    public enum PushAccessStatus {
+        /** The remote accepted us as a writer. */
+        WRITABLE,
+        /** The remote refused the write — no push permission. */
+        DENIED,
+        /** The probe could not reach a verdict (offline, unknown host, ...). */
+        UNDETERMINED
+    }
+
+    /**
+     * Outcome of {@link #probePushAccess}.
+     *
+     * @param status the verdict
+     * @param detail git's own message, or a short summary when writable
+     */
+    public record PushAccess(PushAccessStatus status, String detail) {}
+
+    /**
+     * Probe whether {@code branch} could be pushed to {@code remote}
+     * <em>without pushing anything</em> (IKE-Network/ike-issues#960).
+     *
+     * <p>Uses {@code git push --dry-run}, which performs the full
+     * connection, authentication, and permission negotiation but
+     * transfers no objects and creates no refs — verified against a live
+     * remote, where a dry-run reporting {@code * [new branch]} left no
+     * ref behind.
+     *
+     * <p>A remote that refuses the write refuses it at the
+     * {@code git-receive-pack} advertisement, <em>before</em> any ref
+     * negotiation, so a permission failure is always distinguishable
+     * from a ref-state failure. That ordering is what makes the
+     * classification below sound: reaching a non-fast-forward rejection
+     * at all proves the remote accepted us as a writer, so it counts as
+     * {@link PushAccessStatus#WRITABLE} — whether local {@code branch}
+     * is currently behind its remote counterpart is the calling goal's
+     * problem (a finish refreshes it), not an access question.
+     *
+     * <p>Never throws: a probe that cannot reach a verdict reports
+     * {@link PushAccessStatus#UNDETERMINED} and lets the caller decide.
+     *
+     * @param dir    the repository root directory
+     * @param remote the remote name (e.g. "origin")
+     * @param branch the branch to probe
+     * @return the verdict and git's message
+     */
+    public static PushAccess probePushAccess(File dir, String remote,
+                                             String branch) {
+        String output;
+        int exit;
+        try {
+            Process proc = new ProcessBuilder(
+                    "git", "push", "--dry-run", remote, branch)
+                    .directory(dir)
+                    .redirectErrorStream(true)
+                    .start();
+            try (BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(proc.getInputStream(),
+                            StandardCharsets.UTF_8))) {
+                output = reader.lines()
+                        .collect(Collectors.joining("\n")).trim();
+            }
+            exit = proc.waitFor();
+        } catch (IOException e) {
+            return new PushAccess(PushAccessStatus.UNDETERMINED,
+                    "could not run git push --dry-run: " + e.getMessage());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return new PushAccess(PushAccessStatus.UNDETERMINED,
+                    "interrupted while probing push access");
+        }
+
+        return classifyPushProbe(exit, output);
+    }
+
+    /**
+     * Classify the outcome of a {@code git push --dry-run}.
+     *
+     * <p>Split out from {@link #probePushAccess} so the classification —
+     * the part that decides whether a build stops — is directly testable
+     * against real git output without needing a remote.
+     *
+     * <p>Permission is refused at the {@code git-receive-pack}
+     * advertisement, before ref negotiation, so a permission failure
+     * never co-occurs with a ref-state failure; the permission test
+     * therefore runs first and a rejection reached at all means the
+     * remote already accepted this operator as a writer.
+     *
+     * @param exit   the process exit code
+     * @param output git's merged stdout/stderr, trimmed
+     * @return the verdict and the message to report
+     */
+    static PushAccess classifyPushProbe(int exit, String output) {
+        if (exit == 0) {
+            return new PushAccess(PushAccessStatus.WRITABLE, "write access confirmed");
+        }
+        String safe = output == null ? "" : output;
+        String lower = safe.toLowerCase(Locale.ROOT);
+        if (lower.contains("denied") || lower.contains("403")
+                || lower.contains("not authorized")
+                || lower.contains("read-only")) {
+            return new PushAccess(PushAccessStatus.DENIED, safe);
+        }
+        if (lower.contains("rejected") || lower.contains("non-fast-forward")
+                || lower.contains("fetch first")) {
+            return new PushAccess(PushAccessStatus.WRITABLE,
+                    "write access confirmed (ref update would be rejected — "
+                            + "the calling goal's refresh handles that)");
+        }
+        return new PushAccess(PushAccessStatus.UNDETERMINED, safe);
     }
 
     /**

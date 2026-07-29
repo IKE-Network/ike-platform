@@ -1,0 +1,190 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ReactorSubprojectsReconciler.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws.reconcile</a> &gt; <span class="el_source">ReactorSubprojectsReconciler.java</span></div><h1>ReactorSubprojectsReconciler.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws.reconcile;
+
+import network.ike.plugin.ws.ReactorPom;
+import network.ike.plugin.ws.ReactorPom.ProfileEntry;
+import network.ike.plugin.ws.WsGoal;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
+
+/**
+ * Reconciler that keeps the workspace &lt;em&gt;reactor&lt;/em&gt; POM's subproject
+ * membership in lockstep with {@code workspace.yaml}, and migrates the
+ * legacy {@code with-&lt;name&gt;} file-activated profile pattern to
+ * unconditional top-level {@code &lt;subprojects&gt;} entries
+ * (IKE-Network/ike-issues#696, completing #460).
+ *
+ * &lt;p&gt;Before this reconciler, the only path that added a member to the
+ * reactor POM was {@code ws:add}, one profile at a time. A subproject
+ * that entered {@code workspace.yaml} by any other route — feature-finish
+ * YAML reconciliation, bulk import, a hand edit — silently dropped out of
+ * the reactor, and IntelliJ (which imports the workspace root) never saw
+ * it. There was no convergence step to catch the drift.
+ *
+ * &lt;p&gt;Each {@code ws:scaffold-{draft,publish}} run now converges the
+ * reactor POM to:
+ * &lt;ol&gt;
+ *   &lt;li&gt;a top-level {@code &lt;subprojects&gt;} block listing exactly the
+ *       {@code workspace.yaml} keys, in declaration order — adding the
+ *       missing, removing the stale; and&lt;/li&gt;
+ *   &lt;li&gt;zero {@code with-*} subproject profiles — every one is retired,
+ *       its member already declared top-level.&lt;/li&gt;
+ * &lt;/ol&gt;
+ *
+ * &lt;p&gt;Top-level declarations are safe even for not-yet-cloned subprojects:
+ * {@code ike-workspace-extension}'s {@code SubprojectPruneTransformer}
+ * prunes entries whose directory is absent at model-read time (#460).
+ *
+ * &lt;p&gt;Pure normalization — no version bumps, no clones. {@code detect}
+ * reports the convergence; {@code apply} performs it. Idempotent: a second
+ * run is a no-op. Opt out with {@code -DupdateReactor=false}.
+ *
+ * @see ReactorPom
+ */
+public class ReactorSubprojectsReconciler implements Reconciler {
+
+    /** Creates the reconciler. */
+<span class="fc" id="L53">    public ReactorSubprojectsReconciler() {}</span>
+
+    @Override
+    public String dimension() {
+<span class="fc" id="L57">        return &quot;Reactor subprojects&quot;;</span>
+    }
+
+    @Override
+    public String optOutFlag() {
+<span class="fc" id="L62">        return &quot;updateReactor&quot;;</span>
+    }
+
+    @Override
+    public DriftReport detect(WorkspaceContext ctx) {
+<span class="fc" id="L67">        Path pom = ctx.workspaceRoot().toPath().resolve(&quot;pom.xml&quot;);</span>
+<span class="fc bfc" id="L68" title="All 2 branches covered.">        if (!Files.exists(pom)) {</span>
+<span class="fc" id="L69">            return DriftReport.noDrift(dimension());</span>
+        }
+        String content;
+        try {
+<span class="fc" id="L73">            content = Files.readString(pom, StandardCharsets.UTF_8);</span>
+<span class="nc" id="L74">        } catch (IOException e) {</span>
+<span class="nc" id="L75">            ctx.log().warn(&quot;  Reactor subprojects: could not read &quot;</span>
+<span class="nc" id="L76">                    + &quot;pom.xml: &quot; + e.getMessage());</span>
+<span class="nc" id="L77">            return DriftReport.noDrift(dimension());</span>
+<span class="fc" id="L78">        }</span>
+
+<span class="fc" id="L80">        List&lt;String&gt; yamlKeys = subprojectKeys(ctx);</span>
+<span class="fc" id="L81">        String converged = converge(content, yamlKeys);</span>
+<span class="fc bfc" id="L82" title="All 2 branches covered.">        if (converged.equals(content)) {</span>
+<span class="fc" id="L83">            return DriftReport.noDrift(dimension());</span>
+        }
+
+<span class="fc" id="L86">        List&lt;String&gt; detail = describe(content, yamlKeys);</span>
+<span class="fc" id="L87">        String summary = detail.size() + &quot; reactor-membership change(s)&quot;;</span>
+<span class="fc" id="L88">        String action = &quot;rewrite the reactor POM's &lt;subprojects&gt; and retire &quot;</span>
+                + &quot;with-* profiles on scaffold-publish&quot;;
+<span class="fc" id="L90">        String optOut = &quot;mvn &quot; + WsGoal.SCAFFOLD_PUBLISH.qualified()</span>
+<span class="fc" id="L91">                + &quot; -D&quot; + optOutFlag() + &quot;=false&quot;;</span>
+<span class="fc" id="L92">        return new DriftReport(dimension(), true, summary, detail, action, optOut);</span>
+    }
+
+    @Override
+    public void apply(WorkspaceContext ctx) {
+<span class="fc bfc" id="L97" title="All 2 branches covered.">        if (ctx.options().isOptedOut(optOutFlag())) {</span>
+<span class="fc" id="L98">            ctx.log().info(&quot;  &quot; + dimension() + &quot;: skipped (opted out via -D&quot;</span>
+<span class="fc" id="L99">                    + optOutFlag() + &quot;=false)&quot;);</span>
+<span class="fc" id="L100">            return;</span>
+        }
+<span class="fc" id="L102">        Path pom = ctx.workspaceRoot().toPath().resolve(&quot;pom.xml&quot;);</span>
+<span class="pc bpc" id="L103" title="1 of 2 branches missed.">        if (!Files.exists(pom)) {</span>
+<span class="nc" id="L104">            return;</span>
+        }
+        try {
+<span class="fc" id="L107">            String content = Files.readString(pom, StandardCharsets.UTF_8);</span>
+<span class="fc" id="L108">            String converged = converge(content, subprojectKeys(ctx));</span>
+<span class="fc bfc" id="L109" title="All 2 branches covered.">            if (converged.equals(content)) {</span>
+<span class="fc" id="L110">                return;</span>
+            }
+<span class="fc" id="L112">            Files.writeString(pom, converged, StandardCharsets.UTF_8);</span>
+<span class="fc" id="L113">            ctx.log().info(&quot;  &quot; + dimension() + &quot;: reactor POM converged to &quot;</span>
+                    + &quot;workspace.yaml membership&quot;);
+<span class="nc" id="L115">        } catch (IOException e) {</span>
+<span class="nc" id="L116">            ctx.log().warn(&quot;  Reactor subprojects: could not update &quot;</span>
+<span class="nc" id="L117">                    + &quot;pom.xml: &quot; + e.getMessage());</span>
+<span class="fc" id="L118">        }</span>
+<span class="fc" id="L119">    }</span>
+
+    // ── Core transform (shared by detect and apply) ─────────────────
+
+    /**
+     * Converge a reactor POM to the target membership: declare exactly
+     * {@code yamlKeys} top-level, then retire every legacy subproject
+     * profile. Pure — returns the input unchanged when already converged.
+     *
+     * @param pomContent the reactor POM text
+     * @param yamlKeys   the {@code workspace.yaml} subproject keys, in order
+     * @return the converged POM text
+     */
+    static String converge(String pomContent, List&lt;String&gt; yamlKeys) {
+<span class="fc" id="L133">        String result = ReactorPom.setSubprojects(pomContent, yamlKeys);</span>
+<span class="fc bfc" id="L134" title="All 2 branches covered.">        for (ProfileEntry profile : ReactorPom.listSubprojectProfiles(result)) {</span>
+<span class="pc bpc" id="L135" title="1 of 2 branches missed.">            if (profile.id() != null) {</span>
+<span class="fc" id="L136">                result = ReactorPom.removeProfile(result, profile.id());</span>
+            }
+<span class="fc" id="L138">        }</span>
+<span class="fc" id="L139">        return result;</span>
+    }
+
+    /**
+     * Build the human-readable drift detail for {@code detect}: which
+     * members migrate from a profile, which are newly added, which stale
+     * entries are dropped, and which profiles are retired.
+     */
+    private static List&lt;String&gt; describe(String pomContent,
+                                         List&lt;String&gt; yamlKeys) {
+<span class="fc" id="L149">        List&lt;String&gt; top = ReactorPom.listSubprojects(pomContent);</span>
+<span class="fc" id="L150">        List&lt;ProfileEntry&gt; profiles =</span>
+<span class="fc" id="L151">                ReactorPom.listSubprojectProfiles(pomContent);</span>
+<span class="fc" id="L152">        Set&lt;String&gt; topSet = new LinkedHashSet&lt;&gt;(top);</span>
+<span class="fc" id="L153">        Set&lt;String&gt; profileMembers = new LinkedHashSet&lt;&gt;();</span>
+<span class="fc bfc" id="L154" title="All 2 branches covered.">        for (ProfileEntry p : profiles) {</span>
+<span class="fc" id="L155">            profileMembers.addAll(p.subprojects());</span>
+<span class="fc" id="L156">        }</span>
+<span class="fc" id="L157">        Set&lt;String&gt; yamlSet = new LinkedHashSet&lt;&gt;(yamlKeys);</span>
+
+<span class="fc" id="L159">        List&lt;String&gt; detail = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L160" title="All 2 branches covered.">        for (String key : yamlKeys) {</span>
+<span class="pc bpc" id="L161" title="1 of 2 branches missed.">            if (topSet.contains(key)) {</span>
+<span class="nc" id="L162">                continue;</span>
+            }
+<span class="fc bfc" id="L164" title="All 2 branches covered.">            if (profileMembers.contains(key)) {</span>
+<span class="fc" id="L165">                detail.add(&quot;migrate profile member → &lt;subprojects&gt;: &quot; + key);</span>
+            } else {
+<span class="fc" id="L167">                detail.add(&quot;add subproject: &quot; + key);</span>
+            }
+<span class="fc" id="L169">        }</span>
+<span class="pc bpc" id="L170" title="1 of 2 branches missed.">        for (String s : top) {</span>
+<span class="nc bnc" id="L171" title="All 2 branches missed.">            if (!yamlSet.contains(s)) {</span>
+<span class="nc" id="L172">                detail.add(&quot;remove stale subproject: &quot; + s);</span>
+            }
+<span class="nc" id="L174">        }</span>
+<span class="fc bfc" id="L175" title="All 2 branches covered.">        for (ProfileEntry p : profiles) {</span>
+<span class="fc" id="L176">            detail.add(&quot;retire profile: &quot;</span>
+<span class="pc bpc" id="L177" title="1 of 2 branches missed.">                    + (p.id() != null ? p.id() : p.subprojects()));</span>
+<span class="fc" id="L178">        }</span>
+<span class="fc" id="L179">        return detail;</span>
+    }
+
+    /**
+     * The {@code workspace.yaml} subproject keys in declaration order.
+     */
+    private static List&lt;String&gt; subprojectKeys(WorkspaceContext ctx) {
+<span class="fc" id="L186">        return new ArrayList&lt;&gt;(</span>
+<span class="fc" id="L187">                ctx.graph().manifest().subprojects().keySet());</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

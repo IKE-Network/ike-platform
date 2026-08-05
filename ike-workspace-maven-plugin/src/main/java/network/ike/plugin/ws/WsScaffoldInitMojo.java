@@ -382,31 +382,11 @@ public class WsScaffoldInitMojo implements Mojo {
      *         GitHub form
      */
     static String parseGitHubOrg(String url) {
-        if (url == null || url.isEmpty()) return null;
-        String authority;
-        String path;
-        int schemeIdx = url.indexOf("://");
-        if (schemeIdx >= 0) {
-            // scheme://[user@]host/org/repo(.git)
-            String rest = url.substring(schemeIdx + 3);
-            int slash = rest.indexOf('/');
-            if (slash < 0) return null;
-            authority = rest.substring(0, slash);
-            path = rest.substring(slash + 1);
-        } else {
-            // [user@]host:org/repo(.git)
-            int colon = url.indexOf(':');
-            if (colon < 0) return null;
-            authority = url.substring(0, colon);
-            path = url.substring(colon + 1);
-        }
-        int at = authority.indexOf('@');
-        String host = at >= 0 ? authority.substring(at + 1) : authority;
-        if (!host.equals("github.com") && !host.startsWith("github.com-")) {
-            return null;
-        }
-        int slash = path.indexOf('/');
-        return slash > 0 ? path.substring(0, slash) : null;
+        // Delegates to the canonical owner/repo parser so the host-matching
+        // rules (exact host or github.com-<alias>, #916) live in one place.
+        return FeatureScope.githubSlug(url)
+                .map(slug -> slug.substring(0, slug.indexOf('/')))
+                .orElse(null);
     }
 
     /**

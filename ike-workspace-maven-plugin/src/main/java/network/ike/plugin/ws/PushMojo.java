@@ -50,13 +50,35 @@ public class PushMojo extends AbstractWorkspaceMojo {
     @Parameter(property = "failFast", defaultValue = "false")
     boolean failFast;
 
+    /**
+     * Restrict the push to members currently on {@code feature/<name>}.
+     *
+     * <p>Without it every member of the working set is pushed, including the
+     * workspace root — which fails outright for a contributor with read-only
+     * access to the aggregator repository, taking the whole goal down with
+     * it. Scoping to a feature branch pushes only the repositories that
+     * actually carry the work.
+     *
+     * <p>Members on any other branch are reported as out-of-scope rather
+     * than silently omitted, so the summary still accounts for every member.
+     */
+    @Parameter(property = "feature")
+    String feature;
+
     @Override
     protected WorkspaceReportSpec runGoal() throws MojoException {
         WorkingSet workingSet = resolveWorkingSet();
 
+        String featureBranch = (feature == null || feature.isBlank())
+                ? null
+                : FeatureScope.branchFor(validateFeatureName(feature).value());
+
         getLog().info("");
         getLog().info(header("Push"));
         getLog().info("══════════════════════════════════════════════════════════════");
+        if (featureBranch != null) {
+            getLog().info("  Scope: members on " + featureBranch);
+        }
         getLog().info("");
 
         List<PushRow> rows = new ArrayList<>();
@@ -70,12 +92,23 @@ public class PushMojo extends AbstractWorkspaceMojo {
             String label = workingSet.isWorkspace()
                     && member.directory().equals(workingSet.root())
                     ? "workspace root" : member.name();
+            if (featureBranch != null) {
+                String current = VcsOperations.currentBranch(dir);
+                if (!featureBranch.equals(current)) {
+                    getLog().info("  · " + label + " — on " + current
+                            + ", not " + featureBranch + ", skipping");
+                    rows.add(PushRow.outOfScope(label, current));
+                    continue;
+                }
+            }
             rows.add(pushOne(dir, label));
         }
 
         int pushed = (int) rows.stream().filter(r -> r.outcome == Outcome.PUSHED).count();
         int upToDate = (int) rows.stream().filter(r -> r.outcome == Outcome.UP_TO_DATE).count();
         int skipped = (int) rows.stream().filter(r -> r.outcome == Outcome.NOT_CLONED).count();
+        int outOfScope = (int) rows.stream()
+                .filter(r -> r.outcome == Outcome.OUT_OF_SCOPE).count();
         int failed = (int) rows.stream().filter(r -> r.outcome == Outcome.FAILED).count();
         int uncommitted = (int) rows.stream().filter(r -> r.uncommittedWorkLeft).count();
 
@@ -84,6 +117,10 @@ public class PushMojo extends AbstractWorkspaceMojo {
         summary.append(pushed).append(" pushed");
         if (upToDate > 0) summary.append(", ").append(upToDate).append(" up-to-date");
         if (skipped > 0) summary.append(", ").append(skipped).append(" skipped");
+        if (outOfScope > 0) {
+            summary.append(", ").append(outOfScope)
+                    .append(" not on feature branch");
+        }
         if (uncommitted > 0) {
             summary.append(", ").append(uncommitted)
                     .append(" with uncommitted changes");
@@ -291,6 +328,7 @@ public class PushMojo extends AbstractWorkspaceMojo {
                 case PUSHED -> "✓ pushed";
                 case UP_TO_DATE -> "= up-to-date";
                 case NOT_CLONED -> "not cloned";
+                case OUT_OF_SCOPE -> "· not on feature branch";
                 case FAILED -> "✗ failed";
             };
             if (r.uncommittedWorkLeft) {
@@ -357,7 +395,7 @@ public class PushMojo extends AbstractWorkspaceMojo {
     }
 
     /** Outcome state for a single subproject's push attempt. */
-    enum Outcome {PUSHED, UP_TO_DATE, NOT_CLONED, FAILED}
+    enum Outcome {PUSHED, UP_TO_DATE, NOT_CLONED, OUT_OF_SCOPE, FAILED}
 
     /**
      * One row of per-subproject push detail. Capture-once, render-many:
@@ -395,6 +433,16 @@ public class PushMojo extends AbstractWorkspaceMojo {
         static PushRow notCloned(String name) {
             return new PushRow(name, "—", Outcome.NOT_CLONED, null, null, 0,
                     List.of(), "—", false, null, null, null);
+        }
+
+        /**
+         * A member excluded by {@code -Dfeature} because it sits on another
+         * branch. Its actual branch is retained so the report shows why it
+         * was left out rather than just that it was.
+         */
+        static PushRow outOfScope(String label, String branch) {
+            return new PushRow(label, branch, Outcome.OUT_OF_SCOPE, null, null,
+                    0, List.of(), "—", false, null, null, null);
         }
 
         static PushRow failure(String label, String branch, String oldSha,

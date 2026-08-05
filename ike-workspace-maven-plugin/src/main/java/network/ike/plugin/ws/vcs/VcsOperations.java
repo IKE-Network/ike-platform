@@ -537,6 +537,29 @@ public class VcsOperations {
     }
 
     /**
+     * Create a local branch from {@code <remote>/<branch>} and check it out,
+     * setting the remote branch as its upstream.
+     *
+     * <p>Used when adopting a feature branch that already exists on the
+     * remote but has no local counterpart — the case
+     * {@code ws:feature-track-publish} handles. {@link #checkoutNew} is wrong
+     * here: it branches from the current {@code HEAD}, silently producing a
+     * local branch that shares a name with the remote one but not its
+     * commits.
+     *
+     * @param dir    the repository root directory
+     * @param log    Maven logger
+     * @param remote the remote name (e.g. {@code origin})
+     * @param branch the branch name, identical on both sides
+     * @throws MojoException if the git command fails
+     */
+    public static void checkoutTracking(File dir, Log log, String remote,
+                                        String branch) throws MojoException {
+        run(dir, log, null, "git", "checkout", "-b", branch,
+                "--track", remote + "/" + branch);
+    }
+
+    /**
      * Commit the currently-staged changes with the given message via
      * {@code git commit -F -} (message piped on stdin, no shell quoting
      * issues, no argument-length limits). Does not stage — callers

@@ -1,0 +1,1795 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>VcsOperations.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws.vcs</a> &gt; <span class="el_source">VcsOperations.java</span></div><h1>VcsOperations.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws.vcs;
+
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.Log;
+
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Optional;
+import java.util.stream.Collectors;
+
+/**
+ * Git and VCS state operations for the IKE VCS Bridge.
+ *
+ * &lt;p&gt;All git commands use {@link ProcessBuilder}. Commands that modify
+ * state (commit, push, branch creation) set {@code IKE_VCS_CONTEXT}
+ * in the subprocess environment so that the pre-commit and pre-push
+ * hooks allow the operation through.
+ */
+public class VcsOperations {
+
+    private static final String IKE_VCS_CONTEXT = &quot;IKE_VCS_CONTEXT&quot;;
+    private static final String CONTEXT_VALUE = &quot;ike-maven-plugin&quot;;
+
+    /**
+     * Attempts for a transient-safe git command — the original call
+     * plus one retry. Covers read-only queries (ike-issues#602) and
+     * idempotent mutations (ike-issues#636).
+     */
+    private static final int TRANSIENT_RETRY_ATTEMPTS = 2;
+
+    /** Backoff before the single retry of a transient-safe git command. */
+    private static final long TRANSIENT_RETRY_BACKOFF_MILLIS = 150L;
+
+    private VcsOperations() {}
+
+    // ── Git queries ──────────────────────────────────────────────
+
+    /**
+     * Get the 8-character short SHA of HEAD.
+     *
+     * @param dir the repository root directory
+     * @return the short SHA string
+     * @throws MojoException if the git command fails
+     */
+    public static String headSha(File dir) throws MojoException {
+<span class="fc" id="L54">        return captureRead(dir, &quot;git&quot;, &quot;rev-parse&quot;, &quot;--short=8&quot;, &quot;HEAD&quot;);</span>
+    }
+
+    /**
+     * Get the 8-character short SHA of a local branch tip (without
+     * checking it out). Same width as {@link #remoteSha}, so the two are
+     * directly comparable for push verification.
+     *
+     * @param dir    the repository root directory
+     * @param branch the local branch name
+     * @return the branch tip's short SHA
+     * @throws MojoException if the branch does not resolve
+     */
+    public static String branchSha(File dir, String branch) throws MojoException {
+<span class="fc" id="L68">        return captureRead(dir, &quot;git&quot;, &quot;rev-parse&quot;, &quot;--short=8&quot;,</span>
+                &quot;refs/heads/&quot; + branch);
+    }
+
+    /**
+     * Get the current branch name.
+     *
+     * @param dir the repository root directory
+     * @return the current branch name
+     * @throws MojoException if the git command fails
+     */
+    public static String currentBranch(File dir) throws MojoException {
+<span class="fc" id="L80">        return captureRead(dir, &quot;git&quot;, &quot;branch&quot;, &quot;--show-current&quot;);</span>
+    }
+
+    /**
+     * Get the 8-character short SHA of a remote branch, or empty if unreachable.
+     *
+     * @param dir    the repository root directory
+     * @param remote the remote name (e.g., &quot;origin&quot;)
+     * @param branch the branch name to query
+     * @return the short SHA, or empty if the remote branch is unreachable
+     * @throws MojoException if the git command fails
+     */
+    public static Optional&lt;String&gt; remoteSha(File dir, String remote, String branch)
+            throws MojoException {
+        try {
+<span class="fc" id="L95">            String output = captureRead(dir, &quot;git&quot;, &quot;ls-remote&quot;, remote, branch);</span>
+<span class="fc bfc" id="L96" title="All 2 branches covered.">            if (output.isEmpty()) {</span>
+<span class="fc" id="L97">                return Optional.empty();</span>
+            }
+            // ls-remote output: &lt;full-sha&gt;\trefs/heads/&lt;branch&gt;
+<span class="fc" id="L100">            String fullSha = output.split(&quot;\\s+&quot;)[0];</span>
+<span class="fc" id="L101">            return Optional.of(fullSha.substring(0, 8));</span>
+<span class="fc" id="L102">        } catch (MojoException e) {</span>
+<span class="fc" id="L103">            return Optional.empty();</span>
+        }
+    }
+
+    /**
+     * Check whether the working tree is clean (no staged or unstaged changes).
+     *
+     * @param dir the repository root directory
+     * @return true if the working tree has no changes
+     */
+    public static boolean isClean(File dir) {
+        try {
+<span class="fc" id="L115">            String status = capture(dir, &quot;git&quot;, &quot;status&quot;, &quot;--porcelain&quot;);</span>
+<span class="fc" id="L116">            return status.isEmpty();</span>
+<span class="nc" id="L117">        } catch (MojoException e) {</span>
+<span class="nc" id="L118">            return false;</span>
+        }
+    }
+
+    /**
+     * Check whether a single path is committed-clean — no staged or
+     * unstaged modification and not untracked. Used to decide whether a
+     * machine-derived rewrite of that path (e.g. the
+     * {@code workspace.yaml depends-on} re-derivation in
+     * {@link network.ike.plugin.ws.PostMutationSync}) is the &lt;em&gt;sole&lt;/em&gt;
+     * pending change to it, so it can be committed in isolation without
+     * sweeping in a caller's own concurrent edit
+     * (IKE-Network/ike-issues#774).
+     *
+     * @param dir  the repository root directory
+     * @param path the path to check, relative to {@code dir}
+     * @return true if {@code path} has no pending changes
+     */
+    public static boolean isPathClean(File dir, String path) {
+        try {
+<span class="fc" id="L138">            String status =</span>
+<span class="fc" id="L139">                    capture(dir, &quot;git&quot;, &quot;status&quot;, &quot;--porcelain&quot;, &quot;--&quot;, path);</span>
+<span class="fc" id="L140">            return status.isEmpty();</span>
+<span class="fc" id="L141">        } catch (MojoException e) {</span>
+<span class="fc" id="L142">            return false;</span>
+        }
+    }
+
+    /**
+     * Check whether there are staged changes ready to commit.
+     *
+     * @param dir the repository root directory
+     * @return true if the index has staged changes
+     */
+    public static boolean hasStagedChanges(File dir) {
+        try {
+<span class="fc" id="L154">            String diff = capture(dir, &quot;git&quot;, &quot;diff&quot;, &quot;--cached&quot;, &quot;--name-only&quot;);</span>
+<span class="fc bfc" id="L155" title="All 2 branches covered.">            return !diff.isEmpty();</span>
+<span class="nc" id="L156">        } catch (MojoException e) {</span>
+<span class="nc" id="L157">            return false;</span>
+        }
+    }
+
+    /**
+     * Check whether there are modified but unstaged changes in the working tree.
+     *
+     * @param dir the repository root directory
+     * @return true if there are unstaged modifications
+     */
+    public static boolean hasUnstagedChanges(File dir) {
+        try {
+<span class="nc" id="L169">            String diff = capture(dir, &quot;git&quot;, &quot;diff&quot;, &quot;--name-only&quot;);</span>
+<span class="nc bnc" id="L170" title="All 2 branches missed.">            return !diff.isEmpty();</span>
+<span class="nc" id="L171">        } catch (MojoException e) {</span>
+<span class="nc" id="L172">            return false;</span>
+        }
+    }
+
+    /**
+     * List files with unstaged modifications in the working tree.
+     * Returns a comma-separated summary suitable for log messages.
+     *
+     * @param dir the repository root directory
+     * @return comma-separated file names, or empty string if clean
+     */
+    public static String unstagedFiles(File dir) {
+        try {
+<span class="fc" id="L185">            String diff = capture(dir, &quot;git&quot;, &quot;diff&quot;, &quot;--name-only&quot;);</span>
+<span class="fc bfc" id="L186" title="All 2 branches covered.">            if (diff.isEmpty()) return &quot;&quot;;</span>
+<span class="fc" id="L187">            return String.join(&quot;, &quot;, diff.split(&quot;\n&quot;));</span>
+<span class="nc" id="L188">        } catch (MojoException e) {</span>
+<span class="nc" id="L189">            return &quot;&quot;;</span>
+        }
+    }
+
+    /**
+     * List files with any uncommitted changes (staged, unstaged, or untracked).
+     * Returns the raw porcelain output suitable for detailed error messages.
+     *
+     * @param dir the repository root directory
+     * @return porcelain status output, or empty string if clean
+     */
+    public static String uncommittedStatus(File dir) {
+        try {
+<span class="fc" id="L202">            return capture(dir, &quot;git&quot;, &quot;status&quot;, &quot;--porcelain&quot;);</span>
+<span class="nc" id="L203">        } catch (MojoException e) {</span>
+<span class="nc" id="L204">            return &quot;&quot;;</span>
+        }
+    }
+
+    /**
+     * Count tracked files with modifications (staged or unstaged), excluding
+     * untracked files. Use {@link #untrackedFiles(File)} for the new-file list.
+     *
+     * @param dir the repository root directory
+     * @return count of modified tracked files; zero if clean or on error
+     */
+    public static int modifiedTrackedCount(File dir) {
+        try {
+<span class="fc" id="L217">            String porcelain = capture(dir, &quot;git&quot;, &quot;status&quot;, &quot;--porcelain&quot;);</span>
+<span class="fc bfc" id="L218" title="All 2 branches covered.">            if (porcelain.isEmpty()) return 0;</span>
+<span class="fc" id="L219">            int count = 0;</span>
+<span class="fc bfc" id="L220" title="All 2 branches covered.">            for (String line : porcelain.split(&quot;\n&quot;)) {</span>
+<span class="pc bpc" id="L221" title="1 of 2 branches missed.">                if (line.length() &lt; 2) continue;</span>
+                // ?? = untracked, !! = ignored; everything else is tracked
+<span class="pc bpc" id="L223" title="1 of 4 branches missed.">                if (!line.startsWith(&quot;??&quot;) &amp;&amp; !line.startsWith(&quot;!!&quot;)) count++;</span>
+            }
+<span class="fc" id="L225">            return count;</span>
+<span class="nc" id="L226">        } catch (MojoException e) {</span>
+<span class="nc" id="L227">            return 0;</span>
+        }
+    }
+
+    /**
+     * List untracked, non-ignored files in the working tree.
+     *
+     * @param dir the repository root directory
+     * @return list of untracked file paths; empty if clean or on error
+     */
+    public static List&lt;String&gt; untrackedFiles(File dir) {
+        try {
+<span class="fc" id="L239">            String output = capture(dir, &quot;git&quot;, &quot;ls-files&quot;,</span>
+                    &quot;--others&quot;, &quot;--exclude-standard&quot;);
+<span class="fc bfc" id="L241" title="All 2 branches covered.">            if (output.isEmpty()) return List.of();</span>
+<span class="fc" id="L242">            return List.of(output.split(&quot;\n&quot;));</span>
+<span class="nc" id="L243">        } catch (MojoException e) {</span>
+<span class="nc" id="L244">            return List.of();</span>
+        }
+    }
+
+    /**
+     * List files with unresolved merge conflicts.
+     *
+     * @param dir the repository root directory
+     * @return list of conflicting file paths, empty if none
+     */
+    public static List&lt;String&gt; conflictingFiles(File dir) {
+        try {
+<span class="nc" id="L256">            String output = capture(dir, &quot;git&quot;, &quot;diff&quot;, &quot;--name-only&quot;, &quot;--diff-filter=U&quot;);</span>
+<span class="nc bnc" id="L257" title="All 2 branches missed.">            if (output.isEmpty()) return List.of();</span>
+<span class="nc" id="L258">            return List.of(output.split(&quot;\n&quot;));</span>
+<span class="nc" id="L259">        } catch (MojoException e) {</span>
+<span class="nc" id="L260">            return List.of();</span>
+        }
+    }
+
+    /**
+     * List files changed on {@code head} relative to its merge-base with
+     * {@code base} ({@code git diff --name-only base...head}). Read-only —
+     * touches neither the index nor the working tree.
+     *
+     * @param dir  the repository root directory
+     * @param base the base ref (e.g., {@code &quot;main&quot;})
+     * @param head the head ref (e.g., a feature branch)
+     * @return changed file paths; empty if none or on error
+     */
+    public static List&lt;String&gt; changedFiles(File dir, String base, String head) {
+        try {
+<span class="fc" id="L276">            String output = capture(dir, &quot;git&quot;, &quot;diff&quot;, &quot;--name-only&quot;,</span>
+                    base + &quot;...&quot; + head);
+<span class="pc bpc" id="L278" title="1 of 2 branches missed.">            if (output.isEmpty()) return List.of();</span>
+<span class="fc" id="L279">            return List.of(output.split(&quot;\n&quot;));</span>
+<span class="nc" id="L280">        } catch (MojoException e) {</span>
+<span class="nc" id="L281">            return List.of();</span>
+        }
+    }
+
+    /**
+     * Predict merge conflicts without touching the index or working tree.
+     *
+     * &lt;p&gt;Uses {@code git merge-tree --write-tree} (git 2.38+) to perform
+     * a trial merge in memory. Returns the list of conflicting file paths,
+     * or an empty list if the merge would be clean.
+     *
+     * &lt;p&gt;Falls back gracefully on older git versions — returns an empty
+     * list (conflict prediction unavailable).
+     *
+     * @param dir    the repository root directory
+     * @param branch the branch to merge into (e.g., current feature branch)
+     * @param other  the branch to merge from (e.g., &quot;main&quot;)
+     * @return list of file paths that would conflict, empty if clean or unknown
+     */
+    public static List&lt;String&gt; predictConflicts(File dir, String branch, String other) {
+        try {
+            // git merge-tree --write-tree exits 0 if clean, 1 if conflicts
+            // With --name-only, conflicting file names appear after a blank line
+<span class="fc" id="L304">            ProcessBuilder pb = new ProcessBuilder(</span>
+                    &quot;git&quot;, &quot;merge-tree&quot;, &quot;--write-tree&quot;, &quot;--name-only&quot;,
+                    branch, other)
+<span class="fc" id="L307">                    .directory(dir)</span>
+<span class="fc" id="L308">                    .redirectErrorStream(false);</span>
+<span class="fc" id="L309">            Process proc = pb.start();</span>
+
+<span class="fc" id="L311">            String stdout = new String(</span>
+<span class="fc" id="L312">                    proc.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();</span>
+<span class="fc" id="L313">            String stderr = new String(</span>
+<span class="fc" id="L314">                    proc.getErrorStream().readAllBytes(), StandardCharsets.UTF_8).trim();</span>
+<span class="fc" id="L315">            int exit = proc.waitFor();</span>
+
+<span class="pc bpc" id="L317" title="1 of 2 branches missed.">            if (exit == 0) {</span>
+<span class="fc" id="L318">                return List.of(); // clean merge</span>
+            }
+
+<span class="nc bnc" id="L321" title="All 4 branches missed.">            if (exit == 1 &amp;&amp; !stdout.isEmpty()) {</span>
+                // Output format: tree SHA on first line, then blank line,
+                // then conflicting file names (one per line)
+<span class="nc" id="L324">                String[] sections = stdout.split(&quot;\n\n&quot;, 2);</span>
+<span class="nc bnc" id="L325" title="All 4 branches missed.">                if (sections.length == 2 &amp;&amp; !sections[1].isBlank()) {</span>
+<span class="nc" id="L326">                    return List.of(sections[1].trim().split(&quot;\n&quot;));</span>
+                }
+            }
+
+            // Unexpected exit or format — can't predict
+<span class="nc" id="L331">            return List.of();</span>
+<span class="nc" id="L332">        } catch (Exception e) {</span>
+            // git merge-tree not available or failed — can't predict
+<span class="nc" id="L334">            return List.of();</span>
+        }
+    }
+
+    /**
+     * Read the configured URL for a named git remote, e.g. {@code origin}.
+     * Returns empty when the remote does not exist on this clone.
+     *
+     * @param dir    the repository root directory
+     * @param remote the remote name (typically {@code origin})
+     * @return the URL configured for the remote, empty when absent
+     */
+    public static java.util.Optional&lt;String&gt; remoteUrl(File dir, String remote) {
+        try {
+<span class="fc" id="L348">            String url = capture(dir, &quot;git&quot;, &quot;remote&quot;, &quot;get-url&quot;, remote);</span>
+<span class="pc bpc" id="L349" title="1 of 2 branches missed.">            return url.isEmpty()</span>
+<span class="nc" id="L350">                    ? java.util.Optional.empty()</span>
+<span class="fc" id="L351">                    : java.util.Optional.of(url);</span>
+<span class="fc" id="L352">        } catch (MojoException e) {</span>
+<span class="fc" id="L353">            return java.util.Optional.empty();</span>
+        }
+    }
+
+    /**
+     * Count commits ahead of and behind the current branch's upstream
+     * tracking branch ({@code @{u}}). Returns empty when the branch
+     * has no upstream configured (no {@code branch.&lt;name&gt;.remote}),
+     * which is common in fresh clones before {@code git push -u}.
+     *
+     * @param dir the repository root directory
+     * @return {@code [ahead, behind]} commit counts; empty when no
+     *         upstream tracking branch is configured or git fails
+     */
+    public static java.util.Optional&lt;int[]&gt; aheadBehindUpstream(File dir) {
+        try {
+            // --left-right with HEAD...@{u} returns one line per commit;
+            // --count collapses into &quot;ahead\tbehind&quot;.
+<span class="fc" id="L371">            String output = capture(dir, &quot;git&quot;, &quot;rev-list&quot;,</span>
+                    &quot;--left-right&quot;, &quot;--count&quot;, &quot;HEAD...@{u}&quot;);
+<span class="pc bpc" id="L373" title="1 of 2 branches missed.">            if (output.isEmpty()) return java.util.Optional.empty();</span>
+<span class="fc" id="L374">            String[] parts = output.split(&quot;\\s+&quot;);</span>
+<span class="pc bpc" id="L375" title="1 of 2 branches missed.">            if (parts.length != 2) return java.util.Optional.empty();</span>
+<span class="fc" id="L376">            return java.util.Optional.of(new int[]{</span>
+<span class="fc" id="L377">                    Integer.parseInt(parts[0]),</span>
+<span class="fc" id="L378">                    Integer.parseInt(parts[1])});</span>
+<span class="fc" id="L379">        } catch (MojoException | NumberFormatException e) {</span>
+<span class="fc" id="L380">            return java.util.Optional.empty();</span>
+        }
+    }
+
+    /**
+     *
+     * @param dir  the repository root directory
+     * @param base the starting ref (exclusive)
+     * @param head the ending ref (inclusive)
+     * @return list of one-line commit summaries between the two refs
+     * @throws MojoException if the git command fails
+     */
+    public static List&lt;String&gt; commitLog(File dir, String base, String head)
+            throws MojoException {
+<span class="fc" id="L394">        String output = capture(dir, &quot;git&quot;, &quot;log&quot;,</span>
+                base + &quot;..&quot; + head, &quot;--oneline&quot;, &quot;--no-decorate&quot;);
+<span class="fc bfc" id="L396" title="All 2 branches covered.">        if (output.isEmpty()) return List.of();</span>
+<span class="fc" id="L397">        return List.of(output.split(&quot;\n&quot;));</span>
+    }
+
+    /**
+     * Raw {@code git log --name-status} output for a rev range, each commit
+     * introduced by a {@code commit}+{@code U+0001} marker followed by
+     * {@code &lt;short-sha&gt;&lt;TAB&gt;&lt;subject&gt;}. The machine-parseable input of
+     * {@link network.ike.plugin.ws.GoalCommitLedger}
+     * (IKE-Network/ike-issues#954). The marker deliberately does not
+     * &lt;em&gt;start&lt;/em&gt; with the control character: {@code capture()} trims
+     * the subprocess output, and {@link String#trim} strips every char
+     * ≤ {@code U+0020} — a bare leading {@code U+0001} on the first
+     * header line would vanish.
+     *
+     * @param dir   the repository root directory
+     * @param range the rev range (e.g. {@code &quot;abc12345..HEAD&quot;}, or
+     *              {@code &quot;HEAD&quot;} for the whole history)
+     * @return the raw log output; empty when the range holds no commits
+     * @throws MojoException if the git command fails (e.g. an unborn
+     *                       {@code HEAD})
+     */
+    public static String nameStatusLog(File dir, String range)
+            throws MojoException {
+<span class="fc" id="L420">        return captureRead(dir, &quot;git&quot;, &quot;log&quot;, &quot;--name-status&quot;,</span>
+                &quot;--no-decorate&quot;, &quot;--format=commit%x01%h%x09%s&quot;, range);
+    }
+
+    // ── Git operations ───────────────────────────────────────────
+
+    /**
+     * Fetch from all remotes.
+     *
+     * &lt;p&gt;Passes {@code -c maintenance.auto=false}: git 2.47+ otherwise
+     * spawns a &lt;em&gt;detached&lt;/em&gt; {@code maintenance run --auto} after
+     * the fetch — a background git process that can still hold object
+     * and ref locks while the plugin's next git command runs against
+     * the same repository (ike-issues#636). The repository's own
+     * maintenance policy is unaffected; only the plugin's fetches opt
+     * out of triggering it.
+     *
+     * @param dir the repository root directory
+     * @param log Maven logger
+     * @throws MojoException if the git command fails
+     */
+    public static void fetch(File dir, Log log) throws MojoException {
+<span class="fc" id="L442">        run(dir, log, null, &quot;git&quot;, &quot;-c&quot;, &quot;maintenance.auto=false&quot;,</span>
+                &quot;fetch&quot;, &quot;--all&quot;, &quot;--quiet&quot;);
+<span class="fc" id="L444">    }</span>
+
+    /**
+     * Soft reset (no --hard) — updates HEAD and index, leaves working tree.
+     *
+     * @param dir the repository root directory
+     * @param log Maven logger
+     * @param ref the ref to reset to (e.g., &quot;origin/main&quot;)
+     * @throws MojoException if the git command fails
+     */
+    public static void resetSoft(File dir, Log log, String ref)
+            throws MojoException {
+<span class="fc" id="L456">        run(dir, log, null, &quot;git&quot;, &quot;reset&quot;, ref, &quot;--quiet&quot;);</span>
+<span class="fc" id="L457">    }</span>
+
+    /**
+     * Hard reset — updates HEAD, index, and working tree to match
+     * {@code ref}, discarding uncommitted changes. Also clears any
+     * in-progress merge state ({@code .git/SQUASH_MSG},
+     * {@code .git/MERGE_MSG}), which is useful after a {@code git merge
+     * --squash} whose squashed diff turned out to be empty — see
+     * issue #162.
+     *
+     * @param dir the repository root directory
+     * @param log Maven logger
+     * @param ref the ref to reset to (e.g., {@code &quot;HEAD&quot;})
+     * @throws MojoException if the git command fails
+     */
+    public static void resetHard(File dir, Log log, String ref)
+            throws MojoException {
+<span class="fc" id="L474">        run(dir, log, null, &quot;git&quot;, &quot;reset&quot;, &quot;--hard&quot;, ref, &quot;--quiet&quot;);</span>
+<span class="fc" id="L475">    }</span>
+
+    /**
+     * Check whether one commit is an ancestor of (or equal to) another.
+     *
+     * &lt;p&gt;Uses {@code git merge-base --is-ancestor}: exit 0 means yes,
+     * exit 1 means no, any other exit is an error (e.g., unknown ref).
+     *
+     * @param dir           the repository root directory
+     * @param maybeAncestor candidate ancestor commit (ref or sha)
+     * @param descendant    candidate descendant commit (ref or sha)
+     * @return {@code true} iff {@code maybeAncestor} is reachable from
+     *         {@code descendant} via parent edges (or is equal)
+     * @throws MojoException if either ref is unknown or the git command fails
+     */
+    public static boolean isAncestor(File dir, String maybeAncestor, String descendant)
+            throws MojoException {
+        try {
+<span class="fc" id="L493">            Process proc = new ProcessBuilder(&quot;git&quot;, &quot;merge-base&quot;,</span>
+                    &quot;--is-ancestor&quot;, maybeAncestor, descendant)
+<span class="fc" id="L495">                    .directory(dir)</span>
+<span class="fc" id="L496">                    .redirectErrorStream(true)</span>
+<span class="fc" id="L497">                    .start();</span>
+<span class="fc" id="L498">            String output = new String(proc.getInputStream().readAllBytes(),</span>
+                    StandardCharsets.UTF_8);
+<span class="fc" id="L500">            int exit = proc.waitFor();</span>
+<span class="fc bfc" id="L501" title="All 2 branches covered.">            if (exit == 0) return true;</span>
+<span class="fc bfc" id="L502" title="All 2 branches covered.">            if (exit == 1) return false;</span>
+<span class="fc" id="L503">            throw new MojoException(</span>
+                    &quot;git merge-base --is-ancestor &quot; + maybeAncestor + &quot; &quot;
+                            + descendant + &quot; failed (exit &quot; + exit + &quot;): &quot; + output);
+<span class="nc" id="L506">        } catch (IOException | InterruptedException e) {</span>
+<span class="nc" id="L507">            throw new MojoException(</span>
+                    &quot;Failed to check ancestry of &quot; + maybeAncestor + &quot; / &quot;
+<span class="nc" id="L509">                            + descendant + &quot;: &quot; + e.getMessage(), e);</span>
+        }
+    }
+
+    /**
+     * Checkout an existing branch.
+     *
+     * @param dir    the repository root directory
+     * @param log    Maven logger
+     * @param branch the branch to check out
+     * @throws MojoException if the git command fails
+     */
+    public static void checkout(File dir, Log log, String branch)
+            throws MojoException {
+<span class="fc" id="L523">        run(dir, log, null, &quot;git&quot;, &quot;checkout&quot;, branch);</span>
+<span class="fc" id="L524">    }</span>
+
+    /**
+     * Create and checkout a new branch.
+     *
+     * @param dir    the repository root directory
+     * @param log    Maven logger
+     * @param branch the new branch name to create
+     * @throws MojoException if the git command fails
+     */
+    public static void checkoutNew(File dir, Log log, String branch)
+            throws MojoException {
+<span class="fc" id="L536">        run(dir, log, null, &quot;git&quot;, &quot;checkout&quot;, &quot;-b&quot;, branch);</span>
+<span class="fc" id="L537">    }</span>
+
+    /**
+     * Create a local branch from {@code &lt;remote&gt;/&lt;branch&gt;} and check it out,
+     * setting the remote branch as its upstream.
+     *
+     * &lt;p&gt;Used when adopting a feature branch that already exists on the
+     * remote but has no local counterpart — the case
+     * {@code ws:feature-track-publish} handles. {@link #checkoutNew} is wrong
+     * here: it branches from the current {@code HEAD}, silently producing a
+     * local branch that shares a name with the remote one but not its
+     * commits.
+     *
+     * @param dir    the repository root directory
+     * @param log    Maven logger
+     * @param remote the remote name (e.g. {@code origin})
+     * @param branch the branch name, identical on both sides
+     * @throws MojoException if the git command fails
+     */
+    public static void checkoutTracking(File dir, Log log, String remote,
+                                        String branch) throws MojoException {
+<span class="fc" id="L558">        run(dir, log, null, &quot;git&quot;, &quot;checkout&quot;, &quot;-b&quot;, branch,</span>
+                &quot;--track&quot;, remote + &quot;/&quot; + branch);
+<span class="fc" id="L560">    }</span>
+
+    /**
+     * Commit the currently-staged changes with the given message via
+     * {@code git commit -F -} (message piped on stdin, no shell quoting
+     * issues, no argument-length limits). Does not stage — callers
+     * stage first via {@link #addAll} or per-path {@code git add}.
+     * Sets {@code IKE_VCS_CONTEXT} to bypass the pre-commit hook.
+     *
+     * @param dir     the repository root directory
+     * @param log     Maven logger
+     * @param message the commit message; must not be {@code null} or blank
+     * @throws MojoException if the git command fails
+     */
+    public static void commit(File dir, Log log, String message)
+            throws MojoException {
+<span class="fc" id="L576">        commitWithStdin(dir, log, message, &quot;git&quot;, &quot;commit&quot;, &quot;-F&quot;, &quot;-&quot;);</span>
+<span class="fc" id="L577">    }</span>
+
+    /**
+     * Alias for {@link #commit(File, Log, String)}; retained for callers
+     * that emphasize the &quot;files are already staged&quot; reading. Editor-mode
+     * (null-message) was removed in #277 — Maven's non-interactive child
+     * process cannot open an editor, so the path was never reachable in
+     * practice.
+     *
+     * @param dir     the repository root directory
+     * @param log     Maven logger
+     * @param message the commit message; must not be {@code null} or blank
+     * @throws MojoException if the git command fails
+     */
+    public static void commitStaged(File dir, Log log, String message)
+            throws MojoException {
+<span class="fc" id="L593">        commit(dir, log, message);</span>
+<span class="fc" id="L594">    }</span>
+
+    /**
+     * Commit specific paths in isolation, regardless of what else is in
+     * the index. Equivalent to {@code git commit -F - -- &lt;paths&gt;}: the
+     * working-tree content of the listed (tracked) paths is committed and
+     * nothing else, so a concurrent staged or unstaged change to another
+     * file is neither committed nor disturbed.
+     *
+     * &lt;p&gt;Used by {@link network.ike.plugin.ws.PostMutationSync} to commit
+     * the re-derived {@code workspace.yaml} on its own
+     * (IKE-Network/ike-issues#774). Sets {@code IKE_VCS_CONTEXT} to bypass
+     * the pre-commit hook.
+     *
+     * @param dir     the repository root directory
+     * @param log     Maven logger
+     * @param message the commit message; must not be {@code null} or blank
+     * @param paths   the paths to commit, relative to {@code dir}
+     * @throws MojoException if the git command fails
+     */
+    public static void commitPaths(File dir, Log log, String message,
+                                   String... paths) throws MojoException {
+<span class="fc" id="L616">        List&lt;String&gt; command = new ArrayList&lt;&gt;(</span>
+<span class="fc" id="L617">                List.of(&quot;git&quot;, &quot;commit&quot;, &quot;-F&quot;, &quot;-&quot;, &quot;--&quot;));</span>
+<span class="fc" id="L618">        command.addAll(List.of(paths));</span>
+<span class="fc" id="L619">        commitWithStdin(dir, log, message, command.toArray(new String[0]));</span>
+<span class="fc" id="L620">    }</span>
+
+    /**
+     * Stage all files.
+     *
+     * &lt;p&gt;{@code git add -A} is idempotent — a failed attempt leaves no
+     * partial state and re-running converges on the same index — so it
+     * is routed through {@link #captureIdempotentMutation} and survives
+     * a transient {@code index.lock} collision with a concurrent
+     * process (ike-issues#636).
+     *
+     * @param dir the repository root directory
+     * @param log Maven logger
+     * @throws MojoException if the git command fails on both attempts
+     */
+    public static void addAll(File dir, Log log) throws MojoException {
+<span class="fc" id="L636">        log.debug(&quot;» git add -A&quot;);</span>
+<span class="fc" id="L637">        captureIdempotentMutation(dir, &quot;git&quot;, &quot;add&quot;, &quot;-A&quot;);</span>
+<span class="fc" id="L638">    }</span>
+
+    /**
+     * Push to remote. Sets {@code IKE_VCS_CONTEXT} to bypass the pre-push hook.
+     *
+     * @param dir    the repository root directory
+     * @param log    Maven logger
+     * @param remote the remote name (e.g., &quot;origin&quot;)
+     * @param branch the branch to push
+     * @throws MojoException if the git command fails
+     */
+    public static void push(File dir, Log log, String remote, String branch)
+            throws MojoException {
+<span class="fc" id="L651">        runWithContext(dir, log, &quot;git&quot;, &quot;push&quot;, remote, branch);</span>
+<span class="fc" id="L652">    }</span>
+
+    /**
+     * Push to remote, ignoring failures (no remote, offline, etc.).
+     * Logs a warning on failure instead of throwing.
+     *
+     * @param dir    the repository root directory
+     * @param log    Maven logger
+     * @param remote the remote name (e.g., &quot;origin&quot;)
+     * @param branch the branch to push
+     */
+    public static void pushSafe(File dir, Log log, String remote, String branch) {
+        try {
+<span class="nc" id="L665">            push(dir, log, remote, branch);</span>
+<span class="fc" id="L666">        } catch (MojoException e) {</span>
+<span class="fc" id="L667">            log.warn(&quot;  Push failed (non-fatal): &quot; + e.getMessage());</span>
+<span class="nc" id="L668">        }</span>
+<span class="fc" id="L669">    }</span>
+
+    /**
+     * Push to remote if it exists. If no remote is configured, logs
+     * a helpful message instead of failing with a cryptic git error.
+     *
+     * @param dir    the repository root directory
+     * @param log    Maven logger
+     * @param remote the remote name (e.g., &quot;origin&quot;)
+     * @param branch the branch to push
+     */
+    public static void pushIfRemoteExists(File dir, Log log,
+                                            String remote, String branch) {
+        try {
+<span class="pc bpc" id="L683" title="1 of 2 branches missed.">            if (!network.ike.plugin.ReleaseSupport.hasRemote(dir, remote)) {</span>
+<span class="fc" id="L684">                log.info(&quot;  No remote '&quot; + remote + &quot;' configured for &quot;</span>
+<span class="fc" id="L685">                        + dir.getName() + &quot; — changes remain local.&quot;);</span>
+<span class="fc" id="L686">                return;</span>
+            }
+<span class="nc" id="L688">            push(dir, log, remote, branch);</span>
+<span class="nc" id="L689">        } catch (MojoException e) {</span>
+<span class="nc" id="L690">            log.warn(&quot;  Push failed (non-fatal): &quot; + e.getMessage());</span>
+<span class="nc" id="L691">        }</span>
+<span class="nc" id="L692">    }</span>
+
+    /**
+     * Whether the operator can write to a remote, as established by a
+     * non-mutating probe.
+     */
+<span class="fc" id="L698">    public enum PushAccessStatus {</span>
+        /** The remote accepted us as a writer. */
+<span class="fc" id="L700">        WRITABLE,</span>
+        /** The remote refused the write — no push permission. */
+<span class="fc" id="L702">        DENIED,</span>
+        /** The probe could not reach a verdict (offline, unknown host, ...). */
+<span class="fc" id="L704">        UNDETERMINED</span>
+    }
+
+    /**
+     * Outcome of {@link #probePushAccess}.
+     *
+     * @param status the verdict
+     * @param detail git's own message, or a short summary when writable
+     */
+<span class="fc" id="L713">    public record PushAccess(PushAccessStatus status, String detail) {}</span>
+
+    /**
+     * Probe whether {@code branch} could be pushed to {@code remote}
+     * &lt;em&gt;without pushing anything&lt;/em&gt; (IKE-Network/ike-issues#960).
+     *
+     * &lt;p&gt;Uses {@code git push --dry-run}, which performs the full
+     * connection, authentication, and permission negotiation but
+     * transfers no objects and creates no refs — verified against a live
+     * remote, where a dry-run reporting {@code * [new branch]} left no
+     * ref behind.
+     *
+     * &lt;p&gt;A remote that refuses the write refuses it at the
+     * {@code git-receive-pack} advertisement, &lt;em&gt;before&lt;/em&gt; any ref
+     * negotiation, so a permission failure is always distinguishable
+     * from a ref-state failure. That ordering is what makes the
+     * classification below sound: reaching a non-fast-forward rejection
+     * at all proves the remote accepted us as a writer, so it counts as
+     * {@link PushAccessStatus#WRITABLE} — whether local {@code branch}
+     * is currently behind its remote counterpart is the calling goal's
+     * problem (a finish refreshes it), not an access question.
+     *
+     * &lt;p&gt;Never throws: a probe that cannot reach a verdict reports
+     * {@link PushAccessStatus#UNDETERMINED} and lets the caller decide.
+     *
+     * @param dir    the repository root directory
+     * @param remote the remote name (e.g. &quot;origin&quot;)
+     * @param branch the branch to probe
+     * @return the verdict and git's message
+     */
+    public static PushAccess probePushAccess(File dir, String remote,
+                                             String branch) {
+        String output;
+        int exit;
+        try {
+<span class="fc" id="L748">            Process proc = new ProcessBuilder(</span>
+                    &quot;git&quot;, &quot;push&quot;, &quot;--dry-run&quot;, remote, branch)
+<span class="fc" id="L750">                    .directory(dir)</span>
+<span class="fc" id="L751">                    .redirectErrorStream(true)</span>
+<span class="fc" id="L752">                    .start();</span>
+<span class="fc" id="L753">            try (BufferedReader reader = new BufferedReader(</span>
+<span class="fc" id="L754">                    new InputStreamReader(proc.getInputStream(),</span>
+                            StandardCharsets.UTF_8))) {
+<span class="fc" id="L756">                output = reader.lines()</span>
+<span class="fc" id="L757">                        .collect(Collectors.joining(&quot;\n&quot;)).trim();</span>
+            }
+<span class="fc" id="L759">            exit = proc.waitFor();</span>
+<span class="nc" id="L760">        } catch (IOException e) {</span>
+<span class="nc" id="L761">            return new PushAccess(PushAccessStatus.UNDETERMINED,</span>
+<span class="nc" id="L762">                    &quot;could not run git push --dry-run: &quot; + e.getMessage());</span>
+<span class="nc" id="L763">        } catch (InterruptedException e) {</span>
+<span class="nc" id="L764">            Thread.currentThread().interrupt();</span>
+<span class="nc" id="L765">            return new PushAccess(PushAccessStatus.UNDETERMINED,</span>
+                    &quot;interrupted while probing push access&quot;);
+<span class="fc" id="L767">        }</span>
+
+<span class="fc" id="L769">        return classifyPushProbe(exit, output);</span>
+    }
+
+    /**
+     * Classify the outcome of a {@code git push --dry-run}.
+     *
+     * &lt;p&gt;Split out from {@link #probePushAccess} so the classification —
+     * the part that decides whether a build stops — is directly testable
+     * against real git output without needing a remote.
+     *
+     * &lt;p&gt;Permission is refused at the {@code git-receive-pack}
+     * advertisement, before ref negotiation, so a permission failure
+     * never co-occurs with a ref-state failure; the permission test
+     * therefore runs first and a rejection reached at all means the
+     * remote already accepted this operator as a writer.
+     *
+     * @param exit   the process exit code
+     * @param output git's merged stdout/stderr, trimmed
+     * @return the verdict and the message to report
+     */
+    static PushAccess classifyPushProbe(int exit, String output) {
+<span class="fc bfc" id="L790" title="All 2 branches covered.">        if (exit == 0) {</span>
+<span class="fc" id="L791">            return new PushAccess(PushAccessStatus.WRITABLE, &quot;write access confirmed&quot;);</span>
+        }
+<span class="pc bpc" id="L793" title="1 of 2 branches missed.">        String safe = output == null ? &quot;&quot; : output;</span>
+<span class="fc" id="L794">        String lower = safe.toLowerCase(Locale.ROOT);</span>
+<span class="pc bpc" id="L795" title="1 of 4 branches missed.">        if (lower.contains(&quot;denied&quot;) || lower.contains(&quot;403&quot;)</span>
+<span class="pc bpc" id="L796" title="1 of 2 branches missed.">                || lower.contains(&quot;not authorized&quot;)</span>
+<span class="pc bpc" id="L797" title="1 of 2 branches missed.">                || lower.contains(&quot;read-only&quot;)) {</span>
+<span class="fc" id="L798">            return new PushAccess(PushAccessStatus.DENIED, safe);</span>
+        }
+<span class="pc bpc" id="L800" title="1 of 4 branches missed.">        if (lower.contains(&quot;rejected&quot;) || lower.contains(&quot;non-fast-forward&quot;)</span>
+<span class="pc bpc" id="L801" title="1 of 2 branches missed.">                || lower.contains(&quot;fetch first&quot;)) {</span>
+<span class="fc" id="L802">            return new PushAccess(PushAccessStatus.WRITABLE,</span>
+                    &quot;write access confirmed (ref update would be rejected — &quot;
+                            + &quot;the calling goal's refresh handles that)&quot;);
+        }
+<span class="fc" id="L806">        return new PushAccess(PushAccessStatus.UNDETERMINED, safe);</span>
+    }
+
+    /**
+     * Push to remote with upstream tracking.
+     * Sets {@code IKE_VCS_CONTEXT} to bypass the pre-push hook.
+     *
+     * @param dir    the repository root directory
+     * @param log    Maven logger
+     * @param remote the remote name (e.g., &quot;origin&quot;)
+     * @param branch the branch to push
+     * @throws MojoException if the git command fails
+     */
+    public static void pushWithUpstream(File dir, Log log, String remote, String branch)
+            throws MojoException {
+<span class="nc" id="L821">        runWithContext(dir, log, &quot;git&quot;, &quot;push&quot;, &quot;-u&quot;, remote, branch);</span>
+<span class="nc" id="L822">    }</span>
+
+    /**
+     * Delete a local branch. Uses {@code -D} (force) because squash-merged
+     * branches are not recognized as &quot;fully merged&quot; by git.
+     *
+     * @param dir    the repository root directory
+     * @param log    Maven logger
+     * @param branch the branch to delete
+     * @throws MojoException if the git command fails
+     */
+    public static void deleteBranch(File dir, Log log, String branch)
+            throws MojoException {
+<span class="fc" id="L835">        run(dir, log, null, &quot;git&quot;, &quot;branch&quot;, &quot;-D&quot;, branch);</span>
+<span class="fc" id="L836">    }</span>
+
+    /**
+     * Delete a remote branch.
+     *
+     * @param dir    the repository root directory
+     * @param log    Maven logger
+     * @param remote the remote name (e.g., &quot;origin&quot;)
+     * @param branch the branch to delete on the remote
+     * @throws MojoException if the git command fails
+     */
+    public static void deleteRemoteBranch(File dir, Log log, String remote, String branch)
+            throws MojoException {
+<span class="fc" id="L849">        runWithContext(dir, log, &quot;git&quot;, &quot;push&quot;, remote, &quot;--delete&quot;, branch);</span>
+<span class="fc" id="L850">    }</span>
+
+    /**
+     * Squash-merge a branch into the current branch (does not commit).
+     *
+     * @param dir    the repository root directory
+     * @param log    Maven logger
+     * @param branch the branch to squash-merge
+     * @throws MojoException if the git command fails
+     */
+    public static void mergeSquash(File dir, Log log, String branch)
+            throws MojoException {
+<span class="fc" id="L862">        run(dir, log, null, &quot;git&quot;, &quot;merge&quot;, &quot;--squash&quot;, branch);</span>
+<span class="fc" id="L863">    }</span>
+
+    /**
+     * No-fast-forward merge with a merge commit.
+     *
+     * @param dir     the repository root directory
+     * @param log     Maven logger
+     * @param branch  the branch to merge
+     * @param message the merge commit message
+     * @throws MojoException if the git command fails
+     */
+    public static void mergeNoFf(File dir, Log log, String branch, String message)
+            throws MojoException {
+<span class="fc" id="L876">        runWithContext(dir, log, &quot;git&quot;, &quot;merge&quot;, &quot;--no-ff&quot;, branch, &quot;-m&quot;, message);</span>
+<span class="fc" id="L877">    }</span>
+
+    /**
+     * Fast-forward-only merge. Used to advance the currently-checked-out
+     * branch to a ref that is a strict descendant; fails if a real merge
+     * (or rebase) would be required.
+     *
+     * @param dir the repository root directory
+     * @param log Maven logger
+     * @param ref the ref to fast-forward to
+     * @throws MojoException if the merge is not fast-forwardable or git fails
+     */
+    public static void mergeFfOnly(File dir, Log log, String ref)
+            throws MojoException {
+<span class="fc" id="L891">        runWithContext(dir, log, &quot;git&quot;, &quot;merge&quot;, &quot;--ff-only&quot;, ref);</span>
+<span class="fc" id="L892">    }</span>
+
+    /**
+     * Abort an in-progress merge ({@code git merge --abort}). Used as a
+     * cleanup safety net after a merge attempt fails unexpectedly. Does
+     * not throw if no merge is in progress.
+     *
+     * @param dir the repository root directory
+     * @param log Maven logger
+     */
+    public static void mergeAbortQuiet(File dir, Log log) {
+        try {
+<span class="nc" id="L904">            run(dir, log, null, &quot;git&quot;, &quot;merge&quot;, &quot;--abort&quot;);</span>
+<span class="nc" id="L905">        } catch (MojoException e) {</span>
+            // No merge in progress, or already aborted — non-fatal here.
+<span class="nc" id="L907">        }</span>
+<span class="nc" id="L908">    }</span>
+
+    /**
+     * Check whether a local branch exists.
+     *
+     * @param dir    the repository root directory
+     * @param branch the branch name to check
+     * @return true if the branch exists locally
+     */
+    public static boolean localBranchExists(File dir, String branch) {
+        try {
+<span class="fc" id="L919">            String output = capture(dir, &quot;git&quot;, &quot;branch&quot;, &quot;--list&quot;, branch);</span>
+<span class="fc bfc" id="L920" title="All 2 branches covered.">            return !output.trim().isEmpty();</span>
+<span class="nc" id="L921">        } catch (MojoException e) {</span>
+<span class="nc" id="L922">            return false;</span>
+        }
+    }
+
+    /**
+     * Check whether the remote-tracking ref {@code refs/remotes/&lt;remote&gt;/&lt;branch&gt;}
+     * exists in the local repository. Distinct from {@link #remoteSha}: this
+     * asks what the local clone can &lt;em&gt;see&lt;/em&gt;, not what exists on the
+     * remote. A clone created with a narrowed fetch refspec (e.g.
+     * {@code git clone --single-branch}) can have the branch present on the
+     * remote yet unresolvable locally — the silent-wrong-comparison hazard of
+     * IKE-Network/ike-issues#947.
+     *
+     * @param dir    the repository root directory
+     * @param remote the remote name (e.g., &quot;origin&quot;)
+     * @param branch the branch name to test
+     * @return true if the remote-tracking ref resolves locally
+     */
+    public static boolean remoteTrackingExists(File dir, String remote, String branch) {
+        try {
+<span class="fc" id="L942">            String output = capture(dir, &quot;git&quot;, &quot;rev-parse&quot;, &quot;--verify&quot;,</span>
+                    &quot;--quiet&quot;, &quot;refs/remotes/&quot; + remote + &quot;/&quot; + branch);
+<span class="pc bpc" id="L944" title="1 of 2 branches missed.">            return !output.trim().isEmpty();</span>
+<span class="fc" id="L945">        } catch (MojoException e) {</span>
+<span class="fc" id="L946">            return false;</span>
+        }
+    }
+
+    /**
+     * List local branches matching a prefix that are fully merged into
+     * the given target branch.
+     *
+     * @param dir    the repository root directory
+     * @param target the branch to check merge status against (e.g., &quot;main&quot;)
+     * @param prefix the branch name prefix to filter (e.g., &quot;feature/&quot;)
+     * @return list of merged branch names (trimmed, without leading {@code * })
+     */
+    public static List&lt;String&gt; mergedBranches(File dir, String target, String prefix) {
+        try {
+<span class="fc" id="L961">            String output = capture(dir, &quot;git&quot;, &quot;branch&quot;, &quot;--merged&quot;, target);</span>
+<span class="fc bfc" id="L962" title="All 2 branches covered.">            if (output.isEmpty()) return List.of();</span>
+<span class="fc" id="L963">            return output.lines()</span>
+<span class="fc" id="L964">                    .map(line -&gt; line.replaceFirst(&quot;^[* ] +&quot;, &quot;&quot;))</span>
+<span class="fc" id="L965">                    .filter(b -&gt; b.startsWith(prefix))</span>
+<span class="pc bpc" id="L966" title="1 of 2 branches missed.">                    .filter(b -&gt; !b.equals(target))</span>
+<span class="fc" id="L967">                    .toList();</span>
+<span class="nc" id="L968">        } catch (MojoException e) {</span>
+<span class="nc" id="L969">            return List.of();</span>
+        }
+    }
+
+    /**
+     * List all local branches matching a prefix.
+     *
+     * @param dir    the repository root directory
+     * @param prefix the branch name prefix to filter (e.g., &quot;feature/&quot;)
+     * @return list of branch names
+     */
+    /**
+     * Whether {@code branch}'s tip TREE equals the tree of some recent
+     * commit on {@code targetRef} — the squash-merge detector of
+     * IKE-Network/ike-issues#946. A squash commit is not an ancestor
+     * relation (so {@code git branch --merged} never sees it) and its
+     * single patch-id rarely matches any individual feature commit (so
+     * {@code git cherry} misses it too); but the feature-finish flow
+     * lands exactly the feature tip's tree on the target, so tree
+     * equivalence identifies content-landed branches reliably.
+     *
+     * @param dir       the repository root directory
+     * @param branch    the feature branch to test
+     * @param targetRef the target ref whose recent commits to scan
+     *                  (e.g. {@code &quot;origin/main&quot;})
+     * @param limit     how many recent target commits to compare against
+     * @return true when the branch tip's tree appears on the target
+     */
+    public static boolean branchTreeLandedOn(File dir, String branch,
+                                             String targetRef, int limit) {
+        try {
+<span class="fc" id="L1000">            String branchTree = capture(dir,</span>
+                    &quot;git&quot;, &quot;rev-parse&quot;, branch + &quot;^{tree}&quot;);
+<span class="fc" id="L1002">            String targetTrees = capture(dir,</span>
+                    &quot;git&quot;, &quot;log&quot;, &quot;-&quot; + limit, &quot;--format=%T&quot;, targetRef);
+<span class="fc" id="L1004">            return targetTrees.lines().anyMatch(t -&gt; t.equals(branchTree));</span>
+<span class="nc" id="L1005">        } catch (MojoException e) {</span>
+<span class="nc" id="L1006">            return false;</span>
+        }
+    }
+
+    public static List&lt;String&gt; localBranches(File dir, String prefix) {
+        try {
+<span class="fc" id="L1012">            String output = capture(dir, &quot;git&quot;, &quot;branch&quot;);</span>
+<span class="pc bpc" id="L1013" title="1 of 2 branches missed.">            if (output.isEmpty()) return List.of();</span>
+<span class="fc" id="L1014">            return output.lines()</span>
+<span class="fc" id="L1015">                    .map(line -&gt; line.replaceFirst(&quot;^[* ] +&quot;, &quot;&quot;))</span>
+<span class="fc" id="L1016">                    .filter(b -&gt; b.startsWith(prefix))</span>
+<span class="fc" id="L1017">                    .toList();</span>
+<span class="nc" id="L1018">        } catch (MojoException e) {</span>
+<span class="nc" id="L1019">            return List.of();</span>
+        }
+    }
+
+    /**
+     * Get the date of the last commit on a branch (ISO format).
+     *
+     * @param dir    the repository root directory
+     * @param branch the branch name
+     * @return the commit date string, or &quot;unknown&quot; on failure
+     */
+    public static String branchLastCommitDate(File dir, String branch) {
+        try {
+<span class="fc" id="L1032">            return capture(dir, &quot;git&quot;, &quot;log&quot;, &quot;-1&quot;, &quot;--format=%ci&quot;, branch);</span>
+<span class="fc" id="L1033">        } catch (MojoException e) {</span>
+<span class="fc" id="L1034">            return &quot;unknown&quot;;</span>
+        }
+    }
+
+    // ── Auto-stash via pushable refs (ws:switch, #153) ────────────
+
+    /**
+     * Read {@code git config user.email} for the repository.
+     *
+     * @param dir the repository root directory
+     * @return the configured email address
+     * @throws MojoException if no email is configured
+     */
+    public static String userEmail(File dir) throws MojoException {
+<span class="fc" id="L1048">        String email = capture(dir, &quot;git&quot;, &quot;config&quot;, &quot;user.email&quot;).trim();</span>
+<span class="pc bpc" id="L1049" title="1 of 2 branches missed.">        if (email.isEmpty()) {</span>
+<span class="nc" id="L1050">            throw new MojoException(</span>
+                    &quot;git config user.email is not set in &quot; + dir);
+        }
+<span class="fc" id="L1053">        return email;</span>
+    }
+
+    /**
+     * Derive an ASCII-safe slug from a git email address. Used as the
+     * per-user component of the {@code refs/ws-stash/&lt;slug&gt;/&lt;branch&gt;}
+     * ref naming scheme. Lowercases, replaces {@code @} with
+     * {@code --}, and {@code .} with {@code -}.
+     *
+     * @param email the email address (typically from {@link #userEmail})
+     * @return an ASCII slug safe for ref names and cross-platform shells
+     */
+    public static String userSlug(String email) {
+<span class="fc" id="L1066">        return email.toLowerCase()</span>
+<span class="fc" id="L1067">                .replace(&quot;@&quot;, &quot;--&quot;)</span>
+<span class="fc" id="L1068">                .replace(&quot;.&quot;, &quot;-&quot;);</span>
+    }
+
+    /**
+     * Check whether a remote ref exists by shelling out to
+     * {@code git ls-remote}. Distinguishes &quot;ref absent&quot; from
+     * &quot;remote unreachable&quot;: a zero-exit with empty stdout means absent,
+     * a zero-exit with output means present, and a non-zero exit
+     * surfaces the network/auth error to the caller.
+     *
+     * @param dir    the repository root directory
+     * @param remote the remote name (e.g., {@code &quot;origin&quot;})
+     * @param ref    the full ref to probe (e.g.,
+     *               {@code &quot;refs/ws-stash/kec--knowledge-design/feature/A&quot;})
+     * @return {@code true} if the ref exists on the remote,
+     *         {@code false} if absent
+     * @throws MojoException if the remote is unreachable or the probe fails
+     */
+    public static boolean remoteRefExists(File dir, String remote, String ref)
+            throws MojoException {
+<span class="fc" id="L1088">        String output = capture(dir, &quot;git&quot;, &quot;ls-remote&quot;, remote, ref);</span>
+<span class="pc bpc" id="L1089" title="1 of 2 branches missed.">        return !output.isEmpty();</span>
+    }
+
+    /**
+     * Stash the working tree including untracked files
+     * ({@code git stash push -u -m &lt;message&gt;}). Ignored files are
+     * skipped.
+     *
+     * @param dir     the repository root directory
+     * @param log     Maven logger
+     * @param message the stash message
+     * @throws MojoException if the git command fails
+     */
+    public static void stashPushUntracked(File dir, Log log, String message)
+            throws MojoException {
+<span class="fc" id="L1104">        run(dir, log, null, &quot;git&quot;, &quot;stash&quot;, &quot;push&quot;, &quot;-u&quot;, &quot;-m&quot;, message);</span>
+<span class="fc" id="L1105">    }</span>
+
+    /**
+     * Apply a stash identified by its ref ({@code git stash apply &lt;ref&gt;}).
+     * Unlike {@code git stash apply} with a numbered index, this form
+     * accepts a full ref path (e.g. {@code refs/ws-stash/slug/branch}).
+     *
+     * @param dir the repository root directory
+     * @param log Maven logger
+     * @param ref the stash ref to apply
+     * @throws MojoException if the git command fails
+     */
+    public static void stashApply(File dir, Log log, String ref)
+            throws MojoException {
+<span class="fc" id="L1119">        run(dir, log, null, &quot;git&quot;, &quot;stash&quot;, &quot;apply&quot;, ref);</span>
+<span class="fc" id="L1120">    }</span>
+
+    /**
+     * Drop the top of the stash stack ({@code git stash drop}).
+     *
+     * @param dir the repository root directory
+     * @param log Maven logger
+     * @throws MojoException if the git command fails
+     */
+    public static void stashDrop(File dir, Log log) throws MojoException {
+<span class="fc" id="L1130">        run(dir, log, null, &quot;git&quot;, &quot;stash&quot;, &quot;drop&quot;);</span>
+<span class="fc" id="L1131">    }</span>
+
+    /**
+     * Point a ref at a given target ({@code git update-ref &lt;ref&gt; &lt;target&gt;}).
+     *
+     * @param dir    the repository root directory
+     * @param log    Maven logger
+     * @param ref    the ref to update (full path, e.g.
+     *               {@code &quot;refs/ws-stash/slug/branch&quot;})
+     * @param target the ref or SHA to point at
+     * @throws MojoException if the git command fails
+     */
+    public static void updateRef(File dir, Log log, String ref, String target)
+            throws MojoException {
+<span class="fc" id="L1145">        run(dir, log, null, &quot;git&quot;, &quot;update-ref&quot;, ref, target);</span>
+<span class="fc" id="L1146">    }</span>
+
+    /**
+     * Delete a local ref ({@code git update-ref -d &lt;ref&gt;}).
+     *
+     * @param dir the repository root directory
+     * @param log Maven logger
+     * @param ref the ref to delete
+     * @throws MojoException if the git command fails
+     */
+    public static void deleteLocalRef(File dir, Log log, String ref)
+            throws MojoException {
+<span class="fc" id="L1158">        run(dir, log, null, &quot;git&quot;, &quot;update-ref&quot;, &quot;-d&quot;, ref);</span>
+<span class="fc" id="L1159">    }</span>
+
+    /**
+     * Push a ref to a remote under the same name
+     * ({@code git push &lt;remote&gt; &lt;ref&gt;:&lt;ref&gt;}).
+     *
+     * @param dir    the repository root directory
+     * @param log    Maven logger
+     * @param remote the remote name
+     * @param ref    the ref to push
+     * @throws MojoException if the git command fails
+     */
+    public static void pushRef(File dir, Log log, String remote, String ref)
+            throws MojoException {
+<span class="fc" id="L1173">        run(dir, log, null, &quot;git&quot;, &quot;push&quot;, remote, ref + &quot;:&quot; + ref);</span>
+<span class="fc" id="L1174">    }</span>
+
+    /**
+     * Delete a ref from a remote ({@code git push &lt;remote&gt; :&lt;ref&gt;}).
+     *
+     * @param dir    the repository root directory
+     * @param log    Maven logger
+     * @param remote the remote name
+     * @param ref    the ref to delete on the remote
+     * @throws MojoException if the git command fails
+     */
+    public static void deleteRemoteRef(File dir, Log log,
+                                        String remote, String ref)
+            throws MojoException {
+<span class="fc" id="L1188">        run(dir, log, null, &quot;git&quot;, &quot;push&quot;, remote, &quot;:&quot; + ref);</span>
+<span class="fc" id="L1189">    }</span>
+
+    /**
+     * Fetch a remote ref into a local ref of the same name
+     * ({@code git fetch &lt;remote&gt; &lt;ref&gt;:&lt;ref&gt;}).
+     *
+     * &lt;p&gt;Passes {@code -c maintenance.auto=false} so the fetch never
+     * spawns a detached background {@code maintenance run --auto} that
+     * could race the plugin's subsequent git commands — see
+     * {@link #fetch(File, Log)} and ike-issues#636.
+     *
+     * @param dir    the repository root directory
+     * @param log    Maven logger
+     * @param remote the remote name
+     * @param ref    the ref to fetch
+     * @throws MojoException if the git command fails
+     */
+    public static void fetchRef(File dir, Log log, String remote, String ref)
+            throws MojoException {
+<span class="fc" id="L1208">        run(dir, log, null, &quot;git&quot;, &quot;-c&quot;, &quot;maintenance.auto=false&quot;,</span>
+                &quot;fetch&quot;, remote, ref + &quot;:&quot; + ref);
+<span class="fc" id="L1210">    }</span>
+
+    // ── VCS state operations ─────────────────────────────────────
+
+    /**
+     * Write the VCS state file for the given directory.
+     *
+     * @param dir    the repository root directory
+     * @param action the action being performed
+     * @throws MojoException if writing the state file fails
+     */
+    public static void writeVcsState(File dir, VcsState.Action action)
+            throws MojoException {
+        try {
+<span class="fc" id="L1224">            String branch = currentBranch(dir);</span>
+<span class="fc" id="L1225">            String sha = headSha(dir);</span>
+<span class="fc" id="L1226">            VcsState state = VcsState.create(branch, sha, action);</span>
+<span class="fc" id="L1227">            VcsState.writeTo(dir.toPath(), state);</span>
+<span class="nc" id="L1228">        } catch (IOException e) {</span>
+<span class="nc" id="L1229">            throw new MojoException(</span>
+<span class="nc" id="L1230">                    &quot;Failed to write VCS state file: &quot; + e.getMessage(), e);</span>
+<span class="fc" id="L1231">        }</span>
+<span class="fc" id="L1232">    }</span>
+
+    /**
+     * Record a branch switch this goal just performed in {@code dir} as a
+     * VCS action, exactly as the state-writing goals do, so the VCS-bridge
+     * sync in subsequent goals carries the new branch forward instead of
+     * restoring the branch the state file remembered
+     * (IKE-Network/ike-issues#903, #904). No-op for repositories without an
+     * {@code .ike/} directory — the bridge ignores those entirely, so there
+     * is nothing to record and no directory to invent.
+     *
+     * @param dir the repository root directory whose branch was switched
+     * @param log Maven logger
+     * @throws MojoException if writing the state file fails
+     */
+    public static void recordSwitch(File dir, Log log) throws MojoException {
+<span class="fc bfc" id="L1248" title="All 2 branches covered.">        if (!VcsState.isIkeManaged(dir.toPath())) {</span>
+<span class="fc" id="L1249">            return;</span>
+        }
+<span class="fc" id="L1251">        writeVcsState(dir, VcsState.Action.SWITCH);</span>
+<span class="fc" id="L1252">        log.info(&quot;  Recorded branch alignment in .ike/vcs-state (action=switch).&quot;);</span>
+<span class="fc" id="L1253">    }</span>
+
+    /**
+     * Refresh a stale {@code .ike/vcs-state} whose recorded branch disagrees
+     * with the current checkout, when a goal has just confirmed the checkout
+     * as the aligned branch. Without the refresh, the bridge sync in the next
+     * goal would switch the checkout AWAY from the branch the goal just
+     * confirmed (IKE-Network/ike-issues#903, #904). A missing state file, or
+     * one already naming the current branch, is left untouched — a clean
+     * no-op stays a no-op, and this never invents bridge state.
+     *
+     * @param dir the repository root directory whose checkout was confirmed
+     * @param log Maven logger
+     * @return {@code true} when the state file was refreshed
+     * @throws MojoException if reading git state or writing the file fails
+     */
+    public static boolean refreshStaleBranchState(File dir, Log log)
+            throws MojoException {
+<span class="fc" id="L1271">        Optional&lt;VcsState&gt; state = VcsState.readFrom(dir.toPath());</span>
+<span class="fc bfc" id="L1272" title="All 2 branches covered.">        if (state.isEmpty()) {</span>
+<span class="fc" id="L1273">            return false;</span>
+        }
+<span class="fc" id="L1275">        String current = currentBranch(dir);</span>
+<span class="fc bfc" id="L1276" title="All 2 branches covered.">        if (state.get().branch().equals(current)) {</span>
+<span class="fc" id="L1277">            return false;</span>
+        }
+<span class="fc" id="L1279">        log.info(&quot;  Refreshing stale .ike/vcs-state (recorded '&quot;</span>
+<span class="fc" id="L1280">                + state.get().branch() + &quot;', checkout on '&quot; + current + &quot;').&quot;);</span>
+<span class="fc" id="L1281">        writeVcsState(dir, VcsState.Action.SWITCH);</span>
+<span class="fc" id="L1282">        return true;</span>
+    }
+
+    /**
+     * Check whether the local HEAD has fallen behind the VCS state
+     * file written by a coordinated workspace operation. Returns
+     * {@code false} when the state file is simply stale relative to
+     * later local commits — this is the common case after
+     * {@code git commit --amend} or any subsequent commit that didn't
+     * route through a {@code ws:*} goal (ike-issues#232).
+     *
+     * &lt;p&gt;Decision table:
+     * &lt;ul&gt;
+     *   &lt;li&gt;No state file → {@code false} (nothing to sync against).&lt;/li&gt;
+     *   &lt;li&gt;Branch mismatch → {@code true} (state file expects a
+     *       different branch).&lt;/li&gt;
+     *   &lt;li&gt;{@code state.sha == localSha} → {@code false}.&lt;/li&gt;
+     *   &lt;li&gt;{@code state.sha} is a strict ancestor of {@code localSha}
+     *       → {@code false} (state file is stale, but HEAD is just
+     *       ahead — no cross-machine pull needed).&lt;/li&gt;
+     *   &lt;li&gt;Anything else (state.sha unknown, descendant of HEAD, or
+     *       diverged) → {@code true} (genuine catch-up required).&lt;/li&gt;
+     * &lt;/ul&gt;
+     *
+     * @param dir the repository root directory
+     * @return {@code true} when {@code sync} should run, {@code false}
+     *         when the working tree is already current
+     * @throws MojoException if reading basic git state fails
+     */
+    public static boolean needsSync(File dir) throws MojoException {
+<span class="fc" id="L1312">        Optional&lt;VcsState&gt; state = VcsState.readFrom(dir.toPath());</span>
+<span class="fc bfc" id="L1313" title="All 2 branches covered.">        if (state.isEmpty()) {</span>
+<span class="fc" id="L1314">            return false;</span>
+        }
+<span class="fc" id="L1316">        VcsState s = state.get();</span>
+<span class="fc" id="L1317">        String localBranch = currentBranch(dir);</span>
+<span class="fc bfc" id="L1318" title="All 2 branches covered.">        if (!s.branch().equals(localBranch)) {</span>
+<span class="fc" id="L1319">            return true;</span>
+        }
+<span class="fc" id="L1321">        String localSha = headSha(dir);</span>
+<span class="fc bfc" id="L1322" title="All 2 branches covered.">        if (s.sha().equals(localSha)) {</span>
+<span class="fc" id="L1323">            return false;</span>
+        }
+        // Common case after a routine local commit: state.sha is an
+        // ancestor of HEAD, so the state file is just stale relative to
+        // post-ws:commit-publish work. No sync needed.
+        try {
+<span class="fc bfc" id="L1329" title="All 2 branches covered.">            if (isAncestor(dir, s.sha(), localSha)) {</span>
+<span class="fc" id="L1330">                return false;</span>
+            }
+<span class="fc" id="L1332">        } catch (MojoException e) {</span>
+            // state.sha unknown locally — could be a commit pushed
+            // from another machine that we haven't fetched yet.
+            // Treat as needing sync.
+<span class="fc" id="L1336">        }</span>
+<span class="fc" id="L1337">        return true;</span>
+    }
+
+    /**
+     * Result of {@link #sync(File, Log)} / {@link #catchUp(File, Log)}: whether
+     * a stale-but-safe {@code .ike/vcs-state} checkpoint was self-healed, and a
+     * human-readable note for a goal's markdown report (ike-issues#819).
+     *
+     * @param selfHealed {@code true} when a stale checkpoint was rewritten to
+     *                   the current HEAD because origin-parity was already
+     *                   independently confirmed
+     * @param note       text worth surfacing in a caller's report, or
+     *                   {@code null} when there is nothing to report
+     */
+<span class="fc" id="L1351">    public record SyncOutcome(boolean selfHealed, String note) {</span>
+<span class="fc" id="L1352">        static final SyncOutcome NONE = new SyncOutcome(false, null);</span>
+    }
+
+    /**
+     * Synchronize local git state to match the VCS state file.
+     * Fetches from all remotes, switches branch if needed, and soft-resets.
+     *
+     * @param dir the repository root directory
+     * @param log Maven logger
+     * @return the sync outcome — see {@link SyncOutcome}
+     * @throws MojoException if a git command or state file read fails
+     */
+    public static SyncOutcome sync(File dir, Log log) throws MojoException {
+<span class="fc" id="L1365">        Optional&lt;VcsState&gt; stateOpt = VcsState.readFrom(dir.toPath());</span>
+<span class="pc bpc" id="L1366" title="1 of 2 branches missed.">        if (stateOpt.isEmpty()) {</span>
+<span class="nc" id="L1367">            log.info(&quot;  No VCS state file — nothing to sync.&quot;);</span>
+<span class="nc" id="L1368">            return SyncOutcome.NONE;</span>
+        }
+
+<span class="fc" id="L1371">        VcsState state = stateOpt.get();</span>
+<span class="fc" id="L1372">        log.info(&quot;  Syncing to: &quot; + state.action().label() + &quot; by &quot; + state.machine()</span>
+<span class="fc" id="L1373">                + &quot; at &quot; + state.timestamp());</span>
+
+<span class="fc" id="L1375">        fetch(dir, log);</span>
+
+<span class="fc" id="L1377">        String localBranch = currentBranch(dir);</span>
+<span class="fc bfc" id="L1378" title="All 2 branches covered.">        if (!state.branch().equals(localBranch)) {</span>
+<span class="pc bpc" id="L1379" title="1 of 2 branches missed.">            if (!localBranchExists(dir, state.branch())) {</span>
+                // Branch doesn't exist locally — check remote
+<span class="fc" id="L1381">                Optional&lt;String&gt; remoteCheck = remoteSha(dir, &quot;origin&quot;, state.branch());</span>
+<span class="pc bpc" id="L1382" title="1 of 2 branches missed.">                if (remoteCheck.isEmpty()) {</span>
+<span class="nc" id="L1383">                    log.warn(&quot;  Branch &quot; + state.branch()</span>
+                            + &quot; does not exist locally or on origin.&quot;);
+<span class="nc" id="L1385">                    log.warn(&quot;  The branch may not have been pushed from &quot;</span>
+<span class="nc" id="L1386">                            + state.machine() + &quot; yet.&quot;);</span>
+<span class="nc" id="L1387">                    log.warn(&quot;  Push from &quot; + state.machine()</span>
+                            + &quot; first, then retry sync.&quot;);
+<span class="nc" id="L1389">                    return SyncOutcome.NONE;</span>
+                }
+                // Create local tracking branch from remote
+<span class="fc" id="L1392">                log.info(&quot;  Creating local branch from origin: &quot; + state.branch());</span>
+<span class="fc" id="L1393">                run(dir, log, null, &quot;git&quot;, &quot;checkout&quot;, &quot;-b&quot;,</span>
+<span class="fc" id="L1394">                        state.branch(), &quot;origin/&quot; + state.branch());</span>
+<span class="fc" id="L1395">            } else {</span>
+<span class="nc" id="L1396">                log.info(&quot;  Switching branch: &quot; + localBranch + &quot; → &quot; + state.branch());</span>
+<span class="nc" id="L1397">                checkout(dir, log, state.branch());</span>
+            }
+        }
+
+<span class="fc" id="L1401">        Optional&lt;String&gt; remoteRef = remoteSha(dir, &quot;origin&quot;, state.branch());</span>
+<span class="pc bpc" id="L1402" title="1 of 2 branches missed.">        if (remoteRef.isEmpty()) {</span>
+<span class="nc" id="L1403">            log.info(&quot;  No remote ref for &quot; + state.branch()</span>
+                    + &quot; on origin — branch is local-only, using local state.&quot;);
+<span class="nc" id="L1405">            return SyncOutcome.NONE;</span>
+        }
+
+        // Evaluate the relationship between local branch tip and origin
+        // before touching HEAD. An unconditional reset-to-origin would
+        // silently discard unpushed local commits (#144).
+<span class="fc" id="L1411">        String localSha = headSha(dir);</span>
+<span class="fc" id="L1412">        String remoteShaValue = remoteRef.get();</span>
+
+        // Whether origin-parity is proven by the time we reach the
+        // state-file comparison below — used to tell a merely-stale
+        // bookkeeping checkpoint apart from a genuinely missing push
+        // (ike-issues#819).
+        boolean originParityConfirmed;
+<span class="fc bfc" id="L1419" title="All 2 branches covered.">        if (localSha.equals(remoteShaValue)) {</span>
+<span class="fc" id="L1420">            log.info(&quot;  Already at origin/&quot; + state.branch()</span>
+                    + &quot; — no reset needed.&quot;);
+<span class="fc" id="L1422">            originParityConfirmed = true;</span>
+<span class="fc bfc" id="L1423" title="All 2 branches covered.">        } else if (isAncestor(dir, remoteShaValue, localSha)) {</span>
+            // Local is strictly ahead of origin. Preserve the unpushed
+            // commits — the caller (usually ws:push) will push them.
+            // Origin parity is NOT confirmed here: if the state file
+            // also disagrees below, that's still a real signal worth
+            // a warning (e.g. a missing push from another machine).
+<span class="fc" id="L1429">            log.info(&quot;  Local &quot; + state.branch()</span>
+                    + &quot; is ahead of origin — keeping unpushed commits.&quot;);
+<span class="fc" id="L1431">            originParityConfirmed = false;</span>
+<span class="fc bfc" id="L1432" title="All 2 branches covered.">        } else if (isAncestor(dir, localSha, remoteShaValue)) {</span>
+            // Local is strictly behind origin. Fast-forward is safe
+            // (equivalent to git pull --ff-only).
+<span class="fc" id="L1435">            log.info(&quot;  Fast-forwarding &quot; + state.branch() + &quot; to origin.&quot;);</span>
+<span class="fc" id="L1436">            resetSoft(dir, log, &quot;origin/&quot; + state.branch());</span>
+<span class="fc" id="L1437">            originParityConfirmed = true;</span>
+        } else {
+            // Diverged — local and origin each have unique commits.
+            // Refuse to silently pick a side; ask the human.
+<span class="fc" id="L1441">            throw new MojoException(</span>
+<span class="fc" id="L1442">                    &quot;Local &quot; + state.branch() + &quot; (&quot; + localSha</span>
+<span class="fc" id="L1443">                            + &quot;) has diverged from origin/&quot; + state.branch()</span>
+                            + &quot; (&quot; + remoteShaValue + &quot;) — neither is an &quot;
+                            + &quot;ancestor of the other. Resolve manually &quot;
+                            + &quot;(git pull --rebase, git rebase origin/&quot;
+<span class="fc" id="L1447">                            + state.branch() + &quot;, or ws:update-feature), &quot;</span>
+                            + &quot;then retry.&quot;);
+        }
+
+<span class="fc" id="L1451">        String newSha = headSha(dir);</span>
+<span class="fc bfc" id="L1452" title="All 2 branches covered.">        if (newSha.equals(state.sha())) {</span>
+<span class="fc" id="L1453">            log.info(&quot;  HEAD now matches state file: &quot; + newSha);</span>
+<span class="fc" id="L1454">            return SyncOutcome.NONE;</span>
+        }
+        // After fast-forward / no-op, HEAD may legitimately sit ahead
+        // of state.sha — the state file is just stale relative to
+        // later local commits, not a sign of a missing push
+        // (ike-issues#232). Only warn when state.sha is genuinely
+        // unreachable from HEAD.
+        try {
+<span class="pc bpc" id="L1462" title="1 of 2 branches missed.">            if (isAncestor(dir, state.sha(), newSha)) {</span>
+<span class="nc" id="L1463">                log.info(&quot;  HEAD (&quot; + newSha + &quot;) is ahead of state file (&quot;</span>
+<span class="nc" id="L1464">                        + state.sha() + &quot;) — state file is stale, no action needed.&quot;);</span>
+<span class="nc" id="L1465">                return SyncOutcome.NONE;</span>
+            }
+<span class="fc" id="L1467">        } catch (MojoException ignored) {</span>
+            // state.sha unreachable locally — fall through below.
+<span class="fc" id="L1469">        }</span>
+
+<span class="fc bfc" id="L1471" title="All 2 branches covered.">        if (originParityConfirmed) {</span>
+            // The state file disagrees, but we already proved origin/&lt;branch&gt;
+            // matches HEAD above — this is stale local bookkeeping (e.g. a
+            // rebase/amend rewrote the checkpoint commit, or a prior run
+            // found nothing to push and never refreshed it), not a missing
+            // push. Say so plainly, and self-heal so it stops recurring.
+<span class="fc" id="L1477">            String note = &quot;Local bookkeeping checkpoint (.ike/vcs-state) was stale &quot;</span>
+<span class="fc" id="L1478">                    + &quot;relative to &quot; + state.branch() + &quot;'s history, but origin/&quot;</span>
+<span class="fc" id="L1479">                    + state.branch() + &quot; already matched HEAD (&quot; + newSha</span>
+                    + &quot;) — nothing to push, no action needed.&quot;;
+<span class="fc" id="L1481">            log.info(&quot;  &quot; + note);</span>
+            try {
+<span class="fc" id="L1483">                writeVcsState(dir, VcsState.Action.SYNC);</span>
+<span class="fc" id="L1484">                return new SyncOutcome(true, note);</span>
+<span class="nc" id="L1485">            } catch (MojoException e) {</span>
+<span class="nc" id="L1486">                log.debug(&quot;  Could not refresh .ike/vcs-state after bridge sync: &quot;</span>
+<span class="nc" id="L1487">                        + e.getMessage());</span>
+<span class="nc" id="L1488">                return new SyncOutcome(false, note + &quot; (checkpoint refresh failed — see debug log)&quot;);</span>
+            }
+        }
+
+<span class="fc" id="L1492">        log.warn(&quot;  HEAD after sync (&quot; + newSha + &quot;) does not match state file (&quot;</span>
+<span class="fc" id="L1493">                + state.sha() + &quot;).&quot;);</span>
+<span class="fc" id="L1494">        log.warn(&quot;  The push from &quot; + state.machine() + &quot; may not have completed.&quot;);</span>
+<span class="fc" id="L1495">        log.warn(&quot;  Push from &quot; + state.machine() + &quot; first, then retry sync.&quot;);</span>
+
+<span class="fc" id="L1497">        return SyncOutcome.NONE;</span>
+    }
+
+    /**
+     * Catch-up preamble: sync if needed, otherwise report that we're current.
+     * Used by all goals that modify state (commit, push, feature-start, etc.).
+     *
+     * @param dir the repository root directory
+     * @param log Maven logger
+     * @return the sync outcome — see {@link SyncOutcome}; {@link SyncOutcome#NONE}
+     *         when nothing needed syncing
+     * @throws MojoException if sync fails
+     */
+    public static SyncOutcome catchUp(File dir, Log log) throws MojoException {
+<span class="fc bfc" id="L1511" title="All 2 branches covered.">        if (!VcsState.isIkeManaged(dir.toPath())) {</span>
+<span class="fc" id="L1512">            return SyncOutcome.NONE;</span>
+        }
+<span class="fc bfc" id="L1514" title="All 2 branches covered.">        if (needsSync(dir)) {</span>
+<span class="fc" id="L1515">            log.info(&quot;  VCS state is behind — catching up...&quot;);</span>
+<span class="fc" id="L1516">            return sync(dir, log);</span>
+        }
+<span class="fc" id="L1518">        return SyncOutcome.NONE;</span>
+    }
+
+    // ── Internal helpers ─────────────────────────────────────────
+
+    /**
+     * Test seam (ike-issues#691): intercepts each git subprocess before it runs.
+     * Throwing {@link MojoException} simulates a command failure WITHOUT executing
+     * the real subprocess; returning normally lets the command proceed. Default no-op.
+     */
+    @FunctionalInterface
+    public interface CommandInterceptor {
+        void beforeCommand(File workDir, String[] command) throws MojoException;
+    }
+
+<span class="fc" id="L1533">    private static volatile CommandInterceptor commandInterceptor = (dir, cmd) -&gt; { };</span>
+
+    /** Install a command interceptor (tests only). Pass {@code null} to reset to the default no-op. */
+    static void setCommandInterceptor(CommandInterceptor interceptor) {
+<span class="fc bfc" id="L1537" title="All 2 branches covered.">        commandInterceptor = (interceptor != null) ? interceptor : (dir, cmd) -&gt; { };</span>
+<span class="fc" id="L1538">    }</span>
+
+    /**
+     * Run a command with output routed through the Maven logger.
+     * Optionally sets environment variables.
+     *
+     * &lt;p&gt;On non-zero exit the thrown {@link MojoException} carries the
+     * full command, the working directory, the exit code, &lt;em&gt;and&lt;/em&gt;
+     * git's output — so a failed mutation (a denied push, a rejected
+     * non-fast-forward, an unresolvable ref) is self-diagnosing instead
+     * of a bare exit code (ike-issues#959, the mutating-path counterpart
+     * of the {@link #capture} fix in ike-issues#602). stderr is merged
+     * into stdout here, so the captured text holds git's {@code fatal:}
+     * and {@code remote:} lines.
+     */
+    private static void run(File workDir, Log log, Map&lt;String, String&gt; env,
+                            String... command) throws MojoException {
+<span class="fc" id="L1555">        log.debug(&quot;» &quot; + String.join(&quot; &quot;, command));</span>
+<span class="fc" id="L1556">        commandInterceptor.beforeCommand(workDir, command);</span>
+        try {
+<span class="fc" id="L1558">            ProcessBuilder pb = new ProcessBuilder(command)</span>
+<span class="fc" id="L1559">                    .directory(workDir)</span>
+<span class="fc" id="L1560">                    .redirectErrorStream(true);</span>
+<span class="fc bfc" id="L1561" title="All 2 branches covered.">            if (env != null) {</span>
+<span class="fc" id="L1562">                pb.environment().putAll(env);</span>
+            }
+<span class="fc" id="L1564">            Process proc = pb.start();</span>
+<span class="fc" id="L1565">            List&lt;String&gt; output = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L1566">            try (BufferedReader reader = new BufferedReader(</span>
+<span class="fc" id="L1567">                    new InputStreamReader(proc.getInputStream(),</span>
+                            StandardCharsets.UTF_8))) {
+                String line;
+<span class="fc bfc" id="L1570" title="All 2 branches covered.">                while ((line = reader.readLine()) != null) {</span>
+<span class="fc" id="L1571">                    log.debug(&quot;  &quot; + line);</span>
+<span class="fc" id="L1572">                    output.add(line);</span>
+                }
+            }
+<span class="fc" id="L1575">            int exit = proc.waitFor();</span>
+<span class="fc bfc" id="L1576" title="All 2 branches covered.">            if (exit != 0) {</span>
+<span class="fc" id="L1577">                String detail = String.join(&quot;\n&quot;, output).trim();</span>
+<span class="fc" id="L1578">                throw new MojoException(</span>
+<span class="fc" id="L1579">                        String.join(&quot; &quot;, command) + &quot; in &quot; + workDir</span>
+                                + &quot; failed (exit &quot; + exit + &quot;)&quot;
+<span class="pc bpc" id="L1581" title="1 of 2 branches missed.">                                + (detail.isEmpty() ? &quot;&quot; : &quot;:\n&quot; + detail));</span>
+            }
+<span class="nc" id="L1583">        } catch (IOException e) {</span>
+<span class="nc" id="L1584">            throw new MojoException(</span>
+<span class="nc" id="L1585">                    &quot;Failed to execute &quot; + String.join(&quot; &quot;, command)</span>
+<span class="nc" id="L1586">                            + &quot; in &quot; + workDir + &quot;: &quot; + e.getMessage(), e);</span>
+<span class="nc" id="L1587">        } catch (InterruptedException e) {</span>
+<span class="nc" id="L1588">            Thread.currentThread().interrupt();</span>
+<span class="nc" id="L1589">            throw new MojoException(</span>
+<span class="nc" id="L1590">                    &quot;Interrupted while executing &quot; + String.join(&quot; &quot;, command)</span>
+                            + &quot; in &quot; + workDir, e);
+<span class="fc" id="L1592">        }</span>
+<span class="fc" id="L1593">    }</span>
+
+    /**
+     * Run a command with {@code IKE_VCS_CONTEXT} set in the environment.
+     */
+    private static void runWithContext(File workDir, Log log, String... command)
+            throws MojoException {
+<span class="fc" id="L1600">        run(workDir, log, Map.of(IKE_VCS_CONTEXT, CONTEXT_VALUE), command);</span>
+<span class="fc" id="L1601">    }</span>
+
+    /**
+     * Run a git command that reads its message from stdin via {@code -F -}.
+     *
+     * &lt;p&gt;This supports multi-line messages reliably — no shell quoting
+     * issues, no argument-length limits. The command array should include
+     * {@code &quot;-F&quot;, &quot;-&quot;} where the message would normally follow {@code -m}.
+     *
+     * &lt;p&gt;Sets {@code IKE_VCS_CONTEXT} to bypass the pre-commit hook.
+     *
+     * @param workDir the repository root directory
+     * @param log     Maven logger
+     * @param message the message to write to stdin
+     * @param command the git command (including {@code -F -})
+     * @throws MojoException if the command fails
+     */
+    private static void commitWithStdin(File workDir, Log log,
+                                         String message, String... command)
+            throws MojoException {
+<span class="fc" id="L1621">        log.debug(&quot;» &quot; + String.join(&quot; &quot;, command) + &quot; &lt;&lt;&lt; (message via stdin)&quot;);</span>
+<span class="fc" id="L1622">        commandInterceptor.beforeCommand(workDir, command);</span>
+        try {
+<span class="fc" id="L1624">            ProcessBuilder pb = new ProcessBuilder(command)</span>
+<span class="fc" id="L1625">                    .directory(workDir)</span>
+<span class="fc" id="L1626">                    .redirectErrorStream(true);</span>
+<span class="fc" id="L1627">            pb.environment().put(IKE_VCS_CONTEXT, CONTEXT_VALUE);</span>
+<span class="fc" id="L1628">            Process proc = pb.start();</span>
+
+            // Write message to stdin, then close to signal EOF
+<span class="fc" id="L1631">            try (OutputStream out = proc.getOutputStream()) {</span>
+<span class="fc" id="L1632">                out.write(message.getBytes(StandardCharsets.UTF_8));</span>
+<span class="fc" id="L1633">                out.flush();</span>
+            }
+
+            // Consume stdout/stderr
+            String output;
+<span class="fc" id="L1638">            try (BufferedReader reader = new BufferedReader(</span>
+<span class="fc" id="L1639">                    new InputStreamReader(proc.getInputStream(),</span>
+                            StandardCharsets.UTF_8))) {
+<span class="fc" id="L1641">                output = reader.lines().collect(Collectors.joining(&quot;\n&quot;));</span>
+            }
+
+<span class="fc" id="L1644">            int exit = proc.waitFor();</span>
+<span class="pc bpc" id="L1645" title="1 of 2 branches missed.">            if (exit != 0) {</span>
+<span class="nc" id="L1646">                throw new MojoException(</span>
+                        &quot;Command failed (exit &quot; + exit + &quot;): &quot;
+<span class="nc" id="L1648">                                + String.join(&quot; &quot;, command)</span>
+<span class="nc bnc" id="L1649" title="All 2 branches missed.">                                + (output.isEmpty() ? &quot;&quot; : &quot;\n&quot; + output));</span>
+            }
+<span class="nc" id="L1651">        } catch (IOException | InterruptedException e) {</span>
+<span class="nc" id="L1652">            throw new MojoException(</span>
+<span class="nc" id="L1653">                    &quot;Failed to execute: &quot; + String.join(&quot; &quot;, command), e);</span>
+<span class="fc" id="L1654">        }</span>
+<span class="fc" id="L1655">    }</span>
+
+    /**
+     * Run a command and capture stdout as a trimmed string.
+     *
+     * &lt;p&gt;On non-zero exit the thrown {@link MojoException} carries the
+     * full command, the working directory, the exit code, &lt;em&gt;and&lt;/em&gt;
+     * git's stderr — so a failure is self-diagnosing instead of a bare
+     * exit code (ike-issues#602). Both stdout and stderr are drained
+     * before {@code waitFor()} so the subprocess never blocks on a full
+     * pipe.
+     *
+     * @param workDir the working directory for the command
+     * @param command the command and its arguments
+     * @return the captured stdout, trimmed
+     * @throws MojoException if the command cannot be run or exits non-zero
+     */
+    private static String capture(File workDir, String... command)
+            throws MojoException {
+        // #691 seam: capture-path commands (reads AND idempotent
+        // mutations like `git add -A`) are interceptable too, so tests
+        // can coordinate deterministically with the retry engine instead
+        // of sleeping (the addAll index.lock retry test).
+<span class="fc" id="L1678">        commandInterceptor.beforeCommand(workDir, command);</span>
+        try {
+<span class="fc" id="L1680">            Process proc = new ProcessBuilder(command)</span>
+<span class="fc" id="L1681">                    .directory(workDir)</span>
+<span class="fc" id="L1682">                    .redirectErrorStream(false)</span>
+<span class="fc" id="L1683">                    .start();</span>
+            String stdout;
+<span class="fc" id="L1685">            try (BufferedReader reader = new BufferedReader(</span>
+<span class="fc" id="L1686">                    new InputStreamReader(proc.getInputStream(),</span>
+                            StandardCharsets.UTF_8))) {
+<span class="fc" id="L1688">                stdout = reader.lines().collect(Collectors.joining(&quot;\n&quot;)).trim();</span>
+            }
+<span class="fc" id="L1690">            String stderr = new String(</span>
+<span class="fc" id="L1691">                    proc.getErrorStream().readAllBytes(),</span>
+<span class="fc" id="L1692">                    StandardCharsets.UTF_8).trim();</span>
+<span class="fc" id="L1693">            int exit = proc.waitFor();</span>
+<span class="fc bfc" id="L1694" title="All 2 branches covered.">            if (exit != 0) {</span>
+<span class="fc" id="L1695">                throw new MojoException(</span>
+<span class="fc" id="L1696">                        String.join(&quot; &quot;, command) + &quot; in &quot; + workDir</span>
+                                + &quot; failed (exit &quot; + exit + &quot;)&quot;
+<span class="fc bfc" id="L1698" title="All 2 branches covered.">                                + (stderr.isEmpty() ? &quot;&quot; : &quot;: &quot; + stderr));</span>
+            }
+<span class="fc" id="L1700">            return stdout;</span>
+<span class="nc" id="L1701">        } catch (IOException e) {</span>
+<span class="nc" id="L1702">            throw new MojoException(</span>
+<span class="nc" id="L1703">                    &quot;Failed to execute &quot; + String.join(&quot; &quot;, command)</span>
+<span class="nc" id="L1704">                            + &quot; in &quot; + workDir + &quot;: &quot; + e.getMessage(), e);</span>
+<span class="nc" id="L1705">        } catch (InterruptedException e) {</span>
+<span class="nc" id="L1706">            Thread.currentThread().interrupt();</span>
+<span class="nc" id="L1707">            throw new MojoException(</span>
+<span class="nc" id="L1708">                    &quot;Interrupted while executing &quot; + String.join(&quot; &quot;, command)</span>
+                            + &quot; in &quot; + workDir, e);
+        }
+    }
+
+    /**
+     * Run a read-only git query through {@link #capture}, retrying once
+     * after a short backoff if it fails.
+     *
+     * &lt;p&gt;The read-only queries that drive {@code ws:push} and
+     * {@code ws:sync} — {@code rev-parse}, {@code branch --show-current},
+     * {@code ls-remote} — are idempotent, so a transient per-repository
+     * collision (a concurrent index or ref read, a momentary lock) can be
+     * retried safely rather than failing the whole repository
+     * (ike-issues#602).
+     *
+     * @param workDir the repository directory
+     * @param command the git read command and its arguments
+     * @return the captured stdout, trimmed
+     * @throws MojoException if both attempts fail — carrying the last
+     *                       attempt's self-diagnosing message
+     */
+    private static String captureRead(File workDir, String... command)
+            throws MojoException {
+<span class="fc" id="L1732">        return captureWithRetry(workDir, command);</span>
+    }
+
+    /**
+     * Run an idempotent git mutation through {@link #capture}, retrying
+     * once after a short backoff if it fails.
+     *
+     * &lt;p&gt;{@code git add -A} is the canonical caller: git's index write
+     * is atomic (staged in {@code index.lock}, then renamed into place),
+     * so a failed attempt leaves no partial state and re-running
+     * converges on the same result. That makes it safe to retry across
+     * a transient {@code index.lock} collision with a concurrent
+     * process — an IDE refresh, an agent's status query
+     * (ike-issues#636).
+     *
+     * &lt;p&gt;Genuinely non-idempotent mutations ({@code commit}, {@code tag},
+     * {@code push}) must never be routed here — after an ambiguous
+     * failure a retry could apply them twice. They call {@link #run} or
+     * {@link #capture} directly.
+     *
+     * @param workDir the repository directory
+     * @param command the git mutation command and its arguments
+     * @return the captured stdout, trimmed
+     * @throws MojoException if both attempts fail — carrying the last
+     *                       attempt's self-diagnosing message
+     */
+    private static String captureIdempotentMutation(File workDir, String... command)
+            throws MojoException {
+<span class="fc" id="L1760">        return captureWithRetry(workDir, command);</span>
+    }
+
+    /**
+     * Retry engine behind {@link #captureRead} and
+     * {@link #captureIdempotentMutation}: the original call plus one
+     * retry after a {@link #TRANSIENT_RETRY_BACKOFF_MILLIS} backoff.
+     *
+     * @param workDir the repository directory
+     * @param command the git command and its arguments
+     * @return the captured stdout, trimmed
+     * @throws MojoException if both attempts fail — carrying the last
+     *                       attempt's self-diagnosing message
+     */
+    private static String captureWithRetry(File workDir, String... command)
+            throws MojoException {
+<span class="fc" id="L1776">        MojoException last = null;</span>
+<span class="fc bfc" id="L1777" title="All 2 branches covered.">        for (int attempt = 1; attempt &lt;= TRANSIENT_RETRY_ATTEMPTS; attempt++) {</span>
+            try {
+<span class="fc" id="L1779">                return capture(workDir, command);</span>
+<span class="fc" id="L1780">            } catch (MojoException e) {</span>
+<span class="fc" id="L1781">                last = e;</span>
+<span class="fc bfc" id="L1782" title="All 2 branches covered.">                if (attempt &lt; TRANSIENT_RETRY_ATTEMPTS) {</span>
+                    try {
+<span class="fc" id="L1784">                        Thread.sleep(TRANSIENT_RETRY_BACKOFF_MILLIS);</span>
+<span class="nc" id="L1785">                    } catch (InterruptedException ie) {</span>
+<span class="nc" id="L1786">                        Thread.currentThread().interrupt();</span>
+<span class="nc" id="L1787">                        throw e;</span>
+<span class="fc" id="L1788">                    }</span>
+                }
+            }
+        }
+<span class="fc" id="L1792">        throw last;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

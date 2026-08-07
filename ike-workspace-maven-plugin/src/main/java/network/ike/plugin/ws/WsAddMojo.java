@@ -16,6 +16,7 @@ import network.ike.workspace.ManifestReader;
 import network.ike.workspace.PublishedArtifactSet;
 import network.ike.workspace.VersionSupport;
 
+import org.apache.maven.api.plugin.Log;
 import org.apache.maven.api.plugin.MojoException;
 import org.apache.maven.api.plugin.annotations.Mojo;
 import org.apache.maven.api.plugin.annotations.Parameter;
@@ -134,6 +135,23 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
 
     /** Derived dependency with optional version-property name. */
     record DerivedDep(String subproject, String versionProperty) {}
+
+    /**
+     * A referenced coordinate together with the module POM that
+     * references it — source attribution for a derived edge, used by
+     * the {@code depends-on} acyclicity gate's diagnostic
+     * (IKE-Network/ike-issues#962).
+     */
+    record PomRef(String coordinate, Path pomFile) {}
+
+    /**
+     * Result of {@link #deriveDependenciesDetailed}: the derived
+     * {@code depends-on} entries plus, per producing subproject, the
+     * module POMs whose references create the repo-level edge.
+     */
+    record Derivation(
+            List<DerivedDep> deps,
+            Map<String, List<PomRef>> producerSources) {}
 
     /** Creates this goal instance. */
     public WsAddMojo() {}
@@ -317,7 +335,17 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
         getLog().info("");
 
         // Snapshot the root files BEFORE editing them so the commit below is
-        // scoped to exactly what this goal authored (#780, IN_ISOLATION).
+        // scoped to exactly what this goal authored (#780, IN_ISOLATION),
+        // and so the cycle gate below can restore them (#962).
+        String manifestBefore;
+        String pomBefore;
+        try {
+            manifestBefore = Files.readString(manifestPath, StandardCharsets.UTF_8);
+            pomBefore = Files.readString(pomPath, StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            throw new MojoException(
+                    "Cannot read workspace files: " + e.getMessage(), e);
+        }
         GoalAuthoredChanges authored = GoalAuthoredChanges.snapshot(
                 wsDir.toFile(), getLog(), "workspace.yaml", "pom.xml");
         try {
@@ -357,6 +385,13 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
                         + e.getMessage());
             }
         }
+
+        // Acyclicity gate (#962): the derived forward edges plus the
+        // backfilled reverse edges are all in workspace.yaml now. If they
+        // contracted into a repo-level cycle, restore the pre-add files and
+        // fail — a committed cycle would block every subsequent ws: goal.
+        failOnDependsOnCycle(getLog(), wsDir, manifestPath, pomPath,
+                manifestBefore, pomBefore);
 
         // Commit the root edits in isolation (#780, IN_ISOLATION): only the
         // paths this goal authored (workspace.yaml + pom.xml), which the
@@ -921,6 +956,70 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
         }
     }
 
+    // ── Acyclicity gate (#962) ─────────────────────────────────
+
+    /**
+     * Fail the goal when the manifest just written carries a repo-level
+     * {@code depends-on} cycle, restoring {@code workspace.yaml} and the
+     * reactor POM to their pre-add contents first
+     * (IKE-Network/ike-issues#962).
+     *
+     * <p>Contraction-induced cycles arise when a reactor leaf of one
+     * repo bundles a sibling repo's artifact while that repo builds
+     * against other modules of the first — both real POM edges, cyclic
+     * only at repo granularity. Committing such a manifest would block
+     * every graph-consuming {@code ws:} goal, so {@code ws:add} aborts
+     * with the contributing module-level edges instead. Bundle-time
+     * edges can be modeled with {@code relationship: bundle}
+     * (IKE-Network/ike-issues#963), which the ordering graph ignores.
+     *
+     * @param log            plugin log
+     * @param wsDir          workspace root directory
+     * @param manifestPath   path to workspace.yaml (already rewritten)
+     * @param pomPath        path to the reactor POM (already rewritten)
+     * @param manifestBefore pre-add workspace.yaml content to restore
+     * @param pomBefore      pre-add reactor POM content to restore
+     * @throws MojoException when the written graph contains a cycle
+     */
+    static void failOnDependsOnCycle(Log log, Path wsDir, Path manifestPath,
+                                     Path pomPath, String manifestBefore,
+                                     String pomBefore) throws MojoException {
+        List<String> cycle;
+        Map<String, Map<String, List<PomRef>>> edgeSources =
+                new LinkedHashMap<>();
+        try {
+            Manifest manifest = ManifestReader.read(manifestPath);
+            cycle = DependsOnCycleGate.findCycle(
+                    DependsOnCycleGate.orderingGraph(manifest));
+            if (cycle.isEmpty()) return;
+
+            // Cold path: attribute each cycle edge to the module POMs
+            // that create it, where the member is cloned.
+            for (int i = 0; i < cycle.size() - 1; i++) {
+                String from = cycle.get(i);
+                Path fromDir = wsDir.resolve(from);
+                if (!Files.exists(fromDir.resolve("pom.xml"))) continue;
+                edgeSources.put(from, deriveDependenciesDetailed(
+                        wsDir, manifestPath, fromDir, from).producerSources());
+            }
+        } catch (IOException | ManifestException e) {
+            log.warn("  Could not verify depends-on acyclicity: "
+                    + e.getMessage());
+            return;
+        }
+
+        try {
+            Files.writeString(manifestPath, manifestBefore,
+                    StandardCharsets.UTF_8);
+            Files.writeString(pomPath, pomBefore, StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            log.warn("  Could not restore pre-add workspace files: "
+                    + e.getMessage());
+        }
+        throw new MojoException(DependsOnCycleGate.diagnostic(
+                wsDir, cycle, edgeSources));
+    }
+
     // ── POM-based dependency derivation ────────────────────────
 
     /**
@@ -936,10 +1035,35 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
     static List<DerivedDep> deriveDependencies(Path wsDir, Path manifestPath,
                                                 Path subprojectDir, String subprojectName)
             throws IOException {
-        // Collect all groupId:artifactId pairs referenced by this subproject
-        Set<String> referencedArtifacts = extractReferencedArtifacts(
-                subprojectDir.resolve("pom.xml"));
-        if (referencedArtifacts.isEmpty()) return null;
+        List<DerivedDep> deps = deriveDependenciesDetailed(
+                wsDir, manifestPath, subprojectDir, subprojectName).deps();
+        return deps.isEmpty() ? null : deps;
+    }
+
+    /**
+     * {@link #deriveDependencies} with source attribution: alongside the
+     * derived entries, records for each producing subproject the module
+     * POMs (and coordinates) whose references create the repo-level
+     * edge. The attribution feeds the acyclicity gate's diagnostic so a
+     * contraction-induced cycle can be reported as module edges with
+     * file locations rather than repo names alone
+     * (IKE-Network/ike-issues#962).
+     *
+     * @return the derivation; {@code deps} is empty (never null) when
+     *         nothing was derived
+     */
+    static Derivation deriveDependenciesDetailed(Path wsDir, Path manifestPath,
+                                                 Path subprojectDir, String subprojectName)
+            throws IOException {
+        // Collect all groupId:artifactId pairs referenced by this
+        // subproject, remembering which module POM referenced each.
+        Map<String, Set<Path>> referenceSources = new LinkedHashMap<>();
+        Set<String> referencedArtifacts = new LinkedHashSet<>();
+        scanPomForArtifacts(subprojectDir.resolve("pom.xml"),
+                referencedArtifacts, referenceSources);
+        if (referencedArtifacts.isEmpty()) {
+            return new Derivation(List.of(), Map.of());
+        }
 
         // Read the new subproject's <properties> for version-property detection
         Map<String, String> newSubProperties;
@@ -959,6 +1083,7 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
         // empty and are skipped). Dedupe by producer, then emit in
         // manifest order to keep derived-dependency ordering stable.
         Map<String, String> versionPropertyByProducer = new LinkedHashMap<>();
+        Map<String, List<PomRef>> producerSources = new LinkedHashMap<>();
         for (String coord : referencedArtifacts) {
             int colon = coord.indexOf(':');
             if (colon < 0) continue;
@@ -967,6 +1092,11 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
             if (producer.isEmpty()) continue;                   // external
             String producerName = producer.get();
             if (producerName.equals(subprojectName)) continue;  // never self
+            List<PomRef> refs = producerSources.computeIfAbsent(
+                    producerName, k -> new ArrayList<>());
+            for (Path source : referenceSources.getOrDefault(coord, Set.of())) {
+                refs.add(new PomRef(coord, source));
+            }
             if (!versionPropertyByProducer.containsKey(producerName)) {
                 versionPropertyByProducer.put(producerName,
                         detectVersionProperty(
@@ -982,7 +1112,7 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
                         name, versionPropertyByProducer.get(name)));
             }
         }
-        return matched.isEmpty() ? null : matched;
+        return new Derivation(List.copyOf(matched), producerSources);
     }
 
     /**
@@ -1188,6 +1318,21 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
      */
     static void scanPomForArtifacts(Path pomFile, Set<String> artifacts)
             throws IOException {
+        scanPomForArtifacts(pomFile, artifacts, null);
+    }
+
+    /**
+     * As {@link #scanPomForArtifacts(Path, Set)}, additionally recording
+     * which POM file referenced each coordinate when {@code sources} is
+     * non-null — the per-module attribution behind the acyclicity gate's
+     * diagnostic (IKE-Network/ike-issues#962).
+     *
+     * @param sources coordinate → referencing POM files accumulator,
+     *                or null to skip attribution
+     */
+    static void scanPomForArtifacts(Path pomFile, Set<String> artifacts,
+                                    Map<String, Set<Path>> sources)
+            throws IOException {
         if (!Files.exists(pomFile)) return;
 
         Document doc;
@@ -1204,15 +1349,25 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
         // Read <properties> for ${...} resolution
         Map<String, String> properties = readProperties(project);
 
-        // Scan the project root for parent/deps/BOMs/plugins.
-        collectArtifactsFromContainer(project, properties, artifacts);
+        // Scan the project root for parent/deps/BOMs/plugins, keeping
+        // this file's finds separate so they can be attributed to it.
+        Set<String> found = new LinkedHashSet<>();
+        collectArtifactsFromContainer(project, properties, found);
 
         // Scan each profile body — a profile's deps/plugins become real
         // when it activates, so they're legitimate build edges.
         Element profilesEl = firstChild(project, "profiles");
         if (profilesEl != null) {
             for (Element profile : children(profilesEl, "profile")) {
-                collectArtifactsFromContainer(profile, properties, artifacts);
+                collectArtifactsFromContainer(profile, properties, found);
+            }
+        }
+
+        artifacts.addAll(found);
+        if (sources != null) {
+            for (String coord : found) {
+                sources.computeIfAbsent(coord, k -> new LinkedHashSet<>())
+                        .add(pomFile);
             }
         }
 
@@ -1223,7 +1378,8 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
         if (subprojects != null) {
             for (Element sub : children(subprojects, "subproject")) {
                 String name = sub.getTextContent().trim();
-                scanPomForArtifacts(pomDir.resolve(name).resolve("pom.xml"), artifacts);
+                scanPomForArtifacts(pomDir.resolve(name).resolve("pom.xml"),
+                        artifacts, sources);
             }
         }
 
@@ -1231,7 +1387,8 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
         if (modules != null) {
             for (Element mod : children(modules, "module")) {
                 String name = mod.getTextContent().trim();
-                scanPomForArtifacts(pomDir.resolve(name).resolve("pom.xml"), artifacts);
+                scanPomForArtifacts(pomDir.resolve(name).resolve("pom.xml"),
+                        artifacts, sources);
             }
         }
     }

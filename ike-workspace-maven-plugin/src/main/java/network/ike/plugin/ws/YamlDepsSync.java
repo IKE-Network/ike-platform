@@ -14,6 +14,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -32,6 +34,17 @@ import java.util.Set;
  *
  * <p><b>Idempotent.</b> Same POMs in → same YAML out. Re-running
  * back-to-back produces no further change.
+ *
+ * <p><b>Acyclic by construction.</b> Contracting the module graph to
+ * repo granularity can manufacture a cycle no module edge actually
+ * forms (a reactor leaf bundling a sibling repo's artifact while that
+ * repo builds against other modules — the {@code komet ⇄
+ * komet-claude-plugin} shape). A manifest carrying such a cycle is
+ * rejected by every graph-consuming {@code ws:} goal, so writing one
+ * bricks the workspace. Before writing, the prospective repo-level
+ * graph is therefore checked for cycles; on failure nothing is
+ * written and the contributing module-level edges are reported with
+ * their file locations (IKE-Network/ike-issues#962).
  *
  * <p><b>Safety.</b> Only the {@code depends-on:} block is rewritten,
  * one subproject at a time, via
@@ -55,8 +68,8 @@ final class YamlDepsSync {
      * @param workspaceRoot the workspace root directory
      * @param log           plugin log for the per-subproject summary
      * @return {@code true} if {@code workspace.yaml} was rewritten,
-     *         {@code false} if it was already up to date or could not be
-     *         processed
+     *         {@code false} if it was already up to date, would have
+     *         become cyclic, or could not be processed
      */
     static boolean run(File workspaceRoot, Log log) {
         Path manifestPath = workspaceRoot.toPath().resolve("workspace.yaml");
@@ -68,27 +81,38 @@ final class YamlDepsSync {
         try {
             Manifest manifest = ManifestReader.read(manifestPath);
             String yaml = Files.readString(manifestPath, StandardCharsets.UTF_8);
-            String updated = yaml;
-            int totalAdded = 0;
-            int totalRemoved = 0;
+
+            // ── Phase 1: derive everything; no writes yet ──────────
+            //
+            // The prospective repo-level graph starts as the current
+            // manifest state and is overlaid with each re-derived
+            // subproject's new edge set, so the cycle gate below sees
+            // exactly what a rewrite would produce.
+            Map<String, List<WsAddMojo.DerivedDep>> rederived =
+                    new LinkedHashMap<>();
+            Map<String, Map<String, List<WsAddMojo.PomRef>>> edgeSources =
+                    new LinkedHashMap<>();
+            Map<String, Set<String>> prospective = new LinkedHashMap<>();
+            Set<String> known = manifest.subprojects().keySet();
 
             for (Map.Entry<String, Subproject> entry
                     : manifest.subprojects().entrySet()) {
                 String name = entry.getKey();
                 Subproject sub = entry.getValue();
+                prospective.put(name,
+                        DependsOnCycleGate.orderingTargets(sub, known));
+
                 Path subDir = workspaceRoot.toPath().resolve(name);
                 if (!Files.exists(subDir.resolve("pom.xml"))) {
                     // Not cloned — leave existing depends-on alone
                     continue;
                 }
 
-                List<WsAddMojo.DerivedDep> derived =
-                        WsAddMojo.deriveDependencies(
+                WsAddMojo.Derivation derivation =
+                        WsAddMojo.deriveDependenciesDetailed(
                                 workspaceRoot.toPath(), manifestPath,
                                 subDir, name);
-                if (derived == null) {
-                    derived = List.of();
-                }
+                List<WsAddMojo.DerivedDep> derived = derivation.deps();
 
                 Set<String> currentDepNames = currentDependsOnNames(sub);
                 Set<String> newDepNames = new HashSet<>();
@@ -98,22 +122,60 @@ final class YamlDepsSync {
 
                 if (currentDepNames.equals(newDepNames)) continue;
 
+                // Dry-run the rewrite against the original YAML: a
+                // subproject whose depends-on block cannot be located
+                // will not be rewritten, so it must not contribute new
+                // edges to the prospective graph either.
+                if (WsAddMojo.rewriteDependsOnBlock(yaml, name, derived)
+                        .equals(yaml)) {
+                    log.debug("yaml-deps-sync: " + name
+                            + " — could not locate depends-on block");
+                    continue;
+                }
+
+                rederived.put(name, derived);
+                edgeSources.put(name, derivation.producerSources());
+                Set<String> targets = new LinkedHashSet<>(newDepNames);
+                targets.retainAll(known);
+                prospective.put(name, targets);
+            }
+
+            if (rederived.isEmpty()) {
+                log.debug("yaml-deps-sync: workspace.yaml is up to date");
+                return false;
+            }
+
+            // ── Phase 2: acyclicity gate (#962) ────────────────────
+            List<String> cycle = DependsOnCycleGate.findCycle(prospective);
+            if (!cycle.isEmpty()) {
+                log.error(DependsOnCycleGate.diagnostic(
+                        workspaceRoot.toPath(), cycle, edgeSources));
+                return false;
+            }
+
+            // ── Phase 3: apply the rewrites and write once ─────────
+            String updated = yaml;
+            int totalAdded = 0;
+            int totalRemoved = 0;
+            for (Map.Entry<String, List<WsAddMojo.DerivedDep>> entry
+                    : rederived.entrySet()) {
+                String name = entry.getKey();
+                List<WsAddMojo.DerivedDep> derived = entry.getValue();
+
+                Set<String> currentDepNames = currentDependsOnNames(
+                        manifest.subprojects().get(name));
+                Set<String> newDepNames = new HashSet<>();
+                for (WsAddMojo.DerivedDep d : derived) {
+                    newDepNames.add(d.subproject());
+                }
+
                 int added = countOnlyIn(newDepNames, currentDepNames);
                 int removed = countOnlyIn(currentDepNames, newDepNames);
                 totalAdded += added;
                 totalRemoved += removed;
 
-                String before = updated;
                 updated = WsAddMojo.rewriteDependsOnBlock(
                         updated, name, derived);
-                if (before.equals(updated)) {
-                    // Subproject not present in YAML in a recognizable
-                    // form — likely a freshly added entry without a
-                    // depends-on block yet. Skip rather than guess.
-                    log.debug("yaml-deps-sync: " + name
-                            + " — could not locate depends-on block");
-                    continue;
-                }
 
                 List<String> addedNames = new ArrayList<>(newDepNames);
                 addedNames.removeAll(currentDepNames);

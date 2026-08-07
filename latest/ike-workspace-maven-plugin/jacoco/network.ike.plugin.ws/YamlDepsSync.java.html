@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>YamlDepsSync.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">YamlDepsSync.java</span></div><h1>YamlDepsSync.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
 
-import network.ike.workspace.Dependency;
 import network.ike.workspace.Manifest;
 import network.ike.workspace.ManifestException;
 import network.ike.workspace.ManifestReader;
@@ -13,7 +12,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -33,11 +33,19 @@ import java.util.Set;
  * &lt;p&gt;&lt;b&gt;Idempotent.&lt;/b&gt; Same POMs in → same YAML out. Re-running
  * back-to-back produces no further change.
  *
- * &lt;p&gt;&lt;b&gt;Safety.&lt;/b&gt; Only the {@code depends-on:} block is rewritten,
- * one subproject at a time, via
- * {@link WsAddMojo#rewriteDependsOnBlock}. All other YAML content
- * (comments, defaults, branch fields, version fields) is preserved
- * verbatim.
+ * &lt;p&gt;&lt;b&gt;Merge, not replace.&lt;/b&gt; Derivation only knows {@code build}
+ * edges, so only build edges are machine-owned: hand-declared entries
+ * with any other relationship ({@code bundle}, {@code content},
+ * {@code tooling}) are preserved verbatim — comments included — and
+ * are never downgraded to {@code build}
+ * (IKE-Network/ike-issues#963, #964). See {@link DependsOnMerge}.
+ *
+ * &lt;p&gt;&lt;b&gt;Acyclic by construction.&lt;/b&gt; Contracting the module graph to
+ * repo granularity can manufacture a cycle no module edge actually
+ * forms. Before writing, the prospective repo-level ordering graph is
+ * checked; on a cycle nothing is written and the contributing
+ * module-level edges are reported with file locations
+ * (IKE-Network/ike-issues#962, {@link DependsOnCycleGate}).
  *
  * &lt;p&gt;Subprojects that aren't cloned on disk are left untouched —
  * we can't read the POM that drives the derivation.
@@ -49,112 +57,167 @@ final class YamlDepsSync {
     private YamlDepsSync() {}
 
     /**
+     * Outcome of a sync: whether {@code workspace.yaml} was rewritten,
+     * and one summary line per changed subproject for the re-derivation
+     * commit message (IKE-Network/ike-issues#964).
+     */
+<span class="fc" id="L64">    record SyncResult(boolean changed, List&lt;String&gt; changeLines) {</span>
+
+<span class="fc" id="L66">        static final SyncResult UNCHANGED =</span>
+<span class="fc" id="L67">                new SyncResult(false, List.of());</span>
+    }
+
+    /**
      * Refresh {@code depends-on} edges for the workspace at
      * {@code workspaceRoot}.
      *
      * @param workspaceRoot the workspace root directory
      * @param log           plugin log for the per-subproject summary
-     * @return {@code true} if {@code workspace.yaml} was rewritten,
-     *         {@code false} if it was already up to date or could not be
+     * @return the sync outcome; unchanged when the manifest was already
+     *         up to date, would have become cyclic, or could not be
      *         processed
      */
-    static boolean run(File workspaceRoot, Log log) {
-<span class="fc" id="L62">        Path manifestPath = workspaceRoot.toPath().resolve(&quot;workspace.yaml&quot;);</span>
-<span class="pc bpc" id="L63" title="1 of 2 branches missed.">        if (!Files.isRegularFile(manifestPath)) {</span>
-<span class="nc" id="L64">            log.debug(&quot;yaml-deps-sync: no workspace.yaml — skipping&quot;);</span>
-<span class="nc" id="L65">            return false;</span>
+    static SyncResult run(File workspaceRoot, Log log) {
+<span class="fc" id="L81">        Path manifestPath = workspaceRoot.toPath().resolve(&quot;workspace.yaml&quot;);</span>
+<span class="pc bpc" id="L82" title="1 of 2 branches missed.">        if (!Files.isRegularFile(manifestPath)) {</span>
+<span class="nc" id="L83">            log.debug(&quot;yaml-deps-sync: no workspace.yaml — skipping&quot;);</span>
+<span class="nc" id="L84">            return SyncResult.UNCHANGED;</span>
         }
 
         try {
-<span class="fc" id="L69">            Manifest manifest = ManifestReader.read(manifestPath);</span>
-<span class="fc" id="L70">            String yaml = Files.readString(manifestPath, StandardCharsets.UTF_8);</span>
-<span class="fc" id="L71">            String updated = yaml;</span>
-<span class="fc" id="L72">            int totalAdded = 0;</span>
-<span class="fc" id="L73">            int totalRemoved = 0;</span>
+<span class="fc" id="L88">            Manifest manifest = ManifestReader.read(manifestPath);</span>
+<span class="fc" id="L89">            String yaml = Files.readString(manifestPath, StandardCharsets.UTF_8);</span>
+
+            // ── Phase 1: derive and dry-run the merges; no writes ──
+<span class="fc" id="L92">            Map&lt;String, List&lt;WsAddMojo.DerivedDep&gt;&gt; derivedByName =</span>
+                    new LinkedHashMap&lt;&gt;();
+<span class="fc" id="L94">            Map&lt;String, Map&lt;String, List&lt;WsAddMojo.PomRef&gt;&gt;&gt; edgeSources =</span>
+                    new LinkedHashMap&lt;&gt;();
+<span class="fc" id="L96">            Map&lt;String, Set&lt;String&gt;&gt; prospective = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc" id="L97">            Set&lt;String&gt; known = manifest.subprojects().keySet();</span>
 
             for (Map.Entry&lt;String, Subproject&gt; entry
-<span class="fc bfc" id="L76" title="All 2 branches covered.">                    : manifest.subprojects().entrySet()) {</span>
-<span class="fc" id="L77">                String name = entry.getKey();</span>
-<span class="fc" id="L78">                Subproject sub = entry.getValue();</span>
-<span class="fc" id="L79">                Path subDir = workspaceRoot.toPath().resolve(name);</span>
-<span class="pc bpc" id="L80" title="1 of 2 branches missed.">                if (!Files.exists(subDir.resolve(&quot;pom.xml&quot;))) {</span>
+<span class="fc bfc" id="L100" title="All 2 branches covered.">                    : manifest.subprojects().entrySet()) {</span>
+<span class="fc" id="L101">                String name = entry.getKey();</span>
+<span class="fc" id="L102">                Subproject sub = entry.getValue();</span>
+<span class="fc" id="L103">                prospective.put(name,</span>
+<span class="fc" id="L104">                        DependsOnCycleGate.orderingTargets(sub, known));</span>
+
+<span class="fc" id="L106">                Path subDir = workspaceRoot.toPath().resolve(name);</span>
+<span class="pc bpc" id="L107" title="1 of 2 branches missed.">                if (!Files.exists(subDir.resolve(&quot;pom.xml&quot;))) {</span>
                     // Not cloned — leave existing depends-on alone
-<span class="nc" id="L82">                    continue;</span>
+<span class="nc" id="L109">                    continue;</span>
                 }
 
-<span class="fc" id="L85">                List&lt;WsAddMojo.DerivedDep&gt; derived =</span>
-<span class="fc" id="L86">                        WsAddMojo.deriveDependencies(</span>
-<span class="fc" id="L87">                                workspaceRoot.toPath(), manifestPath,</span>
+<span class="fc" id="L112">                WsAddMojo.Derivation derivation =</span>
+<span class="fc" id="L113">                        WsAddMojo.deriveDependenciesDetailed(</span>
+<span class="fc" id="L114">                                workspaceRoot.toPath(), manifestPath,</span>
                                 subDir, name);
-<span class="fc bfc" id="L89" title="All 2 branches covered.">                if (derived == null) {</span>
-<span class="fc" id="L90">                    derived = List.of();</span>
-                }
 
-<span class="fc" id="L93">                Set&lt;String&gt; currentDepNames = currentDependsOnNames(sub);</span>
-<span class="fc" id="L94">                Set&lt;String&gt; newDepNames = new HashSet&lt;&gt;();</span>
-<span class="fc bfc" id="L95" title="All 2 branches covered.">                for (WsAddMojo.DerivedDep d : derived) {</span>
-<span class="fc" id="L96">                    newDepNames.add(d.subproject());</span>
-<span class="fc" id="L97">                }</span>
+<span class="fc" id="L117">                DependsOnMerge.Result merged = DependsOnMerge.merge(</span>
+<span class="fc" id="L118">                        yaml, name, derivation.deps());</span>
+<span class="fc bfc" id="L119" title="All 2 branches covered.">                if (!merged.changed(yaml)) continue;</span>
 
-<span class="fc bfc" id="L99" title="All 2 branches covered.">                if (currentDepNames.equals(newDepNames)) continue;</span>
+<span class="fc" id="L121">                derivedByName.put(name, derivation.deps());</span>
+<span class="fc" id="L122">                edgeSources.put(name, derivation.producerSources());</span>
+<span class="fc" id="L123">                prospective.put(name,</span>
+<span class="fc" id="L124">                        orderingTargets(merged.finalRelationships(), known));</span>
+<span class="fc" id="L125">            }</span>
 
-<span class="fc" id="L101">                int added = countOnlyIn(newDepNames, currentDepNames);</span>
-<span class="fc" id="L102">                int removed = countOnlyIn(currentDepNames, newDepNames);</span>
-<span class="fc" id="L103">                totalAdded += added;</span>
-<span class="fc" id="L104">                totalRemoved += removed;</span>
-
-<span class="fc" id="L106">                String before = updated;</span>
-<span class="fc" id="L107">                updated = WsAddMojo.rewriteDependsOnBlock(</span>
-                        updated, name, derived);
-<span class="pc bpc" id="L109" title="1 of 2 branches missed.">                if (before.equals(updated)) {</span>
-                    // Subproject not present in YAML in a recognizable
-                    // form — likely a freshly added entry without a
-                    // depends-on block yet. Skip rather than guess.
-<span class="nc" id="L113">                    log.debug(&quot;yaml-deps-sync: &quot; + name</span>
-                            + &quot; — could not locate depends-on block&quot;);
-<span class="nc" id="L115">                    continue;</span>
-                }
-
-<span class="fc" id="L118">                List&lt;String&gt; addedNames = new ArrayList&lt;&gt;(newDepNames);</span>
-<span class="fc" id="L119">                addedNames.removeAll(currentDepNames);</span>
-<span class="fc" id="L120">                List&lt;String&gt; removedNames = new ArrayList&lt;&gt;(currentDepNames);</span>
-<span class="fc" id="L121">                removedNames.removeAll(newDepNames);</span>
-<span class="fc" id="L122">                log.info(&quot;  workspace.yaml: &quot; + name + &quot; depends-on (+&quot;</span>
-                        + added + &quot;, -&quot; + removed + &quot;)&quot;
-<span class="fc bfc" id="L124" title="All 2 branches covered.">                        + (addedNames.isEmpty() ? &quot;&quot;</span>
-<span class="fc" id="L125">                                : &quot; added &quot; + addedNames)</span>
-<span class="fc bfc" id="L126" title="All 2 branches covered.">                        + (removedNames.isEmpty() ? &quot;&quot;</span>
-<span class="fc" id="L127">                                : &quot; removed &quot; + removedNames));</span>
-<span class="fc" id="L128">            }</span>
-
-<span class="fc bfc" id="L130" title="All 2 branches covered.">            if (!updated.equals(yaml)) {</span>
-<span class="fc" id="L131">                Files.writeString(manifestPath, updated, StandardCharsets.UTF_8);</span>
-<span class="fc" id="L132">                log.info(&quot;  yaml-deps-sync: &quot; + totalAdded + &quot; edge(s) added, &quot;</span>
-                        + totalRemoved + &quot; edge(s) removed&quot;);
-<span class="fc" id="L134">                return true;</span>
+<span class="fc bfc" id="L127" title="All 2 branches covered.">            if (derivedByName.isEmpty()) {</span>
+<span class="fc" id="L128">                log.debug(&quot;yaml-deps-sync: workspace.yaml is up to date&quot;);</span>
+<span class="fc" id="L129">                return SyncResult.UNCHANGED;</span>
             }
-<span class="fc" id="L136">            log.debug(&quot;yaml-deps-sync: workspace.yaml is up to date&quot;);</span>
-<span class="fc" id="L137">            return false;</span>
-<span class="nc" id="L138">        } catch (IOException | ManifestException e) {</span>
-<span class="nc" id="L139">            log.warn(&quot;yaml-deps-sync: cannot update workspace.yaml — &quot;</span>
-<span class="nc" id="L140">                    + e.getMessage());</span>
-<span class="nc" id="L141">            return false;</span>
+
+            // ── Phase 2: acyclicity gate (#962) ────────────────────
+<span class="fc" id="L133">            List&lt;String&gt; cycle = DependsOnCycleGate.findCycle(prospective);</span>
+<span class="fc bfc" id="L134" title="All 2 branches covered.">            if (!cycle.isEmpty()) {</span>
+<span class="fc" id="L135">                log.error(DependsOnCycleGate.diagnostic(</span>
+<span class="fc" id="L136">                        workspaceRoot.toPath(), cycle, edgeSources));</span>
+<span class="fc" id="L137">                return SyncResult.UNCHANGED;</span>
+            }
+
+            // ── Phase 3: apply the merges and write once ───────────
+<span class="fc" id="L141">            String updated = yaml;</span>
+<span class="fc" id="L142">            int totalAdded = 0;</span>
+<span class="fc" id="L143">            int totalRemoved = 0;</span>
+<span class="fc" id="L144">            List&lt;String&gt; changeLines = new ArrayList&lt;&gt;();</span>
+            for (Map.Entry&lt;String, List&lt;WsAddMojo.DerivedDep&gt;&gt; entry
+<span class="fc bfc" id="L146" title="All 2 branches covered.">                    : derivedByName.entrySet()) {</span>
+<span class="fc" id="L147">                String name = entry.getKey();</span>
+<span class="fc" id="L148">                DependsOnMerge.Result merged = DependsOnMerge.merge(</span>
+<span class="fc" id="L149">                        updated, name, entry.getValue());</span>
+<span class="fc" id="L150">                updated = merged.yaml();</span>
+
+<span class="fc" id="L152">                List&lt;String&gt; added = new ArrayList&lt;&gt;(merged.addedBuild());</span>
+<span class="fc" id="L153">                added.addAll(merged.addedBundle());</span>
+                // A build edge whose derivation moved to bundle is a
+                // supersede (#965), not a discard — report it apart from
+                // true removals so the #964 hand-edit warning stays honest.
+<span class="fc" id="L157">                List&lt;String&gt; superseded =</span>
+<span class="fc" id="L158">                        new ArrayList&lt;&gt;(merged.removedBuild());</span>
+<span class="fc" id="L159">                superseded.retainAll(merged.addedBundle());</span>
+<span class="fc" id="L160">                List&lt;String&gt; removed =</span>
+<span class="fc" id="L161">                        new ArrayList&lt;&gt;(merged.removedBuild());</span>
+<span class="fc" id="L162">                removed.removeAll(superseded);</span>
+<span class="fc" id="L163">                totalAdded += added.size();</span>
+<span class="fc" id="L164">                totalRemoved += removed.size();</span>
+
+<span class="fc bfc" id="L166" title="All 4 branches covered.">                if (added.isEmpty() &amp;&amp; removed.isEmpty()) {</span>
+                    // Text-only change: managed-marker annotation.
+<span class="fc" id="L168">                    log.info(&quot;  workspace.yaml: &quot; + name</span>
+                            + &quot; depends-on annotated as managed&quot;);
+<span class="fc" id="L170">                    changeLines.add(name + &quot;: annotate managed block&quot;);</span>
+<span class="fc" id="L171">                    continue;</span>
+                }
+<span class="fc" id="L173">                String summary = name + &quot; depends-on (+&quot; + added.size()</span>
+<span class="fc" id="L174">                        + &quot;, -&quot; + removed.size() + &quot;)&quot;</span>
+<span class="fc bfc" id="L175" title="All 2 branches covered.">                        + (added.isEmpty() ? &quot;&quot; : &quot; added &quot; + added)</span>
+<span class="fc bfc" id="L176" title="All 2 branches covered.">                        + (removed.isEmpty() ? &quot;&quot; : &quot; removed &quot; + removed)</span>
+<span class="fc bfc" id="L177" title="All 2 branches covered.">                        + (superseded.isEmpty()</span>
+<span class="fc" id="L178">                                ? &quot;&quot; : &quot; build→bundle &quot; + superseded);</span>
+<span class="fc" id="L179">                changeLines.add(summary);</span>
+<span class="fc bfc" id="L180" title="All 2 branches covered.">                if (removed.isEmpty()) {</span>
+<span class="fc" id="L181">                    log.info(&quot;  workspace.yaml: &quot; + summary);</span>
+                } else {
+                    // Removals may be discarding a hand edit — say so
+                    // where the user can see it (#964).
+<span class="fc" id="L185">                    log.warn(&quot;  workspace.yaml: &quot; + summary</span>
+                            + &quot; — build edges are re-derived from POMs; &quot;
+                            + &quot;a deliberately absent edge needs a non-build &quot;
+                            + &quot;relationship (e.g. bundle) to survive&quot;);
+                }
+<span class="fc" id="L190">            }</span>
+
+<span class="pc bpc" id="L192" title="1 of 2 branches missed.">            if (!updated.equals(yaml)) {</span>
+<span class="fc" id="L193">                Files.writeString(manifestPath, updated, StandardCharsets.UTF_8);</span>
+<span class="fc" id="L194">                log.info(&quot;  yaml-deps-sync: &quot; + totalAdded + &quot; edge(s) added, &quot;</span>
+                        + totalRemoved + &quot; edge(s) removed&quot;);
+<span class="fc" id="L196">                return new SyncResult(true, List.copyOf(changeLines));</span>
+            }
+<span class="nc" id="L198">            log.debug(&quot;yaml-deps-sync: workspace.yaml is up to date&quot;);</span>
+<span class="nc" id="L199">            return SyncResult.UNCHANGED;</span>
+<span class="nc" id="L200">        } catch (IOException | ManifestException e) {</span>
+<span class="nc" id="L201">            log.warn(&quot;yaml-deps-sync: cannot update workspace.yaml — &quot;</span>
+<span class="nc" id="L202">                    + e.getMessage());</span>
+<span class="nc" id="L203">            return SyncResult.UNCHANGED;</span>
         }
     }
 
-    private static Set&lt;String&gt; currentDependsOnNames(Subproject sub) {
-<span class="pc bpc" id="L146" title="1 of 2 branches missed.">        if (sub.dependsOn() == null) return Set.of();</span>
-<span class="fc" id="L147">        Set&lt;String&gt; names = new HashSet&lt;&gt;();</span>
-<span class="fc bfc" id="L148" title="All 2 branches covered.">        for (Dependency dep : sub.dependsOn()) {</span>
-<span class="fc" id="L149">            names.add(dep.subproject());</span>
-<span class="fc" id="L150">        }</span>
-<span class="fc" id="L151">        return names;</span>
-    }
-
-    private static int countOnlyIn(Set&lt;String&gt; a, Set&lt;String&gt; b) {
-<span class="fc" id="L155">        int count = 0;</span>
-<span class="pc bpc" id="L156" title="1 of 4 branches missed.">        for (String s : a) if (!b.contains(s)) count++;</span>
-<span class="fc" id="L157">        return count;</span>
+    /**
+     * Ordering-edge targets of a merged entry set: every final entry
+     * except {@code relationship: bundle}, restricted to known
+     * subprojects — the same rule as
+     * {@link DependsOnCycleGate#orderingTargets}.
+     */
+    private static Set&lt;String&gt; orderingTargets(
+            Map&lt;String, String&gt; finalRelationships, Set&lt;String&gt; known) {
+<span class="fc" id="L215">        Set&lt;String&gt; targets = new LinkedHashSet&lt;&gt;();</span>
+<span class="fc bfc" id="L216" title="All 2 branches covered.">        for (Map.Entry&lt;String, String&gt; e : finalRelationships.entrySet()) {</span>
+<span class="fc bfc" id="L217" title="All 2 branches covered.">            if (&quot;bundle&quot;.equalsIgnoreCase(e.getValue())) continue;</span>
+<span class="pc bpc" id="L218" title="1 of 2 branches missed.">            if (known.contains(e.getKey())) targets.add(e.getKey());</span>
+<span class="fc" id="L219">        }</span>
+<span class="fc" id="L220">        return targets;</span>
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

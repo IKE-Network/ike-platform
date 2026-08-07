@@ -59,7 +59,7 @@ class YamlDepsSyncCycleGateTest {
         addToManifest("plugin-repo", "com.example.plugin");
         String before = manifest();
 
-        boolean changed = YamlDepsSync.run(tempDir.toFile(), log);
+        boolean changed = YamlDepsSync.run(tempDir.toFile(), log).changed();
 
         assertThat(changed)
                 .as("derivation must not report a rewrite on cycle")
@@ -105,7 +105,7 @@ class YamlDepsSyncCycleGateTest {
         addToManifest("app-repo", "com.example.app");
         addToManifest("plugin-repo", "com.example.plugin");
 
-        boolean changed = YamlDepsSync.run(tempDir.toFile(), log);
+        boolean changed = YamlDepsSync.run(tempDir.toFile(), log).changed();
 
         assertThat(changed).isTrue();
         assertThat(manifest()).contains("subproject: plugin-repo");
@@ -127,7 +127,7 @@ class YamlDepsSyncCycleGateTest {
                 "      - subproject: app-repo\n"
                         + "        relationship: build\n");
 
-        boolean changed = YamlDepsSync.run(tempDir.toFile(), log);
+        boolean changed = YamlDepsSync.run(tempDir.toFile(), log).changed();
 
         assertThat(changed).isTrue();
         assertThat(log.errors).isEmpty();

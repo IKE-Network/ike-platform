@@ -1,6 +1,5 @@
 package network.ike.plugin.ws;
 
-import network.ike.workspace.Dependency;
 import network.ike.workspace.Manifest;
 import network.ike.workspace.ManifestException;
 import network.ike.workspace.ManifestReader;
@@ -13,7 +12,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -35,22 +33,19 @@ import java.util.Set;
  * <p><b>Idempotent.</b> Same POMs in → same YAML out. Re-running
  * back-to-back produces no further change.
  *
+ * <p><b>Merge, not replace.</b> Derivation only knows {@code build}
+ * edges, so only build edges are machine-owned: hand-declared entries
+ * with any other relationship ({@code bundle}, {@code content},
+ * {@code tooling}) are preserved verbatim — comments included — and
+ * are never downgraded to {@code build}
+ * (IKE-Network/ike-issues#963, #964). See {@link DependsOnMerge}.
+ *
  * <p><b>Acyclic by construction.</b> Contracting the module graph to
  * repo granularity can manufacture a cycle no module edge actually
- * forms (a reactor leaf bundling a sibling repo's artifact while that
- * repo builds against other modules — the {@code komet ⇄
- * komet-claude-plugin} shape). A manifest carrying such a cycle is
- * rejected by every graph-consuming {@code ws:} goal, so writing one
- * bricks the workspace. Before writing, the prospective repo-level
- * graph is therefore checked for cycles; on failure nothing is
- * written and the contributing module-level edges are reported with
- * their file locations (IKE-Network/ike-issues#962).
- *
- * <p><b>Safety.</b> Only the {@code depends-on:} block is rewritten,
- * one subproject at a time, via
- * {@link WsAddMojo#rewriteDependsOnBlock}. All other YAML content
- * (comments, defaults, branch fields, version fields) is preserved
- * verbatim.
+ * forms. Before writing, the prospective repo-level ordering graph is
+ * checked; on a cycle nothing is written and the contributing
+ * module-level edges are reported with file locations
+ * (IKE-Network/ike-issues#962, {@link DependsOnCycleGate}).
  *
  * <p>Subprojects that aren't cloned on disk are left untouched —
  * we can't read the POM that drives the derivation.
@@ -62,33 +57,39 @@ final class YamlDepsSync {
     private YamlDepsSync() {}
 
     /**
+     * Outcome of a sync: whether {@code workspace.yaml} was rewritten,
+     * and one summary line per changed subproject for the re-derivation
+     * commit message (IKE-Network/ike-issues#964).
+     */
+    record SyncResult(boolean changed, List<String> changeLines) {
+
+        static final SyncResult UNCHANGED =
+                new SyncResult(false, List.of());
+    }
+
+    /**
      * Refresh {@code depends-on} edges for the workspace at
      * {@code workspaceRoot}.
      *
      * @param workspaceRoot the workspace root directory
      * @param log           plugin log for the per-subproject summary
-     * @return {@code true} if {@code workspace.yaml} was rewritten,
-     *         {@code false} if it was already up to date, would have
-     *         become cyclic, or could not be processed
+     * @return the sync outcome; unchanged when the manifest was already
+     *         up to date, would have become cyclic, or could not be
+     *         processed
      */
-    static boolean run(File workspaceRoot, Log log) {
+    static SyncResult run(File workspaceRoot, Log log) {
         Path manifestPath = workspaceRoot.toPath().resolve("workspace.yaml");
         if (!Files.isRegularFile(manifestPath)) {
             log.debug("yaml-deps-sync: no workspace.yaml — skipping");
-            return false;
+            return SyncResult.UNCHANGED;
         }
 
         try {
             Manifest manifest = ManifestReader.read(manifestPath);
             String yaml = Files.readString(manifestPath, StandardCharsets.UTF_8);
 
-            // ── Phase 1: derive everything; no writes yet ──────────
-            //
-            // The prospective repo-level graph starts as the current
-            // manifest state and is overlaid with each re-derived
-            // subproject's new edge set, so the cycle gate below sees
-            // exactly what a rewrite would produce.
-            Map<String, List<WsAddMojo.DerivedDep>> rederived =
+            // ── Phase 1: derive and dry-run the merges; no writes ──
+            Map<String, List<WsAddMojo.DerivedDep>> derivedByName =
                     new LinkedHashMap<>();
             Map<String, Map<String, List<WsAddMojo.PomRef>>> edgeSources =
                     new LinkedHashMap<>();
@@ -112,37 +113,20 @@ final class YamlDepsSync {
                         WsAddMojo.deriveDependenciesDetailed(
                                 workspaceRoot.toPath(), manifestPath,
                                 subDir, name);
-                List<WsAddMojo.DerivedDep> derived = derivation.deps();
 
-                Set<String> currentDepNames = currentDependsOnNames(sub);
-                Set<String> newDepNames = new HashSet<>();
-                for (WsAddMojo.DerivedDep d : derived) {
-                    newDepNames.add(d.subproject());
-                }
+                DependsOnMerge.Result merged = DependsOnMerge.merge(
+                        yaml, name, derivation.deps());
+                if (!merged.changed(yaml)) continue;
 
-                if (currentDepNames.equals(newDepNames)) continue;
-
-                // Dry-run the rewrite against the original YAML: a
-                // subproject whose depends-on block cannot be located
-                // will not be rewritten, so it must not contribute new
-                // edges to the prospective graph either.
-                if (WsAddMojo.rewriteDependsOnBlock(yaml, name, derived)
-                        .equals(yaml)) {
-                    log.debug("yaml-deps-sync: " + name
-                            + " — could not locate depends-on block");
-                    continue;
-                }
-
-                rederived.put(name, derived);
+                derivedByName.put(name, derivation.deps());
                 edgeSources.put(name, derivation.producerSources());
-                Set<String> targets = new LinkedHashSet<>(newDepNames);
-                targets.retainAll(known);
-                prospective.put(name, targets);
+                prospective.put(name,
+                        orderingTargets(merged.finalRelationships(), known));
             }
 
-            if (rederived.isEmpty()) {
+            if (derivedByName.isEmpty()) {
                 log.debug("yaml-deps-sync: workspace.yaml is up to date");
-                return false;
+                return SyncResult.UNCHANGED;
             }
 
             // ── Phase 2: acyclicity gate (#962) ────────────────────
@@ -150,72 +134,78 @@ final class YamlDepsSync {
             if (!cycle.isEmpty()) {
                 log.error(DependsOnCycleGate.diagnostic(
                         workspaceRoot.toPath(), cycle, edgeSources));
-                return false;
+                return SyncResult.UNCHANGED;
             }
 
-            // ── Phase 3: apply the rewrites and write once ─────────
+            // ── Phase 3: apply the merges and write once ───────────
             String updated = yaml;
             int totalAdded = 0;
             int totalRemoved = 0;
+            List<String> changeLines = new ArrayList<>();
             for (Map.Entry<String, List<WsAddMojo.DerivedDep>> entry
-                    : rederived.entrySet()) {
+                    : derivedByName.entrySet()) {
                 String name = entry.getKey();
-                List<WsAddMojo.DerivedDep> derived = entry.getValue();
+                DependsOnMerge.Result merged = DependsOnMerge.merge(
+                        updated, name, entry.getValue());
+                updated = merged.yaml();
 
-                Set<String> currentDepNames = currentDependsOnNames(
-                        manifest.subprojects().get(name));
-                Set<String> newDepNames = new HashSet<>();
-                for (WsAddMojo.DerivedDep d : derived) {
-                    newDepNames.add(d.subproject());
+                List<String> added = merged.addedBuild();
+                List<String> removed = merged.removedBuild();
+                totalAdded += added.size();
+                totalRemoved += removed.size();
+
+                if (added.isEmpty() && removed.isEmpty()) {
+                    // Text-only change: managed-marker annotation.
+                    log.info("  workspace.yaml: " + name
+                            + " depends-on annotated as managed");
+                    changeLines.add(name + ": annotate managed block");
+                    continue;
                 }
-
-                int added = countOnlyIn(newDepNames, currentDepNames);
-                int removed = countOnlyIn(currentDepNames, newDepNames);
-                totalAdded += added;
-                totalRemoved += removed;
-
-                updated = WsAddMojo.rewriteDependsOnBlock(
-                        updated, name, derived);
-
-                List<String> addedNames = new ArrayList<>(newDepNames);
-                addedNames.removeAll(currentDepNames);
-                List<String> removedNames = new ArrayList<>(currentDepNames);
-                removedNames.removeAll(newDepNames);
-                log.info("  workspace.yaml: " + name + " depends-on (+"
-                        + added + ", -" + removed + ")"
-                        + (addedNames.isEmpty() ? ""
-                                : " added " + addedNames)
-                        + (removedNames.isEmpty() ? ""
-                                : " removed " + removedNames));
+                String summary = name + " depends-on (+" + added.size()
+                        + ", -" + removed.size() + ")"
+                        + (added.isEmpty() ? "" : " added " + added)
+                        + (removed.isEmpty() ? "" : " removed " + removed);
+                changeLines.add(summary);
+                if (removed.isEmpty()) {
+                    log.info("  workspace.yaml: " + summary);
+                } else {
+                    // Removals may be discarding a hand edit — say so
+                    // where the user can see it (#964).
+                    log.warn("  workspace.yaml: " + summary
+                            + " — build edges are re-derived from POMs; "
+                            + "a deliberately absent edge needs a non-build "
+                            + "relationship (e.g. bundle) to survive");
+                }
             }
 
             if (!updated.equals(yaml)) {
                 Files.writeString(manifestPath, updated, StandardCharsets.UTF_8);
                 log.info("  yaml-deps-sync: " + totalAdded + " edge(s) added, "
                         + totalRemoved + " edge(s) removed");
-                return true;
+                return new SyncResult(true, List.copyOf(changeLines));
             }
             log.debug("yaml-deps-sync: workspace.yaml is up to date");
-            return false;
+            return SyncResult.UNCHANGED;
         } catch (IOException | ManifestException e) {
             log.warn("yaml-deps-sync: cannot update workspace.yaml — "
                     + e.getMessage());
-            return false;
+            return SyncResult.UNCHANGED;
         }
     }
 
-    private static Set<String> currentDependsOnNames(Subproject sub) {
-        if (sub.dependsOn() == null) return Set.of();
-        Set<String> names = new HashSet<>();
-        for (Dependency dep : sub.dependsOn()) {
-            names.add(dep.subproject());
+    /**
+     * Ordering-edge targets of a merged entry set: every final entry
+     * except {@code relationship: bundle}, restricted to known
+     * subprojects — the same rule as
+     * {@link DependsOnCycleGate#orderingTargets}.
+     */
+    private static Set<String> orderingTargets(
+            Map<String, String> finalRelationships, Set<String> known) {
+        Set<String> targets = new LinkedHashSet<>();
+        for (Map.Entry<String, String> e : finalRelationships.entrySet()) {
+            if ("bundle".equalsIgnoreCase(e.getValue())) continue;
+            if (known.contains(e.getKey())) targets.add(e.getKey());
         }
-        return names;
-    }
-
-    private static int countOnlyIn(Set<String> a, Set<String> b) {
-        int count = 0;
-        for (String s : a) if (!b.contains(s)) count++;
-        return count;
+        return targets;
     }
 }

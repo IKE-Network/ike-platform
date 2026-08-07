@@ -69,6 +69,10 @@ class PostMutationSyncSelfCommitTest {
         assertThat(head()).isNotEqualTo(headBefore);
         assertThat(headSubject()).contains("re-derive depends-on edges");
         assertThat(headBody()).contains("ike-issues#774");
+        // The commit body enumerates the edges it changed (#964) —
+        // a re-derivation is never a silent generic commit.
+        assertThat(headBody()).contains("lib-b depends-on (+1");
+        assertThat(headBody()).contains("added [lib-a]");
     }
 
     @Test

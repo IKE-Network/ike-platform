@@ -712,8 +712,10 @@ public final class SubprojectInitializer {
                 - **Never use `git add -A` or `git add .`** — stage specific files
                 - **Never use raw git for workspace ops** (commit, push, checkout, merge, branch,
                   stash) — use the `ws:` goals (`ws:commit-publish`, `ws:push`, `ws:switch-publish`, …).
-                  `workspace.yaml` `sha:` pins are checkpoint-managed — never hand-edit them. See
-                  `.claude/standards/IKE-WORKSPACE.md`
+                  `workspace.yaml` `sha:` pins are checkpoint-managed — never hand-edit them.
+                  `depends-on` `build` edges are machine-derived from POMs the same way; to declare
+                  an edge derivation must not overwrite, use `relationship: bundle`/`content`
+                  (hand-declared, preserved). See `.claude/standards/IKE-WORKSPACE.md`
 
                 ## Project-Specific Notes
 

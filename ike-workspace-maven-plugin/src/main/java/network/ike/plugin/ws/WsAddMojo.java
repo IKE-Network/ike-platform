@@ -599,55 +599,18 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
 
     /**
      * Update the depends-on section for an existing subproject in
-     * workspace.yaml. Replaces the current depends-on block with
-     * the newly derived dependencies.
+     * workspace.yaml by merging the newly derived build edges into the
+     * current block: hand-declared non-build entries and their comments
+     * are preserved, never replaced (IKE-Network/ike-issues#964).
      */
     static void updateSubprojectDependencies(Path manifestPath, String subprojectName,
                                              List<DerivedDep> derivedDeps) throws IOException {
         String yaml = Files.readString(manifestPath, StandardCharsets.UTF_8);
-        String updated = rewriteDependsOnBlock(yaml, subprojectName, derivedDeps);
+        String updated = DependsOnMerge.merge(yaml, subprojectName,
+                derivedDeps == null ? List.of() : derivedDeps).yaml();
         if (!updated.equals(yaml)) {
             Files.writeString(manifestPath, updated, StandardCharsets.UTF_8);
         }
-    }
-
-    /**
-     * Pure-string variant of {@link #updateSubprojectDependencies}: takes
-     * the current YAML and returns a new string with the named
-     * subproject's {@code depends-on} block replaced. Returns the input
-     * unchanged when the subproject is not present in the YAML.
-     */
-    static String rewriteDependsOnBlock(String yaml, String subprojectName,
-                                        List<DerivedDep> derivedDeps) {
-        // Build the new depends-on block
-        StringBuilder newDeps = new StringBuilder();
-        if (derivedDeps != null && !derivedDeps.isEmpty()) {
-            newDeps.append("    depends-on:\n");
-            for (DerivedDep dep : derivedDeps) {
-                newDeps.append("      - subproject: ").append(dep.subproject()).append("\n");
-                newDeps.append("        relationship: build\n");
-                if (dep.versionProperty() != null) {
-                    newDeps.append("        version-property: ").append(dep.versionProperty()).append("\n");
-                }
-            }
-        } else {
-            newDeps.append("    depends-on: []\n");
-        }
-
-        // Replace the existing depends-on block for this subproject.
-        // Match: "    depends-on: []\n" or "    depends-on:\n      - ...\n"
-        // within this subproject's section.
-        String escaped = Pattern.quote(subprojectName);
-        Pattern depsPattern = Pattern.compile(
-                "(" + escaped + ":[\\s\\S]*?)(    depends-on:.*(?:\\n      .*)*\\n)",
-                Pattern.MULTILINE);
-        Matcher m = depsPattern.matcher(yaml);
-        if (m.find()) {
-            return yaml.substring(0, m.start(2))
-                    + newDeps
-                    + yaml.substring(m.end(2));
-        }
-        return yaml;
     }
 
     // ── POM generation ───────────────────────────────────────────

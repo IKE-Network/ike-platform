@@ -84,16 +84,28 @@ public final class PostMutationSync {
         GoalAuthoredChanges authored =
                 GoalAuthoredChanges.snapshot(workspaceRoot, log, MANIFEST);
 
-        if (!YamlDepsSync.run(workspaceRoot, log)) {
+        YamlDepsSync.SyncResult result = YamlDepsSync.run(workspaceRoot, log);
+        if (!result.changed()) {
             return false;
+        }
+        // Enumerate what changed in the commit itself, so a re-derivation
+        // that reverses a hand edit is at least visible in history rather
+        // than hiding behind a generic subject (#964).
+        StringBuilder changes = new StringBuilder();
+        for (String line : result.changeLines()) {
+            changes.append("- ").append(line).append('\n');
         }
         boolean committed = authored.commitAuthored(
                 "ws: re-derive depends-on edges\n\n"
-                        + "Re-derives workspace.yaml depends-on from POM "
+                        + changes
+                        + "\nRe-derives workspace.yaml depends-on from POM "
                         + "reality after a workspace mutation, so the "
-                        + "manifest is never left uncommitted.\n\n"
+                        + "manifest is never left uncommitted. Build edges "
+                        + "are machine-derived; bundle/content/tooling "
+                        + "edges are preserved as hand-declared.\n\n"
                         + "Refs: IKE-Network/ike-issues#774\n"
-                        + "Refs: IKE-Network/ike-issues#279");
+                        + "Refs: IKE-Network/ike-issues#279\n"
+                        + "Refs: IKE-Network/ike-issues#964");
         if (committed) {
             log.info("  workspace.yaml: committed re-derived depends-on edges");
         }

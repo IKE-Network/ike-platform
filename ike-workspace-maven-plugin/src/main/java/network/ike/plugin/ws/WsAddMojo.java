@@ -133,8 +133,19 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
     @Parameter(property = "skipClone", defaultValue = "false")
     private boolean skipClone;
 
-    /** Derived dependency with optional version-property name. */
-    record DerivedDep(String subproject, String versionProperty) {}
+    /**
+     * Derived dependency: target subproject, optional version-property
+     * name, and the derived relationship — {@code build} for
+     * parent/dependency/BOM-import/plugin-GAV references, {@code bundle}
+     * for plugin-staged references (a plugin's own {@code <dependencies>}
+     * or {@code <artifactItem>} entries; ike-issues#965).
+     */
+    record DerivedDep(String subproject, String versionProperty,
+                      String relationship) {
+        DerivedDep(String subproject, String versionProperty) {
+            this(subproject, versionProperty, "build");
+        }
+    }
 
     /**
      * A referenced coordinate together with the module POM that
@@ -1022,9 +1033,14 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
         // subproject, remembering which module POM referenced each.
         Map<String, Set<Path>> referenceSources = new LinkedHashMap<>();
         Set<String> referencedArtifacts = new LinkedHashSet<>();
+        Set<String> bundleReferenced = new LinkedHashSet<>();
         scanPomForArtifacts(subprojectDir.resolve("pom.xml"),
-                referencedArtifacts, referenceSources);
-        if (referencedArtifacts.isEmpty()) {
+                referencedArtifacts, bundleReferenced, referenceSources);
+        // Build-strength wins: a true dependency declared by any module
+        // outranks plugin staging of the same artifact elsewhere in the
+        // repo (ike-issues#965).
+        bundleReferenced.removeAll(referencedArtifacts);
+        if (referencedArtifacts.isEmpty() && bundleReferenced.isEmpty()) {
             return new Derivation(List.of(), Map.of());
         }
 
@@ -1046,8 +1062,19 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
         // empty and are skipped). Dedupe by producer, then emit in
         // manifest order to keep derived-dependency ordering stable.
         Map<String, String> versionPropertyByProducer = new LinkedHashMap<>();
+        Map<String, String> relationshipByProducer = new LinkedHashMap<>();
         Map<String, List<PomRef>> producerSources = new LinkedHashMap<>();
+        // Build-strength coordinates first so a producer referenced both
+        // ways classifies as build (putIfAbsent below never downgrades).
+        Map<String, String> strengthByCoord = new LinkedHashMap<>();
         for (String coord : referencedArtifacts) {
+            strengthByCoord.put(coord, "build");
+        }
+        for (String coord : bundleReferenced) {
+            strengthByCoord.put(coord, "bundle");
+        }
+        for (Map.Entry<String, String> ref : strengthByCoord.entrySet()) {
+            String coord = ref.getKey();
             int colon = coord.indexOf(':');
             if (colon < 0) continue;
             Optional<String> producer = resolver.subprojectForCoordinate(
@@ -1055,6 +1082,11 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
             if (producer.isEmpty()) continue;                   // external
             String producerName = producer.get();
             if (producerName.equals(subprojectName)) continue;  // never self
+            if ("build".equals(ref.getValue())) {
+                relationshipByProducer.put(producerName, "build");
+            } else {
+                relationshipByProducer.putIfAbsent(producerName, "bundle");
+            }
             List<PomRef> refs = producerSources.computeIfAbsent(
                     producerName, k -> new ArrayList<>());
             for (Path source : referenceSources.getOrDefault(coord, Set.of())) {
@@ -1070,9 +1102,10 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
 
         List<DerivedDep> matched = new ArrayList<>();
         for (String name : manifest.subprojects().keySet()) {
-            if (versionPropertyByProducer.containsKey(name)) {
+            if (relationshipByProducer.containsKey(name)) {
                 matched.add(new DerivedDep(
-                        name, versionPropertyByProducer.get(name)));
+                        name, versionPropertyByProducer.get(name),
+                        relationshipByProducer.get(name)));
             }
         }
         return new Derivation(List.copyOf(matched), producerSources);
@@ -1290,10 +1323,36 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
      * non-null — the per-module attribution behind the acyclicity gate's
      * diagnostic (IKE-Network/ike-issues#962).
      *
+     * <p>Legacy build-strength view: plugin-staged references are
+     * scanned but discarded, preserving pre-#965 semantics for callers
+     * that ask "does this POM truly depend on X" (the {@code ws:add}
+     * reverse-edge check via {@link #extractReferencedArtifacts}).
+     *
      * @param sources coordinate → referencing POM files accumulator,
      *                or null to skip attribution
      */
     static void scanPomForArtifacts(Path pomFile, Set<String> artifacts,
+                                    Map<String, Set<Path>> sources)
+            throws IOException {
+        scanPomForArtifacts(pomFile, artifacts, new LinkedHashSet<>(),
+                sources);
+    }
+
+    /**
+     * Full classified scan: build-strength references (parent,
+     * dependencies, BOM imports, plugin GAVs) accumulate into
+     * {@code artifacts}; plugin-staged references (a plugin's own
+     * {@code <dependencies>} entries and descendant
+     * {@code <artifactItem>} elements) accumulate into
+     * {@code bundleArtifacts} and derive as {@code relationship: bundle}
+     * (ike-issues#965). Source attribution covers both strengths.
+     *
+     * @param bundleArtifacts accumulator for plugin-staged coordinates
+     * @param sources         coordinate → referencing POM files
+     *                        accumulator, or null to skip attribution
+     */
+    static void scanPomForArtifacts(Path pomFile, Set<String> artifacts,
+                                    Set<String> bundleArtifacts,
                                     Map<String, Set<Path>> sources)
             throws IOException {
         if (!Files.exists(pomFile)) return;
@@ -1315,20 +1374,27 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
         // Scan the project root for parent/deps/BOMs/plugins, keeping
         // this file's finds separate so they can be attributed to it.
         Set<String> found = new LinkedHashSet<>();
-        collectArtifactsFromContainer(project, properties, found);
+        Set<String> foundStaged = new LinkedHashSet<>();
+        collectArtifactsFromContainer(project, properties, found, foundStaged);
 
         // Scan each profile body — a profile's deps/plugins become real
         // when it activates, so they're legitimate build edges.
         Element profilesEl = firstChild(project, "profiles");
         if (profilesEl != null) {
             for (Element profile : children(profilesEl, "profile")) {
-                collectArtifactsFromContainer(profile, properties, found);
+                collectArtifactsFromContainer(
+                        profile, properties, found, foundStaged);
             }
         }
 
         artifacts.addAll(found);
+        bundleArtifacts.addAll(foundStaged);
         if (sources != null) {
             for (String coord : found) {
+                sources.computeIfAbsent(coord, k -> new LinkedHashSet<>())
+                        .add(pomFile);
+            }
+            for (String coord : foundStaged) {
                 sources.computeIfAbsent(coord, k -> new LinkedHashSet<>())
                         .add(pomFile);
             }
@@ -1342,7 +1408,7 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
             for (Element sub : children(subprojects, "subproject")) {
                 String name = sub.getTextContent().trim();
                 scanPomForArtifacts(pomDir.resolve(name).resolve("pom.xml"),
-                        artifacts, sources);
+                        artifacts, bundleArtifacts, sources);
             }
         }
 
@@ -1351,7 +1417,7 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
             for (Element mod : children(modules, "module")) {
                 String name = mod.getTextContent().trim();
                 scanPomForArtifacts(pomDir.resolve(name).resolve("pom.xml"),
-                        artifacts, sources);
+                        artifacts, bundleArtifacts, sources);
             }
         }
     }
@@ -1369,14 +1435,23 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
      *   <li>{@code <build><pluginManagement><plugins><plugin>}</li>
      * </ul>
      *
-     * @param container  the {@code <project>} or {@code <profile>} element
-     * @param properties resolved {@code <properties>} for {@code ${...}} references
-     * @param artifacts  accumulator for discovered "groupId:artifactId" strings
+     * <p>Plugin-staged references — entries of a plugin's own
+     * {@code <dependencies>} block and descendant {@code <artifactItem>}
+     * elements — accumulate separately into {@code stagedArtifacts}:
+     * they are package-time provisioning references, resolved from a
+     * repository rather than ordered in the workspace build, and derive
+     * as {@code relationship: bundle} (ike-issues#965, #963).
+     *
+     * @param container       the {@code <project>} or {@code <profile>} element
+     * @param properties      resolved {@code <properties>} for {@code ${...}} references
+     * @param artifacts       accumulator for build-strength "groupId:artifactId" strings
+     * @param stagedArtifacts accumulator for plugin-staged "groupId:artifactId" strings
      */
     static void collectArtifactsFromContainer(
             Element container,
             Map<String, String> properties,
-            Set<String> artifacts) {
+            Set<String> artifacts,
+            Set<String> stagedArtifacts) {
 
         // <parent> — present on project root; profiles don't allow it.
         addArtifactCoords(firstChild(container, "parent"), properties, artifacts);
@@ -1407,13 +1482,20 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
         }
 
         // Build plugins — both top-level <plugins> and <pluginManagement>.
+        // Plugin GAVs are build-strength (a workspace-produced Maven
+        // plugin must exist before its consumer builds); the plugin's
+        // own <dependencies> and <artifactItem>s are staged (#965).
         Element build = firstChild(container, "build");
         if (build != null) {
-            addPluginCoords(firstChild(build, "plugins"), properties, artifacts);
+            Element pluginsEl = firstChild(build, "plugins");
+            addPluginCoords(pluginsEl, properties, artifacts);
+            addPluginStagedCoords(pluginsEl, properties, stagedArtifacts);
             Element pluginMgmt = firstChild(build, "pluginManagement");
             if (pluginMgmt != null) {
-                addPluginCoords(firstChild(pluginMgmt, "plugins"),
-                        properties, artifacts);
+                Element managedEl = firstChild(pluginMgmt, "plugins");
+                addPluginCoords(managedEl, properties, artifacts);
+                addPluginStagedCoords(
+                        managedEl, properties, stagedArtifacts);
             }
         }
     }
@@ -1433,6 +1515,39 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
         if (pluginsEl == null) return;
         for (Element plugin : children(pluginsEl, "plugin")) {
             addArtifactCoords(plugin, properties, artifacts);
+        }
+    }
+
+    /**
+     * Harvest plugin-staged references from every {@code <plugin>}
+     * child: entries of the plugin's own {@code <dependencies>} block
+     * (the reactor-ordering-only idiom) and any descendant
+     * {@code <artifactItem>} (the {@code maven-dependency-plugin}
+     * copy/unpack idiom, wherever it nests under configuration or
+     * executions). No-op if {@code pluginsEl} is null.
+     *
+     * @param pluginsEl       the {@code <plugins>} element, or null
+     * @param properties      resolved {@code <properties>} for property
+     *                        substitution
+     * @param stagedArtifacts accumulator for staged coordinates
+     */
+    private static void addPluginStagedCoords(Element pluginsEl,
+                                              Map<String, String> properties,
+                                              Set<String> stagedArtifacts) {
+        if (pluginsEl == null) return;
+        for (Element plugin : children(pluginsEl, "plugin")) {
+            Element depsEl = firstChild(plugin, "dependencies");
+            if (depsEl != null) {
+                for (Element dep : children(depsEl, "dependency")) {
+                    addArtifactCoords(dep, properties, stagedArtifacts);
+                }
+            }
+            org.w3c.dom.NodeList items =
+                    plugin.getElementsByTagName("artifactItem");
+            for (int i = 0; i < items.getLength(); i++) {
+                addArtifactCoords((Element) items.item(i), properties,
+                        stagedArtifacts);
+            }
         }
     }
 

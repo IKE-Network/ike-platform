@@ -149,8 +149,17 @@ final class YamlDepsSync {
                         updated, name, entry.getValue());
                 updated = merged.yaml();
 
-                List<String> added = merged.addedBuild();
-                List<String> removed = merged.removedBuild();
+                List<String> added = new ArrayList<>(merged.addedBuild());
+                added.addAll(merged.addedBundle());
+                // A build edge whose derivation moved to bundle is a
+                // supersede (#965), not a discard — report it apart from
+                // true removals so the #964 hand-edit warning stays honest.
+                List<String> superseded =
+                        new ArrayList<>(merged.removedBuild());
+                superseded.retainAll(merged.addedBundle());
+                List<String> removed =
+                        new ArrayList<>(merged.removedBuild());
+                removed.removeAll(superseded);
                 totalAdded += added.size();
                 totalRemoved += removed.size();
 
@@ -164,7 +173,9 @@ final class YamlDepsSync {
                 String summary = name + " depends-on (+" + added.size()
                         + ", -" + removed.size() + ")"
                         + (added.isEmpty() ? "" : " added " + added)
-                        + (removed.isEmpty() ? "" : " removed " + removed);
+                        + (removed.isEmpty() ? "" : " removed " + removed)
+                        + (superseded.isEmpty()
+                                ? "" : " build→bundle " + superseded);
                 changeLines.add(summary);
                 if (removed.isEmpty()) {
                     log.info("  workspace.yaml: " + summary);

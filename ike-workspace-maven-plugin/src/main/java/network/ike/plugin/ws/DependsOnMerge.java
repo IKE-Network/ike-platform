@@ -32,7 +32,15 @@ import java.util.regex.Pattern;
  *       included.</li>
  *   <li><b>Build entries no longer derived are removed</b> (the drift
  *       correction this sync exists for), and newly derived targets are
- *       appended as fresh {@code build} entries.</li>
+ *       appended as fresh entries carrying their derived
+ *       relationship.</li>
+ *   <li><b>Derivation may emit {@code bundle}</b> for plugin-staged
+ *       references (ike-issues#965): a {@code build} entry whose
+ *       derivation moved to {@code bundle} is superseded — removed and
+ *       re-added as {@code relationship: bundle} — the idiom-migration
+ *       path from a project dependency to {@code artifactItem} staging.
+ *       Hand-authored non-build entries still cover their target and
+ *       are never replaced.</li>
  * </ul>
  *
  * <p>The rewritten block gains a one-line managed marker above
@@ -52,13 +60,16 @@ final class DependsOnMerge {
 
     /**
      * Outcome of a merge: the updated YAML (identical to the input when
-     * nothing changed), the derived build targets added and removed,
-     * and each final entry's relationship (for ordering-graph
-     * construction by the acyclicity gate).
+     * nothing changed), the derived targets added per relationship, the
+     * build targets removed (a target in both {@code removedBuild} and
+     * {@code addedBundle} was superseded, not dropped), and each final
+     * entry's relationship (for ordering-graph construction by the
+     * acyclicity gate).
      */
     record Result(
             String yaml,
             List<String> addedBuild,
+            List<String> addedBundle,
             List<String> removedBuild,
             Map<String, String> finalRelationships) {
 
@@ -94,7 +105,7 @@ final class DependsOnMerge {
      *
      * @param yaml           the full workspace.yaml content
      * @param subprojectName the subproject whose block to merge
-     * @param derived        the freshly derived build edges
+     * @param derived        the freshly derived edges (build and bundle)
      * @return the merge result; {@code yaml} is returned unchanged when
      *         the subproject's block cannot be located
      */
@@ -102,7 +113,8 @@ final class DependsOnMerge {
                         List<WsAddMojo.DerivedDep> derived) {
         Matcher m = blockPattern(subprojectName).matcher(yaml);
         if (!m.find()) {
-            return new Result(yaml, List.of(), List.of(), Map.of());
+            return new Result(yaml, List.of(), List.of(), List.of(),
+                    Map.of());
         }
         String block = m.group(2);
 
@@ -110,8 +122,10 @@ final class DependsOnMerge {
         List<Entry> current = parsed.entries();
         Set<String> derivedTargets = new LinkedHashSet<>();
         Map<String, String> derivedVersionProperty = new LinkedHashMap<>();
+        Map<String, String> derivedRelationship = new LinkedHashMap<>();
         for (WsAddMojo.DerivedDep dep : derived) {
             derivedTargets.add(dep.subproject());
+            derivedRelationship.put(dep.subproject(), dep.relationship());
             if (dep.versionProperty() != null) {
                 derivedVersionProperty.put(
                         dep.subproject(), dep.versionProperty());
@@ -119,14 +133,18 @@ final class DependsOnMerge {
         }
 
         // Survivors: every non-build entry, plus build entries still
-        // derived. A preserved entry of any relationship covers its
-        // target — no build duplicate is emitted for it.
+        // derived as build. A preserved entry of any relationship covers
+        // its target — no derived duplicate is emitted for it. A build
+        // entry whose derivation moved to bundle is superseded: dropped
+        // here and re-added below with the derived relationship (#965).
         List<Entry> kept = new ArrayList<>();
         List<String> removedBuild = new ArrayList<>();
         Set<String> covered = new LinkedHashSet<>();
         for (Entry entry : current) {
             boolean build = isBuild(entry.relationship());
-            if (!build || derivedTargets.contains(entry.target())) {
+            boolean stillBuild = "build".equalsIgnoreCase(
+                    derivedRelationship.get(entry.target()));
+            if (!build || stillBuild) {
                 kept.add(entry);
                 covered.add(entry.target());
             } else {
@@ -135,6 +153,7 @@ final class DependsOnMerge {
         }
 
         List<String> addedBuild = new ArrayList<>();
+        List<String> addedBundle = new ArrayList<>();
         List<String> toAdd = new ArrayList<>();
         for (String target : derivedTargets) {
             if (!covered.contains(target)) toAdd.add(target);
@@ -150,10 +169,17 @@ final class DependsOnMerge {
                 rendered.append(entry.text());
             }
             for (String target : toAdd) {
-                addedBuild.add(target);
+                String relationship = derivedRelationship
+                        .getOrDefault(target, "build");
+                if ("bundle".equalsIgnoreCase(relationship)) {
+                    addedBundle.add(target);
+                } else {
+                    addedBuild.add(target);
+                }
                 rendered.append("      - subproject: ").append(target)
                         .append('\n');
-                rendered.append("        relationship: build\n");
+                rendered.append("        relationship: ")
+                        .append(relationship).append('\n');
                 String property = derivedVersionProperty.get(target);
                 if (property != null) {
                     rendered.append("        version-property: ")
@@ -175,11 +201,14 @@ final class DependsOnMerge {
         for (String target : addedBuild) {
             finalRelationships.put(target, "build");
         }
+        for (String target : addedBundle) {
+            finalRelationships.put(target, "bundle");
+        }
 
         String updated = yaml.substring(0, m.start(2))
                 + rendered
                 + yaml.substring(m.end(2));
-        return new Result(updated, addedBuild, removedBuild,
+        return new Result(updated, addedBuild, addedBundle, removedBuild,
                 finalRelationships);
     }
 

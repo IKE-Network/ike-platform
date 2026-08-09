@@ -1,10 +1,12 @@
 package network.ike.plugin.ws;
 
+import network.ike.plugin.ws.vcs.VcsOperations;
 import network.ike.workspace.Manifest;
 import network.ike.workspace.ManifestException;
 import network.ike.workspace.ManifestReader;
 import network.ike.workspace.Subproject;
 import org.apache.maven.api.plugin.Log;
+import org.apache.maven.api.plugin.MojoException;
 
 import java.io.File;
 import java.io.IOException;
@@ -49,6 +51,14 @@ import java.util.Set;
  *
  * <p>Subprojects that aren't cloned on disk are left untouched —
  * we can't read the POM that drives the derivation.
+ *
+ * <p>Subprojects whose checkout <em>drifts</em> from the manifest —
+ * a different branch than the entry declares, or a detached HEAD away
+ * from the {@code sha:} pin — are likewise left untouched: the POM on
+ * disk does not represent the manifest's declared state, and deriving
+ * from it strips edges that are real on the declared branch
+ * (IKE-Network/ike-issues#968). A checkout without git metadata
+ * derives as before — branch verification needs a repository.
  *
  * <p>See {@code IKE-Network/ike-issues#279}.
  */
@@ -95,6 +105,7 @@ final class YamlDepsSync {
                     new LinkedHashMap<>();
             Map<String, Set<String>> prospective = new LinkedHashMap<>();
             Set<String> known = manifest.subprojects().keySet();
+            List<String> driftSkipped = new ArrayList<>();
 
             for (Map.Entry<String, Subproject> entry
                     : manifest.subprojects().entrySet()) {
@@ -107,6 +118,16 @@ final class YamlDepsSync {
                 if (!Files.exists(subDir.resolve("pom.xml"))) {
                     // Not cloned — leave existing depends-on alone
                     continue;
+                }
+                if (Files.exists(subDir.resolve(".git"))) {
+                    String drift = driftReason(subDir,
+                            declaredBranch(sub, manifest), sub.sha());
+                    if (drift != null) {
+                        // Drifted checkout — its POM does not represent
+                        // the manifest's declared state (#968).
+                        driftSkipped.add(name + " — " + drift);
+                        continue;
+                    }
                 }
 
                 WsAddMojo.Derivation derivation =
@@ -122,6 +143,21 @@ final class YamlDepsSync {
                 edgeSources.put(name, derivation.producerSources());
                 prospective.put(name,
                         orderingTargets(merged.finalRelationships(), known));
+            }
+
+            if (!driftSkipped.isEmpty()) {
+                log.warn("  yaml-deps-sync: left " + driftSkipped.size()
+                        + " drifted subproject(s) alone — the checkout "
+                        + "disagrees with the manifest, so its POM does "
+                        + "not represent the declared state; recorded "
+                        + "depends-on kept (IKE-Network/ike-issues#968):");
+                for (String skipped : driftSkipped) {
+                    log.warn("    " + skipped);
+                }
+                log.warn("    Align checkouts to the manifest: "
+                        + "mvn ws:reconcile-branches-publish -Dfrom=manifest");
+                log.warn("    Or accept checkouts as truth:    "
+                        + "mvn ws:reconcile-branches-publish");
             }
 
             if (derivedByName.isEmpty()) {
@@ -201,6 +237,62 @@ final class YamlDepsSync {
             log.warn("yaml-deps-sync: cannot update workspace.yaml — "
                     + e.getMessage());
             return SyncResult.UNCHANGED;
+        }
+    }
+
+    /**
+     * The branch the manifest declares for a subproject: its own
+     * {@code branch:} field, falling back to {@code defaults.branch}.
+     *
+     * @param sub      the subproject entry
+     * @param manifest the parsed manifest
+     * @return the declared branch, or null when neither is set
+     */
+    private static String declaredBranch(Subproject sub, Manifest manifest) {
+        if (sub.branch() != null && !sub.branch().isBlank()) {
+            return sub.branch();
+        }
+        return manifest.defaults() == null
+                ? null : manifest.defaults().branch();
+    }
+
+    /**
+     * Why a cloned subproject's checkout cannot back a re-derivation,
+     * or null when it can (IKE-Network/ike-issues#968).
+     *
+     * <p>A checkout on a different branch than the manifest declares —
+     * or detached anywhere but the manifest's {@code sha:} pin — is the
+     * same epistemic situation as an absent clone: the POM on disk does
+     * not represent the declared state. Unreadable git state counts as
+     * drift for the same reason.
+     *
+     * @param subDir         the subproject checkout directory
+     * @param declaredBranch the manifest branch (may be null)
+     * @param pinnedSha      the manifest {@code sha:} pin (may be null)
+     * @return a human-readable drift description, or null when coherent
+     */
+    private static String driftReason(Path subDir, String declaredBranch,
+                                      String pinnedSha) {
+        try {
+            String checkout = VcsOperations.currentBranch(subDir.toFile());
+            if (checkout == null || checkout.isBlank()) {
+                String head = VcsOperations.headSha(subDir.toFile());
+                if (pinnedSha != null && pinnedSha.startsWith(head)) {
+                    // Parked exactly on the manifest pin — coherent.
+                    return null;
+                }
+                return "detached at " + head
+                        + (declaredBranch == null ? ""
+                                : ", manifest declares " + declaredBranch);
+            }
+            if (declaredBranch != null && !declaredBranch.isBlank()
+                    && !declaredBranch.equals(checkout)) {
+                return "checkout on " + checkout
+                        + ", manifest declares " + declaredBranch;
+            }
+            return null;
+        } catch (MojoException e) {
+            return "git state unreadable (" + e.getMessage() + ")";
         }
     }
 

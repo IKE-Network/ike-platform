@@ -5,6 +5,7 @@ import network.ike.plugin.SnapshotScanner;
 import network.ike.plugin.ws.WsGoal;
 import network.ike.plugin.ws.vcs.VcsOperations;
 import network.ike.plugin.ws.vcs.VcsState;
+import network.ike.workspace.Dependency;
 import network.ike.workspace.Subproject;
 import network.ike.workspace.WorkspaceGraph;
 
@@ -128,7 +129,17 @@ public enum PreflightCondition {
             for (String name : ctx.subprojects()) {
                 File pom = new File(new File(root, name), "pom.xml");
                 if (!pom.isFile()) continue;
-                all.addAll(SnapshotScanner.scanSourceProperties(pom));
+                for (SnapshotScanner.Violation violation
+                        : SnapshotScanner.scanSourceProperties(pom)) {
+                    // Release-set-aware exemption (ike-issues#981): a
+                    // property tracking a member that releases in this
+                    // cycle is substituted with the member's released
+                    // version by the loop's catch-up alignment before
+                    // its consumer releases — it never leaks.
+                    if (!resolvedByReleaseCycle(ctx, name, violation)) {
+                        all.add(violation);
+                    }
+                }
             }
 
             if (all.isEmpty()) return Optional.empty();
@@ -841,6 +852,51 @@ public enum PreflightCondition {
                     seen);
         }
         return new ArrayList<>(seen);
+    }
+
+    /**
+     * Whether a SNAPSHOT property violation is resolved by the current
+     * release cycle rather than leaking (ike-issues#981): the property
+     * is the owning member's manifest-declared {@code version-property}
+     * hint for a depends-on edge whose target member releases in this
+     * cycle. The release loop's catch-up alignment substitutes the
+     * target's released version before the owning consumer releases, so
+     * the SNAPSHOT value never reaches a released POM. Everything else —
+     * a property tracking a member outside the release set, or an
+     * unrelated SNAPSHOT property — keeps failing the gate.
+     *
+     * @param ctx       the preflight context; exemptions require both
+     *                  {@link PreflightContext#releaseSet()} and
+     *                  {@link PreflightContext#graph()}
+     * @param owner     the subproject whose POM carries the violation
+     * @param violation the scanned SNAPSHOT property violation
+     * @return true when the cycle's catch-up alignment resolves it
+     */
+    private static boolean resolvedByReleaseCycle(
+            PreflightContext ctx, String owner,
+            SnapshotScanner.Violation violation) {
+        if (ctx.releaseSet() == null || ctx.graph() == null) {
+            return false;
+        }
+        String location = violation.location();
+        int slash = location.lastIndexOf('/');
+        if (slash < 0
+                || !location.substring(0, slash).endsWith("properties")) {
+            return false;
+        }
+        String property = location.substring(slash + 1);
+        Subproject ownerEntry =
+                ctx.graph().manifest().subprojects().get(owner);
+        if (ownerEntry == null || ownerEntry.dependsOn() == null) {
+            return false;
+        }
+        for (Dependency dep : ownerEntry.dependsOn()) {
+            if (property.equals(dep.versionProperty())
+                    && ctx.releaseSet().contains(dep.subproject())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static void addArtifactIdIfPresent(File pom,

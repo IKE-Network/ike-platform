@@ -227,41 +227,11 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
             preReleaseUpstreamAlignment(graph, root);
         }
 
-        // ── Preflight: all working trees clean, no POM-shape gotchas ──
-        // (Javadoc cleanliness is checked per-module by ike:release
-        //  preflight — see ReleaseDraftMojo — so every entry point
-        //  enforces it, not only workspace-level releases.)
-        //
-        // #346 expanded the preflight set so the dry-run is
-        // authoritative: every cascade-time gotcha that has bitten a
-        // release is checked at draft time, not discovered mid-flight
-        // after some subprojects have already tagged:
-        //   WORKING_TREE_CLEAN                   — #132 #154
-        //   NO_SNAPSHOT_PROPERTIES               — Maven 4 consumer
-        //                                          flattener leak
-        //   SUBPROJECT_HAS_DISTRIBUTION_MANAGEMENT — site:stage gate
-        //                                          (#343 surfaced)
-        //   NO_FOUNDATION_PROPERTY_SHADOWING     — ike-tooling.version
-        //                                          shadowing pinned the
-        //                                          plugin to a stale
-        //                                          version that lacked
-        //                                          newer goals
-        //   PARENT_COHERENCE                     — #324 release gate
-        //                                          form
-        PreflightResult releasePreflight = Preflight.of(
-                List.of(PreflightCondition.WORKING_TREE_CLEAN,
-                        PreflightCondition.NO_ON_DISK_GHPAGES_LEAK,
-                        PreflightCondition.NO_SCPEXE_SITE_URLS,
-                        PreflightCondition.NO_SNAPSHOT_PROPERTIES,
-                        PreflightCondition.SUBPROJECT_HAS_DISTRIBUTION_MANAGEMENT,
-                        PreflightCondition.NO_FOUNDATION_PROPERTY_SHADOWING,
-                        PreflightCondition.PARENT_COHERENCE),
-                PreflightContext.of(root, graph, candidates));
-        if (draft) {
-            releasePreflight.warnIfFailed(getLog(), WsGoal.RELEASE_PUBLISH);
-        } else {
-            releasePreflight.requirePassed(WsGoal.RELEASE_PUBLISH);
-        }
+        // (The release preflight runs AFTER release-set detection — see
+        //  below — so NO_SNAPSHOT_PROPERTIES can exempt properties this
+        //  cycle's own catch-up alignment resolves, ike-issues#981.
+        //  Detection is read-only, so the reorder mutates nothing
+        //  earlier than before.)
 
         // ── 2a. Detect source-changed checked-out subprojects ────────────
         // First pass: gather the set of subprojects whose own commits
@@ -350,6 +320,50 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
             return new WorkspaceReportSpec(
                     publish ? WsGoal.RELEASE_PUBLISH : WsGoal.RELEASE_DRAFT,
                     "No components need releasing — all are clean.\n");
+        }
+
+        // ── Preflight: all working trees clean, no POM-shape gotchas ──
+        // (Javadoc cleanliness is checked per-module by ike:release
+        //  preflight — see ReleaseDraftMojo — so every entry point
+        //  enforces it, not only workspace-level releases.)
+        //
+        // #346 expanded the preflight set so the dry-run is
+        // authoritative: every cascade-time gotcha that has bitten a
+        // release is checked at draft time, not discovered mid-flight
+        // after some subprojects have already tagged:
+        //   WORKING_TREE_CLEAN                   — #132 #154
+        //   NO_SNAPSHOT_PROPERTIES               — Maven 4 consumer
+        //                                          flattener leak;
+        //                                          release-set-aware
+        //                                          since #981
+        //   SUBPROJECT_HAS_DISTRIBUTION_MANAGEMENT — site:stage gate
+        //                                          (#343 surfaced)
+        //   NO_FOUNDATION_PROPERTY_SHADOWING     — ike-tooling.version
+        //                                          shadowing pinned the
+        //                                          plugin to a stale
+        //                                          version that lacked
+        //                                          newer goals
+        //   PARENT_COHERENCE                     — #324 release gate
+        //                                          form
+        // Runs after detection so the context can carry this cycle's
+        // release set (#981): a SNAPSHOT property tracking a member
+        // that releases in this cycle is resolved by the loop's
+        // catch-up alignment before its consumer releases, and must
+        // not refuse the publish.
+        PreflightResult releasePreflight = Preflight.of(
+                List.of(PreflightCondition.WORKING_TREE_CLEAN,
+                        PreflightCondition.NO_ON_DISK_GHPAGES_LEAK,
+                        PreflightCondition.NO_SCPEXE_SITE_URLS,
+                        PreflightCondition.NO_SNAPSHOT_PROPERTIES,
+                        PreflightCondition.SUBPROJECT_HAS_DISTRIBUTION_MANAGEMENT,
+                        PreflightCondition.NO_FOUNDATION_PROPERTY_SHADOWING,
+                        PreflightCondition.PARENT_COHERENCE),
+                PreflightContext.of(root, graph, candidates,
+                        releasable.keySet()));
+        if (draft) {
+            releasePreflight.warnIfFailed(getLog(), WsGoal.RELEASE_PUBLISH);
+        } else {
+            releasePreflight.requirePassed(WsGoal.RELEASE_PUBLISH);
         }
 
         // ── 3. Topological sort of release-pending components ────────────

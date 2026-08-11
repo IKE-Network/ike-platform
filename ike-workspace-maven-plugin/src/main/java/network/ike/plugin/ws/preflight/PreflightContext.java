@@ -4,6 +4,7 @@ import network.ike.workspace.WorkspaceGraph;
 
 import java.io.File;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Data that {@link PreflightCondition#check(PreflightContext)} invocations
@@ -25,6 +26,10 @@ import java.util.List;
  *                      (checkpoint, release), or {@code null}
  * @param parentVersion target parent version for set-parent checks,
  *                      or {@code null}
+ * @param releaseSet    names of the members releasing in the current
+ *                      cycle, for release-set-aware conditions
+ *                      (ike-issues#981) — {@code null} when the invoking
+ *                      goal has no release-cycle notion
  */
 public record PreflightContext(
         File workspaceRoot,
@@ -32,12 +37,33 @@ public record PreflightContext(
         List<String> subprojects,
         String branchName,
         String tagName,
-        String parentVersion) {
+        String parentVersion,
+        Set<String> releaseSet) {
 
     /** Minimal context for conditions that only need root + subproject list. */
     public static PreflightContext of(File root,
                                        WorkspaceGraph graph,
                                        List<String> subprojects) {
-        return new PreflightContext(root, graph, subprojects, null, null, null);
+        return new PreflightContext(root, graph, subprojects,
+                null, null, null, null);
+    }
+
+    /**
+     * Context for the release preflight — carries this cycle's release
+     * set so conditions can exempt what the cycle itself resolves
+     * (ike-issues#981).
+     *
+     * @param root        the workspace root directory
+     * @param graph       the loaded workspace graph
+     * @param subprojects subproject names (topological order) to evaluate
+     * @param releaseSet  names of the members releasing this cycle
+     * @return the release-cycle context
+     */
+    public static PreflightContext of(File root,
+                                       WorkspaceGraph graph,
+                                       List<String> subprojects,
+                                       Set<String> releaseSet) {
+        return new PreflightContext(root, graph, subprojects,
+                null, null, null, releaseSet);
     }
 }

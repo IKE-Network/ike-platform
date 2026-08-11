@@ -223,16 +223,17 @@ class WsReleaseCascadeTest {
                     spec.name + " (test)",
                     "https://example.com/" + spec.name + ".git",
                     "main",
-                    "1.0.0-SNAPSHOT",
+                    spec.pinned ? "1.0.0" : "1.0.0-SNAPSHOT",
                     "com.test",
                     deps,
                     null,
                     null,
                     null,
                     null,
-                    Subproject.STATE_SNAPSHOT,
-                    null,
-                    null);
+                    spec.pinned ? Subproject.STATE_TAG_ALIGNED
+                                : Subproject.STATE_SNAPSHOT,
+                    spec.pinned ? "v1.0.0" : null,
+                    spec.pinned ? Subproject.KIND_RELEASE : null);
             subprojects.put(spec.name, sub);
         }
         Manifest manifest = new Manifest(
@@ -245,8 +246,63 @@ class WsReleaseCascadeTest {
     }
 
     private static NodeSpec node(String name, String... dependsOn) {
-        return new NodeSpec(name, List.of(dependsOn));
+        return new NodeSpec(name, List.of(dependsOn), false);
     }
 
-    private record NodeSpec(String name, List<String> dependsOn) {}
+    private static NodeSpec pinnedNode(String name, String... dependsOn) {
+        return new NodeSpec(name, List.of(dependsOn), true);
+    }
+
+    private record NodeSpec(String name, List<String> dependsOn,
+                            boolean pinned) {}
+
+    // ── Tag-aligned members leave the cascade (#973) ────────────────
+
+    @Test
+    void tagAligned_seed_is_dropped() {
+        // A is pinned tag-aligned: commits on its checkout never make it
+        // release-pending, and nothing cascades from it.
+        WorkspaceGraph graph = graphOf(
+                pinnedNode("A"),
+                node("C", "A"));
+
+        Set<String> set = WsReleaseDraftMojo.computeReleaseSet(
+                graph, Set.of("A"));
+
+        assertThat(set).isEmpty();
+    }
+
+    @Test
+    void tagAligned_downstream_is_not_pulled() {
+        // A changed; B and C both depend on A; B is pinned. The cascade
+        // pulls C but must not pull B back into the release set.
+        WorkspaceGraph graph = graphOf(
+                node("A"),
+                pinnedNode("B", "A"),
+                node("C", "A"));
+
+        Set<String> set = WsReleaseDraftMojo.computeReleaseSet(
+                graph, Set.of("A"));
+
+        assertThat(set).containsExactly("A", "C");
+    }
+
+    @Test
+    void cascade_traverses_through_a_pinned_member_conservatively() {
+        // A → B(pinned) → C. B stays out; C is still pulled. C's
+        // re-release against B's unchanged pin is redundant but never
+        // wrong (it re-references the same pinned version). Stopping
+        // propagation AT the pin — the firewall refinement — belongs to
+        // the #233 lattice work; this pins the deliberate conservative
+        // behavior until then.
+        WorkspaceGraph graph = graphOf(
+                node("A"),
+                pinnedNode("B", "A"),
+                node("C", "B"));
+
+        Set<String> set = WsReleaseDraftMojo.computeReleaseSet(
+                graph, Set.of("A"));
+
+        assertThat(set).containsExactly("A", "C");
+    }
 }

@@ -208,17 +208,27 @@ public class FieldNormalizationReconciler implements Reconciler {
             File pomFile = new File(subprojectDir, "pom.xml");
             if (!pomFile.exists()) continue;
 
-            try {
-                String pomVersion = ReleaseSupport.readPomVersion(pomFile);
-                String yamlVersion = subproject.version();
-                if (yamlVersion != null && !yamlVersion.equals(pomVersion)) {
-                    versionUpdates.put(name, new FieldChange(yamlVersion, pomVersion));
-                } else if (yamlVersion == null && pomVersion != null) {
-                    versionUpdates.put(name, new FieldChange(null, pomVersion));
+            // Tag-aligned members are exempt from version denormalization
+            // (#972/#973): their manifest version: field is the release
+            // pin written by ws:record-release, and the on-disk POM has
+            // post-bumped past it by design — syncing from POM truth here
+            // would overwrite the pin with the next SNAPSHOT.
+            if (subproject.isTagAligned()) {
+                ctx.log().debug("  " + name
+                        + ": version field is a tag-aligned pin — skipped");
+            } else {
+                try {
+                    String pomVersion = ReleaseSupport.readPomVersion(pomFile);
+                    String yamlVersion = subproject.version();
+                    if (yamlVersion != null && !yamlVersion.equals(pomVersion)) {
+                        versionUpdates.put(name, new FieldChange(yamlVersion, pomVersion));
+                    } else if (yamlVersion == null && pomVersion != null) {
+                        versionUpdates.put(name, new FieldChange(null, pomVersion));
+                    }
+                } catch (MojoException e) {
+                    ctx.log().warn("  " + name + ": could not read POM version — "
+                            + e.getMessage());
                 }
-            } catch (MojoException e) {
-                ctx.log().warn("  " + name + ": could not read POM version — "
-                        + e.getMessage());
             }
 
             try {

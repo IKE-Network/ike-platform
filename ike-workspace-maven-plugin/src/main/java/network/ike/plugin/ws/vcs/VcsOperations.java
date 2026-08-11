@@ -595,14 +595,22 @@ public class VcsOperations {
 
     /**
      * Commit specific paths in isolation, regardless of what else is in
-     * the index. Equivalent to {@code git commit -F - -- <paths>}: the
-     * working-tree content of the listed (tracked) paths is committed and
-     * nothing else, so a concurrent staged or unstaged change to another
-     * file is neither committed nor disturbed.
+     * the index: a named {@code git add -- <paths>} (never {@code -A})
+     * followed by {@code git commit -F - -- <paths>}. The named add makes
+     * a goal-<em>created</em> (still-untracked) file committable — a bare
+     * pathspec commit cannot include one — and is a semantic no-op for
+     * tracked modifications and deletions, so the working-tree content of
+     * the listed paths is committed and nothing else; a concurrent staged
+     * or unstaged change to another file is neither committed nor
+     * disturbed.
      *
      * <p>Used by {@link network.ike.plugin.ws.PostMutationSync} to commit
      * the re-derived {@code workspace.yaml} on its own
-     * (IKE-Network/ike-issues#774). Sets {@code IKE_VCS_CONTEXT} to bypass
+     * (IKE-Network/ike-issues#774), and by the
+     * {@link network.ike.plugin.ws.GoalAuthoredChanges} IN_ISOLATION
+     * primitive (#780) — {@code ws:record-release} is the first caller
+     * whose authored set includes a newly created file
+     * (IKE-Network/ike-issues#973). Sets {@code IKE_VCS_CONTEXT} to bypass
      * the pre-commit hook.
      *
      * @param dir     the repository root directory
@@ -613,6 +621,11 @@ public class VcsOperations {
      */
     public static void commitPaths(File dir, Log log, String message,
                                    String... paths) throws MojoException {
+        List<String> add = new ArrayList<>(List.of("git", "add", "--"));
+        add.addAll(List.of(paths));
+        // Idempotent: re-running converges on the same index, so it
+        // survives a transient index.lock collision (#636).
+        captureIdempotentMutation(dir, add.toArray(new String[0]));
         List<String> command = new ArrayList<>(
                 List.of("git", "commit", "-F", "-", "--"));
         command.addAll(List.of(paths));

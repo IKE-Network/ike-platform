@@ -274,6 +274,15 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
             Subproject sub = graph.manifest().subprojects().get(name);
             if (sub == null) continue;
 
+            // Tag-aligned members left the release cascade (#973): they
+            // are pinned at a released tag; commits on their checkout do
+            // not make them release-pending here.
+            if (!sub.isSnapshotAligned()) {
+                getLog().info("  Skipping " + name + " — tag-aligned (pinned "
+                        + sub.tag() + "; not in the release cascade)");
+                continue;
+            }
+
             File subDir = new File(root, name);
             if (!subDir.isDirectory() || !new File(subDir, "pom.xml").exists()) {
                 getLog().debug("Skipping " + name + " — not checked out");
@@ -563,10 +572,23 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
      */
     public static Set<String> computeReleaseSet(WorkspaceGraph graph,
                                                 Set<String> sourceChanged) {
-        Set<String> set = new LinkedHashSet<>(sourceChanged);
+        Set<String> set = new LinkedHashSet<>();
         for (String name : sourceChanged) {
-            if (!graph.manifest().subprojects().containsKey(name)) continue;
-            set.addAll(graph.cascade(name));
+            Subproject seed = graph.manifest().subprojects().get(name);
+            // Tag-aligned members left the release cascade (#973): drop
+            // them as seeds and never pull them in as downstream. Names
+            // absent from the manifest are seeded as before — the topo
+            // reorder below governs their fate, exactly as it always has.
+            if (seed != null && !seed.isSnapshotAligned()) continue;
+            set.add(name);
+            if (seed == null) continue;
+            for (String downstream : graph.cascade(name)) {
+                Subproject cascaded =
+                        graph.manifest().subprojects().get(downstream);
+                if (cascaded == null || cascaded.isSnapshotAligned()) {
+                    set.add(downstream);
+                }
+            }
         }
         // Reorder by topo sort so the result is deterministic and matches
         // the dependency order callers expect.

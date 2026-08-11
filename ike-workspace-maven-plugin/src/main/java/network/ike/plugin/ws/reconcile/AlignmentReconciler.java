@@ -5,6 +5,7 @@ import network.ike.plugin.ws.PomModel;
 import network.ike.plugin.ws.SubprojectResolver;
 import network.ike.plugin.ws.WsGoal;
 import network.ike.workspace.Dependency;
+import network.ike.workspace.ManifestException;
 import network.ike.workspace.PublishedArtifactSet;
 import network.ike.workspace.Subproject;
 import network.ike.workspace.WorkspaceGraph;
@@ -90,7 +91,9 @@ public class AlignmentReconciler implements Reconciler {
         List<String> detail = new ArrayList<>();
         for (AlignChange c : plan.changes) {
             detail.add(c.subproject + " (" + c.pomRelPath + "): "
-                    + c.artifact + " " + c.fromVersion + " → " + c.toVersion);
+                    + c.artifact + " " + c.fromVersion + " → " + c.toVersion
+                    + (c.pinnedTag != null
+                            ? " (pinned " + c.pinnedTag + ")" : ""));
         }
         String summary = plan.totalChanges()
                 + " version(s) drift across "
@@ -158,10 +161,13 @@ public class AlignmentReconciler implements Reconciler {
      *                   {@code parent:artifactId}
      * @param fromVersion the version currently declared
      * @param toVersion   the version this reconciler will set
+     * @param pinnedTag   the target member's release tag when the target
+     *                    version is a tag-aligned pin (#972); null when
+     *                    the target is snapshot-aligned
      */
     private record AlignChange(String subproject, String pomRelPath,
                                 String artifact, String fromVersion,
-                                String toVersion) {}
+                                String toVersion, String pinnedTag) {}
 
     /**
      * The full alignment plan for one reconciliation pass.
@@ -181,9 +187,41 @@ public class AlignmentReconciler implements Reconciler {
     }
 
     /**
-     * Associates a subproject name with its current POM version.
+     * Associates a subproject name with the version consumers must
+     * reference: the on-disk POM version for snapshot-aligned members,
+     * or the manifest-pinned released version for tag-aligned members
+     * (IKE-Network/ike-issues#972 — state-aware alignment).
+     *
+     * @param name      the subproject name
+     * @param version   the alignment target version
+     * @param pinnedTag the release tag when the target is a tag-aligned
+     *                  pin; null for snapshot-aligned members
      */
-    private record ComponentVersion(String name, String version) {}
+    private record ComponentVersion(String name, String version,
+                                    String pinnedTag) {}
+
+    /**
+     * Enforce the tag-aligned manifest invariant: a member in
+     * {@code state: tag-aligned} must carry both the pinned
+     * {@code version:} and the {@code tag:} it is pinned at
+     * ({@link Subproject} schema, ike-issues#233). A violation means the
+     * manifest is corrupt and no alignment target is trustworthy, so
+     * this fails the whole pass rather than aligning to a wrong version.
+     *
+     * @param name       the subproject name for the error message
+     * @param subproject the manifest entry to validate
+     * @throws ManifestException when version or tag is null or blank
+     */
+    private static void requirePinComplete(String name, Subproject subproject) {
+        if (subproject.version() == null || subproject.version().isBlank()
+                || subproject.tag() == null || subproject.tag().isBlank()) {
+            throw new ManifestException("Subproject '" + name
+                    + "' is tag-aligned but missing its version: and/or tag:"
+                    + " pin — re-run mvn " + WsGoal.RECORD_RELEASE_PUBLISH.qualified()
+                    + " -Dmember=" + name
+                    + " or restore the fields in workspace.yaml");
+        }
+    }
 
     /**
      * Compute the alignment plan without mutating any POMs. Used by
@@ -332,6 +370,16 @@ public class AlignmentReconciler implements Reconciler {
                     continue;
                 }
 
+                // State-aware (#972): for a tag-aligned parent member the
+                // manifest version field IS the pin (written together with
+                // state/tag by ws:record-release), so the existing
+                // manifest-sourced expectedVersion is already correct —
+                // validate the pin and annotate the change.
+                String parentPinnedTag = null;
+                if (parentSubproject.isTagAligned()) {
+                    requirePinComplete(parentSubprojectName, parentSubproject);
+                    parentPinnedTag = parentSubproject.tag();
+                }
                 String expectedVersion = parentSubproject.version();
                 String currentVersion = parentInfo.getVersion();
                 if (currentVersion == null
@@ -341,7 +389,7 @@ public class AlignmentReconciler implements Reconciler {
                 changes.add(new AlignChange(
                         name, "pom.xml",
                         "parent:" + parentInfo.getArtifactId(),
-                        currentVersion, expectedVersion));
+                        currentVersion, expectedVersion, parentPinnedTag));
             } catch (IOException e) {
                 log.warn("  " + name + ": could not read parent version — "
                         + e.getMessage());
@@ -493,18 +541,31 @@ public class AlignmentReconciler implements Reconciler {
         for (Map.Entry<String, Subproject> entry
                 : graph.manifest().subprojects().entrySet()) {
             String name = entry.getKey();
+            Subproject subproject = entry.getValue();
             File subprojectDir = new File(root, name);
             if (!new File(subprojectDir, "pom.xml").exists()) {
                 continue;
             }
-            String pomVersion;
-            try {
-                pomVersion = ReleaseSupport.readPomVersion(
-                        new File(subprojectDir, "pom.xml"));
-            } catch (MojoException e) {
-                log.warn("  " + name + ": could not read POM version — "
-                        + e.getMessage());
-                continue;
+            // State-aware target resolution (#972): a tag-aligned member's
+            // consumers reference its manifest-pinned released version, not
+            // the member's on-disk POM (which has post-bumped to the next
+            // SNAPSHOT). Snapshot-aligned members keep POM truth.
+            String targetVersion;
+            String pinnedTag;
+            if (subproject.isTagAligned()) {
+                requirePinComplete(name, subproject);
+                targetVersion = subproject.version();
+                pinnedTag = subproject.tag();
+            } else {
+                try {
+                    targetVersion = ReleaseSupport.readPomVersion(
+                            new File(subprojectDir, "pom.xml"));
+                } catch (MojoException e) {
+                    log.warn("  " + name + ": could not read POM version — "
+                            + e.getMessage());
+                    continue;
+                }
+                pinnedTag = null;
             }
             Set<PublishedArtifactSet.Artifact> published;
             try {
@@ -514,7 +575,8 @@ public class AlignmentReconciler implements Reconciler {
                         + e.getMessage());
                 continue;
             }
-            ComponentVersion cv = new ComponentVersion(name, pomVersion);
+            ComponentVersion cv = new ComponentVersion(
+                    name, targetVersion, pinnedTag);
             for (PublishedArtifactSet.Artifact artifact : published) {
                 String key = artifact.groupId() + ":" + artifact.artifactId();
                 index.put(key, cv);
@@ -571,11 +633,11 @@ public class AlignmentReconciler implements Reconciler {
                 if (propValue != null && !propValue.equals(target.version)) {
                     changes.add(new AlignChange(ownerName, relPath,
                             "property:" + propName,
-                            propValue, target.version));
+                            propValue, target.version, target.pinnedTag));
                 }
             } else if (!currentVersion.equals(target.version)) {
                 changes.add(new AlignChange(ownerName, relPath, key,
-                        currentVersion, target.version));
+                        currentVersion, target.version, target.pinnedTag));
             }
         }
 
@@ -593,7 +655,7 @@ public class AlignmentReconciler implements Reconciler {
                         pomFile.toPath()).toString();
                 changes.add(new AlignChange(ownerName, relPath,
                         "property:" + versionProperty,
-                        currentValue, cv.version));
+                        currentValue, cv.version, cv.pinnedTag));
             }
         }
     }
@@ -638,7 +700,7 @@ public class AlignmentReconciler implements Reconciler {
                         pomFile.toPath()).toString();
                 changes.add(new AlignChange(ownerName, relPath,
                         "plugin:" + key,
-                        currentVersion, target.version()));
+                        currentVersion, target.version(), target.pinnedTag()));
             }
         }
     }

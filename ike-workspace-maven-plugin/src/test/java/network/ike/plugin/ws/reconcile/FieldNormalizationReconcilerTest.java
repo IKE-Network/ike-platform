@@ -126,4 +126,70 @@ class FieldNormalizationReconcilerTest {
         assertThat(Files.readString(manifest, StandardCharsets.UTF_8))
                 .isEqualTo(clean);
     }
+
+    /**
+     * Tag-aligned members are exempt from version denormalization
+     * (IKE-Network/ike-issues#972/#973): the manifest {@code version:}
+     * is the release pin, and the on-disk POM has post-bumped past it
+     * by design. A snapshot-aligned sibling with genuine drift must
+     * still sync — the skip is member-scoped, not pass-wide.
+     */
+    @Test
+    void tag_aligned_pin_is_not_overwritten_by_pom_truth(
+            @TempDir Path tmp) throws IOException {
+        String pinned = """
+                schema-version: "1.0"
+                defaults:
+                  branch: main
+                subprojects:
+                  released-lib:
+                    repo: https://example.com/released-lib.git
+                    version: "2.0.0"
+                    state: tag-aligned
+                    kind: release
+                    tag: v2.0.0
+                    groupId: network.ike.test
+                  dev-lib:
+                    repo: https://example.com/dev-lib.git
+                    version: "1.0.0-SNAPSHOT"
+                    groupId: network.ike.test
+                """;
+        Path manifest = tmp.resolve("workspace.yaml");
+        Files.writeString(manifest, pinned, StandardCharsets.UTF_8);
+        writePom(tmp, "released-lib", "2.0.1-SNAPSHOT");
+        writePom(tmp, "dev-lib", "1.1.0-SNAPSHOT");
+
+        WorkspaceContext ctx = new WorkspaceContext(
+                tmp.toFile(),
+                manifest,
+                new WorkspaceGraph(ManifestReader.read(manifest)),
+                ReconcilerOptions.empty(),
+                new TestLog());
+
+        new FieldNormalizationReconciler().apply(ctx);
+
+        String result = Files.readString(manifest, StandardCharsets.UTF_8);
+        assertThat(result)
+                .as("the release pin must survive the sync")
+                .contains("version: \"2.0.0\"")
+                .doesNotContain("2.0.1-SNAPSHOT");
+        assertThat(result)
+                .as("snapshot-aligned drift still syncs")
+                .contains("version: 1.1.0-SNAPSHOT");
+    }
+
+    private static void writePom(Path root, String subproject,
+                                 String version) throws IOException {
+        Path dir = root.resolve(subproject);
+        Files.createDirectories(dir);
+        Files.writeString(dir.resolve("pom.xml"), """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <project xmlns="http://maven.apache.org/POM/4.0.0">
+                    <modelVersion>4.0.0</modelVersion>
+                    <groupId>network.ike.test</groupId>
+                    <artifactId>%s</artifactId>
+                    <version>%s</version>
+                </project>
+                """.formatted(subproject, version), StandardCharsets.UTF_8);
+    }
 }

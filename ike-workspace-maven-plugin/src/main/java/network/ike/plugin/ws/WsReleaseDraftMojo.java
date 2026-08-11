@@ -158,6 +158,18 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
     @Parameter(property = "installerGlob", defaultValue = "installers/*.{pkg,dmg,msi,deb,rpm}")
     String installerGlob;
 
+    /**
+     * Message for both goal-authored alignment commits (pre-release
+     * upstream alignment and the loop's per-member catch-up). Carries
+     * the standing {@code Refs:} trailer so the member release engine's
+     * trailer-compliance preflight passes on the orchestrator's own
+     * bookkeeping (IKE-Network/ike-issues#983; #377 is the alignment
+     * feature the commits implement).
+     */
+    static final String ALIGNMENT_COMMIT_MESSAGE =
+            "chore: align upstream versions before release"
+                    + "\n\nRefs: IKE-Network/ike-issues#377";
+
     /** Creates this goal instance. */
     public WsReleaseDraftMojo() {}
 
@@ -1132,7 +1144,7 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
         try {
             ReleaseSupport.exec(pomDir, getLog(), "git", "add", "pom.xml");
             ReleaseSupport.exec(pomDir, getLog(), "git", "commit", "-m",
-                    "chore: align upstream versions before release");
+                    ALIGNMENT_COMMIT_MESSAGE);
         } catch (Exception e) {
             getLog().warn("  Pre-release alignment commit failed for "
                     + pomDir.getName() + ": " + e.getMessage());
@@ -1483,7 +1495,7 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
             }
             ReleaseSupport.exec(rc.dir, getLog(),
                     "git", "commit", "-m",
-                    "chore: align upstream versions before release");
+                    ALIGNMENT_COMMIT_MESSAGE);
         } catch (MojoException e) {
             throw new MojoException(
                     "Catch-up alignment for " + rc.name

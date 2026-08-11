@@ -1,0 +1,334 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>CleanupWorkspaceMojo.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">CleanupWorkspaceMojo.java</span></div><h1>CleanupWorkspaceMojo.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.workspace.WorkspaceGraph;
+import network.ike.plugin.support.GoalReportBuilder;
+import network.ike.plugin.ws.vcs.VcsOperations;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
+
+import java.io.File;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
+
+/**
+ * Scan the working set for finished feature branches and offer deletion.
+ *
+ * &lt;p&gt;Classifies every local {@code feature/*} branch — across all
+ * subprojects AND the workspace root — into three states
+ * (IKE-Network/ike-issues#946):
+ *
+ * &lt;ul&gt;
+ *   &lt;li&gt;&lt;b&gt;merged&lt;/b&gt; — an ancestor of the target (no-ff merges);&lt;/li&gt;
+ *   &lt;li&gt;&lt;b&gt;squash-merged&lt;/b&gt; — not an ancestor, but its tip's tree equals
+ *       a recent target commit's tree: the content landed via
+ *       {@code ws:feature-finish-squash-*}, the recommended strategy,
+ *       which ancestry classification can never see;&lt;/li&gt;
+ *   &lt;li&gt;&lt;b&gt;active&lt;/b&gt; — genuinely unmerged work.&lt;/li&gt;
+ * &lt;/ul&gt;
+ *
+ * &lt;p&gt;Classification runs against {@code origin/&lt;targetBranch&gt;} (after a
+ * fetch) whenever that ref resolves — the same source-of-truth doctrine
+ * as the feature-lifecycle goals (#857). That also makes deletion of the
+ * matching &lt;em&gt;remote&lt;/em&gt; feature branches safe: squash-merged means the
+ * content is already on the remote target.
+ *
+ * &lt;p&gt;In draft mode (default), only reports. In publish mode, deletes the
+ * merged and squash-merged branches — local and remote (remote deletion
+ * soft-fails per #532).
+ *
+ * &lt;pre&gt;{@code
+ * mvn ws:cleanup-draft                    # list finished branches
+ * mvn ws:cleanup-publish                  # delete merged + squash-merged
+ * mvn ws:cleanup-draft -DtargetBranch=develop
+ * }&lt;/pre&gt;
+ */
+@Mojo(name = &quot;cleanup-draft&quot;, projectRequired = false, aggregator = true)
+public class CleanupWorkspaceMojo extends AbstractWorkspaceMojo {
+
+    /**
+     * How many recent target commits the squash-merge tree comparison
+     * scans. Squash finishes land near the target tip, so a modest
+     * window is ample; the cap keeps the scan O(1) per branch.
+     */
+    private static final int TREE_SCAN_LIMIT = 500;
+
+    /** Creates this goal instance. */
+<span class="fc" id="L62">    public CleanupWorkspaceMojo() {}</span>
+
+    /** Branch to check merge status against. */
+    @Parameter(property = &quot;targetBranch&quot;, defaultValue = &quot;main&quot;)
+    String targetBranch;
+
+    /** Execute deletions (true) or just report (false). */
+    @Parameter(property = &quot;publish&quot;, defaultValue = &quot;false&quot;)
+    boolean publish;
+
+    @Override
+    protected WorkspaceReportSpec runGoal() throws MojoException {
+<span class="fc" id="L74">        WorkspaceGraph graph = loadGraph();</span>
+<span class="fc" id="L75">        File root = workspaceRoot();</span>
+
+<span class="pc bpc" id="L77" title="1 of 2 branches missed.">        boolean draft = !publish;</span>
+<span class="fc" id="L78">        List&lt;String&gt; sorted = graph.topologicalSort(</span>
+<span class="fc" id="L79">                new LinkedHashSet&lt;&gt;(graph.manifest().subprojects().keySet()));</span>
+
+<span class="fc" id="L81">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L82">        getLog().info(header(&quot;Cleanup&quot;));</span>
+<span class="fc" id="L83">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+<span class="fc" id="L84">        getLog().info(&quot;  Target: &quot; + targetBranch);</span>
+<span class="pc bpc" id="L85" title="1 of 2 branches missed.">        if (draft) getLog().info(&quot;  Mode:   DRAFT — listing only&quot;);</span>
+<span class="fc" id="L86">        getLog().info(&quot;&quot;);</span>
+
+        // The working set includes the root repo (#946/#763): a finish
+        // with keepBranch leaves the root's feature branch behind too.
+<span class="fc" id="L90">        Map&lt;String, File&gt; memberDirs = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc bfc" id="L91" title="All 2 branches covered.">        for (String name : sorted) {</span>
+<span class="fc" id="L92">            memberDirs.put(name, new File(root, name));</span>
+<span class="fc" id="L93">        }</span>
+<span class="fc" id="L94">        memberDirs.put(RefreshMainSupport.ROOT_LABEL, root);</span>
+
+        // Collect merged / squash-merged / active feature branches per member.
+<span class="fc" id="L97">        Map&lt;String, List&lt;String&gt;&gt; mergedByMember = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc" id="L98">        Map&lt;String, List&lt;String&gt;&gt; squashedByMember = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc" id="L99">        Map&lt;String, List&lt;String&gt;&gt; activeByMember = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc" id="L100">        Set&lt;String&gt; allMerged = new TreeSet&lt;&gt;();</span>
+<span class="fc" id="L101">        Set&lt;String&gt; allSquashed = new TreeSet&lt;&gt;();</span>
+<span class="fc" id="L102">        Set&lt;String&gt; allActive = new TreeSet&lt;&gt;();</span>
+
+<span class="fc bfc" id="L104" title="All 2 branches covered.">        for (Map.Entry&lt;String, File&gt; entry : memberDirs.entrySet()) {</span>
+<span class="fc" id="L105">            String name = entry.getKey();</span>
+<span class="fc" id="L106">            File dir = entry.getValue();</span>
+<span class="pc bpc" id="L107" title="1 of 2 branches missed.">            if (!new File(dir, &quot;.git&quot;).exists()) continue;</span>
+
+            // Assess against origin truth when available (#857): fetch,
+            // then compare against origin/&lt;target&gt; so a stale local
+            // target neither hides a finished branch nor legitimizes
+            // deleting one whose content is not actually on the remote.
+            try {
+<span class="fc" id="L114">                VcsOperations.fetch(dir, getLog());</span>
+<span class="nc" id="L115">            } catch (MojoException e) {</span>
+<span class="nc" id="L116">                getLog().warn(&quot;  &quot; + name + &quot; — fetch failed (&quot;</span>
+<span class="nc" id="L117">                        + e.getMessage() + &quot;); assessing against local &quot;</span>
+                        + targetBranch);
+<span class="fc" id="L119">            }</span>
+<span class="fc" id="L120">            String assessRef = RefreshMainSupport.assessmentRef(dir, targetBranch);</span>
+
+<span class="fc" id="L122">            List&lt;String&gt; merged = VcsOperations.mergedBranches(</span>
+                    dir, assessRef, &quot;feature/&quot;);
+<span class="fc" id="L124">            List&lt;String&gt; allFeature = VcsOperations.localBranches(dir, &quot;feature/&quot;);</span>
+<span class="fc" id="L125">            List&lt;String&gt; squashed = allFeature.stream()</span>
+<span class="pc bpc" id="L126" title="1 of 2 branches missed.">                    .filter(b -&gt; !merged.contains(b))</span>
+<span class="fc" id="L127">                    .filter(b -&gt; VcsOperations.branchTreeLandedOn(</span>
+                            dir, b, assessRef, TREE_SCAN_LIMIT))
+<span class="fc" id="L129">                    .toList();</span>
+<span class="fc" id="L130">            List&lt;String&gt; active = allFeature.stream()</span>
+<span class="pc bpc" id="L131" title="1 of 2 branches missed.">                    .filter(b -&gt; !merged.contains(b))</span>
+<span class="fc bfc" id="L132" title="All 2 branches covered.">                    .filter(b -&gt; !squashed.contains(b))</span>
+<span class="fc" id="L133">                    .toList();</span>
+
+<span class="pc bpc" id="L135" title="1 of 2 branches missed.">            if (!merged.isEmpty()) {</span>
+<span class="nc" id="L136">                mergedByMember.put(name, merged);</span>
+<span class="nc" id="L137">                allMerged.addAll(merged);</span>
+            }
+<span class="fc bfc" id="L139" title="All 2 branches covered.">            if (!squashed.isEmpty()) {</span>
+<span class="fc" id="L140">                squashedByMember.put(name, squashed);</span>
+<span class="fc" id="L141">                allSquashed.addAll(squashed);</span>
+            }
+<span class="fc bfc" id="L143" title="All 2 branches covered.">            if (!active.isEmpty()) {</span>
+<span class="fc" id="L144">                activeByMember.put(name, active);</span>
+<span class="fc" id="L145">                allActive.addAll(active);</span>
+            }
+<span class="fc" id="L147">        }</span>
+
+        // Report the three classes.
+<span class="pc bpc" id="L150" title="1 of 4 branches missed.">        if (allMerged.isEmpty() &amp;&amp; allSquashed.isEmpty()) {</span>
+<span class="fc" id="L151">            getLog().info(&quot;  No finished feature branches found.&quot;);</span>
+        }
+<span class="pc bpc" id="L153" title="1 of 2 branches missed.">        if (!allMerged.isEmpty()) {</span>
+<span class="nc" id="L154">            getLog().info(&quot;  Merged branches (ancestry — safe to delete):&quot;);</span>
+<span class="nc" id="L155">            logBranchGroup(allMerged, mergedByMember, memberDirs, Ansi.green(&quot;    ✓ &quot;));</span>
+        }
+<span class="fc bfc" id="L157" title="All 2 branches covered.">        if (!allSquashed.isEmpty()) {</span>
+<span class="fc" id="L158">            getLog().info(&quot;  Squash-merged branches (content landed — safe to delete):&quot;);</span>
+<span class="fc" id="L159">            logBranchGroup(allSquashed, squashedByMember, memberDirs, Ansi.green(&quot;    ✓ &quot;));</span>
+        }
+<span class="fc bfc" id="L161" title="All 2 branches covered.">        if (!allActive.isEmpty()) {</span>
+<span class="fc" id="L162">            getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L163">            getLog().info(&quot;  Active branches (not merged):&quot;);</span>
+<span class="fc" id="L164">            logBranchGroup(allActive, activeByMember, memberDirs, Ansi.yellow(&quot;    · &quot;));</span>
+        }
+
+<span class="fc" id="L167">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L168">        getLog().info(&quot;  Summary: &quot; + allMerged.size() + &quot; merged, &quot;</span>
+<span class="fc" id="L169">                + allSquashed.size() + &quot; squash-merged, &quot;</span>
+<span class="fc" id="L170">                + allActive.size() + &quot; active&quot;);</span>
+
+        // In publish mode, delete merged AND squash-merged branches —
+        // local and remote (#946; remote deletion soft-fails per #532).
+<span class="pc bpc" id="L174" title="2 of 6 branches missed.">        if (publish &amp;&amp; (!allMerged.isEmpty() || !allSquashed.isEmpty())) {</span>
+<span class="fc" id="L175">            getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L176">            int deleted = 0;</span>
+<span class="fc" id="L177">            Map&lt;String, List&lt;String&gt;&gt; deletable = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc" id="L178">            mergedByMember.forEach((m, bs) -&gt;</span>
+<span class="nc" id="L179">                    deletable.merge(m, new ArrayList&lt;&gt;(bs), (a, b) -&gt; {</span>
+<span class="nc" id="L180">                        a.addAll(b);</span>
+<span class="nc" id="L181">                        return a;</span>
+                    }));
+<span class="fc" id="L183">            squashedByMember.forEach((m, bs) -&gt;</span>
+<span class="fc" id="L184">                    deletable.merge(m, new ArrayList&lt;&gt;(bs), (a, b) -&gt; {</span>
+<span class="nc" id="L185">                        a.addAll(b);</span>
+<span class="nc" id="L186">                        return a;</span>
+                    }));
+<span class="fc bfc" id="L188" title="All 2 branches covered.">            for (Map.Entry&lt;String, List&lt;String&gt;&gt; entry : deletable.entrySet()) {</span>
+<span class="fc" id="L189">                File dir = memberDirs.get(entry.getKey());</span>
+<span class="fc bfc" id="L190" title="All 2 branches covered.">                for (String branch : entry.getValue()) {</span>
+                    try {
+<span class="fc" id="L192">                        FeatureFinishSupport.deleteBranch(</span>
+<span class="fc" id="L193">                                dir, getLog(), branch, false);</span>
+<span class="fc" id="L194">                        getLog().info(Ansi.green(&quot;    ✓ &quot;) + &quot;deleted: &quot;</span>
+<span class="fc" id="L195">                                + entry.getKey() + &quot;/&quot; + branch);</span>
+<span class="fc" id="L196">                        deleted++;</span>
+
+                        // Also clean up stale remote-tracking refs
+                        try {
+<span class="fc" id="L200">                            new ProcessBuilder(&quot;git&quot;, &quot;remote&quot;, &quot;prune&quot;, &quot;origin&quot;)</span>
+<span class="fc" id="L201">                                    .directory(dir).start().waitFor();</span>
+<span class="pc" id="L202">                        } catch (Exception ignored) {}</span>
+<span class="nc" id="L203">                    } catch (MojoException e) {</span>
+<span class="nc" id="L204">                        getLog().warn(Ansi.red(&quot;    ✗ &quot;) + entry.getKey()</span>
+<span class="nc" id="L205">                                + &quot;/&quot; + branch + &quot; — &quot; + e.getMessage());</span>
+<span class="fc" id="L206">                    }</span>
+<span class="fc" id="L207">                }</span>
+<span class="fc" id="L208">            }</span>
+<span class="fc" id="L209">            getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L210">            getLog().info(&quot;  Deleted &quot; + deleted + &quot; branch reference&quot;</span>
+<span class="pc bpc" id="L211" title="1 of 2 branches missed.">                    + (deleted == 1 ? &quot;&quot; : &quot;s&quot;) + &quot;.&quot;);</span>
+        }
+
+<span class="fc" id="L214">        getLog().info(&quot;&quot;);</span>
+
+<span class="fc" id="L216">        return new WorkspaceReportSpec(</span>
+<span class="pc bpc" id="L217" title="1 of 2 branches missed.">                publish ? WsGoal.CLEANUP_PUBLISH : WsGoal.CLEANUP_DRAFT,</span>
+<span class="fc" id="L218">                buildCleanupReport(allMerged, allSquashed, allActive,</span>
+                        mergedByMember, squashedByMember, memberDirs));
+    }
+
+    /**
+     * Log one line per branch in a classification group: the branch, how
+     * many members carry it, and its last-commit date.
+     *
+     * @param branches   the group's branch names
+     * @param byMember   member → branches in this group
+     * @param memberDirs member → repository directory
+     * @param bullet     the (colored) line prefix
+     */
+    private void logBranchGroup(Set&lt;String&gt; branches,
+                                Map&lt;String, List&lt;String&gt;&gt; byMember,
+                                Map&lt;String, File&gt; memberDirs,
+                                String bullet) {
+<span class="fc bfc" id="L235" title="All 2 branches covered.">        for (String branch : branches) {</span>
+<span class="fc" id="L236">            int count = (int) byMember.values().stream()</span>
+<span class="fc" id="L237">                    .filter(list -&gt; list.contains(branch))</span>
+<span class="fc" id="L238">                    .count();</span>
+<span class="fc" id="L239">            String date = lastCommitDate(branch, byMember, memberDirs);</span>
+<span class="fc" id="L240">            getLog().info(bullet + branch + &quot; (&quot; + count</span>
+<span class="pc bpc" id="L241" title="1 of 2 branches missed.">                    + &quot; member&quot; + (count == 1 ? &quot;&quot; : &quot;s&quot;)</span>
+                    + &quot;, last commit: &quot; + date + &quot;)&quot;);
+<span class="fc" id="L243">        }</span>
+<span class="fc" id="L244">    }</span>
+
+    /**
+     * Last-commit date of a branch, read from the first member that
+     * carries it.
+     *
+     * @param branch     the branch name
+     * @param byMember   member → branches
+     * @param memberDirs member → repository directory
+     * @return the date string, or {@code &quot;unknown&quot;}
+     */
+    private String lastCommitDate(String branch,
+                                  Map&lt;String, List&lt;String&gt;&gt; byMember,
+                                  Map&lt;String, File&gt; memberDirs) {
+<span class="pc bpc" id="L258" title="1 of 2 branches missed.">        for (Map.Entry&lt;String, List&lt;String&gt;&gt; entry : byMember.entrySet()) {</span>
+<span class="pc bpc" id="L259" title="1 of 2 branches missed.">            if (entry.getValue().contains(branch)) {</span>
+<span class="fc" id="L260">                return VcsOperations.branchLastCommitDate(</span>
+<span class="fc" id="L261">                        memberDirs.get(entry.getKey()), branch);</span>
+            }
+<span class="nc" id="L263">        }</span>
+<span class="nc" id="L264">        return &quot;unknown&quot;;</span>
+    }
+
+    /**
+     * Build the markdown report: merged and squash-merged sections (both
+     * deletable) plus the active section.
+     *
+     * @param merged           ancestry-merged branch names
+     * @param squashed         squash-merged (content-landed) branch names
+     * @param active           active branch names
+     * @param mergedByMember   member → ancestry-merged branches
+     * @param squashedByMember member → squash-merged branches
+     * @param memberDirs       member → repository directory
+     * @return the rendered report body
+     */
+    private String buildCleanupReport(Set&lt;String&gt; merged, Set&lt;String&gt; squashed,
+                                      Set&lt;String&gt; active,
+                                      Map&lt;String, List&lt;String&gt;&gt; mergedByMember,
+                                      Map&lt;String, List&lt;String&gt;&gt; squashedByMember,
+                                      Map&lt;String, File&gt; memberDirs) {
+<span class="fc" id="L284">        GoalReportBuilder report = new GoalReportBuilder();</span>
+<span class="fc" id="L285">        report.paragraph(merged.size() + &quot; merged, &quot; + squashed.size()</span>
+<span class="fc" id="L286">                + &quot; squash-merged, &quot; + active.size()</span>
+                + &quot; active feature branch&quot;
+<span class="fc bfc" id="L288" title="All 2 branches covered.">                + (active.size() == 1 ? &quot;&quot; : &quot;es&quot;) + &quot;.&quot;);</span>
+
+<span class="pc bpc" id="L290" title="1 of 2 branches missed.">        if (!merged.isEmpty()) {</span>
+<span class="nc" id="L291">            report.section(&quot;Merged — ancestry (safe to delete)&quot;)</span>
+<span class="nc" id="L292">                    .table(List.of(&quot;Branch&quot;, &quot;Members&quot;, &quot;Last Commit&quot;),</span>
+<span class="nc" id="L293">                            branchRows(merged, mergedByMember, memberDirs));</span>
+        }
+<span class="fc bfc" id="L295" title="All 2 branches covered.">        if (!squashed.isEmpty()) {</span>
+<span class="fc" id="L296">            report.section(&quot;Squash-merged — content landed (safe to delete)&quot;)</span>
+<span class="fc" id="L297">                    .table(List.of(&quot;Branch&quot;, &quot;Members&quot;, &quot;Last Commit&quot;),</span>
+<span class="fc" id="L298">                            branchRows(squashed, squashedByMember, memberDirs));</span>
+        }
+<span class="fc bfc" id="L300" title="All 2 branches covered.">        if (!active.isEmpty()) {</span>
+<span class="fc" id="L301">            List&lt;String[]&gt; activeRows = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L302" title="All 2 branches covered.">            for (String branch : active) {</span>
+<span class="fc" id="L303">                activeRows.add(new String[]{branch});</span>
+<span class="fc" id="L304">            }</span>
+<span class="fc" id="L305">            report.section(&quot;Active&quot;)</span>
+<span class="fc" id="L306">                    .table(List.of(&quot;Branch&quot;), activeRows);</span>
+        }
+
+<span class="fc" id="L309">        return report.build();</span>
+    }
+
+    /**
+     * Rows for a deletable-branch table: branch, member count, last date.
+     *
+     * @param branches   the group's branch names
+     * @param byMember   member → branches in this group
+     * @param memberDirs member → repository directory
+     * @return one row per branch
+     */
+    private List&lt;String[]&gt; branchRows(Set&lt;String&gt; branches,
+                                      Map&lt;String, List&lt;String&gt;&gt; byMember,
+                                      Map&lt;String, File&gt; memberDirs) {
+<span class="fc" id="L323">        List&lt;String[]&gt; rows = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L324" title="All 2 branches covered.">        for (String branch : branches) {</span>
+<span class="fc" id="L325">            int count = (int) byMember.values().stream()</span>
+<span class="fc" id="L326">                    .filter(list -&gt; list.contains(branch))</span>
+<span class="fc" id="L327">                    .count();</span>
+<span class="fc" id="L328">            rows.add(new String[]{branch, String.valueOf(count),</span>
+<span class="fc" id="L329">                    lastCommitDate(branch, byMember, memberDirs)});</span>
+<span class="fc" id="L330">        }</span>
+<span class="fc" id="L331">        return rows;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

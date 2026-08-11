@@ -1,12 +1,12 @@
 ---
-date_published: 2026-08-08
-date_modified: 2026-08-08
+date_published: 2026-08-10
+date_modified: 2026-08-10
 canonical_url: https://ike.network/ike-platform/ike-parent/built-with.html
 ---
 
 # Built With
 
-Open-source software that `ike-parent` 150 depends on, links against, ships within, or invokes at runtime.
+Open-source software that `ike-parent` 151 depends on, links against, ships within, or invokes at runtime.
 
 Three layers of attribution ship with each release:
 

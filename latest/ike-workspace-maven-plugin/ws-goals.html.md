@@ -1,6 +1,6 @@
 ---
-date_published: 2026-08-08
-date_modified: 2026-08-08
+date_published: 2026-08-10
+date_modified: 2026-08-10
 canonical_url: https://ike.network/ike-platform/ike-workspace-maven-plugin/ws-goals.html
 ---
 
@@ -46,6 +46,8 @@ Draft / publish split Most state-mutating goals come in two forms — `**-draft*
 | [ws:push — git push across the workspace](#push) | sync | `git push` across the workspace |
 | [reconcile-branches](#reconcile-branches-draft) | recovery | Reconcile `workspace.yaml` branch fields with on-disk git |
 | [ws:reconcile-branches — recover yaml/git mismatch](#reconcile-branches-publish) | recovery | Apply branch reconciliation |
+| [record-release](#record-release-draft) | release | Preview recording a member’s release (tag-aligned pin + `releases/` row) |
+| [ws:record-release — pin a released member](#record-release-publish) | release | Record a member’s release in one root commit |
 | [ws:refresh-main — refresh local main from origin](#refresh-main) | sync | Refresh local main from origin/main across the workspace |
 | [ws:release-draft — preview a coordinated release](#release-draft) | release | Preview a coordinated multi-repo release |
 | [ws:release-notes — milestone-derived release notes](#release-notes) | release | Generate notes from a GitHub milestone |
@@ -431,6 +433,20 @@ Generate release notes from a GitHub milestone’s closed issues. Queries the Gi
 
 ```
 mvn ws:release-notes -Dmilestone="my-component v17"
+```
+
+### [#ws-record-release--pin-a-released-member](#ws-record-release--pin-a-released-member)ws:record-release — pin a released member
+
+Record a member’s release in the working set (IKE-Network/ike-issues#973). After a member’s single-repo `ike:release-publish` succeeds, the publish variant writes — in one workspace-root commit — the member’s manifest transition to `state: tag-aligned, kind: release, tag: vN` with its `version:` field pinned at the released version, plus the member’s row (version, tag, sha, date) in `releases/release-<cycle>.yaml`.
+
+The pin changes how the rest of the console treats the member: `ws:align` targets the pinned released version instead of the member’s post-bumped SNAPSHOT (#972), the scaffold field sync leaves the pinned `version:` alone, and the release cascade excludes the member entirely. The way back (tag-aligned → snapshot) is the #233 lattice’s `ws:promote`, deliberately deferred — a recorded working set stays pinned until that lands.
+
+Without `-Dmember`, the draft lists un-recorded candidates (members whose tip `v*` tag is not yet reflected by a pin).
+
+```
+mvn ws:record-release-draft                              # list candidates
+mvn ws:record-release-draft -Dmember=komet-bom           # preview
+mvn ws:record-release-publish -Dmember=komet-bom -Dcycle=komet-wsr-1
 ```
 
 ### [#ws-checkpoint--tag-without-releasing](#ws-checkpoint--tag-without-releasing)ws:checkpoint — tag without releasing

@@ -10,10 +10,10 @@ import java.util.List;
 import java.util.Properties;
 
 /**
- * Keeps the managed {@code ike-workspace-extension} entry in
- * {@code .mvn/extensions.xml} in lockstep with the
- * {@code ike-workspace-extension.version} property declared in
- * {@code ike-parent} (IKE-Network/ike-issues#460).
+ * Keeps the managed extension entries in {@code .mvn/extensions.xml} —
+ * {@code ike-workspace-extension} (IKE-Network/ike-issues#460) and
+ * {@code ike-build-report-extension} (IKE-Network/ike-issues#978) — in
+ * lockstep with the version properties declared on the platform.
  *
  * <p>Maven 4 does not interpolate POM properties inside
  * {@code .mvn/extensions.xml} at extension-load time — the version
@@ -38,7 +38,7 @@ public class ExtensionsXmlReconciler implements Reconciler {
 
     @Override
     public String dimension() {
-        return ".mvn/extensions.xml ike-workspace-extension version";
+        return ".mvn/extensions.xml managed extension versions";
     }
 
     @Override
@@ -52,21 +52,26 @@ public class ExtensionsXmlReconciler implements Reconciler {
         if (!Files.exists(xml)) {
             return DriftReport.noDrift(dimension());
         }
-        String target = resolveExtensionVersion();
+        String wsTarget = resolveVersion("ike-workspace-extension.version", "1");
+        String reportTarget = resolveVersion("ike-build-report-extension.version", "244");
         try {
             String existing = Files.readString(xml);
-            if (matchesTarget(existing, target)) {
+            if (matchesTargets(existing,
+                    "ike-workspace-extension", wsTarget,
+                    "ike-build-report-extension", reportTarget)) {
                 return DriftReport.noDrift(dimension());
             }
             return new DriftReport(
                     dimension(),
                     true,
-                    "ike-workspace-extension entry not at " + target,
+                    "managed extension entries not at ike-workspace-extension:"
+                            + wsTarget + " + ike-build-report-extension:" + reportTarget,
                     List.of(EXTENSIONS_XML
-                            + ": rewrite managed block to <version>"
-                            + target + "</version>"),
+                            + ": rewrite managed block to ike-workspace-extension:"
+                            + wsTarget + " + ike-build-report-extension:" + reportTarget),
                     "rewrite the managed block in " + EXTENSIONS_XML
-                            + " to ike-workspace-extension:" + target,
+                            + " to ike-workspace-extension:" + wsTarget
+                            + " + ike-build-report-extension:" + reportTarget,
                     "-D" + optOutFlag() + "=false");
         } catch (IOException e) {
             return DriftReport.noDrift(dimension());
@@ -80,20 +85,24 @@ public class ExtensionsXmlReconciler implements Reconciler {
             ctx.log().debug(dimension() + ": no " + EXTENSIONS_XML + " — skipping");
             return;
         }
-        String target = resolveExtensionVersion();
+        String wsTarget = resolveVersion("ike-workspace-extension.version", "1");
+        String reportTarget = resolveVersion("ike-build-report-extension.version", "244");
         try {
             boolean refreshed = WorkspaceBootstrap
-                    .refreshExtensionsManagedBlock(xml, target);
+                    .refreshExtensionsManagedBlock(xml, wsTarget, reportTarget);
             if (refreshed) {
                 ctx.log().info("  ✓ " + EXTENSIONS_XML
-                        + " → ike-workspace-extension:" + target);
+                        + " → ike-workspace-extension:" + wsTarget
+                        + " + ike-build-report-extension:" + reportTarget);
             }
         } catch (IOException e) {
             ctx.log().warn(dimension() + ": refresh failed: " + e.getMessage());
         }
     }
 
-    private static boolean matchesTarget(String content, String target) {
+    private static boolean matchesTargets(String content,
+                                          String artifactIdA, String targetA,
+                                          String artifactIdB, String targetB) {
         int begin = content.indexOf(WorkspaceBootstrap.EXTENSIONS_MANAGED_BEGIN);
         if (begin < 0) {
             return false;
@@ -103,16 +112,32 @@ public class ExtensionsXmlReconciler implements Reconciler {
             return false;
         }
         String block = content.substring(begin, end);
-        return block.contains("<version>" + target + "</version>");
+        return containsEntryAt(block, artifactIdA, targetA)
+                && containsEntryAt(block, artifactIdB, targetB);
     }
 
-    private static String resolveExtensionVersion() {
+    /**
+     * Checks that the managed block carries the named artifact with the
+     * target version literal immediately following it — a per-entry
+     * match, so one entry's version cannot satisfy the other's check.
+     */
+    private static boolean containsEntryAt(String block, String artifactId, String target) {
+        int at = block.indexOf("<artifactId>" + artifactId + "</artifactId>");
+        if (at < 0) {
+            return false;
+        }
+        int versionAt = block.indexOf("<version>" + target + "</version>", at);
+        int nextEntry = block.indexOf("<artifactId>", at + artifactId.length());
+        return versionAt > at && (nextEntry < 0 || versionAt < nextEntry);
+    }
+
+    private static String resolveVersion(String key, String fallback) {
         try (InputStream is = ExtensionsXmlReconciler.class
                 .getResourceAsStream(PROPERTIES_RESOURCE)) {
             if (is != null) {
                 Properties props = new Properties();
                 props.load(is);
-                String v = props.getProperty("ike-workspace-extension.version");
+                String v = props.getProperty(key);
                 if (v != null && !v.isBlank() && !v.startsWith("${")) {
                     return v;
                 }
@@ -121,6 +146,6 @@ public class ExtensionsXmlReconciler implements Reconciler {
             // Fall through to fallback.
         }
         // Fallback for tests / unfiltered classpath.
-        return "1";
+        return fallback;
     }
 }

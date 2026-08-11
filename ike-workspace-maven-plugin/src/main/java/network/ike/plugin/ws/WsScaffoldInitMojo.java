@@ -269,7 +269,8 @@ public class WsScaffoldInitMojo implements Mojo {
                 name, description, org, group, artifactId, version,
                 mavenVersion, defaultBranch, skipGit,
                 loadBuildProperty("ike-platform.version"),
-                loadBuildProperty("ike-workspace-extension.version"));
+                loadBuildProperty("ike-workspace-extension.version"),
+                loadBuildProperty("ike-build-report-extension.version"));
         WorkspaceBootstrap bootstrap = new WorkspaceBootstrap(params, log);
         bootstrap.createAt(wsDir);
 
@@ -320,19 +321,21 @@ public class WsScaffoldInitMojo implements Mojo {
             log.warn("Could not refresh workspace.yaml header: " + e.getMessage());
         }
 
-        // Refresh the managed ike-workspace-extension entry in
-        // .mvn/extensions.xml so the literal version stays in lockstep
-        // with the ike-parent property (#460). Best-effort — a failure
-        // here doesn't abort the init.
+        // Refresh the managed extension entries in .mvn/extensions.xml
+        // (ike-workspace-extension #460, ike-build-report-extension
+        // #978) so the literal versions stay in lockstep with the
+        // platform properties. Best-effort — a failure here doesn't
+        // abort the init.
         try {
             Path extensionsXml = root.toPath().resolve(".mvn/extensions.xml");
             if (Files.exists(extensionsXml)) {
                 String extVersion = loadBuildProperty("ike-workspace-extension.version");
+                String reportVersion = loadBuildProperty("ike-build-report-extension.version");
                 boolean refreshed = WorkspaceBootstrap
-                        .refreshExtensionsManagedBlock(extensionsXml, extVersion);
+                        .refreshExtensionsManagedBlock(extensionsXml, extVersion, reportVersion);
                 if (refreshed) {
                     log.info(Ansi.green("  ✓ ") + "Refreshed .mvn/extensions.xml ("
-                            + extVersion + ").");
+                            + extVersion + " + build-report " + reportVersion + ").");
                 }
             }
         } catch (IOException e) {

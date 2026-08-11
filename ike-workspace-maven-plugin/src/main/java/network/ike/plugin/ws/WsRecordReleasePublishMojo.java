@@ -1,5 +1,6 @@
 package network.ike.plugin.ws;
 
+import org.apache.maven.api.plugin.MojoException;
 import org.apache.maven.api.plugin.annotations.Mojo;
 
 /**
@@ -20,8 +21,24 @@ import org.apache.maven.api.plugin.annotations.Mojo;
         aggregator = true)
 public class WsRecordReleasePublishMojo extends WsRecordReleaseDraftMojo {
 
-    /** Creates this goal instance in publish mode. */
-    public WsRecordReleasePublishMojo() {
-        this.publish = true;
+    /** Creates this goal instance. */
+    public WsRecordReleasePublishMojo() {}
+
+    /**
+     * Run in publish mode. The flag is set here — after Maven's
+     * parameter injection — because injection applies the inherited
+     * {@code publish} parameter's {@code defaultValue="false"} AFTER
+     * construction: a constructor assignment is silently overwritten
+     * and the goal degrades to a draft (shipped as that defect in
+     * platform 152; the harness bypasses injection, so only a real
+     * Maven run showed it). Mirrors {@code WsAlignPublishMojo}.
+     *
+     * @return the goal report
+     * @throws MojoException if the goal fails
+     */
+    @Override
+    protected WorkspaceReportSpec runGoal() throws MojoException {
+        publish = true;
+        return super.runGoal();
     }
 }

@@ -224,6 +224,13 @@ class WsRecordReleaseIntegrationTest {
         mojo.manifest = helper.workspaceYaml().toFile();
         mojo.member = member;
         mojo.cycle = cycle;
+        // Emulate Maven's parameter injection, which applies the
+        // inherited publish parameter's defaultValue="false" AFTER
+        // construction. The publish subclass must therefore assert
+        // publish mode in runGoal(), not its constructor — the platform
+        // 152 defect this line pins: without it the harness let a
+        // constructor-only flip pass while real Maven ran a draft.
+        mojo.publish = false;
         mojo.execute();
     }
 

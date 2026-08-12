@@ -51,7 +51,7 @@ Draft / publish split Most state-mutating goals come in two forms — `**-draft*
 | [ws:refresh-main — refresh local main from origin](#refresh-main) | sync | Refresh local main from origin/main across the workspace |
 | [ws:release-draft — preview a coordinated release](#release-draft) | release | Preview a coordinated multi-repo release |
 | [ws:release-notes — milestone-derived release notes](#release-notes) | release | Generate notes from a GitHub milestone |
-| [ws:release-publish — execute the coordinated release](#release-publish) | release | Execute the coordinated release |
+| [ws:release-publish — execute the reactor-pass release cycle](#release-publish) | release | Execute the coordinated release |
 | [ws:release-status — diagnose in-flight releases](#release-status) | inspection | Diagnose any in-flight or partial release |
 | [ws:remove — remove a subproject](#remove) | setup | Remove a subproject from `workspace.yaml` |
 | [ws:report — open per-goal reports](#report) | inspection | List and open per-goal markdown reports |
@@ -407,14 +407,18 @@ The draft variant writes the planned actions to `ws꞉release-draft.md` and exit
 mvn ws:release-draft
 ```
 
-### [#ws-release-publish--execute-the-coordinated-releas](#ws-release-publish--execute-the-coordinated-releas)ws:release-publish — execute the coordinated release
+### [#ws-release-publish--execute-the-reactor-pass-relea](#ws-release-publish--execute-the-reactor-pass-relea)ws:release-publish — execute the reactor-pass release cycle
 
-Execute a workspace release with per-member catch-up alignment. The release loop performs **per-member** catch-up alignment immediately before each member’s release: every workspace-internal upstream version reference (parent and version properties) is bumped to the upstream’s current target version. This means a downstream component released second sees the actual just-released upstream version, not the snapshot it had when the release started.
+Execute one checkpoint-shaped release cycle of the working set (ike-issues#997): a **single version pass** de-qualifies every releasing member together (each on its own version line, every tracked reference moving to the referenced artifact’s release value), **one reactor build** verifies everything at release versions, `deploy` runs scoped to exactly the releasing set, an annotated `v`-tag lands per releasing repository and the workspace root, the cycle’s `releases/release-<cycle>.yaml` record rides in the root’s tagged tree, the set post-bumps to its next development versions, and everything pushes. Members outside the release set are untouched — no increment, no tag, no deploy.
 
-Each member’s release runs the single-repo `ike:release-publish` under the hood, so site deploy, Nexus deploy, GitHub Release, and the workspace VCS state file all update in lockstep.
+The release set is the changed members plus every member whose dependency pins change because of them; the workspace root releases once per cycle as the record’s anchor. Publication is working-set level: member repositories receive tags and Nexus artifacts; the release itself lives on the working-set repository.
+
+A standalone repository (no `workspace.yaml`) still delegates to the single-repo `ike:release-publish` engine, which fits it.
 
 ```
-mvn ws:release-publish
+mvn ws:release-publish                       # cycle label defaults to <root>-<version>
+mvn ws:release-publish -Dcycle=my-cycle-1
+mvn ws:release-publish -DskipCycleTests=true # verify without tests
 ```
 
 ### [#ws-post-release--bump-to-next-development-version](#ws-post-release--bump-to-next-development-version)ws:post-release — bump to next development version

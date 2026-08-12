@@ -90,7 +90,7 @@ class WsReleaseCascadeIntegrationTest {
         // lib-b and app-c are downstream of lib-a.
         assertThat(log)
                 .contains("lib-a")
-                .contains("commits since v1.0.0")
+                .contains("commit since v1.0.0")
                 .contains("downstream of lib-a");
     }
 

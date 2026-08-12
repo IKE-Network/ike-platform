@@ -247,12 +247,23 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
         // worktree clean from git's POV; gitignored leak dirs were
         // never counted by `git status --porcelain` anyway.
         //
-        // Publish-only: drafts skip alignment because the goal is
-        // preview, not mutation. A draft will under-report
-        // workspaces with stale parents — accept that for now;
-        // an alignment dry-run mode is a follow-up.
+        // Both modes compute the alignment plan; only publish applies
+        // it (drafts preview, never mutate). The draft reports the
+        // plan and folds planned members into the release set below,
+        // so draft and publish describe the same cycle
+        // (ike-issues#1000 finding 1).
+        Map<String, List<String>> alignmentPlan =
+                computeUpstreamAlignmentPlan(graph, root);
         if (publish) {
             preReleaseUpstreamAlignment(graph, root);
+        } else if (!alignmentPlan.isEmpty()) {
+            getLog().info("Pre-release alignment plan (#377) — applied on publish:");
+            for (Map.Entry<String, List<String>> entry : alignmentPlan.entrySet()) {
+                getLog().info("  " + entry.getKey() + ":");
+                for (String bump : entry.getValue()) {
+                    getLog().info("    " + bump);
+                }
+            }
         }
 
         // (The release preflight runs AFTER release-set detection — see
@@ -305,8 +316,23 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
                     meaningfulCommitsSinceTag(subDir, latestTag);
             if (meaningfulCommits > 0) {
                 releasable.put(name, new ReleaseCandidate(name, sub, subDir,
-                        latestTag,
-                        meaningfulCommits + " commits since " + latestTag));
+                        latestTag, meaningfulCommits
+                        + (meaningfulCommits == 1 ? " commit since "
+                                : " commits since ") + latestTag));
+                sourceChanged.add(name);
+                continue;
+            }
+
+            // A planned-but-unapplied upstream alignment is a change
+            // this cycle WILL make (publish commits it before this
+            // detection runs). Folding it in here keeps the draft's
+            // release set identical to the publish's
+            // (ike-issues#1000 finding 1).
+            List<String> pendingAlignment = alignmentPlan.get(name);
+            if (pendingAlignment != null) {
+                releasable.put(name, new ReleaseCandidate(name, sub, subDir,
+                        latestTag, "upstream alignment pending ("
+                        + String.join(", ", pendingAlignment) + ")"));
                 sourceChanged.add(name);
                 continue;
             }
@@ -929,16 +955,57 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
      * @param graph the loaded workspace graph
      * @param root  the workspace root directory
      */
-    private void preReleaseUpstreamAlignment(WorkspaceGraph graph, File root) {
+    /**
+     * Compute the pre-release upstream-alignment plan without touching
+     * anything: which walked poms have stale foundation references,
+     * and the exact bumps each would receive. The walk covers the
+     * workspace root (keyed {@code "(workspace root)"}) and every
+     * snapshot-aligned subproject — tag-aligned members are pinned
+     * outside the release cascade (#973) and must not be aligned
+     * either (ike-issues#1000 finding 2).
+     *
+     * <p>Both modes call this: the draft reports the plan (and folds
+     * planned members into the printed release set); publish applies
+     * it via {@link #preReleaseUpstreamAlignment}.
+     *
+     * @param graph the loaded workspace graph
+     * @param root  the workspace root directory
+     * @return insertion-ordered member → bump descriptions; empty when
+     *         nothing needs alignment (or no foundation layout exists)
+     */
+    Map<String, List<String>> computeUpstreamAlignmentPlan(
+            WorkspaceGraph graph, File root) {
+        Map<String, List<String>> plan = new LinkedHashMap<>();
+        Map<String, String> groupIdToLatest = foundationLatestVersions(root);
+        if (groupIdToLatest.isEmpty()) return plan;
+        for (Map.Entry<String, File> entry
+                : alignmentWalk(graph, root).entrySet()) {
+            AlignmentEdit edit =
+                    plannedAlignmentEdit(entry.getValue(), groupIdToLatest);
+            if (!edit.bumps().isEmpty() && edit.newContent() != null) {
+                plan.put(entry.getKey(), edit.bumps());
+            }
+        }
+        return plan;
+    }
+
+    /**
+     * Resolve each IKE foundation's latest released version from its
+     * sibling repo's tip {@code v*} tag in the canonical
+     * {@code ~/ike-dev/<foundation>/} layout.
+     *
+     * @param root the workspace root directory
+     * @return foundation groupId → latest released version; empty when
+     *         no sibling layout or no tags are found
+     */
+    private Map<String, String> foundationLatestVersions(File root) {
+        Map<String, String> groupIdToLatest = new LinkedHashMap<>();
         File foundationsDir = root.getParentFile();
         if (foundationsDir == null || !foundationsDir.isDirectory()) {
             getLog().debug("  No siblings directory available for foundation lookup; "
                     + "skipping pre-release alignment.");
-            return;
+            return groupIdToLatest;
         }
-
-        // Build groupId → latest released version once.
-        Map<String, String> groupIdToLatest = new LinkedHashMap<>();
         for (Map.Entry<String, String> entry : FOUNDATION_GROUP_TO_DIR.entrySet()) {
             File siblingDir = new File(foundationsDir, entry.getValue());
             if (!siblingDir.isDirectory()) continue;
@@ -948,22 +1015,47 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
             groupIdToLatest.put(entry.getKey(), version);
         }
         if (groupIdToLatest.isEmpty()) {
-            getLog().debug("  No foundation tags found in " + foundationsDir
+            getLog().debug("  No foundation tags found near " + foundationsDir
                     + "; skipping pre-release alignment.");
-            return;
         }
+        return groupIdToLatest;
+    }
 
-        // Walk: workspace root + each subproject.
-        List<File> poms = new ArrayList<>();
-        poms.add(new File(root, "pom.xml"));
-        for (String name : graph.manifest().subprojects().keySet()) {
-            File sub = new File(new File(root, name), "pom.xml");
-            if (sub.isFile()) poms.add(sub);
+    /**
+     * The alignment walk: workspace root first (keyed
+     * {@code "(workspace root)"}), then every snapshot-aligned,
+     * checked-out subproject in manifest order. Tag-aligned members
+     * are excluded — they are pinned at a released tag and outside
+     * the cascade, so alignment must not mutate them.
+     *
+     * @param graph the loaded workspace graph
+     * @param root  the workspace root directory
+     * @return insertion-ordered member name → pom file
+     */
+    private Map<String, File> alignmentWalk(WorkspaceGraph graph, File root) {
+        Map<String, File> walk = new LinkedHashMap<>();
+        walk.put("(workspace root)", new File(root, "pom.xml"));
+        for (Map.Entry<String, Subproject> entry
+                : graph.manifest().subprojects().entrySet()) {
+            Subproject sub = entry.getValue();
+            if (sub != null && !sub.isSnapshotAligned()) {
+                getLog().debug("  Alignment skips " + entry.getKey()
+                        + " — tag-aligned (pinned " + sub.tag() + ")");
+                continue;
+            }
+            File pom = new File(new File(root, entry.getKey()), "pom.xml");
+            if (pom.isFile()) walk.put(entry.getKey(), pom);
         }
+        return walk;
+    }
+
+    private void preReleaseUpstreamAlignment(WorkspaceGraph graph, File root) {
+        Map<String, String> groupIdToLatest = foundationLatestVersions(root);
+        if (groupIdToLatest.isEmpty()) return;
 
         int aligned = 0;
         int leaksCleaned = 0;
-        for (File pom : poms) {
+        for (File pom : alignmentWalk(graph, root).values()) {
             if (alignPom(pom, groupIdToLatest)) aligned++;
             if (cleanGhPagesLeak(pom)) leaksCleaned++;
         }
@@ -1083,16 +1175,38 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
      * @param groupIdToLatest groupId → latest released version
      * @return whether the pom was bumped
      */
-    private boolean alignPom(File pomFile, Map<String, String> groupIdToLatest) {
+    /**
+     * The computed (not yet applied) alignment of one pom: the
+     * human-readable bump descriptions and the post-bump pom text.
+     * Empty {@code bumps} means the pom is already aligned.
+     *
+     * @param bumps      one line per reference bump, old → new
+     * @param newContent the pom text with every bump applied
+     */
+    record AlignmentEdit(List<String> bumps, String newContent) {}
+
+    /**
+     * Pure computation of {@link #alignPom}'s edit: scan the pom for
+     * stale foundation references (parent block, {@code <X.version>}
+     * properties) and return the would-be bumps plus the rewritten
+     * text. Never writes or commits — the draft path reports this
+     * plan verbatim so draft and publish describe the same cycle
+     * (ike-issues#1000 finding 1).
+     *
+     * @param pomFile         the pom to scan
+     * @param groupIdToLatest foundation groupId → latest released version
+     * @return the computed edit; {@code bumps} empty when already aligned
+     */
+    private AlignmentEdit plannedAlignmentEdit(File pomFile,
+            Map<String, String> groupIdToLatest) {
         String content;
         try {
             content = Files.readString(pomFile.toPath(), StandardCharsets.UTF_8);
         } catch (IOException e) {
             getLog().warn("  Could not read " + pomFile + " for alignment: "
                     + e.getMessage());
-            return false;
+            return new AlignmentEdit(List.of(), null);
         }
-        String original = content;
         List<String> bumps = new ArrayList<>();
 
         // Align <parent> block.
@@ -1127,9 +1241,16 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
             bumps.add("<" + propertyName + ">: " + current + " → " + target);
         }
 
-        if (content.equals(original)) {
+        return new AlignmentEdit(bumps, content);
+    }
+
+    private boolean alignPom(File pomFile, Map<String, String> groupIdToLatest) {
+        AlignmentEdit edit = plannedAlignmentEdit(pomFile, groupIdToLatest);
+        if (edit.bumps().isEmpty() || edit.newContent() == null) {
             return false;
         }
+        String content = edit.newContent();
+        List<String> bumps = edit.bumps();
 
         try {
             Files.writeString(pomFile.toPath(), content,

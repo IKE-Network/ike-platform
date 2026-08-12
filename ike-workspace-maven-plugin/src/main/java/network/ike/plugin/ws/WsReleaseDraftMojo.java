@@ -170,6 +170,22 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
             "chore: align upstream versions before release"
                     + "\n\nRefs: IKE-Network/ike-issues#377";
 
+    /**
+     * The release-cycle label naming the record file
+     * ({@code releases/release-<cycle>.yaml}) and the tag messages.
+     * Defaults to {@code <root-artifactId>-<root-release-version>}.
+     */
+    @Parameter(property = "cycle")
+    String cycleLabel;
+
+    /**
+     * Skip tests in the cycle's reactor verify. The verify is the one
+     * full build of the working set at release versions; tests run
+     * there by default because nothing else in the cycle runs them.
+     */
+    @Parameter(property = "skipCycleTests", defaultValue = "false")
+    boolean skipCycleTests;
+
     /** Creates this goal instance. */
     public WsReleaseDraftMojo() {}
 
@@ -411,11 +427,35 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
         logReleasePlan(plan);
         writeReleasePlan(root, plan);
 
+        // ── 4b. Reactor-pass cycle (ike-issues#997) ───────────────────
+        // One version pass, one reactor verify, deploy scoped to the
+        // releasing set, tags per repository, published at the
+        // working-set level. The draft describes the cycle leniently —
+        // an assembly problem (missing root POM, underivable version)
+        // becomes a report line, because a draft is a preview; the
+        // publish assembles strictly and fails fast.
+        String mvnLauncher = findMvn(root);
+
         if (draft) {
+            getLog().info("");
+            try {
+                WorkspaceReleaseCycle preview = buildCycle(releaseOrder,
+                        releasable, plan, root);
+                for (String line : preview.describe(mvnLauncher)) {
+                    getLog().info(line);
+                }
+            } catch (Exception assembly) {
+                getLog().warn("  ⚠ Cycle assembly would fail on publish: "
+                        + assembly.getMessage());
+            }
+            getLog().info("");
             getLog().info("[DRAFT] No releases executed (draft mode).");
             return new WorkspaceReportSpec(WsGoal.RELEASE_DRAFT,
                     buildReleasePlanMarkdownReport(releaseOrder, releasable));
         }
+
+        WorkspaceReleaseCycle cycle = buildCycle(releaseOrder, releasable,
+                plan, root);
 
         // ── 5. Pre-release checkpoint ─────────────────────────────────
         if (!skipCheckpoint) {
@@ -426,133 +466,45 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
             writeCheckpoint(root, graph, checkpointName);
         }
 
-        // ── 6. Release each subproject in order ────────────────────────
-        List<String> released = new ArrayList<>();
-        Map<String, String> releasedVersions = new LinkedHashMap<>();
-
-        // Capture (subproject name → post-release SNAPSHOT) so we can
-        // sync workspace.yaml after the cascade completes (#371).
-        Map<String, String> manifestVersionUpdates = new LinkedHashMap<>();
-        for (String name : releaseOrder) {
-            ReleaseCandidate rc = releasable.get(name);
-            getLog().info("");
-            getLog().info("────────────────────────────────────────────────");
-            getLog().info("  Releasing: " + rc.name);
-            getLog().info("────────────────────────────────────────────────");
-
-            // Catch-up alignment: bump every workspace-internal upstream
-            // version reference (this-cycle bumps + catch-up to current
-            // published versions) into a single commit. Hard-stops the
-            // release on failure (#192) — no silent stale POMs.
-            updateParentVersions(plan, rc, releasedVersions, root);
-
-            // Derive release version from current SNAPSHOT
-            String currentVersion = currentVersion(rc.dir);
-            String releaseVersion = currentVersion.replace("-SNAPSHOT", "");
-
-            try {
-                // Find mvnw or mvn
-                String mvn = findMvn(rc.dir);
-
-                ReleaseSupport.exec(rc.dir, getLog(),
-                        releaseCommand(mvn));
-
-                released.add(rc.name);
-                releasedVersions.put(rc.name, releaseVersion);
-                getLog().info(Ansi.green("  ✓ ") + "Released " + rc.name + " " + releaseVersion);
-
-                // Capture the post-release SNAPSHOT for workspace.yaml
-                // sync (#371). ike:release-publish ended on a post-
-                // release bump, so reading the POM now yields the new
-                // -SNAPSHOT. Tolerate read failures: the release
-                // succeeded, so don't fail the cascade over a manifest
-                // sync hiccup — the gap will surface as a #371 warning
-                // on the next preflight.
-                try {
-                    String postReleaseVersion = currentVersion(rc.dir);
-                    if (postReleaseVersion != null
-                            && !postReleaseVersion.isBlank()) {
-                        manifestVersionUpdates.put(rc.name, postReleaseVersion);
-                    }
-                } catch (Exception readFail) {
-                    getLog().warn("  ⚠ Could not read post-release version "
-                            + "for " + rc.name + " — workspace.yaml "
-                            + "version: field will stay stale until the "
-                            + "next " + WsGoal.SCAFFOLD_PUBLISH.qualified() + ". "
-                            + readFail.getMessage());
-                }
-            } catch (Exception e) {
-                getLog().error(Ansi.red("  ✗ ") + "Failed to release " + rc.name + ": " + e.getMessage());
-                getLog().error("");
-                getLog().error("Released so far: " + released);
-                getLog().error("Failed at: " + rc.name);
-                getLog().error("Remaining: " + releaseOrder.subList(
-                        releaseOrder.indexOf(name) + 1, releaseOrder.size()));
-                throw new MojoException(
-                        "Workspace release failed at " + rc.name, e);
-            }
+        // ── 6. Execute the reactor-pass cycle (ike-issues#997) ────────
+        // One version pass across every releasing repository, one
+        // reactor verify at release versions, deploy scoped to the
+        // releasing set, tags per repository, the cycle record in the
+        // root's release commit, post-bump, push. The commit subjects
+        // are release-cadence forms, so an interrupted cycle's re-run
+        // never counts them as source changes.
+        Map<String, String> releasedVersions;
+        try {
+            releasedVersions = cycle.execute(mvnLauncher, skipCycleTests);
+        } catch (MojoException e) {
+            getLog().error(Ansi.red("  ✗ ") + "Release cycle failed: "
+                    + e.getMessage());
+            getLog().error("  Roll forward: fix the cause and re-run —"
+                    + " completed phases resume, they do not repeat.");
+            throw e;
         }
 
         // ── 6a. Sync workspace.yaml version: fields (#371) ────────────
-        // Each ike:release-publish bumped its subproject's POM but had
-        // no visibility into the workspace manifest. Now that the
-        // cascade is complete, fold the new SNAPSHOTs back into
-        // workspace.yaml in one commit so the manifest stops drifting.
-        // Filter to changes only — idempotent re-run of an already-
-        // synced workspace writes nothing.
+        // The post-bump moved every releasing member to its next
+        // development SNAPSHOT; fold those into the manifest in one
+        // commit so it never drifts.
+        Map<String, String> manifestVersionUpdates = new LinkedHashMap<>();
+        for (String name : releaseOrder) {
+            ReleaseCandidate rc = releasable.get(name);
+            try {
+                String postVersion = currentVersion(rc.dir);
+                if (postVersion != null && !postVersion.isBlank()) {
+                    manifestVersionUpdates.put(name, postVersion);
+                }
+            } catch (Exception readFail) {
+                getLog().warn("  ⚠ Could not read post-release version for "
+                        + name + " — workspace.yaml version: stays stale"
+                        + " until the next "
+                        + WsGoal.SCAFFOLD_PUBLISH.qualified());
+            }
+        }
         if (!manifestVersionUpdates.isEmpty()) {
             syncWorkspaceVersions(root, manifestVersionUpdates);
-        }
-
-        // ── 6b. Release the workspace root last (#326, #328) ─────────
-        // After all subprojects release, the workspace.yaml has been
-        // updated (per-subproject version: pin) by the post-release
-        // bumps inside ike:release-publish, AND the workspace pom may
-        // have been touched earlier in the cycle (parent bump from
-        // ws:scaffold-publish's ParentVersionReconciler,
-        // .mvn/maven.config from ws:ide-sync).
-        // The workspace itself is therefore source-changed and should
-        // tag + deploy + refresh its site so the published cycle has
-        // a single anchor: "the workspace was at this commit when
-        // these subprojects released v_n".
-        //
-        // Skipped when nothing released (released.isEmpty()) since
-        // there's no cycle to anchor.
-        if (!released.isEmpty() && hasUnreleasedWorkspaceChanges(root)) {
-            getLog().info("");
-            getLog().info("────────────────────────────────────────────────");
-            getLog().info("  Releasing: workspace root");
-            getLog().info("────────────────────────────────────────────────");
-            String workspaceCurrent = currentVersion(root);
-            String workspaceVersion = workspaceCurrent.replace("-SNAPSHOT", "");
-            try {
-                String mvn = findMvn(root);
-                // -DnonRecursiveSite=true on the workspace root release:
-                // the workspace pom is an aggregator and every subproject
-                // inherits a per-artifactId <site> URL with no common
-                // ancestor, so running site:stage with the full reactor
-                // active causes sibling modules to overwrite each other
-                // at the same target/staging/ root. The last-built
-                // subproject wins and the workspace's own staged content
-                // is lost — publishProjectSiteToGhPages then ships
-                // whichever subproject's content was last to land.
-                // -N restricts the workspace's site build to its own
-                // pom only; subprojects already published their own
-                // sites in step 6 above. ike-issues#356.
-                ReleaseSupport.exec(root, getLog(),
-                        releaseCommand(mvn, "-DnonRecursiveSite=true"));
-                released.add("(workspace root)");
-                releasedVersions.put("(workspace root)", workspaceVersion);
-                getLog().info(Ansi.green("  ✓ ") + "Released workspace root "
-                        + workspaceVersion);
-            } catch (Exception e) {
-                getLog().error(Ansi.red("  ✗ ") + "Failed to release "
-                        + "workspace root: " + e.getMessage());
-                getLog().error("");
-                getLog().error("Subprojects released so far: " + released);
-                throw new MojoException(
-                        "Workspace root release failed", e);
-            }
         }
 
         // ── 7. Summary ───────────────────────────────────────────────
@@ -574,6 +526,63 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
         return new WorkspaceReportSpec(
                 publish ? WsGoal.RELEASE_PUBLISH : WsGoal.RELEASE_DRAFT,
                 buildReleaseMarkdownReport(releasedVersions));
+    }
+
+    /**
+     * Assemble the reactor-pass cycle (ike-issues#997) from the detected
+     * release set: every releasing member plus the workspace root, which
+     * releases each cycle as the record's anchor (one cycle, one root
+     * increment).
+     *
+     * @param releaseOrder releasing member names in dependency order
+     * @param releasable   the detected release candidates
+     * @param plan         the computed release plan
+     * @param root         the workspace root directory
+     * @return the executable cycle
+     */
+    private WorkspaceReleaseCycle buildCycle(List<String> releaseOrder,
+            Map<String, ReleaseCandidate> releasable, ReleasePlan plan,
+            File root) {
+        List<WorkspaceReleaseCycle.ReleasingRepo> repos = new ArrayList<>();
+        for (String name : releaseOrder) {
+            repos.add(releasingRepo(name, releasable.get(name).dir));
+        }
+        WorkspaceReleaseCycle.ReleasingRepo rootRepo =
+                releasingRepo("(workspace root)", root);
+        String label = (cycleLabel != null && !cycleLabel.isBlank())
+                ? cycleLabel
+                : rootRepo.artifactId() + "-" + rootRepo.releaseVersion();
+        return new WorkspaceReleaseCycle(root, repos, rootRepo, plan,
+                label, java.time.LocalDate.now().toString(), getLog(),
+                (dir, command) ->
+                        ReleaseSupport.exec(dir, getLog(), command));
+    }
+
+    /**
+     * A repository's release identity for the cycle: versions derived
+     * from its root POM (pre = the current development SNAPSHOT,
+     * release = the de-qualified form, post = the next SNAPSHOT), the
+     * artifactId for the scoped-deploy selector.
+     *
+     * @param name the display name
+     * @param dir  the repository directory
+     * @return the cycle repo record
+     */
+    private WorkspaceReleaseCycle.ReleasingRepo releasingRepo(String name,
+            File dir) {
+        String pre = currentVersion(dir);
+        String release = pre.replace("-SNAPSHOT", "");
+        String post = ReleaseSupport.deriveNextSnapshot(release);
+        String artifactId;
+        try {
+            artifactId = PomModel.parse(new File(dir, "pom.xml").toPath())
+                    .model().getArtifactId();
+        } catch (IOException e) {
+            throw new MojoException("Cannot read artifactId for " + name
+                    + ": " + e.getMessage(), e);
+        }
+        return new WorkspaceReleaseCycle.ReleasingRepo(name, dir,
+                artifactId, pre, release, post);
     }
 
     /**
@@ -1178,26 +1187,6 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
     // workspace has never been tagged or has commits since its last
     // release tag.
 
-    private boolean hasUnreleasedWorkspaceChanges(File root) {
-        // Treat the workspace as a git repo only if .git is present.
-        // Some workspace setups (e.g., a Syncthing-only checkout
-        // without a per-machine git init) won't have one and there's
-        // nothing to release.
-        if (!new File(root, ".git").exists()) {
-            return false;
-        }
-        String latestTag = latestReleaseTag(root);
-        if (latestTag == null) {
-            // Never released — the first cycle that touches the
-            // workspace anchors it.
-            return true;
-        }
-        // #347: filter out cadence commits so a previous successful
-        // workspace release isn't seen as "still needs releasing"
-        // on a retry triggered by a downstream subproject failure.
-        return meaningfulCommitsSinceTag(root, latestTag) > 0;
-    }
-
     /**
      * Write the post-cascade {@code version:} updates into
      * {@code workspace.yaml} and commit. Filters out no-op entries
@@ -1317,191 +1306,6 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
     }
 
     // ── Helper: catch-up alignment for a single subproject ──────────
-
-    /**
-     * Catch-up alignment for a single subproject, driven by the
-     * pre-computed {@link ReleasePlan}.
-     *
-     * <p>Two passes:
-     * <ol>
-     *   <li><b>Plan-driven, in-cascade:</b> walk the plan's artifact
-     *       and property entries; apply updates to any POM under
-     *       {@code rc.dir}. Property names, target values, and POM paths
-     *       are all pre-computed — no heuristics, no reinterpretation.
-     *       Covers child-override properties and parent references in
-     *       submodules that the old manifest-only logic missed.</li>
-     *   <li><b>Out-of-cascade catch-up:</b> for each manifest dependency
-     *       whose upstream is <em>not</em> in the cascade, align the
-     *       root POM's parent ref and manifest-declared property to the
-     *       upstream's current on-disk version. This rescues stale
-     *       properties without expanding the release set.</li>
-     * </ol>
-     *
-     * <p>All bumps for a single subproject batch into one git commit.
-     * If any POM rewrite, write, or git command fails, this method
-     * throws {@link MojoException} so the release loop halts — silent
-     * partial alignment is never acceptable (#192).
-     *
-     * @param plan             the pre-computed release plan
-     * @param rc               the subproject being prepared for release
-     * @param releasedVersions this-cycle release map (for catch-up logging)
-     * @param root             workspace root (for reading upstream POMs
-     *                         that aren't in the plan)
-     * @throws MojoException if POM I/O, git add, or git commit fails
-     */
-    private void updateParentVersions(ReleasePlan plan,
-                                       ReleaseCandidate rc,
-                                       Map<String, String> releasedVersions,
-                                       File root) throws MojoException {
-        Path rcDir = rc.dir.toPath().toAbsolutePath().normalize();
-        Map<Path, String> pomContent = new LinkedHashMap<>();
-
-        try {
-            // ── 1. Plan-driven: in-cascade property updates ─────────
-            for (PropertyReleasePlan pp : plan.properties()) {
-                Path decl = pp.declaringPomPath();
-                if (!decl.startsWith(rcDir)) continue;
-                String before = pomContent.computeIfAbsent(decl, this::readPomContent);
-                String after = PomRewriter.updateProperty(
-                        before, pp.propertyName(), pp.releaseValue());
-                if (!after.equals(before)) {
-                    pomContent.put(decl, after);
-                    getLog().info("    " + rc.name + " ("
-                            + rcDir.relativize(decl) + "): "
-                            + pp.propertyName() + " → " + pp.releaseValue()
-                            + " (plan)");
-                }
-            }
-
-            // ── 2. Plan-driven: in-cascade parent updates ───────────
-            for (ArtifactReleasePlan ap : plan.artifacts().values()) {
-                for (ReferenceSite site : ap.referenceSites()) {
-                    if (site.kind() != ReferenceKind.PARENT) continue;
-                    Path pomPath = site.pomPath();
-                    if (!pomPath.startsWith(rcDir)) continue;
-                    String before = pomContent.computeIfAbsent(pomPath, this::readPomContent);
-                    String after = PomRewriter.updateParentVersion(
-                            before, ap.ga().groupId(), ap.ga().artifactId(),
-                            ap.releaseValue());
-                    if (!after.equals(before)) {
-                        pomContent.put(pomPath, after);
-                        getLog().info("    " + rc.name + " ("
-                                + rcDir.relativize(pomPath) + "): "
-                                + "parent " + ap.ga().artifactId()
-                                + " → " + ap.releaseValue() + " (plan)");
-                    }
-                }
-            }
-
-            // ── 3. Out-of-cascade catch-up ──────────────────────────
-            // Read the RC's root <parent> block once so the catch-up
-            // match can require BOTH groupId and artifactId (#241).
-            Set<String> inPlan = plan.artifacts().values().stream()
-                    .map(ArtifactReleasePlan::producingSubproject)
-                    .collect(Collectors.toSet());
-            Path rootPom = rcDir.resolve("pom.xml");
-            PomParentSupport.ParentInfo rootPomParent;
-            try {
-                rootPomParent = PomParentSupport.readParent(rootPom);
-            } catch (IOException e) {
-                getLog().warn("    " + rc.name + ": cannot read root"
-                        + " <parent> for catch-up — " + e.getMessage());
-                rootPomParent = null;
-            }
-            for (network.ike.workspace.Dependency dep : rc.subproject.dependsOn()) {
-                if (inPlan.contains(dep.subproject())) continue;
-                String target = upstreamTargetVersion(
-                        dep.subproject(), releasedVersions, root);
-                if (target == null) {
-                    getLog().debug("    " + rc.name + ": no target for "
-                            + dep.subproject() + " (not in plan, not on disk)");
-                    continue;
-                }
-                String before = pomContent.computeIfAbsent(rootPom, this::readPomContent);
-                // Only update the root <parent> when the dep's
-                // subproject name matches the root parent's artifactId.
-                // The full GA is then used for the rewrite so unrelated
-                // groupIds with the same artifactId aren't touched (#241).
-                if (rootPomParent != null
-                        && dep.subproject().equals(rootPomParent.artifactId())) {
-                    String after = PomRewriter.updateParentVersion(
-                            before, rootPomParent.groupId(),
-                            rootPomParent.artifactId(), target);
-                    if (!after.equals(before)) {
-                        pomContent.put(rootPom, after);
-                        getLog().info("    " + rc.name + ": parent "
-                                + rootPomParent.groupId() + ":"
-                                + rootPomParent.artifactId() + " → "
-                                + target + " (out-of-cascade catch-up)");
-                        before = after;
-                    }
-                }
-                if (dep.versionProperty() != null) {
-                    String after = PomRewriter.updateProperty(
-                            before, dep.versionProperty(), target);
-                    if (!after.equals(before)) {
-                        pomContent.put(rootPom, after);
-                        getLog().info("    " + rc.name + ": "
-                                + dep.versionProperty() + " → " + target
-                                + " (out-of-cascade catch-up)");
-                    }
-                }
-            }
-        } catch (UncheckedIOException e) {
-            throw new MojoException(
-                    "Catch-up alignment for " + rc.name
-                            + " failed reading POM: " + e.getMessage(),
-                    e.getCause());
-        }
-
-        // ── 4. Write modified POMs ──────────────────────────────────
-        List<Path> changedPoms = new ArrayList<>();
-        for (Map.Entry<Path, String> entry : pomContent.entrySet()) {
-            Path path = entry.getKey();
-            String content = entry.getValue();
-            String original;
-            try {
-                original = Files.readString(path, StandardCharsets.UTF_8);
-            } catch (IOException e) {
-                throw new MojoException(
-                        "Catch-up alignment for " + rc.name
-                                + " failed: cannot read " + path + ": "
-                                + e.getMessage(), e);
-            }
-            if (!content.equals(original)) {
-                try {
-                    Files.writeString(path, content, StandardCharsets.UTF_8);
-                } catch (IOException e) {
-                    throw new MojoException(
-                            "Catch-up alignment for " + rc.name
-                                    + " failed: cannot write " + path
-                                    + ": " + e.getMessage(), e);
-                }
-                changedPoms.add(path);
-            }
-        }
-        if (!changedPoms.isEmpty()) {
-            getLog().info("  Updated " + changedPoms.size()
-                    + " POM(s) in " + rc.name);
-        }
-
-        if (changedPoms.isEmpty()) return;
-
-        // ── 5. Stage + commit in one batch ──────────────────────────
-        try {
-            for (Path p : changedPoms) {
-                ReleaseSupport.exec(rc.dir, getLog(),
-                        "git", "add", rcDir.relativize(p).toString());
-            }
-            ReleaseSupport.exec(rc.dir, getLog(),
-                    "git", "commit", "-m",
-                    ALIGNMENT_COMMIT_MESSAGE);
-        } catch (MojoException e) {
-            throw new MojoException(
-                    "Catch-up alignment for " + rc.name
-                            + " failed at git commit: " + e.getMessage(), e);
-        }
-    }
 
     /**
      * Read POM content as UTF-8. Used inside
@@ -1733,36 +1537,6 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
             return s.isEmpty() ? "." : s;
         }
         return abs.toString();
-    }
-
-    /**
-     * Resolve the catch-up target version for a single upstream.
-     *
-     * <p>If the upstream released earlier in this cycle, returns the
-     * <em>released</em> version (e.g., release 105 → downstream
-     * references become {@code 105}). Downstream POMs must reference
-     * artifacts that actually exist in the remote repository; the
-     * post-release next-snapshot bump (e.g., {@code 106-SNAPSHOT})
-     * sits on the upstream's main branch but is not yet deployed and
-     * would produce an unresolvable reference.
-     *
-     * <p>Otherwise reads the upstream's current pom.xml version from
-     * disk. If the upstream is neither in this cycle nor checked out,
-     * returns {@code null} — there's no value to align to.
-     */
-    String upstreamTargetVersion(String upstreamName,
-                                  Map<String, String> releasedVersions,
-                                  File root) {
-        if (releasedVersions.containsKey(upstreamName)) {
-            return releasedVersions.get(upstreamName);
-        }
-        File upstreamDir = new File(root, upstreamName);
-        if (!upstreamDir.isDirectory()
-                || !new File(upstreamDir, "pom.xml").exists()) {
-            return null;
-        }
-        String version = currentVersion(upstreamDir);
-        return "unknown".equals(version) ? null : version;
     }
 
     // ── Helper: write checkpoint YAML ────────────────────────────────

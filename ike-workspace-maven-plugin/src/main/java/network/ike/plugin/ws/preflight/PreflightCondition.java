@@ -515,6 +515,16 @@ public enum PreflightCondition {
             List<String> violations = new ArrayList<>();
 
             for (String name : ctx.subprojects()) {
+                // Tag-aligned members are pinned at a released tag and
+                // outside the release cascade (#973): their parent
+                // matches the pinned tag's era by design, not the
+                // workspace tip's, so coherence-with-the-tip does not
+                // apply to them (ike-issues#1000, cycle two).
+                if (ctx.graph() != null) {
+                    network.ike.workspace.Subproject sub =
+                            ctx.graph().manifest().subprojects().get(name);
+                    if (sub != null && !sub.isSnapshotAligned()) continue;
+                }
                 File pom = new File(new File(root, name), "pom.xml");
                 if (!pom.isFile()) continue;
                 String content;

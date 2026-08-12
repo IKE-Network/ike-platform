@@ -1207,15 +1207,20 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
                     + e.getMessage());
             return new AlignmentEdit(List.of(), null);
         }
+        String original = content;
         List<String> bumps = new ArrayList<>();
 
-        // Align <parent> block.
+        // Align <parent> block — forward only. A stale local foundation
+        // clone resolves an OLDER "latest" than the pom already pins;
+        // proposing that as an alignment would downgrade the pom
+        // (ike-issues#1000, cycle two).
         try {
             PomParentSupport.ParentInfo parent =
                     PomParentSupport.readParent(pomFile.toPath());
             if (parent != null) {
                 String target = groupIdToLatest.get(parent.groupId());
-                if (target != null && !target.equals(parent.version())) {
+                if (target != null
+                        && isForwardBump(parent.version(), target)) {
                     content = PomParentSupport.updateParentVersion(content,
                             parent.groupId(), parent.artifactId(), target);
                     bumps.add("<parent>" + parent.groupId() + ":"
@@ -1228,7 +1233,10 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
                     + ": " + e.getMessage());
         }
 
-        // Align <X.version> properties.
+        // Align <X.version> properties — forward only, and never an
+        // expression value: `<ike-platform.version>${project.parent.version}`
+        // delegates elsewhere by design, and replacing it with a literal
+        // would freeze the delegation (ike-issues#1000, cycle two).
         for (Map.Entry<String, String> entry : PROPERTY_TO_GROUP.entrySet()) {
             String propertyName = entry.getKey();
             String groupId = entry.getValue();
@@ -1236,12 +1244,38 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
             if (target == null) continue;
             String current = extractPropertyValue(content, propertyName);
             if (current == null) continue;
-            if (target.equals(current)) continue;
+            if (current.contains("${")) continue;
+            if (!isForwardBump(current, target)) continue;
             content = PomRewriter.updateProperty(content, propertyName, target);
             bumps.add("<" + propertyName + ">: " + current + " → " + target);
         }
 
+        // The bump list must describe an actual textual change, or the
+        // draft would promise a release the publish never makes (the
+        // rewriter treating a bump as a no-op must not count).
+        if (content.equals(original)) {
+            return new AlignmentEdit(List.of(), original);
+        }
         return new AlignmentEdit(bumps, content);
+    }
+
+    /**
+     * True when {@code from} → {@code to} moves strictly forward under
+     * whole-number comparison. Foundation versions are single-segment
+     * integers; anything unparseable is incomparable and never bumped
+     * (versions must not be assumed semver, and a stale local
+     * foundation clone must never cause a downgrade proposal).
+     *
+     * @param from the version currently in the pom
+     * @param to   the candidate target version
+     * @return {@code true} only when both parse and {@code to} is newer
+     */
+    static boolean isForwardBump(String from, String to) {
+        try {
+            return Long.parseLong(to.trim()) > Long.parseLong(from.trim());
+        } catch (NumberFormatException e) {
+            return false;
+        }
     }
 
     private boolean alignPom(File pomFile, Map<String, String> groupIdToLatest) {

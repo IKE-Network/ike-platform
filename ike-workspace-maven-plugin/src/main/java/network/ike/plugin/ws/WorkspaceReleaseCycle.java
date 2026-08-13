@@ -108,6 +108,7 @@ final class WorkspaceReleaseCycle {
     private final ReleasePlan plan;
     private final String cycleLabel;
     private final String recordDate;
+    private final ReleaseTagStyle tagStyle;
     private final Log log;
     private final Runner runner;
 
@@ -128,8 +129,10 @@ final class WorkspaceReleaseCycle {
     WorkspaceReleaseCycle(File root, List<ReleasingRepo> members,
                           ReleasingRepo rootRepo, ReleasePlan plan,
                           String cycleLabel, String recordDate,
+                          ReleaseTagStyle tagStyle,
                           Log log, Runner runner) {
         this.root = root;
+        this.tagStyle = tagStyle;
         this.members = List.copyOf(members);
         this.rootRepo = rootRepo;
         this.plan = plan;
@@ -207,7 +210,7 @@ final class WorkspaceReleaseCycle {
                         + " first — roll forward per IKE-RELEASE-RECOVERY.md"
                         + " — then re-run.");
             }
-            if (tagExists(m.dir(), "v" + m.releaseVersion())) {
+            if (tagExists(m.dir(), tagStyle.tagFor(m.releaseVersion()))) {
                 throw new MojoException("Tag v" + m.releaseVersion()
                         + " already exists in " + m.name()
                         + " — its version was not bumped after the last"
@@ -308,7 +311,7 @@ final class WorkspaceReleaseCycle {
     /** Annotated v-tags at the release commits, one per repository. */
     private void tagReleases() {
         for (ReleasingRepo m : allRepos()) {
-            String tag = "v" + m.releaseVersion();
+            String tag = tagStyle.tagFor(m.releaseVersion());
             ReleaseSupport.exec(m.dir(), log, "git", "tag", "-a", tag,
                     "-m", "release: " + m.name() + " " + m.releaseVersion()
                             + " (cycle " + cycleLabel + ")");
@@ -341,7 +344,7 @@ final class WorkspaceReleaseCycle {
             ReleaseSupport.exec(m.dir(), log, "git", "push", "origin",
                     branch);
             ReleaseSupport.exec(m.dir(), log, "git", "push", "origin",
-                    "v" + m.releaseVersion());
+                    tagStyle.tagFor(m.releaseVersion()));
             log.info(Ansi.green("  ✓ ") + "pushed " + m.name());
         }
     }
@@ -421,7 +424,7 @@ final class WorkspaceReleaseCycle {
                         "git", "rev-parse", "HEAD").trim();
                 record = record.withMember(m.name(),
                         new ReleaseRecord.MemberRelease(m.releaseVersion(),
-                                "v" + m.releaseVersion(), sha, recordDate));
+                                tagStyle.tagFor(m.releaseVersion()), sha, recordDate));
             }
             ReleaseRecordFile.write(recordPath, record);
         } catch (Exception e) {

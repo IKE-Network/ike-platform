@@ -147,7 +147,7 @@ class WorkspaceReleaseCycleTest {
                 List.of(new WorkspaceReleaseCycle.ReleasingRepo("lib-a",
                         libA, "lib-a", "1.0.0", "1.0.0", "1.0.1-SNAPSHOT")),
                 rootRepo(), emptyPlan(), "c1", "2026-08-12",
-                new TestLog(), recorder());
+                ReleaseTagStyle.V_PREFIXED, new TestLog(), recorder());
         assertThatThrownBy(() -> cycle.execute("mvnw", true))
                 .isInstanceOf(MojoException.class)
                 .hasMessageContaining("In-flight release cycle");
@@ -172,7 +172,8 @@ class WorkspaceReleaseCycleTest {
                         "lib-b", "2.0.0-SNAPSHOT", "2.0.0",
                         "2.0.1-SNAPSHOT"));
         return new WorkspaceReleaseCycle(root, members, rootRepo(),
-                plan(), label, "2026-08-12", new TestLog(), recorder());
+                plan(), label, "2026-08-12", ReleaseTagStyle.V_PREFIXED,
+                new TestLog(), recorder());
     }
 
     private WorkspaceReleaseCycle.ReleasingRepo rootRepo() {

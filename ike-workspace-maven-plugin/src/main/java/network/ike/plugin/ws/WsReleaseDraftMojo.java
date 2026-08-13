@@ -186,6 +186,19 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
     @Parameter(property = "skipCycleTests", defaultValue = "false")
     boolean skipCycleTests;
 
+    /**
+     * How this working set names release tags, in both directions —
+     * the tags the cycle writes and the tags detection reads back as
+     * "the last release". Workspaces whose members are repositories
+     * IKE does not own must follow those repositories' own convention:
+     * the komet working set's ikmdev members carry bare version tags,
+     * so its root declares
+     * {@code <ike.release.tagStyle>BARE</ike.release.tagStyle>}.
+     * Defaults to IKE's own {@code v}-prefixed form.
+     */
+    @Parameter(property = "ike.release.tagStyle", defaultValue = "V_PREFIXED")
+    ReleaseTagStyle tagStyle = ReleaseTagStyle.V_PREFIXED;
+
     /** Creates this goal instance. */
     public WsReleaseDraftMojo() {}
 
@@ -579,7 +592,8 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
                 ? cycleLabel
                 : rootRepo.artifactId() + "-" + rootRepo.releaseVersion();
         return new WorkspaceReleaseCycle(root, repos, rootRepo, plan,
-                label, java.time.LocalDate.now().toString(), getLog(),
+                label, java.time.LocalDate.now().toString(), tagStyle,
+                getLog(),
                 (dir, command) ->
                         ReleaseSupport.exec(dir, getLog(), command));
     }
@@ -811,11 +825,31 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
     // ── Helper: find latest release tag ──────────────────────────────
 
     private String latestReleaseTag(File subDir) {
+        return latestReleaseTag(subDir, tagStyle);
+    }
+
+    /**
+     * The newest release tag in the given style, or {@code null} when
+     * the repository has none. Git's version sort orders the
+     * candidates; the style's own pattern then rejects the
+     * lookalikes that share the glob (dated tags, hand-cut
+     * development tags), so the first survivor is the real latest.
+     *
+     * @param subDir the repository directory
+     * @param style  the working set's tag style
+     * @return the newest release tag, or {@code null}
+     */
+    static String latestReleaseTag(File subDir, ReleaseTagStyle style) {
         try {
             String tags = ReleaseSupport.execCapture(subDir,
-                    "git", "tag", "-l", "v*", "--sort=-version:refname");
+                    "git", "tag", "-l", style.tagGlob(),
+                    "--sort=-version:refname");
             if (tags == null || tags.isBlank()) return null;
-            return tags.lines().findFirst().orElse(null);
+            return tags.lines()
+                    .map(String::strip)
+                    .filter(style::isReleaseTag)
+                    .findFirst()
+                    .orElse(null);
         } catch (Exception e) {
             return null;
         }

@@ -70,6 +70,26 @@ class ReleaseTagStyleTest {
                 ReleaseTagStyle.BARE)).isEqualTo("1.127.1");
     }
 
+    /**
+     * A foundation repository is IKE's own and always tags
+     * v-prefixed, whatever style the working set uses for its members.
+     * Reading it through a BARE working set's style finds nothing —
+     * which is why the upstream-alignment lookup pins the foundation
+     * style rather than inheriting the member style.
+     */
+    @Test
+    void foundation_tags_stay_v_prefixed_under_a_bare_working_set()
+            throws Exception {
+        File foundation = repoWithTags("v158", "v160", "v161");
+
+        assertThat(WsReleaseDraftMojo.latestReleaseTag(foundation,
+                ReleaseTagStyle.V_PREFIXED)).isEqualTo("v161");
+        assertThat(WsReleaseDraftMojo.latestReleaseTag(foundation,
+                ReleaseTagStyle.BARE)).isNull();
+        assertThat(ReleaseTagStyle.V_PREFIXED.versionOf("v161"))
+                .isEqualTo("161");
+    }
+
     private File repoWithTags(String... tags) throws Exception {
         Path dir = Files.createDirectories(
                 tempDir.resolve("repo-" + tags.length + "-" + tags[0]));

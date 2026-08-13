@@ -1043,10 +1043,16 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
         for (Map.Entry<String, String> entry : FOUNDATION_GROUP_TO_DIR.entrySet()) {
             File siblingDir = new File(foundationsDir, entry.getValue());
             if (!siblingDir.isDirectory()) continue;
-            String tag = latestReleaseTag(siblingDir);
+            // The foundations are IKE's own repositories and always
+            // tag v-prefixed, whatever style this working set uses for
+            // its members. Reading them through the member style would
+            // find nothing in a BARE workspace and silently skip
+            // alignment altogether (ike-issues#1000).
+            String tag = latestReleaseTag(siblingDir,
+                    ReleaseTagStyle.V_PREFIXED);
             if (tag == null) continue;
-            String version = tag.startsWith("v") ? tag.substring(1) : tag;
-            groupIdToLatest.put(entry.getKey(), version);
+            groupIdToLatest.put(entry.getKey(),
+                    ReleaseTagStyle.V_PREFIXED.versionOf(tag));
         }
         if (groupIdToLatest.isEmpty()) {
             getLog().debug("  No foundation tags found near " + foundationsDir

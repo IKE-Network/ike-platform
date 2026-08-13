@@ -185,7 +185,8 @@ final class WorkspaceReleaseCycle {
                 + " releasing set:");
         for (ReleasingRepo m : allRepos()) {
             lines.add("  " + m.name() + ": " + m.preVersion() + " → "
-                    + m.releaseVersion() + " (tag v" + m.releaseVersion()
+                    + m.releaseVersion() + " (tag "
+                    + tagStyle.tagFor(m.releaseVersion())
                     + "), then " + m.postVersion());
         }
         lines.add("  verify: " + String.join(" ", verifyCommand(mvn, false)));

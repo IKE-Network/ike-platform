@@ -1719,6 +1719,22 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
             String yaml = buildPreReleaseCheckpointYaml(name, timestamp, componentData);
             Files.writeString(file, yaml, StandardCharsets.UTF_8);
             getLog().info("Checkpoint written: " + file);
+
+            // Commit it: an untracked artifact the goal itself just
+            // wrote would fail the very next preflight's clean-tree
+            // check — the goal blocking on its own output
+            // (ike-issues#1000, cycle two).
+            String relative = root.toPath().relativize(file).toString();
+            try {
+                ReleaseSupport.exec(root, getLog(), "git", "add", "--", relative);
+                ReleaseSupport.exec(root, getLog(), "git", "commit", "-m",
+                        "checkpoint: pre-release safety checkpoint " + name
+                                + "\n\nRefs: IKE-Network/ike-issues#1000",
+                        "--", relative);
+            } catch (Exception e) {
+                getLog().warn("Could not commit checkpoint " + relative
+                        + ": " + e.getMessage());
+            }
         } catch (IOException e) {
             getLog().warn("Could not write checkpoint: " + e.getMessage());
         }

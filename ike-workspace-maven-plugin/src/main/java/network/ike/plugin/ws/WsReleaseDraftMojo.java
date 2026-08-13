@@ -417,6 +417,27 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
         // that releases in this cycle is resolved by the loop's
         // catch-up alignment before its consumer releases, and must
         // not refuse the publish.
+        // ── 2b. Topological order + release plan ─────────────────────
+        // The plan is pure computation over the checked-out POMs, and
+        // the preflight needs it: only the plan knows which version
+        // properties this cycle de-qualifies (ike-issues#1004). It is
+        // logged and written further down, where the report reads.
+        List<String> releaseOrder = graph.topologicalSort().stream()
+                .filter(releasable::containsKey)
+                .toList();
+        ReleasePlan plan;
+        try {
+            plan = buildReleasePlan(releaseOrder, releasable);
+        } catch (IOException e) {
+            throw new MojoException(
+                    "Release plan compute failed: " + e.getMessage(), e);
+        }
+        Set<String> cycleResolvedProperties = new LinkedHashSet<>();
+        for (ReleasePlan.PropertyReleasePlan property : plan.properties()) {
+            cycleResolvedProperties.add(property.declaringSubproject()
+                    + "::" + property.propertyName());
+        }
+
         PreflightResult releasePreflight = Preflight.of(
                 List.of(PreflightCondition.WORKING_TREE_CLEAN,
                         PreflightCondition.NO_ON_DISK_GHPAGES_LEAK,
@@ -426,17 +447,12 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
                         PreflightCondition.NO_FOUNDATION_PROPERTY_SHADOWING,
                         PreflightCondition.PARENT_COHERENCE),
                 PreflightContext.of(root, graph, candidates,
-                        releasable.keySet()));
+                        releasable.keySet(), cycleResolvedProperties));
         if (draft) {
             releasePreflight.warnIfFailed(getLog(), WsGoal.RELEASE_PUBLISH);
         } else {
             releasePreflight.requirePassed(WsGoal.RELEASE_PUBLISH);
         }
-
-        // ── 3. Topological sort of release-pending components ────────────
-        List<String> releaseOrder = graph.topologicalSort().stream()
-                .filter(releasable::containsKey)
-                .toList();
 
         // ── 4. Report plan ────────────────────────────────────────────
         getLog().info("════════════════════════════════════════════════════");
@@ -456,13 +472,6 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
         // One plan for the entire cascade, computed once up front. Every
         // pre-release alignment is a blind lookup in this plan — no
         // mid-flight heuristics. See dev-release-plan design topic.
-        ReleasePlan plan;
-        try {
-            plan = buildReleasePlan(releaseOrder, releasable);
-        } catch (IOException e) {
-            throw new MojoException(
-                    "Release plan compute failed: " + e.getMessage(), e);
-        }
         logReleasePlan(plan);
         writeReleasePlan(root, plan);
 

@@ -38,14 +38,15 @@ public record PreflightContext(
         String branchName,
         String tagName,
         String parentVersion,
-        Set<String> releaseSet) {
+        Set<String> releaseSet,
+        Set<String> cycleResolvedProperties) {
 
     /** Minimal context for conditions that only need root + subproject list. */
     public static PreflightContext of(File root,
                                        WorkspaceGraph graph,
                                        List<String> subprojects) {
         return new PreflightContext(root, graph, subprojects,
-                null, null, null, null);
+                null, null, null, null, Set.of());
     }
 
     /**
@@ -64,6 +65,35 @@ public record PreflightContext(
                                        List<String> subprojects,
                                        Set<String> releaseSet) {
         return new PreflightContext(root, graph, subprojects,
-                null, null, null, releaseSet);
+                null, null, null, releaseSet, Set.of());
+    }
+
+    /**
+     * Context for the release preflight, carrying both this cycle's
+     * release set and the version properties the cycle's own release
+     * plan rewrites. The plan is the authority on what the cycle
+     * resolves: a property it de-qualifies never reaches a released
+     * POM as a SNAPSHOT, whatever the manifest does or does not
+     * declare about it (ike-issues#1004).
+     *
+     * @param root                     the workspace root directory
+     * @param graph                    the loaded workspace graph
+     * @param subprojects              subproject names (topological
+     *                                 order) to evaluate
+     * @param releaseSet               names of the members releasing
+     *                                 this cycle
+     * @param cycleResolvedProperties  {@code <subproject>::<property>}
+     *                                 keys the release plan rewrites
+     * @return the release-cycle context
+     */
+    public static PreflightContext of(File root,
+                                       WorkspaceGraph graph,
+                                       List<String> subprojects,
+                                       Set<String> releaseSet,
+                                       Set<String> cycleResolvedProperties) {
+        return new PreflightContext(root, graph, subprojects,
+                null, null, null, releaseSet,
+                cycleResolvedProperties == null
+                        ? Set.of() : cycleResolvedProperties);
     }
 }

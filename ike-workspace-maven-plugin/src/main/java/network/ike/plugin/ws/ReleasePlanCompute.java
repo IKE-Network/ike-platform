@@ -246,6 +246,10 @@ final class ReleasePlanCompute {
                     survey.propertyDeclarations().entrySet()) {
                 String propName = decl.getKey();
                 ArtifactReleaseIntent tracked = propertyTracks.get(propName);
+                if (tracked == null) {
+                    tracked = inferTrackedArtifact(propName, decl.getValue(),
+                            intents);
+                }
                 if (tracked == null) continue;
 
                 String preValue = decl.getValue();
@@ -319,6 +323,79 @@ final class ReleasePlanCompute {
                 || expr.equals("project.version")
                 || expr.equals("project.groupId")
                 || expr.equals("project.artifactId");
+    }
+
+    /**
+     * Infer which releasing artifact a version property tracks when no
+     * scanned reference site resolved it. Reference sites answer the
+     * question whenever the property is consumed somewhere the survey
+     * visits; two real shapes escape that net, and both leak
+     * {@code -SNAPSHOT} into released POMs if left unplanned
+     * (ike-issues#1004):
+     *
+     * <ul>
+     *   <li>the property's consumers sit inside plugin
+     *       <em>configuration</em> — {@code <artifactItem>} blocks that
+     *       stage runtime plugins — which no dependency, plugin, or
+     *       parent site scan reaches;</li>
+     *   <li>the property is named for something other than the
+     *       released artifact ({@code komet.version} pinning modules
+     *       whose aggregator releases as {@code komet-parent};
+     *       {@code chronology-store.version} pinning tinkar-core's).</li>
+     * </ul>
+     *
+     * <p>Inference is by value, and it fires only when the answer is
+     * unambiguous. Agreement on the pre-release value is required in
+     * every case: a property pinning {@code 1.59.0-SNAPSHOT} can only
+     * be tracking a member sitting at {@code 1.59.0-SNAPSHOT}. When
+     * exactly one releasing member holds that value, that is the
+     * target. When several do — five members of a working set can all
+     * sit at {@code 1-SNAPSHOT} — the property name breaks the tie
+     * only if it names exactly one of them ({@code <artifactId>.version}
+     * or {@code <subproject>.version}). Anything still ambiguous stays
+     * unplanned, and the release preflight refuses the cycle rather
+     * than guessing.
+     *
+     * @param propertyName  the declared property name
+     * @param propertyValue the property's current (pre-release) value
+     * @param intents       this cycle's releasing artifacts
+     * @return the tracked artifact, or {@code null} when no unambiguous
+     *         answer exists
+     */
+    static ArtifactReleaseIntent inferTrackedArtifact(String propertyName,
+            String propertyValue, List<ArtifactReleaseIntent> intents) {
+        if (propertyName == null || propertyValue == null
+                || propertyValue.isBlank()
+                || propertyValue.contains("${")) {
+            return null;
+        }
+        List<ArtifactReleaseIntent> valueMatches = new ArrayList<>();
+        for (ArtifactReleaseIntent intent : intents) {
+            if (propertyValue.equals(intent.preReleaseValue())) {
+                valueMatches.add(intent);
+            }
+        }
+        if (valueMatches.size() == 1) {
+            return valueMatches.getFirst();
+        }
+        if (valueMatches.isEmpty()) {
+            return null;
+        }
+        // Several members share the value; the name must single one out.
+        String stem = propertyName.endsWith(".version")
+                ? propertyName.substring(0,
+                        propertyName.length() - ".version".length())
+                : null;
+        if (stem == null) return null;
+        ArtifactReleaseIntent named = null;
+        for (ArtifactReleaseIntent intent : valueMatches) {
+            if (stem.equals(intent.ga().artifactId())
+                    || stem.equals(intent.producingSubproject())) {
+                if (named != null && named != intent) return null;
+                named = intent;
+            }
+        }
+        return named;
     }
 
     /**

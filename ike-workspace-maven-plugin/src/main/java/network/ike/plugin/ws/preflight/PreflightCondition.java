@@ -895,6 +895,20 @@ public enum PreflightCondition {
             return false;
         }
         String property = location.substring(slash + 1);
+
+        // The cycle's own release plan is the authority: any property
+        // it rewrites is de-qualified before the reactor builds, so it
+        // cannot reach a released POM as a SNAPSHOT. The manifest-hint
+        // path below stays for callers that have no plan to offer, but
+        // it exempts strictly less than the plan resolves — which is
+        // how six already-planned properties blocked the komet cycle
+        // (ike-issues#1004).
+        if (ctx.cycleResolvedProperties() != null
+                && ctx.cycleResolvedProperties()
+                        .contains(owner + "::" + property)) {
+            return true;
+        }
+
         Subproject ownerEntry =
                 ctx.graph().manifest().subprojects().get(owner);
         if (ownerEntry == null || ownerEntry.dependsOn() == null) {

@@ -96,6 +96,28 @@ class PreflightConditionTest {
     }
 
     @Test
+    void shadowsProperty_commentNamingTheProperty_false() {
+        // komet-bom's real shape after renaming its shadow: the pin is
+        // now named for the artifact, and the comment explains why by
+        // naming the property it no longer declares. Prose is not a
+        // declaration (ike-issues#1004).
+        String pom = """
+                <project>
+                  <properties>
+                    <!-- Named for the artifact it pins: declaring
+                         <ike-docs.version> here would pin plugin
+                         resolution. -->
+                    <koncept-core.version>97</koncept-core.version>
+                  </properties>
+                </project>
+                """;
+        assertThat(PreflightCondition.shadowsProperty(pom,
+                "ike-docs.version")).isFalse();
+        assertThat(PreflightCondition.shadowsProperty(pom,
+                "koncept-core.version")).isTrue();
+    }
+
+    @Test
     void shadowsProperty_namespacedAlternative_false() {
         // The post-#347 layout: same value but under `it.*` namespace
         // — does NOT shadow the inherited property.

@@ -1131,7 +1131,12 @@ public enum PreflightCondition {
         // a shadowing site.
         java.util.regex.Matcher matcher = TOP_LEVEL_PROPERTIES_BLOCK.matcher(pomContent);
         while (matcher.find()) {
-            String block = matcher.group(1);
+            // Comments are prose, not declarations. A POM that renames
+            // a shadowing property and explains why — naming the
+            // property it no longer declares — must not read as still
+            // declaring it (ike-issues#1004).
+            String block = XML_COMMENT.matcher(matcher.group(1))
+                    .replaceAll("");
             if (java.util.regex.Pattern
                     .compile("<" + java.util.regex.Pattern.quote(propertyName)
                             + "\\b")
@@ -1141,6 +1146,10 @@ public enum PreflightCondition {
         }
         return false;
     }
+
+    /** An XML comment, including its delimiters, across lines. */
+    private static final java.util.regex.Pattern XML_COMMENT =
+            java.util.regex.Pattern.compile("(?s)<!--.*?-->");
 
     private static final java.util.regex.Pattern DISTRIBUTION_MGMT_OR_PARENT =
             java.util.regex.Pattern.compile(

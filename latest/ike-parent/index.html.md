@@ -1,6 +1,6 @@
 ---
-date_published: 2026-08-11
-date_modified: 2026-08-11
+date_published: 2026-08-12
+date_modified: 2026-08-12
 canonical_url: https://ike.network/ike-platform/ike-parent/index.html
 ---
 

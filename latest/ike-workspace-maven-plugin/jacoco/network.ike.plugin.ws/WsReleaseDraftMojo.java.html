@@ -1719,10 +1719,26 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
 <span class="nc" id="L1719">            String yaml = buildPreReleaseCheckpointYaml(name, timestamp, componentData);</span>
 <span class="nc" id="L1720">            Files.writeString(file, yaml, StandardCharsets.UTF_8);</span>
 <span class="nc" id="L1721">            getLog().info(&quot;Checkpoint written: &quot; + file);</span>
-<span class="nc" id="L1722">        } catch (IOException e) {</span>
-<span class="nc" id="L1723">            getLog().warn(&quot;Could not write checkpoint: &quot; + e.getMessage());</span>
-<span class="nc" id="L1724">        }</span>
-<span class="nc" id="L1725">    }</span>
+
+            // Commit it: an untracked artifact the goal itself just
+            // wrote would fail the very next preflight's clean-tree
+            // check — the goal blocking on its own output
+            // (ike-issues#1000, cycle two).
+<span class="nc" id="L1727">            String relative = root.toPath().relativize(file).toString();</span>
+            try {
+<span class="nc" id="L1729">                ReleaseSupport.exec(root, getLog(), &quot;git&quot;, &quot;add&quot;, &quot;--&quot;, relative);</span>
+<span class="nc" id="L1730">                ReleaseSupport.exec(root, getLog(), &quot;git&quot;, &quot;commit&quot;, &quot;-m&quot;,</span>
+                        &quot;checkpoint: pre-release safety checkpoint &quot; + name
+                                + &quot;\n\nRefs: IKE-Network/ike-issues#1000&quot;,
+                        &quot;--&quot;, relative);
+<span class="nc" id="L1734">            } catch (Exception e) {</span>
+<span class="nc" id="L1735">                getLog().warn(&quot;Could not commit checkpoint &quot; + relative</span>
+<span class="nc" id="L1736">                        + &quot;: &quot; + e.getMessage());</span>
+<span class="nc" id="L1737">            }</span>
+<span class="nc" id="L1738">        } catch (IOException e) {</span>
+<span class="nc" id="L1739">            getLog().warn(&quot;Could not write checkpoint: &quot; + e.getMessage());</span>
+<span class="nc" id="L1740">        }</span>
+<span class="nc" id="L1741">    }</span>
 
     /**
      * Build pre-release checkpoint YAML content from pre-gathered
@@ -1739,22 +1755,22 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
      */
     public static String buildPreReleaseCheckpointYaml(
             String name, String timestamp, List&lt;String[]&gt; componentData) {
-<span class="fc" id="L1742">        StringBuilder yaml = new StringBuilder();</span>
-<span class="fc" id="L1743">        yaml.append(&quot;# Workspace checkpoint: &quot;).append(name).append(&quot;\n&quot;);</span>
-<span class="fc" id="L1744">        yaml.append(&quot;# Generated: &quot;).append(timestamp).append(&quot;\n&quot;);</span>
-<span class="fc" id="L1745">        yaml.append(&quot;checkpoint: &quot;).append(name).append(&quot;\n&quot;);</span>
-<span class="fc" id="L1746">        yaml.append(&quot;timestamp: &quot;).append(timestamp).append(&quot;\n&quot;);</span>
-<span class="fc" id="L1747">        yaml.append(&quot;subprojects:\n&quot;);</span>
+<span class="fc" id="L1758">        StringBuilder yaml = new StringBuilder();</span>
+<span class="fc" id="L1759">        yaml.append(&quot;# Workspace checkpoint: &quot;).append(name).append(&quot;\n&quot;);</span>
+<span class="fc" id="L1760">        yaml.append(&quot;# Generated: &quot;).append(timestamp).append(&quot;\n&quot;);</span>
+<span class="fc" id="L1761">        yaml.append(&quot;checkpoint: &quot;).append(name).append(&quot;\n&quot;);</span>
+<span class="fc" id="L1762">        yaml.append(&quot;timestamp: &quot;).append(timestamp).append(&quot;\n&quot;);</span>
+<span class="fc" id="L1763">        yaml.append(&quot;subprojects:\n&quot;);</span>
 
-<span class="fc bfc" id="L1749" title="All 2 branches covered.">        for (String[] sub : componentData) {</span>
-<span class="fc" id="L1750">            yaml.append(&quot;  &quot;).append(sub[0]).append(&quot;:\n&quot;);</span>
-<span class="fc" id="L1751">            yaml.append(&quot;    branch: &quot;).append(sub[1]).append(&quot;\n&quot;);</span>
-<span class="fc" id="L1752">            yaml.append(&quot;    sha: &quot;).append(sub[2]).append(&quot;\n&quot;);</span>
-<span class="fc" id="L1753">            yaml.append(&quot;    version: &quot;).append(sub[3]).append(&quot;\n&quot;);</span>
-<span class="fc" id="L1754">            yaml.append(&quot;    modified: &quot;).append(sub[4]).append(&quot;\n&quot;);</span>
-<span class="fc" id="L1755">        }</span>
+<span class="fc bfc" id="L1765" title="All 2 branches covered.">        for (String[] sub : componentData) {</span>
+<span class="fc" id="L1766">            yaml.append(&quot;  &quot;).append(sub[0]).append(&quot;:\n&quot;);</span>
+<span class="fc" id="L1767">            yaml.append(&quot;    branch: &quot;).append(sub[1]).append(&quot;\n&quot;);</span>
+<span class="fc" id="L1768">            yaml.append(&quot;    sha: &quot;).append(sub[2]).append(&quot;\n&quot;);</span>
+<span class="fc" id="L1769">            yaml.append(&quot;    version: &quot;).append(sub[3]).append(&quot;\n&quot;);</span>
+<span class="fc" id="L1770">            yaml.append(&quot;    modified: &quot;).append(sub[4]).append(&quot;\n&quot;);</span>
+<span class="fc" id="L1771">        }</span>
 
-<span class="fc" id="L1757">        return yaml.toString();</span>
+<span class="fc" id="L1773">        return yaml.toString();</span>
     }
 
     // ── Bare mode: single-repo release (no workspace.yaml) ───────────
@@ -1776,33 +1792,33 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
         // The single-repo release is a cohort of one (ike-issues#612);
         // resolve it through the shared CohortResolver rather than reading
         // user.dir directly.
-<span class="fc" id="L1779">        File repo = resolveCohort().members().getFirst().directory().toFile();</span>
-<span class="pc bpc" id="L1780" title="1 of 2 branches missed.">        if (!new File(repo, &quot;pom.xml&quot;).exists()) {</span>
-<span class="fc" id="L1781">            throw new MojoException(</span>
+<span class="fc" id="L1795">        File repo = resolveCohort().members().getFirst().directory().toFile();</span>
+<span class="pc bpc" id="L1796" title="1 of 2 branches missed.">        if (!new File(repo, &quot;pom.xml&quot;).exists()) {</span>
+<span class="fc" id="L1797">            throw new MojoException(</span>
                     &quot;ws:release: &quot; + repo + &quot; has no pom.xml and no workspace.yaml &quot;
                     + &quot;was found — run it in a Maven project, or a workspace.&quot;);
         }
-<span class="nc bnc" id="L1785" title="All 2 branches missed.">        boolean draft = !publish;</span>
-<span class="nc bnc" id="L1786" title="All 2 branches missed.">        WsGoal goal = draft ? WsGoal.RELEASE_DRAFT : WsGoal.RELEASE_PUBLISH;</span>
-<span class="nc bnc" id="L1787" title="All 2 branches missed.">        String delegate = draft ? &quot;ike:release-draft&quot; : &quot;ike:release-publish&quot;;</span>
+<span class="nc bnc" id="L1801" title="All 2 branches missed.">        boolean draft = !publish;</span>
+<span class="nc bnc" id="L1802" title="All 2 branches missed.">        WsGoal goal = draft ? WsGoal.RELEASE_DRAFT : WsGoal.RELEASE_PUBLISH;</span>
+<span class="nc bnc" id="L1803" title="All 2 branches missed.">        String delegate = draft ? &quot;ike:release-draft&quot; : &quot;ike:release-publish&quot;;</span>
 
-<span class="nc" id="L1789">        getLog().info(&quot;&quot;);</span>
-<span class="nc" id="L1790">        getLog().info(goal.qualified());</span>
-<span class="nc" id="L1791">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
-<span class="nc" id="L1792">        getLog().info(&quot;  Repo: &quot; + repo.getName());</span>
-<span class="nc" id="L1793">        getLog().info(&quot;  Mode: single repo (no workspace.yaml) → &quot; + delegate);</span>
-<span class="nc" id="L1794">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L1805">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L1806">        getLog().info(goal.qualified());</span>
+<span class="nc" id="L1807">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+<span class="nc" id="L1808">        getLog().info(&quot;  Repo: &quot; + repo.getName());</span>
+<span class="nc" id="L1809">        getLog().info(&quot;  Mode: single repo (no workspace.yaml) → &quot; + delegate);</span>
+<span class="nc" id="L1810">        getLog().info(&quot;&quot;);</span>
 
-<span class="nc" id="L1796">        String mvn = findMvn(repo);</span>
-<span class="nc" id="L1797">        ReleaseSupport.exec(repo, getLog(),</span>
-<span class="nc bnc" id="L1798" title="All 2 branches missed.">                draft ? draftCommand(mvn) : releaseCommand(mvn));</span>
+<span class="nc" id="L1812">        String mvn = findMvn(repo);</span>
+<span class="nc" id="L1813">        ReleaseSupport.exec(repo, getLog(),</span>
+<span class="nc bnc" id="L1814" title="All 2 branches missed.">                draft ? draftCommand(mvn) : releaseCommand(mvn));</span>
 
-<span class="nc" id="L1800">        GoalReportBuilder report = new GoalReportBuilder();</span>
-<span class="nc" id="L1801">        report.paragraph(&quot;**Repo:** `&quot; + repo + &quot;`&quot;);</span>
-<span class="nc bnc" id="L1802" title="All 2 branches missed.">        report.paragraph(&quot;Single-repo release &quot; + (draft ? &quot;preview&quot; : &quot;executed&quot;)</span>
+<span class="nc" id="L1816">        GoalReportBuilder report = new GoalReportBuilder();</span>
+<span class="nc" id="L1817">        report.paragraph(&quot;**Repo:** `&quot; + repo + &quot;`&quot;);</span>
+<span class="nc bnc" id="L1818" title="All 2 branches missed.">        report.paragraph(&quot;Single-repo release &quot; + (draft ? &quot;preview&quot; : &quot;executed&quot;)</span>
                 + &quot; via `&quot; + delegate + &quot;` — a working set of one, no workspace &quot;
                 + &quot;cascade.&quot;);
-<span class="nc" id="L1805">        return new WorkspaceReportSpec(goal, report.build());</span>
+<span class="nc" id="L1821">        return new WorkspaceReportSpec(goal, report.build());</span>
     }
 
     /**
@@ -1815,20 +1831,20 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
      * @return the full command, ready for {@link ReleaseSupport#exec}
      */
     String[] draftCommand(String mvn) {
-<span class="fc" id="L1818">        List&lt;String&gt; cmd = new ArrayList&lt;&gt;();</span>
-<span class="fc" id="L1819">        cmd.add(mvn);</span>
-<span class="fc" id="L1820">        cmd.add(&quot;ike:release-draft&quot;);</span>
-<span class="fc bfc" id="L1821" title="All 2 branches covered.">        if (ignoreWarnings) {</span>
-<span class="fc" id="L1822">            cmd.add(&quot;-Dike.release.ignoreWarnings=true&quot;);</span>
+<span class="fc" id="L1834">        List&lt;String&gt; cmd = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L1835">        cmd.add(mvn);</span>
+<span class="fc" id="L1836">        cmd.add(&quot;ike:release-draft&quot;);</span>
+<span class="fc bfc" id="L1837" title="All 2 branches covered.">        if (ignoreWarnings) {</span>
+<span class="fc" id="L1838">            cmd.add(&quot;-Dike.release.ignoreWarnings=true&quot;);</span>
         }
-<span class="fc" id="L1824">        cmd.add(&quot;-B&quot;);</span>
-<span class="fc" id="L1825">        return cmd.toArray(new String[0]);</span>
+<span class="fc" id="L1840">        cmd.add(&quot;-B&quot;);</span>
+<span class="fc" id="L1841">        return cmd.toArray(new String[0]);</span>
     }
 
     // ── Helper: find mvn or mvnw ─────────────────────────────────────
 
     private String findMvn(File subDir) {
-<span class="fc" id="L1831">        return resolveMvnCommand(subDir);</span>
+<span class="fc" id="L1847">        return resolveMvnCommand(subDir);</span>
     }
 
     /**
@@ -1844,18 +1860,18 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
      * @return the full command, ready for {@link ReleaseSupport#exec}
      */
     String[] releaseCommand(String mvn, String... extra) {
-<span class="fc" id="L1847">        List&lt;String&gt; cmd = new ArrayList&lt;&gt;();</span>
-<span class="fc" id="L1848">        cmd.add(mvn);</span>
-<span class="fc" id="L1849">        cmd.add(&quot;ike:release-publish&quot;);</span>
-<span class="fc" id="L1850">        cmd.add(&quot;-DpushRelease=&quot; + push);</span>
-<span class="fc bfc" id="L1851" title="All 2 branches covered.">        if (ignoreWarnings) {</span>
-<span class="fc" id="L1852">            cmd.add(&quot;-Dike.release.ignoreWarnings=true&quot;);</span>
+<span class="fc" id="L1863">        List&lt;String&gt; cmd = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L1864">        cmd.add(mvn);</span>
+<span class="fc" id="L1865">        cmd.add(&quot;ike:release-publish&quot;);</span>
+<span class="fc" id="L1866">        cmd.add(&quot;-DpushRelease=&quot; + push);</span>
+<span class="fc bfc" id="L1867" title="All 2 branches covered.">        if (ignoreWarnings) {</span>
+<span class="fc" id="L1868">            cmd.add(&quot;-Dike.release.ignoreWarnings=true&quot;);</span>
         }
-<span class="pc bpc" id="L1854" title="1 of 2 branches missed.">        for (String arg : extra) {</span>
-<span class="nc" id="L1855">            cmd.add(arg);</span>
+<span class="pc bpc" id="L1870" title="1 of 2 branches missed.">        for (String arg : extra) {</span>
+<span class="nc" id="L1871">            cmd.add(arg);</span>
         }
-<span class="fc" id="L1857">        cmd.add(&quot;-B&quot;);</span>
-<span class="fc" id="L1858">        return cmd.toArray(new String[0]);</span>
+<span class="fc" id="L1873">        cmd.add(&quot;-B&quot;);</span>
+<span class="fc" id="L1874">        return cmd.toArray(new String[0]);</span>
     }
 
     /**
@@ -1869,20 +1885,20 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
      * @return absolute path to mvnw/mvnw.cmd, or {@code &quot;mvn&quot;}
      */
     public static String resolveMvnCommand(File subDir) {
-<span class="fc" id="L1872">        File mvnw = new File(subDir, &quot;mvnw&quot;);</span>
-<span class="fc bfc" id="L1873" title="All 4 branches covered.">        if (mvnw.exists() &amp;&amp; mvnw.canExecute()) {</span>
-<span class="fc" id="L1874">            return mvnw.getAbsolutePath();</span>
+<span class="fc" id="L1888">        File mvnw = new File(subDir, &quot;mvnw&quot;);</span>
+<span class="fc bfc" id="L1889" title="All 4 branches covered.">        if (mvnw.exists() &amp;&amp; mvnw.canExecute()) {</span>
+<span class="fc" id="L1890">            return mvnw.getAbsolutePath();</span>
         }
-<span class="fc" id="L1876">        File mvnwCmd = new File(subDir, &quot;mvnw.cmd&quot;);</span>
-<span class="fc bfc" id="L1877" title="All 2 branches covered.">        if (mvnwCmd.exists()) {</span>
-<span class="fc" id="L1878">            return mvnwCmd.getAbsolutePath();</span>
+<span class="fc" id="L1892">        File mvnwCmd = new File(subDir, &quot;mvnw.cmd&quot;);</span>
+<span class="fc bfc" id="L1893" title="All 2 branches covered.">        if (mvnwCmd.exists()) {</span>
+<span class="fc" id="L1894">            return mvnwCmd.getAbsolutePath();</span>
         }
-<span class="fc" id="L1880">        return &quot;mvn&quot;;</span>
+<span class="fc" id="L1896">        return &quot;mvn&quot;;</span>
     }
 
     // ── Record for candidate tracking ────────────────────────────────
 
-<span class="fc" id="L1885">    private record ReleaseCandidate(</span>
+<span class="fc" id="L1901">    private record ReleaseCandidate(</span>
             String name,
             Subproject subproject,
             File dir,

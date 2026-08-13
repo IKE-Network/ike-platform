@@ -409,11 +409,23 @@ mvn ws:release-draft
 
 ### [#ws-release-publish--execute-the-reactor-pass-relea](#ws-release-publish--execute-the-reactor-pass-relea)ws:release-publish — execute the reactor-pass release cycle
 
-Execute one checkpoint-shaped release cycle of the working set (ike-issues#997): a **single version pass** de-qualifies every releasing member together (each on its own version line, every tracked reference moving to the referenced artifact’s release value), **one reactor build** verifies everything at release versions, `deploy` runs scoped to exactly the releasing set, an annotated `v`-tag lands per releasing repository and the workspace root, the cycle’s `releases/release-<cycle>.yaml` record rides in the root’s tagged tree, the set post-bumps to its next development versions, and everything pushes. Members outside the release set are untouched — no increment, no tag, no deploy.
+Execute one checkpoint-shaped release cycle of the working set (ike-issues#997): a **single version pass** de-qualifies every releasing member together (each on its own version line, every tracked reference moving to the referenced artifact’s release value), **one reactor build** verifies everything at release versions, `deploy` runs scoped to exactly the releasing set, an annotated release tag lands per releasing repository and the workspace root, the cycle’s `releases/release-<cycle>.yaml` record rides in the root’s tagged tree, the set post-bumps to its next development versions, and everything pushes. Members outside the release set are untouched — no increment, no tag, no deploy.
 
 The release set is the changed members plus every member whose dependency pins change because of them; the workspace root releases once per cycle as the record’s anchor. Publication is working-set level: member repositories receive tags and Nexus artifacts; the release itself lives on the working-set repository.
 
 A standalone repository (no `workspace.yaml`) still delegates to the single-repo `ike:release-publish` engine, which fits it.
+
+#### [#release-tag-style](#release-tag-style)Release tag style
+
+A working set tags its members the way those members already tag themselves, in both directions — the tags a cycle writes and the tags detection reads back as "the last release". IKE’s own repositories use `v`-prefixed tags (`v160`); the komet working set’s ikmdev members use bare version tags (`1.127.2`), so its root declares:
+
+```
+<properties>
+    <ike.release.tagStyle>BARE</ike.release.tagStyle>
+</properties>
+```
+
+Detection reads a repository’s real release history through this style, so a member whose upstream already released at `1.127.1` enters the cycle as "one release behind", not "never released". Tags that merely resemble releases — dated tags, hand-cut development tags, checkpoint tags — are excluded by pattern, not by glob alone.
 
 ```
 mvn ws:release-publish                       # cycle label defaults to <root>-<version>

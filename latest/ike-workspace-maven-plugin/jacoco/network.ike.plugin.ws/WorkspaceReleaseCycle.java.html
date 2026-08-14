@@ -231,148 +231,245 @@ final class WorkspaceReleaseCycle {
 <span class="fc" id="L231">        log.info(&quot;  Version pass — &quot; + allRepos().size()</span>
                 + &quot; repositories de-qualify together&quot;);
 
-        // Self-versions.
-<span class="fc bfc" id="L235" title="All 2 branches covered.">        for (ReleasingRepo m : allRepos()) {</span>
-<span class="fc" id="L236">            File pom = new File(m.dir(), &quot;pom.xml&quot;);</span>
+        // Self-versions — the repository root POM and every sub-module
+        // beneath it that names the repository's own version.
+<span class="fc bfc" id="L236" title="All 2 branches covered.">        for (ReleasingRepo m : allRepos()) {</span>
+<span class="fc" id="L237">            File pom = new File(m.dir(), &quot;pom.xml&quot;);</span>
             try {
-<span class="fc" id="L238">                ReleaseSupport.setPomVersion(pom, m.preVersion(),</span>
-<span class="fc" id="L239">                        m.releaseVersion());</span>
-<span class="nc" id="L240">            } catch (Exception e) {</span>
-<span class="nc" id="L241">                throw new MojoException(&quot;Version pass failed setting &quot;</span>
-<span class="nc" id="L242">                        + m.name() + &quot; to &quot; + m.releaseVersion() + &quot;: &quot;</span>
-<span class="nc" id="L243">                        + e.getMessage(), e);</span>
-<span class="fc" id="L244">            }</span>
-<span class="fc" id="L245">        }</span>
+<span class="fc" id="L239">                ReleaseSupport.setPomVersion(pom, m.preVersion(),</span>
+<span class="fc" id="L240">                        m.releaseVersion());</span>
+<span class="nc" id="L241">            } catch (Exception e) {</span>
+<span class="nc" id="L242">                throw new MojoException(&quot;Version pass failed setting &quot;</span>
+<span class="nc" id="L243">                        + m.name() + &quot; to &quot; + m.releaseVersion() + &quot;: &quot;</span>
+<span class="nc" id="L244">                        + e.getMessage(), e);</span>
+<span class="fc" id="L245">            }</span>
+<span class="fc" id="L246">            retargetOwnCoordinates(m, m.preVersion(), m.releaseVersion());</span>
+<span class="fc" id="L247">        }</span>
 
         // Tracking properties settle at the referenced release values.
-<span class="fc bfc" id="L248" title="All 2 branches covered.">        for (ReleasePlan.PropertyReleasePlan p : plan.properties()) {</span>
-<span class="fc" id="L249">            rewrite(p.declaringPomPath(), content -&gt; PomModel.updateProperty(</span>
-<span class="fc" id="L250">                    content, p.propertyName(), p.releaseValue()),</span>
-<span class="fc" id="L251">                    &quot;property &quot; + p.propertyName());</span>
-<span class="fc" id="L252">        }</span>
+<span class="fc bfc" id="L250" title="All 2 branches covered.">        for (ReleasePlan.PropertyReleasePlan p : plan.properties()) {</span>
+<span class="fc" id="L251">            rewrite(p.declaringPomPath(), content -&gt; PomModel.updateProperty(</span>
+<span class="fc" id="L252">                    content, p.propertyName(), p.releaseValue()),</span>
+<span class="fc" id="L253">                    &quot;property &quot; + p.propertyName());</span>
+<span class="fc" id="L254">        }</span>
 
         // Parent blocks and literal dependency sites (properties cover
         // the ${…}-routed sites).
-<span class="fc bfc" id="L256" title="All 2 branches covered.">        for (ReleasePlan.ArtifactReleasePlan a : plan.artifacts().values()) {</span>
-<span class="fc bfc" id="L257" title="All 2 branches covered.">            for (ReleasePlan.ReferenceSite site : a.referenceSites()) {</span>
-<span class="pc bpc" id="L258" title="1 of 2 branches missed.">                if (site.textAtSite() == null</span>
-<span class="pc bpc" id="L259" title="1 of 2 branches missed.">                        || site.textAtSite().startsWith(&quot;${&quot;)) {</span>
-<span class="fc" id="L260">                    continue;</span>
+<span class="fc bfc" id="L258" title="All 2 branches covered.">        for (ReleasePlan.ArtifactReleasePlan a : plan.artifacts().values()) {</span>
+<span class="fc bfc" id="L259" title="All 2 branches covered.">            for (ReleasePlan.ReferenceSite site : a.referenceSites()) {</span>
+<span class="pc bpc" id="L260" title="1 of 2 branches missed.">                if (site.textAtSite() == null</span>
+<span class="pc bpc" id="L261" title="1 of 2 branches missed.">                        || site.textAtSite().startsWith(&quot;${&quot;)) {</span>
+<span class="fc" id="L262">                    continue;</span>
                 }
-<span class="nc bnc" id="L262" title="All 4 branches missed.">                switch (site.kind()) {</span>
-<span class="nc" id="L263">                    case PARENT -&gt; rewrite(site.pomPath(),</span>
-<span class="nc" id="L264">                            content -&gt; PomModel.updateParentVersion(content,</span>
-<span class="nc" id="L265">                                    site.targetGa().groupId(),</span>
-<span class="nc" id="L266">                                    site.targetGa().artifactId(),</span>
-<span class="nc" id="L267">                                    a.releaseValue()),</span>
-<span class="nc" id="L268">                            &quot;parent &quot; + site.targetGa());</span>
-<span class="nc" id="L269">                    case DEPENDENCY -&gt; rewrite(site.pomPath(),</span>
-<span class="nc" id="L270">                            content -&gt; PomModel.updateDependencyVersion(content,</span>
-<span class="nc" id="L271">                                    site.targetGa().groupId(),</span>
-<span class="nc" id="L272">                                    site.targetGa().artifactId(),</span>
-<span class="nc" id="L273">                                    a.releaseValue()),</span>
-<span class="nc" id="L274">                            &quot;dependency &quot; + site.targetGa());</span>
-<span class="nc" id="L275">                    case PLUGIN -&gt; rewrite(site.pomPath(),</span>
-<span class="nc" id="L276">                            content -&gt; PomModel.updatePluginVersion(content,</span>
-<span class="nc" id="L277">                                    site.targetGa().groupId(),</span>
-<span class="nc" id="L278">                                    site.targetGa().artifactId(),</span>
-<span class="nc" id="L279">                                    a.releaseValue()),</span>
-<span class="nc" id="L280">                            &quot;plugin &quot; + site.targetGa());</span>
+<span class="nc bnc" id="L264" title="All 4 branches missed.">                switch (site.kind()) {</span>
+<span class="nc" id="L265">                    case PARENT -&gt; rewrite(site.pomPath(),</span>
+<span class="nc" id="L266">                            content -&gt; PomModel.updateParentVersion(content,</span>
+<span class="nc" id="L267">                                    site.targetGa().groupId(),</span>
+<span class="nc" id="L268">                                    site.targetGa().artifactId(),</span>
+<span class="nc" id="L269">                                    a.releaseValue()),</span>
+<span class="nc" id="L270">                            &quot;parent &quot; + site.targetGa());</span>
+<span class="nc" id="L271">                    case DEPENDENCY -&gt; rewrite(site.pomPath(),</span>
+<span class="nc" id="L272">                            content -&gt; PomModel.updateDependencyVersion(content,</span>
+<span class="nc" id="L273">                                    site.targetGa().groupId(),</span>
+<span class="nc" id="L274">                                    site.targetGa().artifactId(),</span>
+<span class="nc" id="L275">                                    a.releaseValue()),</span>
+<span class="nc" id="L276">                            &quot;dependency &quot; + site.targetGa());</span>
+<span class="nc" id="L277">                    case PLUGIN -&gt; rewrite(site.pomPath(),</span>
+<span class="nc" id="L278">                            content -&gt; PomModel.updatePluginVersion(content,</span>
+<span class="nc" id="L279">                                    site.targetGa().groupId(),</span>
+<span class="nc" id="L280">                                    site.targetGa().artifactId(),</span>
+<span class="nc" id="L281">                                    a.releaseValue()),</span>
+<span class="nc" id="L282">                            &quot;plugin &quot; + site.targetGa());</span>
                 }
-<span class="nc" id="L282">            }</span>
-<span class="fc" id="L283">        }</span>
+<span class="nc" id="L284">            }</span>
+<span class="fc" id="L285">        }</span>
 
         // The cycle record rides in the root's release commit, so the
         // tagged root tree carries it.
-<span class="fc" id="L287">        writeCycleRecord();</span>
+<span class="fc" id="L289">        writeCycleRecord();</span>
 
-<span class="fc bfc" id="L289" title="All 2 branches covered.">        for (ReleasingRepo m : allRepos()) {</span>
-<span class="fc" id="L290">            commitRepo(m.dir(), &quot;release: set version to &quot;</span>
-<span class="fc" id="L291">                    + m.releaseVersion());</span>
-<span class="fc" id="L292">            log.info(Ansi.green(&quot;  ✓ &quot;) + m.name() + &quot; → &quot;</span>
+<span class="fc bfc" id="L291" title="All 2 branches covered.">        for (ReleasingRepo m : allRepos()) {</span>
+<span class="fc" id="L292">            commitRepo(m.dir(), &quot;release: set version to &quot;</span>
 <span class="fc" id="L293">                    + m.releaseVersion());</span>
-<span class="fc" id="L294">        }</span>
-<span class="fc" id="L295">    }</span>
+<span class="fc" id="L294">            log.info(Ansi.green(&quot;  ✓ &quot;) + m.name() + &quot; → &quot;</span>
+<span class="fc" id="L295">                    + m.releaseVersion());</span>
+<span class="fc" id="L296">        }</span>
+<span class="fc" id="L297">    }</span>
 
     /** One reactor build of the whole working set at release versions. */
     private void verifyReactor(String mvn, boolean skipTests) {
-<span class="fc" id="L299">        log.info(&quot;&quot;);</span>
-<span class="fc" id="L300">        log.info(&quot;  Reactor verify — one build, everything at release&quot;</span>
+<span class="fc" id="L301">        log.info(&quot;&quot;);</span>
+<span class="fc" id="L302">        log.info(&quot;  Reactor verify — one build, everything at release&quot;</span>
                 + &quot; versions&quot;);
-<span class="fc" id="L302">        runner.run(root, verifyCommand(mvn, skipTests));</span>
-<span class="fc" id="L303">    }</span>
+<span class="fc" id="L304">        runner.run(root, verifyCommand(mvn, skipTests));</span>
+<span class="fc" id="L305">    }</span>
 
     /** Deploy exactly the releasing set from the verified reactor. */
     private void deployReleasingSet(String mvn) {
-<span class="fc" id="L307">        log.info(&quot;&quot;);</span>
-<span class="fc" id="L308">        log.info(&quot;  Deploy — scoped to the releasing set&quot;);</span>
-<span class="fc" id="L309">        runner.run(root, deployCommand(mvn));</span>
-<span class="fc" id="L310">    }</span>
+<span class="fc" id="L309">        log.info(&quot;&quot;);</span>
+<span class="fc" id="L310">        log.info(&quot;  Deploy — scoped to the releasing set&quot;);</span>
+<span class="fc" id="L311">        runner.run(root, deployCommand(mvn));</span>
+<span class="fc" id="L312">    }</span>
 
     /** Annotated v-tags at the release commits, one per repository. */
     private void tagReleases() {
-<span class="fc bfc" id="L314" title="All 2 branches covered.">        for (ReleasingRepo m : allRepos()) {</span>
-<span class="fc" id="L315">            String tag = tagStyle.tagFor(m.releaseVersion());</span>
-<span class="fc" id="L316">            ReleaseSupport.exec(m.dir(), log, &quot;git&quot;, &quot;tag&quot;, &quot;-a&quot;, tag,</span>
-<span class="fc" id="L317">                    &quot;-m&quot;, &quot;release: &quot; + m.name() + &quot; &quot; + m.releaseVersion()</span>
+<span class="fc bfc" id="L316" title="All 2 branches covered.">        for (ReleasingRepo m : allRepos()) {</span>
+<span class="fc" id="L317">            String tag = tagStyle.tagFor(m.releaseVersion());</span>
+<span class="fc" id="L318">            ReleaseSupport.exec(m.dir(), log, &quot;git&quot;, &quot;tag&quot;, &quot;-a&quot;, tag,</span>
+<span class="fc" id="L319">                    &quot;-m&quot;, &quot;release: &quot; + m.name() + &quot; &quot; + m.releaseVersion()</span>
                             + &quot; (cycle &quot; + cycleLabel + &quot;)&quot;);
-<span class="fc" id="L319">            log.info(Ansi.green(&quot;  ✓ &quot;) + &quot;tagged &quot; + m.name() + &quot; &quot; + tag);</span>
-<span class="fc" id="L320">        }</span>
-<span class="fc" id="L321">    }</span>
+<span class="fc" id="L321">            log.info(Ansi.green(&quot;  ✓ &quot;) + &quot;tagged &quot; + m.name() + &quot; &quot; + tag);</span>
+<span class="fc" id="L322">        }</span>
+<span class="fc" id="L323">    }</span>
 
     /**
      * Own versions move to the next development SNAPSHOTs; reference
      * sites stay at the released values (the plan's settle semantics).
      */
     private void postBump() {
-<span class="fc bfc" id="L328" title="All 2 branches covered.">        for (ReleasingRepo m : allRepos()) {</span>
-<span class="fc" id="L329">            File pom = new File(m.dir(), &quot;pom.xml&quot;);</span>
+<span class="fc bfc" id="L330" title="All 2 branches covered.">        for (ReleasingRepo m : allRepos()) {</span>
+<span class="fc" id="L331">            File pom = new File(m.dir(), &quot;pom.xml&quot;);</span>
             try {
-<span class="fc" id="L331">                ReleaseSupport.setPomVersion(pom, m.releaseVersion(),</span>
-<span class="fc" id="L332">                        m.postVersion());</span>
-<span class="nc" id="L333">            } catch (Exception e) {</span>
-<span class="nc" id="L334">                throw new MojoException(&quot;Post-bump failed for &quot; + m.name()</span>
-<span class="nc" id="L335">                        + &quot;: &quot; + e.getMessage(), e);</span>
-<span class="fc" id="L336">            }</span>
-<span class="fc" id="L337">            commitRepo(m.dir(), &quot;post-release: bump to &quot; + m.postVersion());</span>
-<span class="fc" id="L338">        }</span>
-<span class="fc" id="L339">    }</span>
+<span class="fc" id="L333">                ReleaseSupport.setPomVersion(pom, m.releaseVersion(),</span>
+<span class="fc" id="L334">                        m.postVersion());</span>
+<span class="nc" id="L335">            } catch (Exception e) {</span>
+<span class="nc" id="L336">                throw new MojoException(&quot;Post-bump failed for &quot; + m.name()</span>
+<span class="nc" id="L337">                        + &quot;: &quot; + e.getMessage(), e);</span>
+<span class="fc" id="L338">            }</span>
+<span class="fc" id="L339">            retargetOwnCoordinates(m, m.releaseVersion(), m.postVersion());</span>
+<span class="fc" id="L340">            commitRepo(m.dir(), &quot;post-release: bump to &quot; + m.postVersion());</span>
+<span class="fc" id="L341">        }</span>
+<span class="fc" id="L342">    }</span>
 
     /** Push every repository's branch and release tag. */
     private void pushAll() {
-<span class="fc bfc" id="L343" title="All 2 branches covered.">        for (ReleasingRepo m : allRepos()) {</span>
-<span class="fc" id="L344">            String branch = ReleaseSupport.currentBranch(m.dir());</span>
-<span class="fc" id="L345">            ReleaseSupport.exec(m.dir(), log, &quot;git&quot;, &quot;push&quot;, &quot;origin&quot;,</span>
+<span class="fc bfc" id="L346" title="All 2 branches covered.">        for (ReleasingRepo m : allRepos()) {</span>
+<span class="fc" id="L347">            String branch = ReleaseSupport.currentBranch(m.dir());</span>
+<span class="fc" id="L348">            ReleaseSupport.exec(m.dir(), log, &quot;git&quot;, &quot;push&quot;, &quot;origin&quot;,</span>
                     branch);
-<span class="fc" id="L347">            ReleaseSupport.exec(m.dir(), log, &quot;git&quot;, &quot;push&quot;, &quot;origin&quot;,</span>
-<span class="fc" id="L348">                    tagStyle.tagFor(m.releaseVersion()));</span>
-<span class="fc" id="L349">            log.info(Ansi.green(&quot;  ✓ &quot;) + &quot;pushed &quot; + m.name());</span>
-<span class="fc" id="L350">        }</span>
-<span class="fc" id="L351">    }</span>
+<span class="fc" id="L350">            ReleaseSupport.exec(m.dir(), log, &quot;git&quot;, &quot;push&quot;, &quot;origin&quot;,</span>
+<span class="fc" id="L351">                    tagStyle.tagFor(m.releaseVersion()));</span>
+<span class="fc" id="L352">            log.info(Ansi.green(&quot;  ✓ &quot;) + &quot;pushed &quot; + m.name());</span>
+<span class="fc" id="L353">        }</span>
+<span class="fc" id="L354">    }</span>
 
     // ── Helpers ──────────────────────────────────────────────────────
 
     private List&lt;ReleasingRepo&gt; allRepos() {
-<span class="fc" id="L356">        List&lt;ReleasingRepo&gt; all = new ArrayList&lt;&gt;(members);</span>
-<span class="fc" id="L357">        all.add(rootRepo);</span>
-<span class="fc" id="L358">        return all;</span>
+<span class="fc" id="L359">        List&lt;ReleasingRepo&gt; all = new ArrayList&lt;&gt;(members);</span>
+<span class="fc" id="L360">        all.add(rootRepo);</span>
+<span class="fc" id="L361">        return all;</span>
     }
 
     /** Content-transform one POM file in place. */
+    /**
+     * Move a releasing repository's own version wherever its sub-modules
+     * name it: a module declaring its own {@code &lt;version&gt;}, and a
+     * module whose {@code &lt;parent&gt;} names an aggregator inside the same
+     * repository. Maven carries the rest by inheritance, but a POM that
+     * spells the version out is left behind by a root-only rewrite —
+     * and one straggler at the old version breaks the whole reactor,
+     * since its siblings' release-version dependencies on it resolve
+     * nowhere (IKE-Network/ike-issues#1011).
+     *
+     * &lt;p&gt;Only the repository's own coordinates move. The match is the
+     * version string itself: a {@code &lt;parent&gt;} or self {@code &lt;version&gt;}
+     * equal to this repository's {@code from} value is by construction
+     * this repository's own, since an external parent carries an
+     * unrelated version. Dependency versions are never touched here —
+     * cross-repository references belong to the release plan, which
+     * knows the target's release value.
+     *
+     * @param repo the releasing repository whose modules to retarget
+     * @param from the version to move away from
+     * @param to   the version to move to
+     */
+    private void retargetOwnCoordinates(ReleasingRepo repo, String from,
+                                        String to) {
+<span class="fc" id="L389">        Path repoRoot = repo.dir().toPath();</span>
+        List&lt;Path&gt; modulePoms;
+<span class="fc" id="L391">        try (java.util.stream.Stream&lt;Path&gt; tree = Files.walk(repoRoot)) {</span>
+<span class="fc" id="L392">            modulePoms = tree</span>
+<span class="fc" id="L393">                    .filter(p -&gt; p.getFileName().toString().equals(&quot;pom.xml&quot;))</span>
+<span class="fc bfc" id="L394" title="All 2 branches covered.">                    .filter(p -&gt; !p.equals(repoRoot.resolve(&quot;pom.xml&quot;)))</span>
+<span class="pc bpc" id="L395" title="1 of 2 branches missed.">                    .filter(p -&gt; !p.toString().contains(File.separator</span>
+                            + &quot;target&quot; + File.separator))
+<span class="fc" id="L397">                    .toList();</span>
+<span class="nc" id="L398">        } catch (IOException e) {</span>
+<span class="nc" id="L399">            throw new MojoException(&quot;Version pass could not walk &quot;</span>
+<span class="nc" id="L400">                    + repo.name() + &quot;: &quot; + e.getMessage(), e);</span>
+<span class="fc" id="L401">        }</span>
+<span class="fc" id="L402">        int retargeted = 0;</span>
+<span class="fc bfc" id="L403" title="All 2 branches covered.">        for (Path pom : modulePoms) {</span>
+<span class="fc" id="L404">            boolean changed = false;</span>
+
+            // A &lt;parent&gt; naming an aggregator inside this repository.
+            try {
+<span class="fc" id="L408">                PomParentSupport.ParentInfo parent =</span>
+<span class="fc" id="L409">                        PomParentSupport.readParent(pom);</span>
+<span class="pc bpc" id="L410" title="2 of 4 branches missed.">                if (parent != null &amp;&amp; from.equals(parent.version())) {</span>
+<span class="fc" id="L411">                    rewrite(pom, content -&gt; PomModel.updateParentVersion(</span>
+<span class="fc" id="L412">                            content, parent.groupId(), parent.artifactId(),</span>
+<span class="fc" id="L413">                            to), &quot;parent &quot; + parent.artifactId());</span>
+<span class="fc" id="L414">                    changed = true;</span>
+                }
+<span class="nc" id="L416">            } catch (IOException e) {</span>
+<span class="nc" id="L417">                throw new MojoException(&quot;Version pass could not read the&quot;</span>
+<span class="nc" id="L418">                        + &quot; parent block of &quot; + pom + &quot;: &quot; + e.getMessage(), e);</span>
+<span class="fc" id="L419">            }</span>
+
+            // A module spelling out its own version.
+<span class="fc bfc" id="L422" title="All 2 branches covered.">            if (declaresOwnVersion(pom, from)) {</span>
+<span class="fc" id="L423">                ReleaseSupport.setPomVersion(pom.toFile(), from, to);</span>
+<span class="fc" id="L424">                changed = true;</span>
+            }
+<span class="pc bpc" id="L426" title="1 of 2 branches missed.">            if (changed) retargeted++;</span>
+<span class="fc" id="L427">        }</span>
+<span class="fc bfc" id="L428" title="All 2 branches covered.">        if (retargeted &gt; 0) {</span>
+<span class="fc" id="L429">            log.info(&quot;    &quot; + repo.name() + &quot;: &quot; + retargeted</span>
+                    + &quot; sub-module POM(s) retargeted to &quot; + to);
+        }
+<span class="fc" id="L432">    }</span>
+
+    /**
+     * Whether this POM declares its own {@code &lt;version&gt;} at the given
+     * value — the first {@code &lt;version&gt;} after any {@code &lt;parent&gt;}
+     * block, which is the same element
+     * {@link ReleaseSupport#setPomVersion} moves. Modules that inherit
+     * their version declare none, and must be left alone.
+     *
+     * @param pom     the POM to inspect
+     * @param version the version to look for
+     * @return {@code true} when the POM spells out that version itself
+     */
+    private static boolean declaresOwnVersion(Path pom, String version) {
+        try {
+            // The model's own version is null when the module inherits
+            // it. Asking the model rather than the text matters: an
+            // inheriting module whose dependency happens to carry the
+            // same version string would otherwise look like a
+            // declaration, and the rewrite would land on that
+            // dependency — an unrelated coordinate.
+<span class="fc" id="L453">            return version.equals(PomModel.parse(pom).model().getVersion());</span>
+<span class="nc" id="L454">        } catch (IOException e) {</span>
+<span class="nc" id="L455">            return false;</span>
+        }
+    }
+
     private void rewrite(Path pomPath,
                          java.util.function.UnaryOperator&lt;String&gt; transform,
                          String what) {
         try {
-<span class="fc" id="L366">            String before = Files.readString(pomPath, StandardCharsets.UTF_8);</span>
-<span class="fc" id="L367">            String after = transform.apply(before);</span>
-<span class="pc bpc" id="L368" title="1 of 2 branches missed.">            if (!after.equals(before)) {</span>
-<span class="fc" id="L369">                Files.writeString(pomPath, after, StandardCharsets.UTF_8);</span>
+<span class="fc" id="L463">            String before = Files.readString(pomPath, StandardCharsets.UTF_8);</span>
+<span class="fc" id="L464">            String after = transform.apply(before);</span>
+<span class="pc bpc" id="L465" title="1 of 2 branches missed.">            if (!after.equals(before)) {</span>
+<span class="fc" id="L466">                Files.writeString(pomPath, after, StandardCharsets.UTF_8);</span>
             }
-<span class="nc" id="L371">        } catch (IOException e) {</span>
-<span class="nc" id="L372">            throw new MojoException(&quot;Version pass failed rewriting &quot; + what</span>
-<span class="nc" id="L373">                    + &quot; in &quot; + pomPath + &quot;: &quot; + e.getMessage(), e);</span>
-<span class="fc" id="L374">        }</span>
-<span class="fc" id="L375">    }</span>
+<span class="nc" id="L468">        } catch (IOException e) {</span>
+<span class="nc" id="L469">            throw new MojoException(&quot;Version pass failed rewriting &quot; + what</span>
+<span class="nc" id="L470">                    + &quot; in &quot; + pomPath + &quot;: &quot; + e.getMessage(), e);</span>
+<span class="fc" id="L471">        }</span>
+<span class="fc" id="L472">    }</span>
 
     /**
      * Whether an exact tag exists in the repository.
@@ -383,11 +480,11 @@ final class WorkspaceReleaseCycle {
      */
     private static boolean tagExists(File dir, String tag) {
         try {
-<span class="fc" id="L386">            String out = ReleaseSupport.execCapture(dir,</span>
+<span class="fc" id="L483">            String out = ReleaseSupport.execCapture(dir,</span>
                     &quot;git&quot;, &quot;tag&quot;, &quot;-l&quot;, tag);
-<span class="pc bpc" id="L388" title="1 of 4 branches missed.">            return out != null &amp;&amp; !out.isBlank();</span>
-<span class="nc" id="L389">        } catch (Exception e) {</span>
-<span class="nc" id="L390">            return false;</span>
+<span class="pc bpc" id="L485" title="1 of 4 branches missed.">            return out != null &amp;&amp; !out.isBlank();</span>
+<span class="nc" id="L486">        } catch (Exception e) {</span>
+<span class="nc" id="L487">            return false;</span>
         }
     }
 
@@ -398,58 +495,58 @@ final class WorkspaceReleaseCycle {
      * stages the cycle's (new, untracked) record file by exact path.
      */
     private void commitRepo(File dir, String message) {
-<span class="fc" id="L401">        ReleaseSupport.exec(dir, log, &quot;git&quot;, &quot;add&quot;, &quot;-u&quot;);</span>
-<span class="fc bfc" id="L402" title="All 2 branches covered.">        if (dir.equals(root)) {</span>
-<span class="fc" id="L403">            ReleaseSupport.exec(dir, log, &quot;git&quot;, &quot;add&quot;, &quot;--&quot;,</span>
-<span class="fc" id="L404">                    rootRelativeRecordPath());</span>
+<span class="fc" id="L498">        ReleaseSupport.exec(dir, log, &quot;git&quot;, &quot;add&quot;, &quot;-u&quot;);</span>
+<span class="fc bfc" id="L499" title="All 2 branches covered.">        if (dir.equals(root)) {</span>
+<span class="fc" id="L500">            ReleaseSupport.exec(dir, log, &quot;git&quot;, &quot;add&quot;, &quot;--&quot;,</span>
+<span class="fc" id="L501">                    rootRelativeRecordPath());</span>
         }
-<span class="fc" id="L406">        ReleaseSupport.exec(dir, log, &quot;git&quot;, &quot;commit&quot;, &quot;-m&quot;, message);</span>
-<span class="fc" id="L407">    }</span>
+<span class="fc" id="L503">        ReleaseSupport.exec(dir, log, &quot;git&quot;, &quot;commit&quot;, &quot;-m&quot;, message);</span>
+<span class="fc" id="L504">    }</span>
 
     private String rootRelativeRecordPath() {
-<span class="fc" id="L410">        return root.toPath().relativize(</span>
-<span class="fc" id="L411">                ReleaseRecordFile.pathFor(root.toPath(), cycleLabel))</span>
-<span class="fc" id="L412">                .toString();</span>
+<span class="fc" id="L507">        return root.toPath().relativize(</span>
+<span class="fc" id="L508">                ReleaseRecordFile.pathFor(root.toPath(), cycleLabel))</span>
+<span class="fc" id="L509">                .toString();</span>
     }
 
     /** Write the cycle's record with a row per releasing repository. */
     private void writeCycleRecord() {
         try {
-<span class="fc" id="L418">            Path recordPath = ReleaseRecordFile.pathFor(root.toPath(),</span>
+<span class="fc" id="L515">            Path recordPath = ReleaseRecordFile.pathFor(root.toPath(),</span>
                     cycleLabel);
-<span class="pc bpc" id="L420" title="1 of 2 branches missed.">            ReleaseRecord record = Files.exists(recordPath)</span>
-<span class="nc" id="L421">                    ? ReleaseRecordFile.read(recordPath)</span>
-<span class="fc" id="L422">                    : ReleaseRecord.start(cycleLabel, recordDate);</span>
-<span class="fc bfc" id="L423" title="All 2 branches covered.">            for (ReleasingRepo m : allRepos()) {</span>
-<span class="fc" id="L424">                String sha = ReleaseSupport.execCapture(m.dir(),</span>
-<span class="fc" id="L425">                        &quot;git&quot;, &quot;rev-parse&quot;, &quot;HEAD&quot;).trim();</span>
-<span class="fc" id="L426">                record = record.withMember(m.name(),</span>
-<span class="fc" id="L427">                        new ReleaseRecord.MemberRelease(m.releaseVersion(),</span>
-<span class="fc" id="L428">                                tagStyle.tagFor(m.releaseVersion()), sha, recordDate));</span>
-<span class="fc" id="L429">            }</span>
-<span class="fc" id="L430">            ReleaseRecordFile.write(recordPath, record);</span>
-<span class="nc" id="L431">        } catch (Exception e) {</span>
-<span class="nc" id="L432">            throw new MojoException(&quot;Cycle record write failed: &quot;</span>
-<span class="nc" id="L433">                    + e.getMessage(), e);</span>
-<span class="fc" id="L434">        }</span>
-<span class="fc" id="L435">    }</span>
+<span class="pc bpc" id="L517" title="1 of 2 branches missed.">            ReleaseRecord record = Files.exists(recordPath)</span>
+<span class="nc" id="L518">                    ? ReleaseRecordFile.read(recordPath)</span>
+<span class="fc" id="L519">                    : ReleaseRecord.start(cycleLabel, recordDate);</span>
+<span class="fc bfc" id="L520" title="All 2 branches covered.">            for (ReleasingRepo m : allRepos()) {</span>
+<span class="fc" id="L521">                String sha = ReleaseSupport.execCapture(m.dir(),</span>
+<span class="fc" id="L522">                        &quot;git&quot;, &quot;rev-parse&quot;, &quot;HEAD&quot;).trim();</span>
+<span class="fc" id="L523">                record = record.withMember(m.name(),</span>
+<span class="fc" id="L524">                        new ReleaseRecord.MemberRelease(m.releaseVersion(),</span>
+<span class="fc" id="L525">                                tagStyle.tagFor(m.releaseVersion()), sha, recordDate));</span>
+<span class="fc" id="L526">            }</span>
+<span class="fc" id="L527">            ReleaseRecordFile.write(recordPath, record);</span>
+<span class="nc" id="L528">        } catch (Exception e) {</span>
+<span class="nc" id="L529">            throw new MojoException(&quot;Cycle record write failed: &quot;</span>
+<span class="nc" id="L530">                    + e.getMessage(), e);</span>
+<span class="fc" id="L531">        }</span>
+<span class="fc" id="L532">    }</span>
 
     private String[] verifyCommand(String mvn, boolean skipTests) {
-<span class="fc" id="L438">        List&lt;String&gt; cmd = new ArrayList&lt;&gt;(List.of(mvn, &quot;-B&quot;, &quot;-ntp&quot;,</span>
+<span class="fc" id="L535">        List&lt;String&gt; cmd = new ArrayList&lt;&gt;(List.of(mvn, &quot;-B&quot;, &quot;-ntp&quot;,</span>
                 &quot;clean&quot;, &quot;install&quot;, &quot;-P&quot;, &quot;release&quot;, &quot;-T&quot;, &quot;1&quot;));
-<span class="pc bpc" id="L440" title="1 of 2 branches missed.">        if (skipTests) {</span>
-<span class="fc" id="L441">            cmd.add(&quot;-DskipTests&quot;);</span>
+<span class="pc bpc" id="L537" title="1 of 2 branches missed.">        if (skipTests) {</span>
+<span class="fc" id="L538">            cmd.add(&quot;-DskipTests&quot;);</span>
         }
-<span class="fc" id="L443">        return cmd.toArray(new String[0]);</span>
+<span class="fc" id="L540">        return cmd.toArray(new String[0]);</span>
     }
 
     private String[] deployCommand(String mvn) {
-<span class="fc" id="L447">        Set&lt;String&gt; selectors = new LinkedHashSet&lt;&gt;();</span>
-<span class="fc bfc" id="L448" title="All 2 branches covered.">        for (ReleasingRepo m : allRepos()) {</span>
-<span class="fc" id="L449">            selectors.add(&quot;:&quot; + m.artifactId());</span>
-<span class="fc" id="L450">        }</span>
-<span class="fc" id="L451">        return new String[] {mvn, &quot;-B&quot;, &quot;-ntp&quot;, &quot;deploy&quot;,</span>
-<span class="fc" id="L452">                &quot;-pl&quot;, String.join(&quot;,&quot;, selectors),</span>
+<span class="fc" id="L544">        Set&lt;String&gt; selectors = new LinkedHashSet&lt;&gt;();</span>
+<span class="fc bfc" id="L545" title="All 2 branches covered.">        for (ReleasingRepo m : allRepos()) {</span>
+<span class="fc" id="L546">            selectors.add(&quot;:&quot; + m.artifactId());</span>
+<span class="fc" id="L547">        }</span>
+<span class="fc" id="L548">        return new String[] {mvn, &quot;-B&quot;, &quot;-ntp&quot;, &quot;deploy&quot;,</span>
+<span class="fc" id="L549">                &quot;-pl&quot;, String.join(&quot;,&quot;, selectors),</span>
                 &quot;-P&quot;, &quot;release,signArtifacts&quot;, &quot;-T&quot;, &quot;1&quot;, &quot;-DskipTests&quot;};
     }
 }

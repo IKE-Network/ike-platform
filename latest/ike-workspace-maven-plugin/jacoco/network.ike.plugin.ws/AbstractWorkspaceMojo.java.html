@@ -229,6 +229,41 @@ import java.util.List;
     }
 
     /**
+     * Confirms this machine holds the working set's lease before a goal
+     * rewrites branches, versions or history.
+     *
+     * &lt;p&gt;Called by the {@code -publish} goals only. The {@code -draft} goals
+     * are dry runs — they print what they would do and touch nothing — so
+     * making one wait out a propagation window, or fail on a lease, would be
+     * a cost with no writer to protect.
+     *
+     * &lt;p&gt;Confirmation is the read-back, not merely the claim: two machines
+     * acquiring the same free lease inside the sync layer's propagation
+     * window both succeed, and the loser is never told. It costs about 25
+     * seconds, which is nothing against a release and is the difference
+     * between one writer and two. IKE-Network/ike-issues#1005.
+     *
+     * &lt;p&gt;Silent and harmless where the lease protocol does not exist — no
+     * {@code lease.sh}, no machine identity, or a project outside
+     * {@code ~/ike-dev}. See {@link WorkingSetLease}.
+     *
+     * @throws MojoException if another machine holds the working set
+     */
+    protected void confirmWorkingSetLease() {
+<span class="fc" id="L253">        WorkingSetLease.Decision decision =</span>
+<span class="fc" id="L254">                WorkingSetLease.confirm(workspaceRoot().toPath());</span>
+<span class="pc bpc" id="L255" title="3 of 4 branches missed.">        switch (decision.verdict()) {</span>
+<span class="fc" id="L256">            case NOT_APPLICABLE -&gt; { }</span>
+<span class="nc" id="L257">            case HELD -&gt; getLog().info(</span>
+<span class="nc" id="L258">                    &quot;  Working-set lease: confirmed for &quot; + decision.detail());</span>
+<span class="nc" id="L259">            case FENCED -&gt; throw new MojoException(</span>
+                    &quot;This machine does not hold the working set's lease, so &quot;
+                            + &quot;writing here would collide with the machine that &quot;
+<span class="nc" id="L262">                            + &quot;does.\n&quot; + decision.detail());</span>
+        }
+<span class="fc" id="L264">    }</span>
+
+    /**
      * Run {@code git status --porcelain} on a subproject directory and
      * return the output (empty string = clean).
      *
@@ -237,10 +272,10 @@ import java.util.List;
      */
     protected String gitStatus(File subprojectDir) {
         try {
-<span class="fc" id="L240">            return ReleaseSupport.execCapture(subprojectDir,</span>
+<span class="fc" id="L275">            return ReleaseSupport.execCapture(subprojectDir,</span>
                     &quot;git&quot;, &quot;status&quot;, &quot;--porcelain&quot;);
-<span class="fc" id="L242">        } catch (Exception e) {</span>
-<span class="fc" id="L243">            return &quot;ERROR: &quot; + e.getMessage();</span>
+<span class="fc" id="L277">        } catch (Exception e) {</span>
+<span class="fc" id="L278">            return &quot;ERROR: &quot; + e.getMessage();</span>
         }
     }
 
@@ -252,10 +287,10 @@ import java.util.List;
      */
     protected String gitBranch(File subprojectDir) {
         try {
-<span class="fc" id="L255">            return ReleaseSupport.execCapture(subprojectDir,</span>
+<span class="fc" id="L290">            return ReleaseSupport.execCapture(subprojectDir,</span>
                     &quot;git&quot;, &quot;rev-parse&quot;, &quot;--abbrev-ref&quot;, &quot;HEAD&quot;);
-<span class="fc" id="L257">        } catch (Exception e) {</span>
-<span class="fc" id="L258">            return &quot;unknown&quot;;</span>
+<span class="fc" id="L292">        } catch (Exception e) {</span>
+<span class="fc" id="L293">            return &quot;unknown&quot;;</span>
         }
     }
 
@@ -267,10 +302,10 @@ import java.util.List;
      */
     protected String gitShortSha(File subprojectDir) {
         try {
-<span class="fc" id="L270">            return ReleaseSupport.execCapture(subprojectDir,</span>
+<span class="fc" id="L305">            return ReleaseSupport.execCapture(subprojectDir,</span>
                     &quot;git&quot;, &quot;rev-parse&quot;, &quot;--short&quot;, &quot;HEAD&quot;);
-<span class="fc" id="L272">        } catch (Exception e) {</span>
-<span class="fc" id="L273">            return &quot;???????&quot;;</span>
+<span class="fc" id="L307">        } catch (Exception e) {</span>
+<span class="fc" id="L308">            return &quot;???????&quot;;</span>
         }
     }
 
@@ -282,10 +317,10 @@ import java.util.List;
      */
     protected boolean isWorkspaceMode() {
         try {
-<span class="fc" id="L285">            resolveManifest();</span>
-<span class="fc" id="L286">            return true;</span>
-<span class="fc" id="L287">        } catch (MojoException e) {</span>
-<span class="fc" id="L288">            return false;</span>
+<span class="fc" id="L320">            resolveManifest();</span>
+<span class="fc" id="L321">            return true;</span>
+<span class="fc" id="L322">        } catch (MojoException e) {</span>
+<span class="fc" id="L323">            return false;</span>
         }
     }
 
@@ -304,11 +339,11 @@ import java.util.List;
      * @return the resolved working set (never {@code null})
      */
     protected WorkingSet resolveWorkingSet() {
-<span class="fc" id="L307">        File configured = this.manifest;</span>
-<span class="pc bpc" id="L308" title="1 of 4 branches missed.">        Path startDir = (configured != null &amp;&amp; configured.exists())</span>
-<span class="fc" id="L309">                ? configured.getAbsoluteFile().toPath().getParent()</span>
-<span class="fc" id="L310">                : Path.of(System.getProperty(&quot;user.dir&quot;));</span>
-<span class="fc" id="L311">        return WorkingSetResolver.resolve(startDir);</span>
+<span class="fc" id="L342">        File configured = this.manifest;</span>
+<span class="pc bpc" id="L343" title="1 of 4 branches missed.">        Path startDir = (configured != null &amp;&amp; configured.exists())</span>
+<span class="fc" id="L344">                ? configured.getAbsoluteFile().toPath().getParent()</span>
+<span class="fc" id="L345">                : Path.of(System.getProperty(&quot;user.dir&quot;));</span>
+<span class="fc" id="L346">        return WorkingSetResolver.resolve(startDir);</span>
     }
 
     /**
@@ -324,11 +359,11 @@ import java.util.List;
      * @return the resolved cohort (never {@code null})
      */
     protected Cohort resolveCohort() {
-<span class="fc" id="L327">        File configured = this.manifest;</span>
-<span class="pc bpc" id="L328" title="3 of 4 branches missed.">        Path startDir = (configured != null &amp;&amp; configured.exists())</span>
-<span class="nc" id="L329">                ? configured.getAbsoluteFile().toPath().getParent()</span>
-<span class="fc" id="L330">                : Path.of(System.getProperty(&quot;user.dir&quot;));</span>
-<span class="fc" id="L331">        return CohortResolver.resolve(startDir);</span>
+<span class="fc" id="L362">        File configured = this.manifest;</span>
+<span class="pc bpc" id="L363" title="3 of 4 branches missed.">        Path startDir = (configured != null &amp;&amp; configured.exists())</span>
+<span class="nc" id="L364">                ? configured.getAbsoluteFile().toPath().getParent()</span>
+<span class="fc" id="L365">                : Path.of(System.getProperty(&quot;user.dir&quot;));</span>
+<span class="fc" id="L366">        return CohortResolver.resolve(startDir);</span>
     }
 
     /**
@@ -350,17 +385,17 @@ import java.util.List;
      */
     protected String requireParam(String currentValue, String propertyName,
                                   String promptLabel) {
-<span class="pc bpc" id="L353" title="1 of 4 branches missed.">        if (currentValue != null &amp;&amp; !currentValue.isBlank()) {</span>
-<span class="fc" id="L354">            return currentValue.trim();</span>
+<span class="pc bpc" id="L388" title="1 of 4 branches missed.">        if (currentValue != null &amp;&amp; !currentValue.isBlank()) {</span>
+<span class="fc" id="L389">            return currentValue.trim();</span>
         }
-<span class="fc" id="L356">        IkePrompter p = getPrompter();</span>
-<span class="pc bpc" id="L357" title="1 of 2 branches missed.">        if (p.isInteractive()) {</span>
-<span class="nc" id="L358">            String input = p.prompt(promptLabel + &quot;: &quot;);</span>
-<span class="nc bnc" id="L359" title="All 4 branches missed.">            if (input != null &amp;&amp; !input.isBlank()) {</span>
-<span class="nc" id="L360">                return input.trim();</span>
+<span class="fc" id="L391">        IkePrompter p = getPrompter();</span>
+<span class="pc bpc" id="L392" title="1 of 2 branches missed.">        if (p.isInteractive()) {</span>
+<span class="nc" id="L393">            String input = p.prompt(promptLabel + &quot;: &quot;);</span>
+<span class="nc bnc" id="L394" title="All 4 branches missed.">            if (input != null &amp;&amp; !input.isBlank()) {</span>
+<span class="nc" id="L395">                return input.trim();</span>
             }
         }
-<span class="fc" id="L363">        throw new MojoException(</span>
+<span class="fc" id="L398">        throw new MojoException(</span>
                 propertyName + &quot; is required. Specify -D&quot; + propertyName
                         + &quot;=&lt;value&gt; or run interactively.&quot;);
     }
@@ -382,9 +417,9 @@ import java.util.List;
      */
     protected static FeatureName validateFeatureName(String feature) {
         try {
-<span class="fc" id="L385">            return FeatureName.of(feature);</span>
-<span class="fc" id="L386">        } catch (IllegalArgumentException e) {</span>
-<span class="fc" id="L387">            throw new MojoException(e.getMessage());</span>
+<span class="fc" id="L420">            return FeatureName.of(feature);</span>
+<span class="fc" id="L421">        } catch (IllegalArgumentException e) {</span>
+<span class="fc" id="L422">            throw new MojoException(e.getMessage());</span>
         }
     }
 
@@ -402,9 +437,9 @@ import java.util.List;
      */
     protected static SubprojectName validateSubprojectName(String subproject) {
         try {
-<span class="fc" id="L405">            return SubprojectName.of(subproject);</span>
-<span class="nc" id="L406">        } catch (IllegalArgumentException e) {</span>
-<span class="nc" id="L407">            throw new MojoException(e.getMessage());</span>
+<span class="fc" id="L440">            return SubprojectName.of(subproject);</span>
+<span class="nc" id="L441">        } catch (IllegalArgumentException e) {</span>
+<span class="nc" id="L442">            throw new MojoException(e.getMessage());</span>
         }
     }
 
@@ -423,9 +458,9 @@ import java.util.List;
      */
     protected static MavenVersion validateMavenVersion(String version) {
         try {
-<span class="fc" id="L426">            return MavenVersion.of(version);</span>
-<span class="nc" id="L427">        } catch (IllegalArgumentException e) {</span>
-<span class="nc" id="L428">            throw new MojoException(e.getMessage());</span>
+<span class="fc" id="L461">            return MavenVersion.of(version);</span>
+<span class="nc" id="L462">        } catch (IllegalArgumentException e) {</span>
+<span class="nc" id="L463">            throw new MojoException(e.getMessage());</span>
         }
     }
 
@@ -440,7 +475,7 @@ import java.util.List;
      * @throws MojoException if no answer can be obtained
      */
     protected boolean confirm(String label, boolean defaultYes) {
-<span class="fc" id="L443">        return getPrompter().confirm(label, defaultYes);</span>
+<span class="fc" id="L478">        return getPrompter().confirm(label, defaultYes);</span>
     }
 
     /**
@@ -453,15 +488,15 @@ import java.util.List;
      * @throws MojoException if no valid choice can be obtained
      */
     protected String selectFromList(String label, List&lt;String&gt; options) {
-<span class="nc bnc" id="L456" title="All 4 branches missed.">        if (options == null || options.isEmpty()) {</span>
-<span class="nc" id="L457">            return null;</span>
+<span class="nc bnc" id="L491" title="All 4 branches missed.">        if (options == null || options.isEmpty()) {</span>
+<span class="nc" id="L492">            return null;</span>
         }
-<span class="nc" id="L459">        String chosen = getPrompter().select(label, options);</span>
-<span class="nc bnc" id="L460" title="All 2 branches missed.">        if (chosen == null) {</span>
-<span class="nc" id="L461">            throw new MojoException(</span>
+<span class="nc" id="L494">        String chosen = getPrompter().select(label, options);</span>
+<span class="nc bnc" id="L495" title="All 2 branches missed.">        if (chosen == null) {</span>
+<span class="nc" id="L496">            throw new MojoException(</span>
                     &quot;Could not read a valid selection for: &quot; + label);
         }
-<span class="nc" id="L464">        return chosen;</span>
+<span class="nc" id="L499">        return chosen;</span>
     }
 
     /**
@@ -472,14 +507,14 @@ import java.util.List;
      */
     protected String workspaceName() {
         try {
-<span class="fc" id="L475">            File rootPom = new File(workspaceRoot(), &quot;pom.xml&quot;);</span>
-<span class="fc bfc" id="L476" title="All 2 branches covered.">            if (rootPom.exists()) {</span>
-<span class="fc" id="L477">                return ReleaseSupport.readPomArtifactId(rootPom);</span>
+<span class="fc" id="L510">            File rootPom = new File(workspaceRoot(), &quot;pom.xml&quot;);</span>
+<span class="fc bfc" id="L511" title="All 2 branches covered.">            if (rootPom.exists()) {</span>
+<span class="fc" id="L512">                return ReleaseSupport.readPomArtifactId(rootPom);</span>
             }
-<span class="fc" id="L479">        } catch (Exception e) {</span>
+<span class="fc" id="L514">        } catch (Exception e) {</span>
             // Fall through
-<span class="fc" id="L481">        }</span>
-<span class="fc" id="L482">        return &quot;Workspace&quot;;</span>
+<span class="fc" id="L516">        }</span>
+<span class="fc" id="L517">        return &quot;Workspace&quot;;</span>
     }
 
     /**
@@ -490,7 +525,7 @@ import java.util.List;
      * @return the formatted header string
      */
     protected String header(String goalName) {
-<span class="fc" id="L493">        return workspaceName() + &quot; — &quot; + goalName;</span>
+<span class="fc" id="L528">        return workspaceName() + &quot; — &quot; + goalName;</span>
     }
 
     /**
@@ -515,20 +550,20 @@ import java.util.List;
      */
     @Override
     public final void execute() throws MojoException {
-<span class="fc" id="L518">        surfaceBranchIncoherence();</span>
+<span class="fc" id="L553">        surfaceBranchIncoherence();</span>
         WorkspaceReportSpec report;
         try {
-<span class="fc" id="L521">            report = runGoal();</span>
-<span class="fc" id="L522">        } catch (WorkspaceReportException e) {</span>
+<span class="fc" id="L556">            report = runGoal();</span>
+<span class="fc" id="L557">        } catch (WorkspaceReportException e) {</span>
             // #935: the goal failed but still produced findings worth
             // recording. Persist its report (stamped by WorkspaceReport with
             // this run's timestamp) before the failure propagates, so a stale
             // prior report can never masquerade as the current one.
-<span class="fc" id="L527">            writeReport(e.report());</span>
-<span class="fc" id="L528">            throw e;</span>
-<span class="fc" id="L529">        }</span>
-<span class="fc" id="L530">        writeReport(report);</span>
-<span class="fc" id="L531">    }</span>
+<span class="fc" id="L562">            writeReport(e.report());</span>
+<span class="fc" id="L563">            throw e;</span>
+<span class="fc" id="L564">        }</span>
+<span class="fc" id="L565">        writeReport(report);</span>
+<span class="fc" id="L566">    }</span>
 
     /**
      * Write one {@code ws:*} goal report to its per-goal file at the
@@ -540,13 +575,13 @@ import java.util.List;
      */
     private void writeReport(WorkspaceReportSpec report) {
         try {
-<span class="fc" id="L543">            WorkspaceReport.write(workspaceRoot().toPath(),</span>
-<span class="fc" id="L544">                    report.goal().qualified(), report.content(), getLog());</span>
-<span class="fc" id="L545">        } catch (MojoException e) {</span>
-<span class="fc" id="L546">            getLog().debug(&quot;Could not resolve workspace root for report: &quot;</span>
-<span class="fc" id="L547">                    + e.getMessage());</span>
-<span class="fc" id="L548">        }</span>
-<span class="fc" id="L549">    }</span>
+<span class="fc" id="L578">            WorkspaceReport.write(workspaceRoot().toPath(),</span>
+<span class="fc" id="L579">                    report.goal().qualified(), report.content(), getLog());</span>
+<span class="fc" id="L580">        } catch (MojoException e) {</span>
+<span class="fc" id="L581">            getLog().debug(&quot;Could not resolve workspace root for report: &quot;</span>
+<span class="fc" id="L582">                    + e.getMessage());</span>
+<span class="fc" id="L583">        }</span>
+<span class="fc" id="L584">    }</span>
 
     /**
      * Warn — never fail — when any subproject's three branch axes disagree:
@@ -565,24 +600,24 @@ import java.util.List;
      */
     private void surfaceBranchIncoherence() {
         try {
-<span class="fc" id="L568">            WorkspaceGraph graph = loadGraph();</span>
-<span class="fc" id="L569">            File root = workspaceRoot();</span>
-<span class="fc" id="L570">            PreflightCondition.BRANCH_COHERENCE</span>
-<span class="fc" id="L571">                    .check(PreflightContext.of(root, graph,</span>
-<span class="fc" id="L572">                            List.copyOf(graph.manifest().subprojects().keySet())))</span>
-<span class="fc" id="L573">                    .ifPresent(msg -&gt; {</span>
-<span class="fc" id="L574">                        getLog().warn(&quot;&quot;);</span>
-<span class="fc" id="L575">                        getLog().warn(&quot;⚠ Branch coherence:&quot;);</span>
-<span class="fc bfc" id="L576" title="All 2 branches covered.">                        for (String line : msg.split(&quot;\n&quot;)) {</span>
-<span class="fc" id="L577">                            getLog().warn(line);</span>
+<span class="fc" id="L603">            WorkspaceGraph graph = loadGraph();</span>
+<span class="fc" id="L604">            File root = workspaceRoot();</span>
+<span class="fc" id="L605">            PreflightCondition.BRANCH_COHERENCE</span>
+<span class="fc" id="L606">                    .check(PreflightContext.of(root, graph,</span>
+<span class="fc" id="L607">                            List.copyOf(graph.manifest().subprojects().keySet())))</span>
+<span class="fc" id="L608">                    .ifPresent(msg -&gt; {</span>
+<span class="fc" id="L609">                        getLog().warn(&quot;&quot;);</span>
+<span class="fc" id="L610">                        getLog().warn(&quot;⚠ Branch coherence:&quot;);</span>
+<span class="fc bfc" id="L611" title="All 2 branches covered.">                        for (String line : msg.split(&quot;\n&quot;)) {</span>
+<span class="fc" id="L612">                            getLog().warn(line);</span>
                         }
-<span class="fc" id="L579">                        getLog().warn(&quot;&quot;);</span>
-<span class="fc" id="L580">                    });</span>
-<span class="fc" id="L581">        } catch (RuntimeException e) {</span>
-<span class="fc" id="L582">            getLog().debug(&quot;Branch-coherence advisory skipped: &quot;</span>
-<span class="fc" id="L583">                    + e.getMessage());</span>
-<span class="fc" id="L584">        }</span>
-<span class="fc" id="L585">    }</span>
+<span class="fc" id="L614">                        getLog().warn(&quot;&quot;);</span>
+<span class="fc" id="L615">                    });</span>
+<span class="fc" id="L616">        } catch (RuntimeException e) {</span>
+<span class="fc" id="L617">            getLog().debug(&quot;Branch-coherence advisory skipped: &quot;</span>
+<span class="fc" id="L618">                    + e.getMessage());</span>
+<span class="fc" id="L619">        }</span>
+<span class="fc" id="L620">    }</span>
 
     /**
      * Run this goal's work and return the report it produced.

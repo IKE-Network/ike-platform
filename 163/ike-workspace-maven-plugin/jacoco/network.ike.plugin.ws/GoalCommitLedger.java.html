@@ -1,0 +1,236 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>GoalCommitLedger.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">GoalCommitLedger.java</span></div><h1>GoalCommitLedger.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.plugin.ws.vcs.VcsOperations;
+import org.apache.maven.api.plugin.MojoException;
+
+import java.io.File;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * The committed-work ledger of a publish goal (IKE-Network/ike-issues#954).
+ *
+ * &lt;p&gt;A publish goal that owns its commits (#919, #780) ends by showing the
+ * operator exactly what it committed — not a working-tree status check,
+ * which is empty by design once every goal-authored change is committed.
+ * The ledger derives that inventory from git truth: the caller records each
+ * repository's {@code HEAD} immediately after the goal's preflight proved
+ * the tree free of uncommitted changes ({@link #baselineSha baselineSha}),
+ * lets the goal run, then {@link #collect collect}s
+ * {@code git log --name-status baseline..HEAD} per repository. Because the
+ * preflight guaranteed a committed baseline, every commit in the range is
+ * provably goal-authored — including commits made by delegated subprocesses
+ * (the per-subproject {@code ike:scaffold-publish} fan-out) that the
+ * workspace mojo cannot otherwise observe.
+ */
+public final class GoalCommitLedger {
+
+    private GoalCommitLedger() {}
+
+    /**
+     * One goal-authored commit.
+     *
+     * @param sha     the 8-character short SHA
+     * @param subject the commit subject line
+     * @param files   the changed files as {@code &quot;&lt;status&gt; &lt;path&gt;&quot;} entries
+     *                (e.g. {@code &quot;M pom.xml&quot;}); renames and copies as
+     *                {@code &quot;&lt;status&gt; &lt;old&gt; → &lt;new&gt;&quot;}
+     */
+<span class="fc" id="L39">    public record Commit(String sha, String subject, List&lt;String&gt; files) {}</span>
+
+    /**
+     * One repository's ledger entry.
+     *
+     * @param label   the repository label shown in reports
+     * @param commits the goal-authored commits, newest first ({@code git log}
+     *                order)
+     * @param residue stripped porcelain status lines left uncommitted after
+     *                the run — empty on a healthy publish (#919)
+     */
+<span class="fc" id="L50">    public record RepoChanges(String label, List&lt;Commit&gt; commits,</span>
+                              List&lt;String&gt; residue) {
+
+        /**
+         * Whether the goal authored at least one commit in this repository.
+         *
+         * @return {@code true} when {@link #commits} is non-empty
+         */
+        public boolean hasCommits() {
+<span class="fc bfc" id="L59" title="All 2 branches covered.">            return !commits.isEmpty();</span>
+        }
+
+        /**
+         * Whether files were left uncommitted in this repository.
+         *
+         * @return {@code true} when {@link #residue} is non-empty
+         */
+        public boolean hasResidue() {
+<span class="fc bfc" id="L68" title="All 2 branches covered.">            return !residue.isEmpty();</span>
+        }
+    }
+
+    /**
+     * The repository's current {@code HEAD} short SHA, for use as the
+     * ledger baseline — or {@code null} for a repository with no commits
+     * yet (an unborn {@code HEAD}), in which case the whole history at
+     * collect time is goal-authored.
+     *
+     * @param dir the repository root directory
+     * @return the baseline short SHA, or {@code null} when the repository
+     *         has no commits yet
+     */
+    public static String baselineSha(File dir) {
+        try {
+<span class="fc" id="L84">            return VcsOperations.headSha(dir);</span>
+<span class="fc" id="L85">        } catch (MojoException e) {</span>
+<span class="fc" id="L86">            return null;</span>
+        }
+    }
+
+    /**
+     * Collect one repository's ledger entry: the goal-authored commits in
+     * {@code baseline..HEAD} (each with subject, short SHA, and changed
+     * files) plus any uncommitted residue. Collection is best-effort — a
+     * repository whose log cannot be read (e.g. {@code HEAD} still unborn)
+     * reports no commits rather than failing the goal's report.
+     *
+     * @param label       the repository label shown in reports
+     * @param dir         the repository root directory
+     * @param baselineSha the {@code HEAD} recorded by {@link #baselineSha}
+     *                    before the goal ran; {@code null} means the
+     *                    repository had no commits then, so the whole
+     *                    history is goal-authored
+     * @return the repository's ledger entry
+     */
+    public static RepoChanges collect(String label, File dir,
+                                      String baselineSha) {
+<span class="fc bfc" id="L107" title="All 2 branches covered.">        String range = baselineSha == null ? &quot;HEAD&quot; : baselineSha + &quot;..HEAD&quot;;</span>
+        List&lt;Commit&gt; commits;
+        try {
+<span class="fc" id="L110">            commits = parseNameStatusLog(</span>
+<span class="fc" id="L111">                    VcsOperations.nameStatusLog(dir, range));</span>
+<span class="nc" id="L112">        } catch (MojoException e) {</span>
+<span class="nc" id="L113">            commits = List.of();</span>
+<span class="fc" id="L114">        }</span>
+<span class="fc" id="L115">        List&lt;String&gt; residue = VcsOperations.uncommittedStatus(dir).lines()</span>
+<span class="fc" id="L116">                .map(String::strip)</span>
+<span class="pc bpc" id="L117" title="1 of 2 branches missed.">                .filter(line -&gt; !line.isEmpty())</span>
+<span class="fc" id="L118">                .toList();</span>
+<span class="fc" id="L119">        return new RepoChanges(label, commits, residue);</span>
+    }
+
+    /**
+     * The commit-header marker of
+     * {@link VcsOperations#nameStatusLog VcsOperations.nameStatusLog}:
+     * {@code commit} followed by {@code U+0001}. No name-status line can
+     * collide with it (they open with a status letter and a tab), and —
+     * unlike a bare leading {@code U+0001} — it survives the trimming the
+     * subprocess capture applies to git's output.
+     */
+    static final String COMMIT_MARKER = &quot;commit&quot; + (char) 1;
+
+    /**
+     * Parse the output of
+     * {@link VcsOperations#nameStatusLog VcsOperations.nameStatusLog}: each
+     * commit opens with a {@link #COMMIT_MARKER}-prefixed
+     * {@code &lt;short-sha&gt;&lt;TAB&gt;&lt;subject&gt;} header line, followed by its
+     * name-status entries ({@code M&lt;TAB&gt;path}, {@code R100&lt;TAB&gt;old&lt;TAB&gt;new},
+     * …). Blank lines are ignored. Pure — unit-testable without git.
+     *
+     * @param raw the raw log output
+     * @return the parsed commits, in log order (newest first)
+     */
+    static List&lt;Commit&gt; parseNameStatusLog(String raw) {
+<span class="fc" id="L144">        List&lt;Commit&gt; commits = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L145">        String sha = null;</span>
+<span class="fc" id="L146">        String subject = null;</span>
+<span class="fc" id="L147">        List&lt;String&gt; files = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L148" title="All 2 branches covered.">        for (String line : raw.split(&quot;\n&quot;, -1)) {</span>
+<span class="fc bfc" id="L149" title="All 2 branches covered.">            if (line.startsWith(COMMIT_MARKER)) {</span>
+<span class="fc bfc" id="L150" title="All 2 branches covered.">                if (sha != null) {</span>
+<span class="fc" id="L151">                    commits.add(new Commit(sha, subject, List.copyOf(files)));</span>
+                }
+<span class="fc" id="L153">                String[] header = line.substring(COMMIT_MARKER.length()).split(&quot;\t&quot;, 2);</span>
+<span class="fc" id="L154">                sha = header[0];</span>
+<span class="pc bpc" id="L155" title="1 of 2 branches missed.">                subject = header.length &gt; 1 ? header[1] : &quot;&quot;;</span>
+<span class="fc" id="L156">                files = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L157" title="All 4 branches covered.">            } else if (sha != null &amp;&amp; !line.isBlank()) {</span>
+<span class="fc" id="L158">                files.add(formatNameStatus(line));</span>
+            }
+        }
+<span class="fc bfc" id="L161" title="All 2 branches covered.">        if (sha != null) {</span>
+<span class="fc" id="L162">            commits.add(new Commit(sha, subject, List.copyOf(files)));</span>
+        }
+<span class="fc" id="L164">        return List.copyOf(commits);</span>
+    }
+
+    /**
+     * Render one {@code git log --name-status} entry for display: the
+     * status letter (similarity scores stripped) and the path, renames and
+     * copies as {@code old → new}.
+     *
+     * @param line one raw name-status line
+     * @return the display form, e.g. {@code &quot;M pom.xml&quot;} or
+     *         {@code &quot;R a.txt → b.txt&quot;}
+     */
+    private static String formatNameStatus(String line) {
+<span class="fc" id="L177">        String[] parts = line.split(&quot;\t&quot;);</span>
+<span class="fc bfc" id="L178" title="All 2 branches covered.">        if (parts.length &gt;= 3) {</span>
+<span class="fc" id="L179">            return parts[0].substring(0, 1) + &quot; &quot; + parts[1] + &quot; → &quot;</span>
+                    + parts[2];
+        }
+<span class="pc bpc" id="L182" title="1 of 2 branches missed.">        if (parts.length == 2) {</span>
+<span class="fc" id="L183">            return parts[0].substring(0, 1) + &quot; &quot; + parts[1];</span>
+        }
+<span class="nc" id="L185">        return line.strip();</span>
+    }
+
+    /**
+     * Render the repositories' goal-authored commits as nested Markdown
+     * bullets — repository, then each commit's short SHA and subject, then
+     * its changed files. Repositories without commits are omitted.
+     *
+     * @param repos the collected ledger entries
+     * @return Markdown bullet lines, empty when no repository has commits
+     */
+    static String commitsToMarkdown(List&lt;RepoChanges&gt; repos) {
+<span class="fc" id="L197">        StringBuilder md = new StringBuilder();</span>
+<span class="fc bfc" id="L198" title="All 2 branches covered.">        for (RepoChanges repo : repos) {</span>
+<span class="fc bfc" id="L199" title="All 2 branches covered.">            if (!repo.hasCommits()) {</span>
+<span class="fc" id="L200">                continue;</span>
+            }
+<span class="fc" id="L202">            md.append(&quot;- **&quot;).append(repo.label()).append(&quot;**\n&quot;);</span>
+<span class="fc bfc" id="L203" title="All 2 branches covered.">            for (Commit commit : repo.commits()) {</span>
+<span class="fc" id="L204">                md.append(&quot;  - `&quot;).append(commit.sha()).append(&quot;` &quot;)</span>
+<span class="fc" id="L205">                        .append(commit.subject()).append(&quot;\n&quot;);</span>
+<span class="fc bfc" id="L206" title="All 2 branches covered.">                for (String file : commit.files()) {</span>
+<span class="fc" id="L207">                    md.append(&quot;    - `&quot;).append(file).append(&quot;`\n&quot;);</span>
+<span class="fc" id="L208">                }</span>
+<span class="fc" id="L209">            }</span>
+<span class="fc" id="L210">        }</span>
+<span class="fc" id="L211">        return md.toString();</span>
+    }
+
+    /**
+     * Render the repositories' uncommitted residue as nested Markdown
+     * bullets. Repositories without residue are omitted.
+     *
+     * @param repos the collected ledger entries
+     * @return Markdown bullet lines, empty when no repository has residue
+     */
+    static String residueToMarkdown(List&lt;RepoChanges&gt; repos) {
+<span class="fc" id="L222">        StringBuilder md = new StringBuilder();</span>
+<span class="fc bfc" id="L223" title="All 2 branches covered.">        for (RepoChanges repo : repos) {</span>
+<span class="pc bpc" id="L224" title="1 of 2 branches missed.">            if (!repo.hasResidue()) {</span>
+<span class="nc" id="L225">                continue;</span>
+            }
+<span class="fc" id="L227">            md.append(&quot;- **&quot;).append(repo.label()).append(&quot;** — &quot;)</span>
+<span class="fc" id="L228">                    .append(repo.residue().size()).append(&quot; file(s)\n&quot;);</span>
+<span class="fc bfc" id="L229" title="All 2 branches covered.">            for (String line : repo.residue()) {</span>
+<span class="fc" id="L230">                md.append(&quot;  - `&quot;).append(line).append(&quot;`\n&quot;);</span>
+<span class="fc" id="L231">            }</span>
+<span class="fc" id="L232">        }</span>
+<span class="fc" id="L233">        return md.toString();</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

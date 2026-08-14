@@ -34,6 +34,7 @@ public class WsReleasePublishMojo extends WsReleaseDraftMojo {
 
     @Override
     protected WorkspaceReportSpec runGoal() throws MojoException {
+        confirmWorkingSetLease();
         publish = true;
         return super.runGoal();
     }

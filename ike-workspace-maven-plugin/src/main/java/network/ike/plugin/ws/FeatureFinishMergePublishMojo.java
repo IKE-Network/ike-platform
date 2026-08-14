@@ -21,6 +21,7 @@ public class FeatureFinishMergePublishMojo extends FeatureFinishMergeDraftMojo {
 
     @Override
     protected WorkspaceReportSpec runGoal() throws MojoException {
+        confirmWorkingSetLease();
         publish = true;
         WorkspaceReportSpec spec = super.runGoal();
         PostMutationSync.refresh(workspaceRoot(), getLog());

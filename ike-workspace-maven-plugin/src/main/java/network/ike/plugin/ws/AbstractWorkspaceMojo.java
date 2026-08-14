@@ -229,6 +229,41 @@ abstract class AbstractWorkspaceMojo implements Mojo {
     }
 
     /**
+     * Confirms this machine holds the working set's lease before a goal
+     * rewrites branches, versions or history.
+     *
+     * <p>Called by the {@code -publish} goals only. The {@code -draft} goals
+     * are dry runs — they print what they would do and touch nothing — so
+     * making one wait out a propagation window, or fail on a lease, would be
+     * a cost with no writer to protect.
+     *
+     * <p>Confirmation is the read-back, not merely the claim: two machines
+     * acquiring the same free lease inside the sync layer's propagation
+     * window both succeed, and the loser is never told. It costs about 25
+     * seconds, which is nothing against a release and is the difference
+     * between one writer and two. IKE-Network/ike-issues#1005.
+     *
+     * <p>Silent and harmless where the lease protocol does not exist — no
+     * {@code lease.sh}, no machine identity, or a project outside
+     * {@code ~/ike-dev}. See {@link WorkingSetLease}.
+     *
+     * @throws MojoException if another machine holds the working set
+     */
+    protected void confirmWorkingSetLease() {
+        WorkingSetLease.Decision decision =
+                WorkingSetLease.confirm(workspaceRoot().toPath());
+        switch (decision.verdict()) {
+            case NOT_APPLICABLE -> { }
+            case HELD -> getLog().info(
+                    "  Working-set lease: confirmed for " + decision.detail());
+            case FENCED -> throw new MojoException(
+                    "This machine does not hold the working set's lease, so "
+                            + "writing here would collide with the machine that "
+                            + "does.\n" + decision.detail());
+        }
+    }
+
+    /**
      * Run {@code git status --porcelain} on a subproject directory and
      * return the output (empty string = clean).
      *

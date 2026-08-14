@@ -43,7 +43,7 @@ class WorkspaceReleaseCycleTest {
     @BeforeEach
     void setUp() throws Exception {
         bares = Files.createDirectories(tempDir.resolve("bares"));
-        root = repo("wsr-root", """
+        root = repoWithManifest("wsr-root", """
                 <?xml version="1.0" encoding="UTF-8"?>
                 <project xmlns="http://maven.apache.org/POM/4.0.0">
                     <modelVersion>4.0.0</modelVersion>
@@ -53,7 +53,7 @@ class WorkspaceReleaseCycleTest {
                     <packaging>pom</packaging>
                 </project>
                 """);
-        libA = repo("lib-a", """
+        libA = repo("wsr-root/lib-a", """
                 <?xml version="1.0" encoding="UTF-8"?>
                 <project xmlns="http://maven.apache.org/POM/4.0.0">
                     <modelVersion>4.0.0</modelVersion>
@@ -62,7 +62,7 @@ class WorkspaceReleaseCycleTest {
                     <version>1.0.0-SNAPSHOT</version>
                 </project>
                 """);
-        libB = repo("lib-b", """
+        libB = repo("wsr-root/lib-b", """
                 <?xml version="1.0" encoding="UTF-8"?>
                 <project xmlns="http://maven.apache.org/POM/4.0.0">
                     <modelVersion>4.0.0</modelVersion>
@@ -253,6 +253,29 @@ class WorkspaceReleaseCycleTest {
                 .doesNotContain("<version>1.0.0</version>");
     }
 
+    /**
+     * The manifest carried in the tagged root tree must pin every
+     * member at the commit that was released. Before this, a release
+     * tag carried released versions beside checkpoint-era commits, and
+     * the installer chain — which materialises members from these pins
+     — built a tree that never existed as a release
+     * (IKE-Network/ike-issues#1017).
+     */
+    @Test
+    void the_tagged_manifest_pins_the_released_commits() throws Exception {
+        cycle("pins").execute("mvnw", true);
+
+        String manifest = git(root, "show", "v1:workspace.yaml");
+        String libAReleaseSha = git(libA, "rev-parse", "v1.0.0^{commit}");
+        String libBReleaseSha = git(libB, "rev-parse", "v2.0.0^{commit}");
+
+        assertThat(manifest).contains(libAReleaseSha)
+                .contains(libBReleaseSha)
+                // the stale placeholders are gone
+                .doesNotContain("0000000000000000000000000000000000000000")
+                .doesNotContain("1111111111111111111111111111111111111111");
+    }
+
     @Test
     void in_flight_cycle_is_refused() {
         WorkspaceReleaseCycle cycle = new WorkspaceReleaseCycle(root,
@@ -320,6 +343,32 @@ class WorkspaceReleaseCycleTest {
         return new ReleasePlan(new LinkedHashMap<>(), List.of());
     }
 
+
+    /**
+     * The workspace root, with the manifest the cycle pins into. The
+     * pins start deliberately stale — a checkpoint-era value — so a test
+     * can tell "the cycle wrote them" from "they happened to be right".
+     */
+    private File repoWithManifest(String name, String pomXml) throws Exception {
+        File f = repo(name, pomXml);
+        Files.writeString(f.toPath().resolve("workspace.yaml"), """
+                subprojects:
+                  lib-a:
+                    repo: https://example.invalid/lib-a.git
+                    branch: main
+                    version: "0.0.1"
+                    sha: "0000000000000000000000000000000000000000"
+                  lib-b:
+                    repo: https://example.invalid/lib-b.git
+                    branch: main
+                    version: "0.0.1"
+                    sha: "1111111111111111111111111111111111111111"
+                """, StandardCharsets.UTF_8);
+        git(f, "add", "workspace.yaml");
+        git(f, "commit", "-m", "add manifest");
+        return f;
+    }
+
     private File repo(String name, String pomXml) throws Exception {
         Path dir = Files.createDirectories(tempDir.resolve(name));
         Files.writeString(dir.resolve("pom.xml"), pomXml,
@@ -334,7 +383,8 @@ class WorkspaceReleaseCycleTest {
         git(f, "config", "user.name", "Test");
         git(f, "add", ".");
         git(f, "commit", "-m", "init");
-        Path bare = bares.resolve(name + ".git");
+        String bareName = name.substring(name.lastIndexOf('/') + 1);
+        Path bare = bares.resolve(bareName + ".git");
         exec(bares.toFile(), "git", "init", "--bare", "-b", "main",
                 bare.toString());
         git(f, "remote", "add", "origin", bare.toString());

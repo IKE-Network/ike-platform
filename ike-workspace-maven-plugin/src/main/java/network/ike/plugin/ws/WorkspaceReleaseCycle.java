@@ -1,6 +1,7 @@
 package network.ike.plugin.ws;
 
 import network.ike.plugin.ReleaseSupport;
+import network.ike.workspace.ManifestWriter;
 import network.ike.workspace.ReleaseRecord;
 import network.ike.workspace.ReleaseRecordFile;
 import org.apache.maven.api.plugin.Log;
@@ -284,16 +285,41 @@ final class WorkspaceReleaseCycle {
             }
         }
 
-        // The cycle record rides in the root's release commit, so the
-        // tagged root tree carries it.
-        writeCycleRecord();
-
-        for (ReleasingRepo m : allRepos()) {
+        // Members commit first, so their release commits exist to be
+        // pinned and recorded; the root commits last, carrying both the
+        // record and the pins into the tree its tag will name.
+        for (ReleasingRepo m : members) {
             commitRepo(m.dir(), "release: set version to "
                     + m.releaseVersion());
             log.info(Ansi.green("  ✓ ") + m.name() + " → "
                     + m.releaseVersion());
         }
+
+        pinWorkingSetState(workingSetDirs());
+        writeCycleRecord();
+
+        commitRepo(rootRepo.dir(), "release: set version to "
+                + rootRepo.releaseVersion());
+        log.info(Ansi.green("  ✓ ") + rootRepo.name() + " → "
+                + rootRepo.releaseVersion());
+    }
+
+    /**
+     * Every member's directory by name — the whole working set, not
+     * only what is releasing, since the manifest speaks for all of it.
+     *
+     * @return member name → directory, for each checked-out member
+     */
+    private Map<String, File> workingSetDirs() {
+        Map<String, File> dirs = new LinkedHashMap<>();
+        File[] entries = root.listFiles();
+        if (entries == null) return dirs;
+        for (File entry : entries) {
+            if (entry.isDirectory() && new File(entry, ".git").exists()) {
+                dirs.put(entry.getName(), entry);
+            }
+        }
+        return dirs;
     }
 
     /** One reactor build of the whole working set at release versions. */
@@ -507,6 +533,45 @@ final class WorkspaceReleaseCycle {
         return root.toPath().relativize(
                 ReleaseRecordFile.pathFor(root.toPath(), cycleLabel))
                 .toString();
+    }
+
+    /**
+     * Pin every member of the working set at the commit it holds right
+     * now — the state being released — so the manifest carried in the
+     * tagged root tree describes a coherent, buildable working set.
+     *
+     * <p>All members, not only the releasing ones. The cycle record
+     * names what was released, which is a smaller set by design
+     * (#997); the installers are built from the whole working set, so
+     * something has to say what the whole set was. Before this, a
+     * release tag carried released {@code version:} fields beside
+     * {@code sha:} pins left over from the last checkpoint — versions
+     * from the release, commits from days earlier — and anything that
+     * materialised from those pins built a state that never existed as
+     * a release (IKE-Network/ike-issues#1017).
+     *
+     * @param memberDirs every member's directory, by member name
+     */
+    private void pinWorkingSetState(Map<String, File> memberDirs) {
+        Map<String, String> pins = new LinkedHashMap<>();
+        for (Map.Entry<String, File> member : memberDirs.entrySet()) {
+            try {
+                pins.put(member.getKey(), ReleaseSupport.execCapture(
+                        member.getValue(), "git", "rev-parse", "HEAD").trim());
+            } catch (Exception e) {
+                throw new MojoException("Cannot read the released commit of "
+                        + member.getKey() + ": " + e.getMessage(), e);
+            }
+        }
+        try {
+            ManifestWriter.updateShas(root.toPath().resolve("workspace.yaml"),
+                    pins);
+        } catch (Exception e) {
+            throw new MojoException("Cannot pin the working set state: "
+                    + e.getMessage(), e);
+        }
+        log.info("    pinned " + pins.size()
+                + " member(s) at their released commits");
     }
 
     /** Write the cycle's record with a row per releasing repository. */

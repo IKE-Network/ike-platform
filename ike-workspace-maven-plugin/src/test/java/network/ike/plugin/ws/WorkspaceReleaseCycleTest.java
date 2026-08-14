@@ -141,6 +141,118 @@ class WorkspaceReleaseCycleTest {
                 .startsWith("post-release: bump to 1.0.1-SNAPSHOT");
     }
 
+    /**
+     * A multi-module member: the version pass must move the versions
+     * its sub-modules spell out, not just the repository root's. This
+     * is tinkar-core's real shape — a module parenting to an
+     * aggregator inside the same repository — which stranded one
+     * module at {@code -SNAPSHOT} while its siblings released, and
+     * broke the reactor 45 modules in (ike-issues#1011).
+     */
+    @Test
+    void sub_modules_naming_their_own_version_move_with_the_repository()
+            throws Exception {
+        // An intermediate aggregator, and a leaf parenting to it —
+        // both spelling out lib-a's version.
+        Path group = Files.createDirectories(libA.toPath().resolve("group"));
+        Files.writeString(group.resolve("pom.xml"), """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <project xmlns="http://maven.apache.org/POM/4.0.0">
+                    <modelVersion>4.0.0</modelVersion>
+                    <parent>
+                        <groupId>com.test</groupId>
+                        <artifactId>lib-a</artifactId>
+                        <version>1.0.0-SNAPSHOT</version>
+                    </parent>
+                    <artifactId>group</artifactId>
+                    <version>1.0.0-SNAPSHOT</version>
+                    <packaging>pom</packaging>
+                </project>
+                """, StandardCharsets.UTF_8);
+        Path leaf = Files.createDirectories(group.resolve("leaf"));
+        Files.writeString(leaf.resolve("pom.xml"), """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <project xmlns="http://maven.apache.org/POM/4.0.0">
+                    <modelVersion>4.0.0</modelVersion>
+                    <parent>
+                        <groupId>com.test</groupId>
+                        <artifactId>group</artifactId>
+                        <version>1.0.0-SNAPSHOT</version>
+                    </parent>
+                    <artifactId>leaf</artifactId>
+                </project>
+                """, StandardCharsets.UTF_8);
+        git(libA, "add", ".");
+        git(libA, "commit", "-m", "add modules");
+
+        cycle("multi-module").execute("mvnw", true);
+
+        // Released tree: no module left behind at the old version.
+        String groupAtTag = git(libA, "show", "v1.0.0:group/pom.xml");
+        assertThat(groupAtTag).contains("<version>1.0.0</version>")
+                .doesNotContain("1.0.0-SNAPSHOT");
+        assertThat(git(libA, "show", "v1.0.0:group/leaf/pom.xml"))
+                .contains("<version>1.0.0</version>")
+                .doesNotContain("1.0.0-SNAPSHOT");
+
+        // And the post-bump carries them forward too.
+        assertThat(Files.readString(group.resolve("pom.xml"),
+                StandardCharsets.UTF_8))
+                .contains("<version>1.0.1-SNAPSHOT</version>");
+        assertThat(Files.readString(leaf.resolve("pom.xml"),
+                StandardCharsets.UTF_8))
+                .contains("<version>1.0.1-SNAPSHOT</version>");
+    }
+
+    /** A module inheriting its version must keep declaring none. */
+    @Test
+    void inherited_module_versions_are_left_alone() throws Exception {
+        Path child = Files.createDirectories(libA.toPath().resolve("child"));
+        Files.writeString(child.resolve("pom.xml"), """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <project xmlns="http://maven.apache.org/POM/4.0.0">
+                    <modelVersion>4.0.0</modelVersion>
+                    <parent>
+                        <groupId>com.test</groupId>
+                        <artifactId>lib-a</artifactId>
+                        <version>1.0.0-SNAPSHOT</version>
+                        <relativePath>../pom.xml</relativePath>
+                    </parent>
+                    <artifactId>child</artifactId>
+                    <dependencies>
+                        <dependency>
+                            <groupId>org.external</groupId>
+                            <artifactId>unrelated</artifactId>
+                            <version>1.0.0-SNAPSHOT</version>
+                        </dependency>
+                    </dependencies>
+                </project>
+                """, StandardCharsets.UTF_8);
+        git(libA, "add", ".");
+        git(libA, "commit", "-m", "add child");
+
+        cycle("inheritance").execute("mvnw", true);
+
+        String released = git(libA, "show", "v1.0.0:child/pom.xml");
+
+        // The parent reference — this repository's own coordinate — moved.
+        String parentBlock = released.substring(released.indexOf("<parent>"),
+                released.indexOf("</parent>"));
+        assertThat(parentBlock).contains("lib-a").contains("1.0.0")
+                .doesNotContain("SNAPSHOT");
+
+        // The unrelated external dependency carries the same version
+        // string and a different coordinate: it must be untouched.
+        String dependencyBlock =
+                released.substring(released.indexOf("<dependencies>"));
+        assertThat(dependencyBlock).contains("unrelated")
+                .contains("1.0.0-SNAPSHOT");
+
+        // And the module still declares no version of its own.
+        assertThat(released.substring(released.indexOf("</parent>")))
+                .doesNotContain("<version>1.0.0</version>");
+    }
+
     @Test
     void in_flight_cycle_is_refused() {
         WorkspaceReleaseCycle cycle = new WorkspaceReleaseCycle(root,

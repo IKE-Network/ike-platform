@@ -231,7 +231,8 @@ final class WorkspaceReleaseCycle {
         log.info("  Version pass — " + allRepos().size()
                 + " repositories de-qualify together");
 
-        // Self-versions.
+        // Self-versions — the repository root POM and every sub-module
+        // beneath it that names the repository's own version.
         for (ReleasingRepo m : allRepos()) {
             File pom = new File(m.dir(), "pom.xml");
             try {
@@ -242,6 +243,7 @@ final class WorkspaceReleaseCycle {
                         + m.name() + " to " + m.releaseVersion() + ": "
                         + e.getMessage(), e);
             }
+            retargetOwnCoordinates(m, m.preVersion(), m.releaseVersion());
         }
 
         // Tracking properties settle at the referenced release values.
@@ -334,6 +336,7 @@ final class WorkspaceReleaseCycle {
                 throw new MojoException("Post-bump failed for " + m.name()
                         + ": " + e.getMessage(), e);
             }
+            retargetOwnCoordinates(m, m.releaseVersion(), m.postVersion());
             commitRepo(m.dir(), "post-release: bump to " + m.postVersion());
         }
     }
@@ -359,6 +362,100 @@ final class WorkspaceReleaseCycle {
     }
 
     /** Content-transform one POM file in place. */
+    /**
+     * Move a releasing repository's own version wherever its sub-modules
+     * name it: a module declaring its own {@code <version>}, and a
+     * module whose {@code <parent>} names an aggregator inside the same
+     * repository. Maven carries the rest by inheritance, but a POM that
+     * spells the version out is left behind by a root-only rewrite —
+     * and one straggler at the old version breaks the whole reactor,
+     * since its siblings' release-version dependencies on it resolve
+     * nowhere (IKE-Network/ike-issues#1011).
+     *
+     * <p>Only the repository's own coordinates move. The match is the
+     * version string itself: a {@code <parent>} or self {@code <version>}
+     * equal to this repository's {@code from} value is by construction
+     * this repository's own, since an external parent carries an
+     * unrelated version. Dependency versions are never touched here —
+     * cross-repository references belong to the release plan, which
+     * knows the target's release value.
+     *
+     * @param repo the releasing repository whose modules to retarget
+     * @param from the version to move away from
+     * @param to   the version to move to
+     */
+    private void retargetOwnCoordinates(ReleasingRepo repo, String from,
+                                        String to) {
+        Path repoRoot = repo.dir().toPath();
+        List<Path> modulePoms;
+        try (java.util.stream.Stream<Path> tree = Files.walk(repoRoot)) {
+            modulePoms = tree
+                    .filter(p -> p.getFileName().toString().equals("pom.xml"))
+                    .filter(p -> !p.equals(repoRoot.resolve("pom.xml")))
+                    .filter(p -> !p.toString().contains(File.separator
+                            + "target" + File.separator))
+                    .toList();
+        } catch (IOException e) {
+            throw new MojoException("Version pass could not walk "
+                    + repo.name() + ": " + e.getMessage(), e);
+        }
+        int retargeted = 0;
+        for (Path pom : modulePoms) {
+            boolean changed = false;
+
+            // A <parent> naming an aggregator inside this repository.
+            try {
+                PomParentSupport.ParentInfo parent =
+                        PomParentSupport.readParent(pom);
+                if (parent != null && from.equals(parent.version())) {
+                    rewrite(pom, content -> PomModel.updateParentVersion(
+                            content, parent.groupId(), parent.artifactId(),
+                            to), "parent " + parent.artifactId());
+                    changed = true;
+                }
+            } catch (IOException e) {
+                throw new MojoException("Version pass could not read the"
+                        + " parent block of " + pom + ": " + e.getMessage(), e);
+            }
+
+            // A module spelling out its own version.
+            if (declaresOwnVersion(pom, from)) {
+                ReleaseSupport.setPomVersion(pom.toFile(), from, to);
+                changed = true;
+            }
+            if (changed) retargeted++;
+        }
+        if (retargeted > 0) {
+            log.info("    " + repo.name() + ": " + retargeted
+                    + " sub-module POM(s) retargeted to " + to);
+        }
+    }
+
+    /**
+     * Whether this POM declares its own {@code <version>} at the given
+     * value — the first {@code <version>} after any {@code <parent>}
+     * block, which is the same element
+     * {@link ReleaseSupport#setPomVersion} moves. Modules that inherit
+     * their version declare none, and must be left alone.
+     *
+     * @param pom     the POM to inspect
+     * @param version the version to look for
+     * @return {@code true} when the POM spells out that version itself
+     */
+    private static boolean declaresOwnVersion(Path pom, String version) {
+        try {
+            // The model's own version is null when the module inherits
+            // it. Asking the model rather than the text matters: an
+            // inheriting module whose dependency happens to carry the
+            // same version string would otherwise look like a
+            // declaration, and the rewrite would land on that
+            // dependency — an unrelated coordinate.
+            return version.equals(PomModel.parse(pom).model().getVersion());
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
     private void rewrite(Path pomPath,
                          java.util.function.UnaryOperator<String> transform,
                          String what) {

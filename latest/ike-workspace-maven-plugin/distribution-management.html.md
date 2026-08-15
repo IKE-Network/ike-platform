@@ -1,6 +1,6 @@
 ---
-date_published: 2026-08-13
-date_modified: 2026-08-13
+date_published: 2026-08-14
+date_modified: 2026-08-14
 canonical_url: https://ike.network/ike-platform/ike-workspace-maven-plugin/distribution-management.html
 ---
 

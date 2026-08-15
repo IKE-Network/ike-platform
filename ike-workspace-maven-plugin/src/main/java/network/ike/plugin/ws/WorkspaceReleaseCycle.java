@@ -624,8 +624,13 @@ final class WorkspaceReleaseCycle {
     }
 
     private String[] verifyCommand(String mvn, boolean skipTests) {
+        // The release-mode signal for the workspace extension's
+        // intra-set version resolution (ike-issues#1019): bystanders
+        // bind to their released versions, version-passed members to
+        // reactor-current.
         List<String> cmd = new ArrayList<>(List.of(mvn, "-B", "-ntp",
-                "clean", "install", "-P", "release", "-T", "1"));
+                "clean", "install", "-P", "release",
+                "-Dike.workspace.release=true", "-T", "1"));
         if (skipTests) {
             cmd.add("-DskipTests");
         }
@@ -639,6 +644,7 @@ final class WorkspaceReleaseCycle {
         }
         return new String[] {mvn, "-B", "-ntp", "deploy",
                 "-pl", String.join(",", selectors),
-                "-P", "release,signArtifacts", "-T", "1", "-DskipTests"};
+                "-P", "release,signArtifacts",
+                "-Dike.workspace.release=true", "-T", "1", "-DskipTests"};
     }
 }

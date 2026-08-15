@@ -99,10 +99,12 @@ class WorkspaceReleaseCycleTest {
         // Exactly two reactor builds: one verify, one scoped deploy.
         assertThat(ranCommands).hasSize(2);
         assertThat(ranCommands.get(0)).isEqualTo(
-                "mvnw -B -ntp clean install -P release -T 1 -DskipTests");
+                "mvnw -B -ntp clean install -P release"
+                        + " -Dike.workspace.release=true -T 1 -DskipTests");
         assertThat(ranCommands.get(1)).isEqualTo(
                 "mvnw -B -ntp deploy -pl :lib-a,:lib-b,:wsr-root"
-                        + " -P release,signArtifacts -T 1 -DskipTests");
+                        + " -P release,signArtifacts"
+                        + " -Dike.workspace.release=true -T 1 -DskipTests");
 
         // Working trees post-bumped; reference settled at the release.
         assertThat(pom(libA)).contains("<version>1.0.1-SNAPSHOT</version>");

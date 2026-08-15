@@ -1,0 +1,208 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ClaudeMdMerge.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws.bootstrap</a> &gt; <span class="el_source">ClaudeMdMerge.java</span></div><h1>ClaudeMdMerge.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws.bootstrap;
+
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.regex.Pattern;
+
+/**
+ * Non-destructive regeneration of a subproject {@code CLAUDE.md}
+ * (IKE-Network/ike-issues#917, #920).
+ *
+ * &lt;p&gt;{@code ws:scaffold-init} regenerates each subproject's {@code CLAUDE.md}
+ * from a template on every run. A naive full overwrite destroyed two kinds of
+ * content the template does not own:
+ *
+ * &lt;ul&gt;
+ *   &lt;li&gt;&lt;b&gt;#920&lt;/b&gt; — the {@code ike-managed} regions that
+ *       {@code ike:scaffold-publish} appends
+ *       ({@code &lt;!-- BEGIN ike-managed: &lt;name&gt; --&gt; … &lt;!-- END ike-managed: &lt;name&gt; --&gt;}),
+ *       causing the two generators to ping-pong the file on alternate runs.&lt;/li&gt;
+ *   &lt;li&gt;&lt;b&gt;#917&lt;/b&gt; — hand-authored {@code ##} sections a developer added
+ *       (e.g. a project's fast-dev build notes), silently dropped on
+ *       regeneration.&lt;/li&gt;
+ * &lt;/ul&gt;
+ *
+ * &lt;p&gt;{@link #merge(String, String)} is a pure function so it can be unit-tested
+ * without touching the filesystem. It:
+ *
+ * &lt;ol&gt;
+ *   &lt;li&gt;extracts every {@code ike-managed} region from the existing file
+ *       &lt;em&gt;verbatim&lt;/em&gt; (byte-for-byte, on its own lines, so the emitting
+ *       plugin's line-exact marker matching still locates it) and re-appends
+ *       them after the freshly generated template;&lt;/li&gt;
+ *   &lt;li&gt;returns any top-level ({@code ## }) section whose heading the template
+ *       does not itself produce as a {@linkplain Section rescued} section, for
+ *       the caller to preserve in {@code CLAUDE-&lt;name&gt;.md} — the file the
+ *       scaffold never overwrites — rather than carrying it into the
+ *       regenerated {@code CLAUDE.md}.&lt;/li&gt;
+ * &lt;/ol&gt;
+ *
+ * &lt;p&gt;Template-owned sections are regenerated from the template (that is the
+ * point of regeneration); only sections the template does not emit are treated
+ * as hand-authored. A section added as prose &lt;em&gt;inside&lt;/em&gt; a template-owned
+ * section (no new {@code ## } heading) is a residual gap — it is regenerated
+ * with its section — but the reported real-world losses were whole sections,
+ * which this preserves.
+ */
+final class ClaudeMdMerge {
+
+    private ClaudeMdMerge() {}
+
+    /** Matches a {@code &lt;!-- BEGIN ike-managed: &lt;name&gt; --&gt;} marker line. */
+<span class="fc" id="L54">    private static final Pattern MANAGED_BEGIN = Pattern.compile(</span>
+            &quot;^\\s*&lt;!--\\s*BEGIN ike-managed:.*--&gt;\\s*$&quot;);
+
+    /** Matches a {@code &lt;!-- END ike-managed: &lt;name&gt; --&gt;} marker line. */
+<span class="fc" id="L58">    private static final Pattern MANAGED_END = Pattern.compile(</span>
+            &quot;^\\s*&lt;!--\\s*END ike-managed:.*--&gt;\\s*$&quot;);
+
+    /**
+     * A hand-authored section rescued from a regenerated {@code CLAUDE.md}.
+     *
+     * @param title the heading text after {@code ## } (used for logging/dedupe)
+     * @param text  the full section including its {@code ## } heading line,
+     *              with a trailing newline
+     */
+<span class="fc" id="L68">    record Section(String title, String text) {}</span>
+
+    /**
+     * The result of merging an existing {@code CLAUDE.md} with a freshly
+     * generated template.
+     *
+     * @param claudeMd the content to write back to {@code CLAUDE.md}
+     * @param rescued  hand-authored sections to preserve elsewhere; empty when
+     *                 the existing file held nothing the template does not own
+     */
+<span class="fc" id="L78">    record Result(String claudeMd, List&lt;Section&gt; rescued) {}</span>
+
+    /**
+     * Merge {@code existing} CLAUDE.md content with a freshly {@code generated}
+     * template.
+     *
+     * @param existing  the current on-disk {@code CLAUDE.md}, or {@code null}
+     *                  when the file does not exist yet (fresh write)
+     * @param generated the freshly generated template content
+     * @return the merged content plus any hand-authored sections to rescue
+     */
+    static Result merge(String existing, String generated) {
+<span class="fc bfc" id="L90" title="All 4 branches covered.">        if (existing == null || existing.isBlank()) {</span>
+<span class="fc" id="L91">            return new Result(generated, List.of());</span>
+        }
+
+<span class="fc" id="L94">        List&lt;String&gt; managed = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L95">        String withoutManaged = extractManaged(existing, managed);</span>
+
+<span class="fc" id="L97">        Set&lt;String&gt; templateTitles = sectionTitles(generated);</span>
+<span class="fc" id="L98">        List&lt;Section&gt; rescued = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L99" title="All 2 branches covered.">        for (Section section : parseSections(withoutManaged)) {</span>
+<span class="fc bfc" id="L100" title="All 2 branches covered.">            if (!templateTitles.contains(section.title())) {</span>
+<span class="fc" id="L101">                rescued.add(section);</span>
+            }
+<span class="fc" id="L103">        }</span>
+
+<span class="fc" id="L105">        StringBuilder sb = new StringBuilder(generated);</span>
+<span class="fc bfc" id="L106" title="All 2 branches covered.">        for (String block : managed) {</span>
+<span class="pc bpc" id="L107" title="1 of 4 branches missed.">            while (sb.length() &gt; 0 &amp;&amp; sb.charAt(sb.length() - 1) == '\n') {</span>
+<span class="fc" id="L108">                sb.deleteCharAt(sb.length() - 1);</span>
+            }
+<span class="fc" id="L110">            sb.append(&quot;\n\n&quot;).append(block.stripTrailing()).append('\n');</span>
+<span class="fc" id="L111">        }</span>
+<span class="fc" id="L112">        return new Result(sb.toString(), rescued);</span>
+    }
+
+    /**
+     * Split off every {@code ike-managed} region from {@code content},
+     * collecting each verbatim (from its {@code BEGIN} line through its
+     * {@code END} line) into {@code managed}, and returning the remaining
+     * (non-managed) content.
+     *
+     * &lt;p&gt;An unterminated {@code BEGIN} (no matching {@code END}) is left in the
+     * remaining content rather than swallowing the rest of the file — the
+     * emitter always writes balanced pairs, so this only guards against
+     * hand-corrupted markers.
+     */
+    private static String extractManaged(String content, List&lt;String&gt; managed) {
+<span class="fc" id="L127">        String[] lines = content.split(&quot;\n&quot;, -1);</span>
+<span class="fc" id="L128">        StringBuilder remaining = new StringBuilder();</span>
+<span class="fc" id="L129">        int i = 0;</span>
+<span class="fc bfc" id="L130" title="All 2 branches covered.">        while (i &lt; lines.length) {</span>
+<span class="fc bfc" id="L131" title="All 2 branches covered.">            if (MANAGED_BEGIN.matcher(lines[i]).matches()) {</span>
+<span class="fc" id="L132">                int end = -1;</span>
+<span class="fc bfc" id="L133" title="All 2 branches covered.">                for (int j = i + 1; j &lt; lines.length; j++) {</span>
+<span class="fc bfc" id="L134" title="All 2 branches covered.">                    if (MANAGED_END.matcher(lines[j]).matches()) {</span>
+<span class="fc" id="L135">                        end = j;</span>
+<span class="fc" id="L136">                        break;</span>
+                    }
+                }
+<span class="fc bfc" id="L139" title="All 2 branches covered.">                if (end &gt;= 0) {</span>
+<span class="fc" id="L140">                    StringBuilder block = new StringBuilder();</span>
+<span class="fc bfc" id="L141" title="All 2 branches covered.">                    for (int k = i; k &lt;= end; k++) {</span>
+<span class="fc bfc" id="L142" title="All 2 branches covered.">                        if (k &gt; i) {</span>
+<span class="fc" id="L143">                            block.append('\n');</span>
+                        }
+<span class="fc" id="L145">                        block.append(lines[k]);</span>
+                    }
+<span class="fc" id="L147">                    managed.add(block.toString());</span>
+<span class="fc" id="L148">                    i = end + 1;</span>
+                    // Skip a single blank separator line left behind.
+<span class="pc bpc" id="L150" title="2 of 4 branches missed.">                    if (i &lt; lines.length &amp;&amp; lines[i].isBlank()) {</span>
+<span class="fc" id="L151">                        i++;</span>
+                    }
+                    continue;
+                }
+            }
+<span class="fc" id="L156">            remaining.append(lines[i]);</span>
+<span class="fc bfc" id="L157" title="All 2 branches covered.">            if (i &lt; lines.length - 1) {</span>
+<span class="fc" id="L158">                remaining.append('\n');</span>
+            }
+<span class="fc" id="L160">            i++;</span>
+        }
+<span class="fc" id="L162">        return remaining.toString();</span>
+    }
+
+    /**
+     * Parse the top-level ({@code ## }) sections of {@code content}. Content
+     * before the first {@code ## } heading (the {@code # } title, description)
+     * is the preamble and is not returned — only headed sections can be
+     * hand-authored additions.
+     */
+    private static List&lt;Section&gt; parseSections(String content) {
+<span class="fc" id="L172">        String[] lines = content.split(&quot;\n&quot;, -1);</span>
+<span class="fc" id="L173">        List&lt;Section&gt; sections = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L174">        StringBuilder current = null;</span>
+<span class="fc" id="L175">        String currentTitle = null;</span>
+<span class="fc bfc" id="L176" title="All 2 branches covered.">        for (String line : lines) {</span>
+<span class="fc bfc" id="L177" title="All 2 branches covered.">            if (line.startsWith(&quot;## &quot;)) {</span>
+<span class="fc bfc" id="L178" title="All 2 branches covered.">                if (current != null) {</span>
+<span class="fc" id="L179">                    sections.add(new Section(currentTitle,</span>
+<span class="fc" id="L180">                            current.toString().stripTrailing() + &quot;\n&quot;));</span>
+                }
+<span class="fc" id="L182">                current = new StringBuilder();</span>
+<span class="fc" id="L183">                currentTitle = line.substring(3).strip();</span>
+            }
+<span class="fc bfc" id="L185" title="All 2 branches covered.">            if (current != null) {</span>
+<span class="fc" id="L186">                current.append(line).append('\n');</span>
+            }
+        }
+<span class="pc bpc" id="L189" title="1 of 2 branches missed.">        if (current != null) {</span>
+<span class="fc" id="L190">            sections.add(new Section(currentTitle,</span>
+<span class="fc" id="L191">                    current.toString().stripTrailing() + &quot;\n&quot;));</span>
+        }
+<span class="fc" id="L193">        return sections;</span>
+    }
+
+    /**
+     * The set of {@code ## } section titles the template itself emits — the
+     * headings a regenerated file legitimately owns.
+     */
+    private static Set&lt;String&gt; sectionTitles(String generated) {
+<span class="fc" id="L201">        Set&lt;String&gt; titles = new LinkedHashSet&lt;&gt;();</span>
+<span class="fc bfc" id="L202" title="All 2 branches covered.">        for (Section section : parseSections(generated)) {</span>
+<span class="fc" id="L203">            titles.add(section.title());</span>
+<span class="fc" id="L204">        }</span>
+<span class="fc" id="L205">        return titles;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

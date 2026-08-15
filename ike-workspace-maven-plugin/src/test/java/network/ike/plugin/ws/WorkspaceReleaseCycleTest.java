@@ -276,6 +276,39 @@ class WorkspaceReleaseCycleTest {
                 .doesNotContain("1111111111111111111111111111111111111111");
     }
 
+    /**
+     * The root's version pass must not reach into its members. They
+     * live inside its directory but are separate repositories with
+     * their own release lines; a member whose version string happened
+     * to match the root's was rewritten as though it were one of the
+     * root's modules, leaving five members with uncommitted version
+     * changes after cycle 2 (IKE-Network/ike-issues#1011 follow-up).
+     */
+    @Test
+    void the_roots_version_pass_stops_at_a_members_repository()
+            throws Exception {
+        // A member sharing the root's exact version string — the case
+        // that actually happened.
+        File twin = repo("wsr-root/twin", """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <project xmlns="http://maven.apache.org/POM/4.0.0">
+                    <modelVersion>4.0.0</modelVersion>
+                    <groupId>com.test</groupId>
+                    <artifactId>twin</artifactId>
+                    <version>1-SNAPSHOT</version>
+                </project>
+                """);
+        String before = Files.readString(twin.toPath().resolve("pom.xml"),
+                StandardCharsets.UTF_8);
+
+        cycle("boundary").execute("mvnw", true);
+
+        // Untouched: not released, not rewritten, nothing uncommitted.
+        assertThat(Files.readString(twin.toPath().resolve("pom.xml"),
+                StandardCharsets.UTF_8)).isEqualTo(before);
+        assertThat(git(twin, "status", "--porcelain")).isEmpty();
+    }
+
     @Test
     void in_flight_cycle_is_refused() {
         WorkspaceReleaseCycle cycle = new WorkspaceReleaseCycle(root,

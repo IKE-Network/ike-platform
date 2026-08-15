@@ -420,6 +420,14 @@ final class WorkspaceReleaseCycle {
                     .filter(p -> !p.equals(repoRoot.resolve("pom.xml")))
                     .filter(p -> !p.toString().contains(File.separator
                             + "target" + File.separator))
+                    // Never cross into another repository. A working
+                    // set's members live INSIDE the root's directory,
+                    // so walking the root's tree reaches every member's
+                    // POM — and a member whose version string happened
+                    // to match the root's was rewritten as if it were
+                    // one of the root's own modules. It is not: it is a
+                    // separate repository with its own release line.
+                    .filter(p -> !crossesRepositoryBoundary(repoRoot, p))
                     .toList();
         } catch (IOException e) {
             throw new MojoException("Version pass could not walk "
@@ -468,6 +476,25 @@ final class WorkspaceReleaseCycle {
      * @param version the version to look for
      * @return {@code true} when the POM spells out that version itself
      */
+    /**
+     * Whether a POM lies inside a repository nested under this one —
+     * a working-set member, which owns its own versions and must not be
+     * touched by another repository's version pass.
+     *
+     * @param repoRoot the repository whose tree is being walked
+     * @param pom      a POM found beneath it
+     * @return {@code true} when some directory between the two is
+     *         itself a repository
+     */
+    private static boolean crossesRepositoryBoundary(Path repoRoot, Path pom) {
+        Path dir = pom.getParent();
+        while (dir != null && !dir.equals(repoRoot)) {
+            if (Files.exists(dir.resolve(".git"))) return true;
+            dir = dir.getParent();
+        }
+        return false;
+    }
+
     private static boolean declaresOwnVersion(Path pom, String version) {
         try {
             // The model's own version is null when the module inherits

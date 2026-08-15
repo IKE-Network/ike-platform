@@ -27,6 +27,6 @@ canonical_url: https://ike.network/ike-platform/ike-workspace-maven-plugin/summa
 | --- | --- |
 | GroupId | network.ike.platform |
 | ArtifactId | ike-workspace-maven-plugin |
-| Version | 166 |
+| Version | 167 |
 | Type | maven-plugin |
 | Java Version | 25 |

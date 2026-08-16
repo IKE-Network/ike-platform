@@ -22,6 +22,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Closed vocabulary of preflight checks that {@code ws:*} goals can
@@ -151,6 +152,70 @@ public enum PreflightCondition {
                     + "  flattener and baked into released artifacts. Bump each\n"
                     + "  property to a released (non-SNAPSHOT) version before\n"
                     + "  re-running the release."));
+        }
+    },
+
+    /**
+     * No releasing member's POMs — every module, profiles included —
+     * may carry a literal {@code -SNAPSHOT} version on a dependency,
+     * parent, or plugin reference the cycle does not itself resolve
+     * (ike-issues#1022).
+     *
+     * <p>The property channel is guarded by
+     * {@link #NO_SNAPSHOT_PROPERTIES}; this is the literal channel.
+     * A released POM naming an external SNAPSHOT is not
+     * repository-true: it builds only where a local repository happens
+     * to cache the snapshot — which is how komet-desktop shipped two
+     * releases pinning {@code dev.ikm.jpms:rocksdbjni-jpms
+     * 10.4.2-r1-SNAPSHOT}, an artifact that never released anywhere
+     * (ike-issues#1021), while warm caches kept every machine green
+     * and the cold CI agent alone resolved honestly.
+     *
+     * <p>Exempt, because the cycle resolves them before anything
+     * deploys: references to artifacts this cycle's release plan
+     * de-qualifies (retargeted by the version pass), and references to
+     * coordinates produced inside the same repository (the member's
+     * own version pass moves those). Bystanders' POMs are not scanned
+     * — they do not deploy this cycle. Without a release set the
+     * condition is inert: development trees legitimately reference
+     * snapshots.
+     */
+    NO_EXTERNAL_SNAPSHOT_DEPENDENCIES(
+            "No releasing member references external -SNAPSHOT versions") {
+        @Override
+        public Optional<String> check(PreflightContext ctx) {
+            if (ctx.releaseSet() == null || ctx.releaseSet().isEmpty()) {
+                return Optional.empty();
+            }
+            File root = ctx.workspaceRoot();
+            List<SnapshotScanner.Violation> external = new ArrayList<>();
+
+            for (String name : ctx.subprojects()) {
+                if (!ctx.releaseSet().contains(name)) continue;
+                File memberDir = new File(root, name);
+                if (!new File(memberDir, "pom.xml").isFile()) continue;
+                List<File> poms = memberPoms(memberDir);
+                Set<String> ownKeys = ownCoordinateKeys(poms, memberDir);
+                for (SnapshotScanner.Violation violation
+                        : SnapshotScanner.scanForSnapshotVersions(poms)) {
+                    if (!cycleResolvesReference(ctx, ownKeys, violation)) {
+                        external.add(violation);
+                    }
+                }
+            }
+
+            if (external.isEmpty()) return Optional.empty();
+
+            return Optional.of(SnapshotScanner.formatViolations(external,
+                    root,
+                    external.size() + " external SNAPSHOT reference(s) would"
+                            + " ship in released POMs:",
+                    "  Each site names a version this cycle neither releases\n"
+                    + "  nor retargets, so the deployed POM would reference a\n"
+                    + "  SNAPSHOT no repository is required to have. Pin each\n"
+                    + "  site to a released version (or remove the version and\n"
+                    + "  let managed/bound resolution supply it) before\n"
+                    + "  re-running the release. ike-issues#1022."));
         }
     },
 
@@ -862,6 +927,190 @@ public enum PreflightCondition {
                     seen);
         }
         return new ArrayList<>(seen);
+    }
+
+    /**
+     * Every {@code pom.xml} inside a member repository — build output
+     * and nested repositories excluded. The same tree the release
+     * cycle's version pass walks, so what this gate scans is exactly
+     * what the cycle deploys.
+     *
+     * @param memberDir the member repository directory
+     * @return the member's POM files; on a walk failure, just the root
+     *         POM (preflights degrade rather than fail on IO)
+     */
+    private static List<File> memberPoms(File memberDir) {
+        java.nio.file.Path root = memberDir.toPath();
+        try (java.util.stream.Stream<java.nio.file.Path> tree =
+                     java.nio.file.Files.walk(root)) {
+            return tree
+                    .filter(p -> p.getFileName().toString().equals("pom.xml"))
+                    .filter(p -> !p.toString().contains(
+                            File.separator + "target" + File.separator))
+                    .filter(p -> !nestedRepositoryBetween(root, p))
+                    .map(java.nio.file.Path::toFile)
+                    .toList();
+        } catch (IOException e) {
+            return List.of(new File(memberDir, "pom.xml"));
+        }
+    }
+
+    /**
+     * Whether a POM lies inside a repository nested under this one —
+     * a twin of the release cycle's repository-boundary guard: such a
+     * POM belongs to another member and is scanned (or not) as part of
+     * that member, never through an enclosing tree.
+     *
+     * @param repoRoot the repository whose tree is being walked
+     * @param pom      a POM found beneath it
+     * @return {@code true} when some directory between the two is
+     *         itself a repository
+     */
+    private static boolean nestedRepositoryBetween(java.nio.file.Path repoRoot,
+                                                    java.nio.file.Path pom) {
+        java.nio.file.Path dir = pom.getParent();
+        while (dir != null && !dir.equals(repoRoot)) {
+            if (java.nio.file.Files.exists(dir.resolve(".git"))) return true;
+            dir = dir.getParent();
+        }
+        return false;
+    }
+
+    /**
+     * The coordinate keys a member's own tree produces: every module's
+     * {@code artifactId} plus, where the groupId is spelled out or
+     * inherited from the module's parent block, the full
+     * {@code groupId:artifactId}. References to these move with the
+     * member's own version pass (intermediate aggregators included —
+     * they are nobody's release-plan artifact but are retargeted all
+     * the same).
+     *
+     * @param poms      the member's POM files
+     * @param memberDir the member repository directory (unused except
+     *                  as documentation anchor for the Maven 4.1
+     *                  directory-name inference below)
+     * @return artifactId and groupId:artifactId keys of the member's
+     *         own modules
+     */
+    private static Set<String> ownCoordinateKeys(List<File> poms,
+                                                  File memberDir) {
+        Set<String> keys = new java.util.LinkedHashSet<>();
+        // Depth-sorted so parents resolve before the modules that
+        // inherit from them: Maven 4.1 modules may declare an empty
+        // <parent/> and no groupId (tinkar-core's reasoner aggregator
+        // does), inheriting the groupId from the nearest ancestor
+        // module by directory — the same resolution the workspace
+        // extension's index performs.
+        List<File> ordered = new ArrayList<>(poms);
+        ordered.sort(java.util.Comparator.comparingInt(
+                p -> p.toPath().getNameCount()));
+        Map<java.nio.file.Path, String> groupByDir = new LinkedHashMap<>();
+        for (File pom : ordered) {
+            try {
+                org.apache.maven.api.model.Model model =
+                        network.ike.plugin.ws.PomModel.parse(pom.toPath())
+                                .model();
+                String artifactId = model.getArtifactId() != null
+                        ? model.getArtifactId()
+                        // Maven 4.1 inference: an absent artifactId is
+                        // the module's directory name.
+                        : pom.getParentFile().getName();
+                String groupId = model.getGroupId() != null
+                        ? model.getGroupId()
+                        : model.getParent() != null
+                                && model.getParent().getGroupId() != null
+                                ? model.getParent().getGroupId()
+                                : nearestAncestorGroupId(groupByDir,
+                                        memberDir.toPath(),
+                                        pom.getParentFile().toPath());
+                keys.add(artifactId);
+                if (groupId != null && !groupId.contains("${")) {
+                    groupByDir.put(pom.getParentFile().toPath(), groupId);
+                    keys.add(groupId + ":" + artifactId);
+                }
+            } catch (IOException e) {
+                // Best-effort — preflight does not fail on read errors.
+            }
+        }
+        return keys;
+    }
+
+    /**
+     * The groupId of the nearest already-resolved ancestor module, for
+     * Maven 4.1 modules that infer theirs from the directory tree.
+     *
+     * @param groupByDir module directory → resolved groupId, filled in
+     *                   depth order
+     * @param repoRoot   the member repository root (walk stops here)
+     * @param moduleDir  the inferring module's directory
+     * @return the nearest ancestor's groupId, or {@code null} when no
+     *         ancestor inside the repository has resolved one
+     */
+    private static String nearestAncestorGroupId(
+            Map<java.nio.file.Path, String> groupByDir,
+            java.nio.file.Path repoRoot, java.nio.file.Path moduleDir) {
+        java.nio.file.Path dir = moduleDir.getParent();
+        while (dir != null && dir.startsWith(repoRoot)) {
+            String groupId = groupByDir.get(dir);
+            if (groupId != null) return groupId;
+            dir = dir.getParent();
+        }
+        return null;
+    }
+
+    /**
+     * Whether the current release cycle resolves a snapshot reference
+     * before anything deploys: the referenced coordinate is either one
+     * the cycle's release plan de-qualifies (the version pass retargets
+     * every reference to it) or one the member's own tree produces
+     * (the member's version pass moves it). The
+     * {@code ${project.groupId}} sibling idiom leaves the groupId
+     * unresolved at scan time, so identity falls back to the
+     * artifactId alone — mirroring the workspace extension's
+     * resolution rule.
+     *
+     * @param ctx       the preflight context carrying
+     *                  {@link PreflightContext#cycleReleasedArtifacts()}
+     * @param ownKeys   the member's own coordinate keys
+     * @param violation the scanned SNAPSHOT reference
+     * @return true when the cycle itself resolves the reference
+     */
+    private static boolean cycleResolvesReference(
+            PreflightContext ctx, Set<String> ownKeys,
+            SnapshotScanner.Violation violation) {
+        String location = violation.location();
+        String ga;
+        if (location.endsWith("]")) {
+            // Parent sites format as "parent[groupId:artifactId]".
+            int open = location.lastIndexOf('[');
+            ga = location.substring(open + 1, location.length() - 1);
+        } else {
+            ga = location.substring(location.lastIndexOf('/') + 1);
+        }
+        Set<String> released = ctx.cycleReleasedArtifacts() == null
+                ? Set.of() : ctx.cycleReleasedArtifacts();
+        if (ownKeys.contains(ga) || released.contains(ga)) {
+            return true;
+        }
+        int colon = ga.lastIndexOf(':');
+        if (colon < 0) {
+            return false;
+        }
+        String groupId = ga.substring(0, colon);
+        if (!groupId.contains("${")) {
+            return false;
+        }
+        String artifactId = ga.substring(colon + 1);
+        if (ownKeys.contains(artifactId)) {
+            return true;
+        }
+        for (String key : released) {
+            int c = key.lastIndexOf(':');
+            if (c >= 0 && key.substring(c + 1).equals(artifactId)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

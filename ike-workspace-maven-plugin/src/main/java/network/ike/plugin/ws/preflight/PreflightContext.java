@@ -30,6 +30,12 @@ import java.util.Set;
  *                      cycle, for release-set-aware conditions
  *                      (ike-issues#981) — {@code null} when the invoking
  *                      goal has no release-cycle notion
+ * @param cycleReleasedArtifacts {@code groupId:artifactId} keys of the
+ *                      artifacts the current cycle's release plan
+ *                      de-qualifies — every reference to one of them is
+ *                      retargeted by the version pass, so snapshot
+ *                      references to them must not refuse the release
+ *                      (ike-issues#1022); empty when no cycle is running
  */
 public record PreflightContext(
         File workspaceRoot,
@@ -39,14 +45,15 @@ public record PreflightContext(
         String tagName,
         String parentVersion,
         Set<String> releaseSet,
-        Set<String> cycleResolvedProperties) {
+        Set<String> cycleResolvedProperties,
+        Set<String> cycleReleasedArtifacts) {
 
     /** Minimal context for conditions that only need root + subproject list. */
     public static PreflightContext of(File root,
                                        WorkspaceGraph graph,
                                        List<String> subprojects) {
         return new PreflightContext(root, graph, subprojects,
-                null, null, null, null, Set.of());
+                null, null, null, null, Set.of(), Set.of());
     }
 
     /**
@@ -65,7 +72,7 @@ public record PreflightContext(
                                        List<String> subprojects,
                                        Set<String> releaseSet) {
         return new PreflightContext(root, graph, subprojects,
-                null, null, null, releaseSet, Set.of());
+                null, null, null, releaseSet, Set.of(), Set.of());
     }
 
     /**
@@ -94,6 +101,40 @@ public record PreflightContext(
         return new PreflightContext(root, graph, subprojects,
                 null, null, null, releaseSet,
                 cycleResolvedProperties == null
-                        ? Set.of() : cycleResolvedProperties);
+                        ? Set.of() : cycleResolvedProperties, Set.of());
+    }
+
+    /**
+     * Context for the release preflight, carrying the release set, the
+     * version properties the cycle's plan rewrites (ike-issues#1004),
+     * and the artifacts the cycle releases (ike-issues#1022). The plan
+     * remains the authority on both exemption channels: a property it
+     * rewrites and a reference to an artifact it de-qualifies are each
+     * resolved by the cycle before anything deploys.
+     *
+     * @param root                     the workspace root directory
+     * @param graph                    the loaded workspace graph
+     * @param subprojects              subproject names (topological
+     *                                 order) to evaluate
+     * @param releaseSet               names of the members releasing
+     *                                 this cycle
+     * @param cycleResolvedProperties  {@code <subproject>::<property>}
+     *                                 keys the release plan rewrites
+     * @param cycleReleasedArtifacts   {@code groupId:artifactId} keys
+     *                                 the release plan de-qualifies
+     * @return the release-cycle context
+     */
+    public static PreflightContext of(File root,
+                                       WorkspaceGraph graph,
+                                       List<String> subprojects,
+                                       Set<String> releaseSet,
+                                       Set<String> cycleResolvedProperties,
+                                       Set<String> cycleReleasedArtifacts) {
+        return new PreflightContext(root, graph, subprojects,
+                null, null, null, releaseSet,
+                cycleResolvedProperties == null
+                        ? Set.of() : cycleResolvedProperties,
+                cycleReleasedArtifacts == null
+                        ? Set.of() : cycleReleasedArtifacts);
     }
 }

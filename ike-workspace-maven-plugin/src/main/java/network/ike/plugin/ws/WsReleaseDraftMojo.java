@@ -95,6 +95,13 @@ import java.util.stream.Stream;
  *       POM may carry a {@code <properties>} value ending in
  *       {@code -SNAPSHOT}. Catches the {@code ike-parent-105.pom}
  *       leakage class of bug at its source (see issues #175, #177).</li>
+ *   <li>{@link PreflightCondition#NO_EXTERNAL_SNAPSHOT_DEPENDENCIES} —
+ *       no releasing member's POMs may carry a literal
+ *       {@code -SNAPSHOT} version the cycle neither releases nor
+ *       retargets. The literal complement of the property gate:
+ *       komet-desktop shipped two releases pinning a never-released
+ *       external snapshot inside OS profiles (ike-issues#1021), which
+ *       only a cold repository could expose (ike-issues#1022).</li>
  * </ul>
  *
  * <p>Per-subproject preflight (javadoc warnings, git push auth, SSH
@@ -403,6 +410,10 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
         //                                          flattener leak;
         //                                          release-set-aware
         //                                          since #981
+        //   NO_EXTERNAL_SNAPSHOT_DEPENDENCIES    — literal snapshot
+        //                                          references the cycle
+        //                                          neither releases nor
+        //                                          retargets (#1022)
         //   SUBPROJECT_HAS_DISTRIBUTION_MANAGEMENT — site:stage gate
         //                                          (#343 surfaced)
         //   NO_FOUNDATION_PROPERTY_SHADOWING     — ike-tooling.version
@@ -437,17 +448,26 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
             cycleResolvedProperties.add(property.declaringSubproject()
                     + "::" + property.propertyName());
         }
+        // The artifacts the plan de-qualifies: references to them are
+        // retargeted by the version pass, so the external-snapshot gate
+        // (ike-issues#1022) must not refuse them.
+        Set<String> cycleReleasedArtifacts = new LinkedHashSet<>();
+        for (ReleasePlan.GA ga : plan.artifacts().keySet()) {
+            cycleReleasedArtifacts.add(ga.toString());
+        }
 
         PreflightResult releasePreflight = Preflight.of(
                 List.of(PreflightCondition.WORKING_TREE_CLEAN,
                         PreflightCondition.NO_ON_DISK_GHPAGES_LEAK,
                         PreflightCondition.NO_SCPEXE_SITE_URLS,
                         PreflightCondition.NO_SNAPSHOT_PROPERTIES,
+                        PreflightCondition.NO_EXTERNAL_SNAPSHOT_DEPENDENCIES,
                         PreflightCondition.SUBPROJECT_HAS_DISTRIBUTION_MANAGEMENT,
                         PreflightCondition.NO_FOUNDATION_PROPERTY_SHADOWING,
                         PreflightCondition.PARENT_COHERENCE),
                 PreflightContext.of(root, graph, candidates,
-                        releasable.keySet(), cycleResolvedProperties));
+                        releasable.keySet(), cycleResolvedProperties,
+                        cycleReleasedArtifacts));
         if (draft) {
             releasePreflight.warnIfFailed(getLog(), WsGoal.RELEASE_PUBLISH);
         } else {

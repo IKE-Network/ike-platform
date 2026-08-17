@@ -1,6 +1,6 @@
 ---
-date_published: 2026-08-15
-date_modified: 2026-08-15
+date_published: 2026-08-16
+date_modified: 2026-08-16
 canonical_url: https://ike.network/ike-platform/plugins.html
 ---
 

@@ -380,6 +380,76 @@ class WorkspaceReleaseCycleTest {
 
 
     /**
+     * The cycle's what-changed notes (ike-issues#1016): committed into
+     * the tagged root tree beside the record; per-member sections carry
+     * the non-mechanical commits since the member's previous release
+     * tag (bodies indented, trailers dropped); a member whose only
+     * movement is the cascade lands on the alignment-only line; a
+     * member with no previous release tag is noted as a first release.
+     */
+    @Test
+    void notes_carry_member_commits_and_filter_mechanical()
+            throws Exception {
+        // lib-a: previous release v0.9.0, then one feature commit (with
+        // body and trailer) and one goal-authored hygiene commit.
+        git(libA, "tag", "v0.9.0");
+        Files.writeString(libA.toPath().resolve("flight.txt"), "wings",
+                StandardCharsets.UTF_8);
+        git(libA, "add", ".");
+        git(libA, "commit", "-m", "Teach lib-a to fly\n\n"
+                + "Wings are load-bearing.\n\n"
+                + "Refs: IKE-Network/ike-issues#1");
+        Files.writeString(libA.toPath().resolve("aligned.txt"), "x",
+                StandardCharsets.UTF_8);
+        git(libA, "add", ".");
+        git(libA, "commit", "-m",
+                "workspace: align inter-subproject versions");
+        // lib-b: previously released, nothing since — pure cascade.
+        git(libB, "tag", "v1.9.0");
+
+        cycle("notes-cycle").execute("mvnw", true);
+
+        String notes = git(root, "show",
+                "v1:releases/release-notes-cycle-notes.md");
+        assertThat(notes)
+                .contains("# What changed — cycle notes-cycle")
+                .contains("## lib-a 1.0.0  ·  v0.9.0 → v1.0.0")
+                .contains("- **Teach lib-a to fly**")
+                .contains("\n  Wings are load-bearing.")
+                .doesNotContain("Refs:")
+                .doesNotContain("workspace: align")
+                .contains("Moved for version alignment only: lib-b 2.0.0.")
+                .contains("## (workspace root) 1")
+                .contains("- _First release of this member._");
+    }
+
+    /** Cadence, hygiene, trailers, and blanks never reach the notes. */
+    @Test
+    void notes_formatting_filters_mechanical_and_trailers() {
+        String raw = String.join("\u001e",
+                "release: set version to 1.0.0",
+                "checkpoint: pre-release safety checkpoint x",
+                "chore: align upstream versions before release",
+                "post-release: sync workspace.yaml versions (#371)",
+                "Fix the flux capacitor\u001fNeeds 1.21 gigawatts.\n\n"
+                        + "Fixes: IKE-Network/ike-issues#88\n"
+                        + "Co-Authored-By: Doc <doc@test>");
+        assertThat(WorkspaceReleaseCycle.formatNotesEntries(raw))
+                .containsExactly("- **Fix the flux capacitor**"
+                        + "\n  Needs 1.21 gigawatts.");
+    }
+
+    /** Bodiless commits format as a bare bullet; empty input is empty. */
+    @Test
+    void notes_formatting_handles_bodiless_and_empty() {
+        assertThat(WorkspaceReleaseCycle.formatNotesEntries(
+                "Add a knob"))
+                .containsExactly("- **Add a knob**");
+        assertThat(WorkspaceReleaseCycle.formatNotesEntries("")).isEmpty();
+        assertThat(WorkspaceReleaseCycle.formatNotesEntries(null)).isEmpty();
+    }
+
+    /**
      * The workspace root, with the manifest the cycle pins into. The
      * pins start deliberately stale — a checkpoint-era value — so a test
      * can tell "the cycle wrote them" from "they happened to be right".

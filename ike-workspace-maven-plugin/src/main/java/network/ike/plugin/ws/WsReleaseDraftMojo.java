@@ -19,6 +19,7 @@ import network.ike.plugin.support.GoalReportBuilder;
 import network.ike.workspace.ManifestWriter;
 import network.ike.workspace.Subproject;
 import network.ike.workspace.WorkspaceGraph;
+import org.apache.maven.api.plugin.Log;
 import org.apache.maven.api.plugin.MojoException;
 import org.apache.maven.api.plugin.annotations.Mojo;
 import org.apache.maven.api.plugin.annotations.Parameter;
@@ -181,9 +182,23 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
      * The release-cycle label naming the record file
      * ({@code releases/release-<cycle>.yaml}) and the tag messages.
      * Defaults to {@code <root-artifactId>-<root-release-version>}.
+     * An explicit label that diverges from that canonical form warns at
+     * draft and refuses at publish unless {@link #acceptCycleLabel}
+     * confirms it — the delivery chain resolves the record by the
+     * canonical name, so a drifted label silently breaks downstream
+     * publishing (IKE-Network/ike-issues#1035).
      */
     @Parameter(property = "cycle")
     String cycleLabel;
+
+    /**
+     * Confirms a deliberately non-canonical {@link #cycleLabel}.
+     * Without it, an explicit label that diverges from
+     * {@code <root-artifactId>-<root-release-version>} refuses at
+     * publish (IKE-Network/ike-issues#1035).
+     */
+    @Parameter(property = "acceptCycleLabel", defaultValue = "false")
+    boolean acceptCycleLabel;
 
     /**
      * Skip tests in the cycle's reactor verify. The verify is the one
@@ -617,14 +632,56 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
         }
         WorkspaceReleaseCycle.ReleasingRepo rootRepo =
                 releasingRepo("(workspace root)", root);
+        String canonical =
+                rootRepo.artifactId() + "-" + rootRepo.releaseVersion();
         String label = (cycleLabel != null && !cycleLabel.isBlank())
                 ? cycleLabel
-                : rootRepo.artifactId() + "-" + rootRepo.releaseVersion();
+                : canonical;
+        guardCycleLabel(label, canonical, publish, acceptCycleLabel,
+                getLog());
         return new WorkspaceReleaseCycle(root, repos, rootRepo, plan,
                 label, java.time.LocalDate.now().toString(), tagStyle,
                 getLog(),
                 (dir, command) ->
                         ReleaseSupport.exec(dir, getLog(), command));
+    }
+
+    /**
+     * Refuse (publish) or warn about (draft) a cycle label that
+     * diverges from the canonical
+     * {@code <root artifactId>-<root release version>}. The delivery
+     * chain resolves the cycle record by the canonical name, so a
+     * drifted label publishes the release against a stale record
+     * (IKE-Network/ike-issues#1035 — cycle 6 shipped with cycle 5's
+     * release body this way). Static and pure for direct unit testing.
+     *
+     * @param label     the resolved cycle label
+     * @param canonical the canonical label for this cycle
+     * @param publish   whether this run publishes (refuse) or drafts
+     *                  (warn)
+     * @param accepted  whether the operator confirmed the divergence
+     *                  ({@code -DacceptCycleLabel=true})
+     * @param log       Maven logger for the draft warning
+     * @throws MojoException when publishing with an unconfirmed
+     *                       divergent label
+     */
+    static void guardCycleLabel(String label, String canonical,
+            boolean publish, boolean accepted, Log log)
+            throws MojoException {
+        if (label.equals(canonical) || accepted) {
+            return;
+        }
+        String message = "Cycle label `" + label + "` diverges from the"
+                + " canonical `" + canonical + "` — the delivery chain"
+                + " resolves the record releases/release-" + canonical
+                + ".yaml by that name, so a drifted label publishes"
+                + " against a stale record (ike-issues#1035). Omit"
+                + " -Dcycle to use the canonical label, or confirm the"
+                + " custom label with -DacceptCycleLabel=true.";
+        if (publish) {
+            throw new MojoException(message);
+        }
+        log.warn(message);
     }
 
     /**

@@ -193,6 +193,7 @@ final class WorkspaceReleaseCycle {
         lines.add("  verify: " + String.join(" ", verifyCommand(mvn, false)));
         lines.add("  deploy: " + String.join(" ", deployCommand(mvn)));
         lines.add("  record: " + rootRelativeRecordPath());
+        lines.add("  notes:  " + rootRelativeNotesPath());
         return lines;
     }
 
@@ -297,6 +298,7 @@ final class WorkspaceReleaseCycle {
 
         pinWorkingSetState(workingSetDirs());
         writeCycleRecord();
+        writeCycleNotes();
 
         commitRepo(rootRepo.dir(), "release: set version to "
                 + rootRepo.releaseVersion());
@@ -551,7 +553,7 @@ final class WorkspaceReleaseCycle {
         ReleaseSupport.exec(dir, log, "git", "add", "-u");
         if (dir.equals(root)) {
             ReleaseSupport.exec(dir, log, "git", "add", "--",
-                    rootRelativeRecordPath());
+                    rootRelativeRecordPath(), rootRelativeNotesPath());
         }
         ReleaseSupport.exec(dir, log, "git", "commit", "-m", message);
     }
@@ -560,6 +562,20 @@ final class WorkspaceReleaseCycle {
         return root.toPath().relativize(
                 ReleaseRecordFile.pathFor(root.toPath(), cycleLabel))
                 .toString();
+    }
+
+    /**
+     * The cycle's what-changed notes file, beside the record
+     * ({@code releases/release-<cycle>-notes.md}).
+     */
+    private Path notesPath() {
+        Path record = ReleaseRecordFile.pathFor(root.toPath(), cycleLabel);
+        return record.resolveSibling(record.getFileName().toString()
+                .replace(".yaml", "-notes.md"));
+    }
+
+    private String rootRelativeNotesPath() {
+        return root.toPath().relativize(notesPath()).toString();
     }
 
     /**
@@ -621,6 +637,145 @@ final class WorkspaceReleaseCycle {
             throw new MojoException("Cycle record write failed: "
                     + e.getMessage(), e);
         }
+    }
+
+    /**
+     * Write the cycle's what-changed notes beside the record
+     * (IKE-Network/ike-issues#1016): for each releasing repository, the
+     * non-mechanical commits between its previous release tag and the
+     * release commit — subjects with their bodies, goal-authored cadence
+     * and hygiene commits filtered — so the delivery chain publishes a
+     * narrative from the tagged tree instead of a bare member table.
+     * Repositories whose only movement is version alignment are listed
+     * on one summary line; a repository with no previous release tag is
+     * noted as a first release rather than dumping its whole history.
+     */
+    private void writeCycleNotes() {
+        StringBuilder md = new StringBuilder();
+        md.append("# What changed — cycle ").append(cycleLabel)
+                .append(" (").append(recordDate).append(")\n");
+        List<String> alignmentOnly = new ArrayList<>();
+        for (ReleasingRepo m : allRepos()) {
+            String previousTag =
+                    WsReleaseDraftMojo.latestReleaseTag(m.dir(), tagStyle);
+            if (previousTag == null) {
+                md.append("\n## ").append(m.name()).append(' ')
+                        .append(m.releaseVersion()).append("\n\n")
+                        .append("- _First release of this member._\n");
+                continue;
+            }
+            List<String> entries = notesEntriesFor(m.dir(), previousTag);
+            if (entries.isEmpty()) {
+                alignmentOnly.add(m.name() + " " + m.releaseVersion());
+            } else {
+                md.append("\n## ").append(m.name()).append(' ')
+                        .append(m.releaseVersion()).append("  ·  ")
+                        .append(previousTag).append(" → ")
+                        .append(tagStyle.tagFor(m.releaseVersion()))
+                        .append("\n\n");
+                for (String entry : entries) {
+                    md.append(entry).append('\n');
+                }
+            }
+        }
+        if (!alignmentOnly.isEmpty()) {
+            md.append("\nMoved for version alignment only: ")
+                    .append(String.join(", ", alignmentOnly)).append(".\n");
+        }
+        try {
+            Files.writeString(notesPath(), md.toString(),
+                    StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            throw new MojoException("Cycle notes write failed: "
+                    + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * The narrative entries for one repository: commits between the
+     * previous release tag and HEAD, formatted by
+     * {@link #formatNotesEntries(String)}.
+     *
+     * @param dir         the repository directory
+     * @param previousTag the repository's previous release tag
+     * @return formatted entries, oldest last; empty when every commit
+     *         since the tag is mechanical
+     */
+    private List<String> notesEntriesFor(File dir, String previousTag) {
+        String raw;
+        try {
+            raw = ReleaseSupport.execCapture(dir, "git", "log",
+                    previousTag + "..HEAD", "--no-merges",
+                    "--pretty=format:%s%x1f%b%x1e");
+        } catch (Exception e) {
+            throw new MojoException("Cycle notes: cannot read "
+                    + dir.getName() + " history since " + previousTag
+                    + ": " + e.getMessage(), e);
+        }
+        return formatNotesEntries(raw);
+    }
+
+    /**
+     * Goal-authored hygiene subjects filtered from the notes on top of
+     * the release-cadence patterns: checkpoints, scaffold
+     * reconciliation, workspace alignment, and post-release manifest
+     * sync say nothing about what a release means to its consumers.
+     */
+    private static final java.util.regex.Pattern NOTES_MECHANICAL_PATTERN =
+            java.util.regex.Pattern.compile(
+                    "^(checkpoint: .*"
+                            + "|scaffold: .*"
+                            + "|ws:scaffold.*"
+                            + "|workspace: .*"
+                            + "|chore: align upstream versions.*"
+                            + "|post-release: .*)$");
+
+    /** Trailer lines dropped from commit bodies in the notes. */
+    private static final java.util.regex.Pattern NOTES_TRAILER_PATTERN =
+            java.util.regex.Pattern.compile(
+                    "^(Refs:|Fixes:|Co-[Aa]uthored-[Bb]y:|Signed-off-by:).*");
+
+    /**
+     * Format raw {@code git log} output (subject {@code US} body
+     * {@code RS}, as produced with
+     * {@code --pretty=format:%s%x1f%b%x1e}) into Markdown notes
+     * entries: one {@code - **subject**} bullet per non-mechanical
+     * commit, body lines indented beneath it with trailers and blank
+     * lines dropped. Static and pure for direct unit testing.
+     *
+     * @param raw the raw log output; {@code null} or blank yields no
+     *            entries
+     * @return formatted entries in log order
+     */
+    static List<String> formatNotesEntries(String raw) {
+        List<String> entries = new ArrayList<>();
+        if (raw == null || raw.isBlank()) {
+            return entries;
+        }
+        for (String commit : raw.split("\u001e")) {
+            String[] parts = commit.split("\u001f", 2);
+            String subject = parts[0].strip();
+            if (subject.isEmpty()
+                    || WsReleaseDraftMojo.isReleaseCadenceCommit(subject)
+                    || NOTES_MECHANICAL_PATTERN.matcher(subject).matches()) {
+                continue;
+            }
+            StringBuilder entry = new StringBuilder("- **")
+                    .append(subject).append("**");
+            if (parts.length > 1) {
+                for (String line : parts[1].split("\n")) {
+                    String stripped = line.strip();
+                    if (stripped.isEmpty()
+                            || NOTES_TRAILER_PATTERN.matcher(stripped)
+                                    .matches()) {
+                        continue;
+                    }
+                    entry.append("\n  ").append(stripped);
+                }
+            }
+            entries.add(entry.toString());
+        }
+        return entries;
     }
 
     private String[] verifyCommand(String mvn, boolean skipTests) {

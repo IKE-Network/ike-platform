@@ -1,0 +1,150 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>WorkingSetLease.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">WorkingSetLease.java</span></div><h1>WorkingSetLease.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+import java.util.concurrent.TimeUnit;
+
+/**
+ * Bridge to the working-set lease protocol in {@code ~/ike-dev/scripts/lease.sh}.
+ *
+ * &lt;p&gt;A working set — any project root under {@code ~/ike-dev} — has one
+ * writer at a time across the machines that share that folder. A
+ * {@code ws:} goal that rewrites branches, versions and history is
+ * emphatically a writer, so it confirms it holds the lease before it
+ * starts. Design: {@code dev-working-set-lease} in ike-lab-documents,
+ * IKE-Network/ike-issues#1002; this half is #1005.
+ *
+ * &lt;p&gt;&lt;strong&gt;Inert outside that setup.&lt;/strong&gt; Every check is an
+ * existence check first: no {@code lease.sh}, no {@code ~/.ike-machine-id},
+ * or a project that is not under {@code ~/ike-dev}, and the goal proceeds
+ * exactly as it did before. That matters because this plugin is published
+ * and run by people with no Syncthing-paired fleet, for whom the lease
+ * protocol does not exist. It fails open for the same reason the Claude
+ * fence does: a coordination aid that can wedge a build is worse than no
+ * coordination aid.
+ *
+ * &lt;p&gt;&lt;strong&gt;The protocol is not reimplemented here.&lt;/strong&gt; Epoch
+ * arithmetic, staleness horizons and conflict reconciliation live once, in
+ * the shell script that the IDE plugin and the Claude hook also call. A
+ * fencing system whose halves disagree is worse than one with no fencing
+ * at all.
+ */
+final class WorkingSetLease {
+
+    /**
+     * Seconds to allow the confirming call. It deliberately sleeps out the
+     * sync layer's propagation window — about 25 seconds — before reading
+     * the record back, so this has to be generous. Cutting it short would
+     * report a race lost that was never run.
+     */
+    private static final long CONFIRM_TIMEOUT_SECONDS = 120L;
+
+    private WorkingSetLease() { }
+
+    /**
+     * The outcome of asking the lease protocol whether this machine may write.
+     *
+     * @param verdict  what the protocol decided
+     * @param detail   the protocol's own explanation, for the operator; empty
+     *                 when there is nothing to say
+     */
+<span class="fc" id="L56">    record Decision(Verdict verdict, String detail) { }</span>
+
+    /** What {@link #confirm} concluded. */
+<span class="fc" id="L59">    enum Verdict {</span>
+        /** This machine holds the lease; proceed. */
+<span class="fc" id="L61">        HELD,</span>
+        /** No lease machinery, or not a working set. Proceed. */
+<span class="fc" id="L63">        NOT_APPLICABLE,</span>
+        /** Another machine holds it, or won the race. Do not write. */
+<span class="fc" id="L65">        FENCED</span>
+    }
+
+    /**
+     * Confirms this machine holds the working set's lease, waiting out the
+     * sync layer's propagation window and reading the record back.
+     *
+     * @param workspaceRoot the directory the goal is about to write to
+     * @return the decision; never {@code null}
+     */
+    static Decision confirm(Path workspaceRoot) {
+<span class="fc" id="L76">        Path script = script();</span>
+<span class="pc bpc" id="L77" title="1 of 4 branches missed.">        if (script == null || workspaceRoot == null) {</span>
+<span class="fc" id="L78">            return new Decision(Verdict.NOT_APPLICABLE, &quot;&quot;);</span>
+        }
+<span class="fc" id="L80">        Result resolved = run(script, 10L, &quot;resolve&quot;, workspaceRoot.toString());</span>
+<span class="pc bpc" id="L81" title="3 of 4 branches missed.">        if (resolved.exitCode() != 0 || resolved.output().isBlank()) {</span>
+<span class="fc" id="L82">            return new Decision(Verdict.NOT_APPLICABLE, &quot;&quot;);</span>
+        }
+<span class="nc" id="L84">        String workingSet = resolved.output().trim();</span>
+<span class="nc" id="L85">        Result confirmed = run(script, CONFIRM_TIMEOUT_SECONDS,</span>
+                &quot;ensure&quot;, workingSet, &quot;--confirm&quot;);
+<span class="nc bnc" id="L87" title="All 2 branches missed.">        if (confirmed.exitCode() == 0) {</span>
+<span class="nc" id="L88">            return new Decision(Verdict.HELD, workingSet);</span>
+        }
+        // A negative exit is this bridge failing to run the script at all —
+        // not the protocol refusing. Fail open.
+<span class="nc bnc" id="L92" title="All 2 branches missed.">        if (confirmed.exitCode() &lt; 0) {</span>
+<span class="nc" id="L93">            return new Decision(Verdict.NOT_APPLICABLE, &quot;&quot;);</span>
+        }
+<span class="nc" id="L95">        return new Decision(Verdict.FENCED, confirmed.output().trim());</span>
+    }
+
+    /**
+     * Locates the lease script, requiring the machine identity beside it.
+     *
+     * @return the script path, or {@code null} when this machine has no
+     *         lease machinery
+     */
+    private static Path script() {
+<span class="fc" id="L105">        String home = System.getProperty(&quot;user.home&quot;);</span>
+<span class="pc bpc" id="L106" title="1 of 2 branches missed.">        if (home == null) {</span>
+<span class="nc" id="L107">            return null;</span>
+        }
+<span class="fc" id="L109">        Path script = Path.of(home, &quot;ike-dev&quot;, &quot;scripts&quot;, &quot;lease.sh&quot;);</span>
+<span class="fc" id="L110">        Path identity = Path.of(home, &quot;.ike-machine-id&quot;);</span>
+<span class="pc bpc" id="L111" title="2 of 4 branches missed.">        return Files.isExecutable(script) &amp;&amp; Files.exists(identity) ? script : null;</span>
+    }
+
+    private static Result run(Path script, long timeoutSeconds, String... args) {
+        try {
+<span class="fc" id="L116">            Process process = new ProcessBuilder(</span>
+<span class="fc" id="L117">                    concat(script.toString(), args))</span>
+<span class="fc" id="L118">                    .redirectErrorStream(true)</span>
+<span class="fc" id="L119">                    .start();</span>
+<span class="fc" id="L120">            StringBuilder output = new StringBuilder();</span>
+<span class="fc" id="L121">            try (BufferedReader reader = new BufferedReader(new InputStreamReader(</span>
+<span class="fc" id="L122">                    process.getInputStream(), StandardCharsets.UTF_8))) {</span>
+                String line;
+<span class="pc bpc" id="L124" title="1 of 2 branches missed.">                while ((line = reader.readLine()) != null) {</span>
+<span class="nc" id="L125">                    output.append(line).append('\n');</span>
+                }
+            }
+<span class="pc bpc" id="L128" title="1 of 2 branches missed.">            if (!process.waitFor(timeoutSeconds, TimeUnit.SECONDS)) {</span>
+<span class="nc" id="L129">                process.destroyForcibly();</span>
+<span class="nc" id="L130">                return new Result(-1, output.toString());</span>
+            }
+<span class="fc" id="L132">            return new Result(process.exitValue(), output.toString());</span>
+<span class="nc" id="L133">        } catch (IOException e) {</span>
+<span class="nc" id="L134">            return new Result(-1, &quot;&quot;);</span>
+<span class="nc" id="L135">        } catch (InterruptedException e) {</span>
+<span class="nc" id="L136">            Thread.currentThread().interrupt();</span>
+<span class="nc" id="L137">            return new Result(-1, &quot;&quot;);</span>
+        }
+    }
+
+    private static List&lt;String&gt; concat(String head, String... tail) {
+<span class="fc" id="L142">        java.util.ArrayList&lt;String&gt; command = new java.util.ArrayList&lt;&gt;();</span>
+<span class="fc" id="L143">        command.add(head);</span>
+<span class="fc" id="L144">        command.addAll(List.of(tail));</span>
+<span class="fc" id="L145">        return command;</span>
+    }
+
+<span class="fc" id="L148">    private record Result(int exitCode, String output) { }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

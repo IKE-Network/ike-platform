@@ -12,6 +12,6 @@ canonical_url: https://ike.network/ike-platform/ike-workspace-maven-plugin/depen
 <plugin>
   <groupId>network.ike.platform</groupId>
   <artifactId>ike-workspace-maven-plugin</artifactId>
-  <version>171</version>
+  <version>172</version>
 </plugin>
 ```

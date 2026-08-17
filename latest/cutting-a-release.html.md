@@ -27,7 +27,7 @@ Any release runs **two ways** behind the same engine (`ike:release-publish` / `w
 | --- | --- |
 | Single-repo release (`mvn ike:release-publish`) | You’re inside one repo and want to ship just that repo’s artifact. Used for one-off promotions of a single workspace subproject, or when a single foundation repo has changes that need to ship in isolation. |
 | Foundation cascade (`mvn ike:release-cascade`) | From any foundation repo, walk `ike-tooling → ike-docs → ike-platform` as sibling checkouts and release each one that has unreleased changes. The order is assembled from each repo’s own `src/main/cascade/release-cascade.yaml`; `ike:release-publish` aligns each repo to its upstreams before cutting its release. ike-issues#375. |
-| Workspace cascade (`mvn ws:release-publish`) | You’re inside a workspace aggregator (a `-ws` repo) and want to release every subproject whose source has changed since its last tag, in topological order. Each subproject runs through `ike:release-publish` internally; the workspace root tags itself last so the cycle has a single anchor. |
+| Workspace cascade (`mvn ws:release-publish`) | You’re inside a workspace aggregator (a `-ws` repo) and want to release every subproject whose source has changed since its last tag, in topological order. Each subproject runs through `ike:release-publish` internally; the workspace root tags itself last so the mission has a single anchor. |
 
 ## [#cascade-order-across-the-ike-network](#cascade-order-across-the-ike-network)Cascade order across the IKE Network
 
@@ -35,7 +35,7 @@ Any release runs **two ways** behind the same engine (`ike:release-publish` / `w
 ike-tooling  →  ike-docs  →  ike-platform  →  { downstream consumers }
 ```
 
-Always upstream-first. `ike-docs` consumes `ike-tooling’s `ike-maven-plugin`. `ike-platform’s `ike-parent` consumes both. Downstream consumer repos (workspace aggregators, doc-only projects, ike-example-its) inherit from `ike-parent`. Every release of an upstream causes a property bump in everything downstream — that bump is what triggers a downstream release in the same cycle.
+Always upstream-first. `ike-docs` consumes `ike-tooling’s `ike-maven-plugin`. `ike-platform’s `ike-parent` consumes both. Downstream consumer repos (workspace aggregators, doc-only projects, ike-example-its) inherit from `ike-parent`. Every release of an upstream causes a property bump in everything downstream — that bump is what triggers a downstream release in the same mission.
 
 This cascade is **structural**, not driven by extension-realm timing. See [Design rationale](index.html#design_rationale)[1] on the overview page for why no plugin in this ecosystem uses `<extensions>true</extensions>`.
 
@@ -151,7 +151,7 @@ The goal hits six public-URL targets in one pass and reports green/red for each.
 
 ### [#workspace-root-release-runs-last-in-ws-release-pub](#workspace-root-release-runs-last-in-ws-release-pub)Workspace-root release runs LAST in `ws:release-publish`
 
-After every subproject in the cascade tags, the workspace root itself tags — anchoring the cycle to a single commit on the workspace’s main. Don’t be surprised by the extra commit at the end. It’s intentional (ike-issues#326, #328).
+After every subproject in the cascade tags, the workspace root itself tags — anchoring the mission to a single commit on the workspace’s main. Don’t be surprised by the extra commit at the end. It’s intentional (ike-issues#326, #328).
 
 The workspace root release is gated on `hasUnreleasedWorkspaceChanges(root)` — it only runs if the workspace has its own meaningful commits since its last tag.
 

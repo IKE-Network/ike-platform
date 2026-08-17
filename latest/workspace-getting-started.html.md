@@ -218,7 +218,7 @@ mvn ike:scaffold-publish   # apply (post-#348)
 
 The scaffold zip embeds the foundation versions ike-tooling captured at its release moment — parent, `ike-tooling.version`, `ike-docs.version`, `ike-platform.version` — so a single command bumps everything together.
 
-For specific-version overrides (testing against an older `ike-parent`, partial-cycle rollback), pin the parent version explicitly on `ws:scaffold-publish`:
+For specific-version overrides (testing against an older `ike-parent`, partial-mission rollback), pin the parent version explicitly on `ws:scaffold-publish`:
 
 ```
 mvn ws:scaffold-draft -DparentVersion=22    # preview cascade pinned to parent 22

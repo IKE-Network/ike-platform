@@ -27,15 +27,15 @@ import java.util.Set;
  * @param parentVersion target parent version for set-parent checks,
  *                      or {@code null}
  * @param releaseSet    names of the members releasing in the current
- *                      cycle, for release-set-aware conditions
+ *                      mission, for release-set-aware conditions
  *                      (ike-issues#981) — {@code null} when the invoking
- *                      goal has no release-cycle notion
- * @param cycleReleasedArtifacts {@code groupId:artifactId} keys of the
- *                      artifacts the current cycle's release plan
+ *                      goal has no release-mission notion
+ * @param missionReleasedArtifacts {@code groupId:artifactId} keys of the
+ *                      artifacts the current mission's release plan
  *                      de-qualifies — every reference to one of them is
  *                      retargeted by the version pass, so snapshot
  *                      references to them must not refuse the release
- *                      (ike-issues#1022); empty when no cycle is running
+ *                      (ike-issues#1022); empty when no mission is running
  */
 public record PreflightContext(
         File workspaceRoot,
@@ -45,8 +45,8 @@ public record PreflightContext(
         String tagName,
         String parentVersion,
         Set<String> releaseSet,
-        Set<String> cycleResolvedProperties,
-        Set<String> cycleReleasedArtifacts) {
+        Set<String> missionResolvedProperties,
+        Set<String> missionReleasedArtifacts) {
 
     /** Minimal context for conditions that only need root + subproject list. */
     public static PreflightContext of(File root,
@@ -57,15 +57,15 @@ public record PreflightContext(
     }
 
     /**
-     * Context for the release preflight — carries this cycle's release
-     * set so conditions can exempt what the cycle itself resolves
+     * Context for the release preflight — carries this mission's release
+     * set so conditions can exempt what the mission itself resolves
      * (ike-issues#981).
      *
      * @param root        the workspace root directory
      * @param graph       the loaded workspace graph
      * @param subprojects subproject names (topological order) to evaluate
-     * @param releaseSet  names of the members releasing this cycle
-     * @return the release-cycle context
+     * @param releaseSet  names of the members releasing this mission
+     * @return the release-mission context
      */
     public static PreflightContext of(File root,
                                        WorkspaceGraph graph,
@@ -76,9 +76,9 @@ public record PreflightContext(
     }
 
     /**
-     * Context for the release preflight, carrying both this cycle's
-     * release set and the version properties the cycle's own release
-     * plan rewrites. The plan is the authority on what the cycle
+     * Context for the release preflight, carrying both this mission's
+     * release set and the version properties the mission's own release
+     * plan rewrites. The plan is the authority on what the mission
      * resolves: a property it de-qualifies never reaches a released
      * POM as a SNAPSHOT, whatever the manifest does or does not
      * declare about it (ike-issues#1004).
@@ -88,53 +88,53 @@ public record PreflightContext(
      * @param subprojects              subproject names (topological
      *                                 order) to evaluate
      * @param releaseSet               names of the members releasing
-     *                                 this cycle
-     * @param cycleResolvedProperties  {@code <subproject>::<property>}
+     *                                 this mission
+     * @param missionResolvedProperties  {@code <subproject>::<property>}
      *                                 keys the release plan rewrites
-     * @return the release-cycle context
+     * @return the release-mission context
      */
     public static PreflightContext of(File root,
                                        WorkspaceGraph graph,
                                        List<String> subprojects,
                                        Set<String> releaseSet,
-                                       Set<String> cycleResolvedProperties) {
+                                       Set<String> missionResolvedProperties) {
         return new PreflightContext(root, graph, subprojects,
                 null, null, null, releaseSet,
-                cycleResolvedProperties == null
-                        ? Set.of() : cycleResolvedProperties, Set.of());
+                missionResolvedProperties == null
+                        ? Set.of() : missionResolvedProperties, Set.of());
     }
 
     /**
      * Context for the release preflight, carrying the release set, the
-     * version properties the cycle's plan rewrites (ike-issues#1004),
-     * and the artifacts the cycle releases (ike-issues#1022). The plan
+     * version properties the mission's plan rewrites (ike-issues#1004),
+     * and the artifacts the mission releases (ike-issues#1022). The plan
      * remains the authority on both exemption channels: a property it
      * rewrites and a reference to an artifact it de-qualifies are each
-     * resolved by the cycle before anything deploys.
+     * resolved by the mission before anything deploys.
      *
      * @param root                     the workspace root directory
      * @param graph                    the loaded workspace graph
      * @param subprojects              subproject names (topological
      *                                 order) to evaluate
      * @param releaseSet               names of the members releasing
-     *                                 this cycle
-     * @param cycleResolvedProperties  {@code <subproject>::<property>}
+     *                                 this mission
+     * @param missionResolvedProperties  {@code <subproject>::<property>}
      *                                 keys the release plan rewrites
-     * @param cycleReleasedArtifacts   {@code groupId:artifactId} keys
+     * @param missionReleasedArtifacts   {@code groupId:artifactId} keys
      *                                 the release plan de-qualifies
-     * @return the release-cycle context
+     * @return the release-mission context
      */
     public static PreflightContext of(File root,
                                        WorkspaceGraph graph,
                                        List<String> subprojects,
                                        Set<String> releaseSet,
-                                       Set<String> cycleResolvedProperties,
-                                       Set<String> cycleReleasedArtifacts) {
+                                       Set<String> missionResolvedProperties,
+                                       Set<String> missionReleasedArtifacts) {
         return new PreflightContext(root, graph, subprojects,
                 null, null, null, releaseSet,
-                cycleResolvedProperties == null
-                        ? Set.of() : cycleResolvedProperties,
-                cycleReleasedArtifacts == null
-                        ? Set.of() : cycleReleasedArtifacts);
+                missionResolvedProperties == null
+                        ? Set.of() : missionResolvedProperties,
+                missionReleasedArtifacts == null
+                        ? Set.of() : missionReleasedArtifacts);
     }
 }

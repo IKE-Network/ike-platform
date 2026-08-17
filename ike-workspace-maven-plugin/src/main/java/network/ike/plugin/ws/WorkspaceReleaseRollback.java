@@ -13,29 +13,29 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Rolls a working set back from a failed release cycle
+ * Rolls a working set back from a failed release mission
  * (IKE-Network/ike-issues#1010) — the mechanized form of the hand
- * resets that a mid-cycle failure previously demanded across every
+ * resets that a mid-mission failure previously demanded across every
  * repository.
  *
- * <p>A cycle's local footprint is exactly its release-cadence commits
+ * <p>A mission's local footprint is exactly its release-cadence commits
  * ({@code release: set version to …}, {@code post-release: bump to …},
  * the alignment and manifest-sync subjects) plus any tags pointing at
  * them. Rollback walks each repository's <em>unpushed</em> range from
  * {@code HEAD} downward, discarding consecutive cadence commits and
  * the local tags on them, and resets to the first non-cadence commit.
  * Pushed history is never touched: a cadence commit already on origin
- * belongs to a completed cycle, and a failed cycle that got as far as
+ * belongs to a completed mission, and a failed mission that got as far as
  * pushing is a publication event a human must judge.
  *
  * <p>Refusals (per repository, and the publish is all-or-nothing over
  * the set): a working tree with uncommitted changes, no upstream to
- * define the unpushed range, or cycle commits buried beneath later
+ * define the unpushed range, or mission commits buried beneath later
  * non-cadence work — each names the repository and the remediation.
  */
 final class WorkspaceReleaseRollback {
 
-    /** Subjects the release cycle authors; anything else is work. */
+    /** Subjects the release mission authors; anything else is work. */
     private static final List<String> CADENCE_PREFIXES = List.of(
             "release: set version to ",
             "post-release: bump to ",
@@ -103,7 +103,7 @@ final class WorkspaceReleaseRollback {
         for (int i = walked; i < unpushed.size(); i++) {
             if (isCadence(subjectOf(unpushed.get(i)))) {
                 return new RepoPlan(name, dir, null, List.of(), List.of(),
-                        "cycle commits buried beneath later work ("
+                        "mission commits buried beneath later work ("
                                 + subjectOf(unpushed.get(walked))
                                 + " sits above them) — resolve by hand");
             }

@@ -19,7 +19,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Release-set awareness of {@link PreflightCondition#NO_SNAPSHOT_PROPERTIES}
  * (ike-issues#981): a SNAPSHOT property that is the manifest-declared
  * {@code version-property} hint of an edge whose target releases in the
- * current cycle is resolved by the loop's catch-up alignment and must not
+ * current mission is resolved by the loop's catch-up alignment and must not
  * fail the gate; every other SNAPSHOT property keeps failing.
  */
 class SnapshotPropertyReleaseSetTest {

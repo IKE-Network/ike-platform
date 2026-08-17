@@ -102,9 +102,9 @@ class WorkspaceReleaseRollbackTest {
     }
 
     @Test
-    void cycle_commits_buried_under_later_work_refuse() throws Exception {
+    void mission_commits_buried_under_later_work_refuse() throws Exception {
         commit("release: set version to 2.0.0");
-        commit("fix: something after the failed cycle");
+        commit("fix: something after the failed mission");
 
         WorkspaceReleaseRollback.RepoPlan plan =
                 WorkspaceReleaseRollback.plan("member", repo);

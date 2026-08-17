@@ -38,9 +38,9 @@ import java.util.regex.Pattern;
  *       {@code version:} field pinned at the released version, so
  *       alignment targets the pin and the release cascade excludes the
  *       member.</li>
- *   <li><b>releases/release-&lt;cycle&gt;.yaml</b> — the member's row
- *       (version, tag, sha, recorded date) appends to the cycle's
- *       record; one file per cycle, finalized by the cycle's
+ *   <li><b>releases/release-&lt;mission&gt;.yaml</b> — the member's row
+ *       (version, tag, sha, recorded date) appends to the mission's
+ *       record; one file per mission, finalized by the mission's
  *       workspace-root release.</li>
  * </ul>
  *
@@ -48,12 +48,12 @@ import java.util.regex.Pattern;
  * checked-out members whose tip {@code v*} tag is not yet reflected by
  * a tag-aligned pin. With {@code -Dmember}, it previews the exact
  * transition. {@code ws:record-release-publish} requires both
- * {@code -Dmember} and {@code -Dcycle} and applies it.
+ * {@code -Dmember} and {@code -Dmission} and applies it.
  *
  * <pre>{@code
  * mvn ws:record-release-draft                                  # list candidates
  * mvn ws:record-release-draft -Dmember=komet-bom               # preview
- * mvn ws:record-release-publish -Dmember=komet-bom -Dcycle=komet-wsr-1
+ * mvn ws:record-release-publish -Dmember=komet-bom -Dmission=komet-wsr-1
  * }</pre>
  *
  * @see WsRecordReleasePublishMojo
@@ -61,8 +61,8 @@ import java.util.regex.Pattern;
 @Mojo(name = "record-release-draft", projectRequired = false, aggregator = true)
 public class WsRecordReleaseDraftMojo extends AbstractWorkspaceMojo {
 
-    /** Path-safe cycle labels: no separators, no traversal. */
-    private static final Pattern CYCLE_PATTERN =
+    /** Path-safe mission labels: no separators, no traversal. */
+    private static final Pattern MISSION_PATTERN =
             Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]*");
 
     /**
@@ -73,12 +73,21 @@ public class WsRecordReleaseDraftMojo extends AbstractWorkspaceMojo {
     String member;
 
     /**
-     * The release-cycle label naming the record file
-     * ({@code releases/release-<cycle>.yaml}), e.g. {@code komet-wsr-1}.
+     * The release-mission label naming the record file
+     * ({@code releases/release-<mission>.yaml}), e.g. {@code komet-wsr-1}.
      * Required for publish.
      */
+    @Parameter(property = "mission")
+    String mission;
+
+    /**
+     * Deprecated spelling of {@link #mission} from before the
+     * cycle-to-mission rename (IKE-Network/ike-issues#1038). Honoured
+     * with a deprecation warning when {@code -Dmission} is absent;
+     * removed after one platform generation.
+     */
     @Parameter(property = "cycle")
-    String cycle;
+    String missionDeprecatedCycle;
 
     /**
      * When true, apply the transition; when false (default), preview.
@@ -92,6 +101,13 @@ public class WsRecordReleaseDraftMojo extends AbstractWorkspaceMojo {
 
     @Override
     protected WorkspaceReportSpec runGoal() throws MojoException {
+        if ((mission == null || mission.isBlank())
+                && missionDeprecatedCycle != null
+                && !missionDeprecatedCycle.isBlank()) {
+            getLog().warn("-Dcycle is deprecated — the release iteration"
+                    + " is a mission; use -Dmission (ike-issues#1038).");
+            mission = missionDeprecatedCycle;
+        }
         WorkspaceGraph graph = loadGraph();
         File root = workspaceRoot();
         WsGoal goal = publish ? WsGoal.RECORD_RELEASE_PUBLISH
@@ -168,28 +184,28 @@ public class WsRecordReleaseDraftMojo extends AbstractWorkspaceMojo {
         }
 
         if (!publish) {
-            String cycleShown = (cycle == null || cycle.isBlank())
-                    ? "<cycle>" : cycle;
+            String missionShown = (mission == null || mission.isBlank())
+                    ? "<mission>" : mission;
             report.append("Apply with:\n\n```\nmvn ")
                     .append(WsGoal.RECORD_RELEASE_PUBLISH.qualified())
                     .append(" -Dmember=").append(member)
-                    .append(" -Dcycle=").append(cycleShown)
+                    .append(" -Dmission=").append(missionShown)
                     .append("\n```\n");
             return new WorkspaceReportSpec(goal, report.toString());
         }
 
         // ── Publish ────────────────────────────────────────────────────
-        if (cycle == null || cycle.isBlank()) {
-            throw new MojoException("-Dcycle is required for "
-                    + goal.qualified() + " — e.g. -Dcycle=komet-wsr-1.");
+        if (mission == null || mission.isBlank()) {
+            throw new MojoException("-Dmission is required for "
+                    + goal.qualified() + " — e.g. -Dmission=komet-wsr-1.");
         }
-        if (!CYCLE_PATTERN.matcher(cycle).matches()) {
-            throw new MojoException("Invalid cycle label '" + cycle
+        if (!MISSION_PATTERN.matcher(mission).matches()) {
+            throw new MojoException("Invalid mission label '" + mission
                     + "' — use letters, digits, dot, dash, underscore.");
         }
 
         Path manifestPath = resolveManifest();
-        Path recordPath = ReleaseRecordFile.pathFor(root.toPath(), cycle);
+        Path recordPath = ReleaseRecordFile.pathFor(root.toPath(), mission);
         String recordRelPath = root.toPath().relativize(recordPath)
                 .toString();
 
@@ -216,7 +232,7 @@ public class WsRecordReleaseDraftMojo extends AbstractWorkspaceMojo {
 
             ReleaseRecord record = Files.exists(recordPath)
                     ? ReleaseRecordFile.read(recordPath)
-                    : ReleaseRecord.start(cycle, today);
+                    : ReleaseRecord.start(mission, today);
             record = record.withMember(member,
                     new ReleaseRecord.MemberRelease(version, tag, sha, today));
             ReleaseRecordFile.write(recordPath, record);
@@ -236,7 +252,7 @@ public class WsRecordReleaseDraftMojo extends AbstractWorkspaceMojo {
             }
         }
 
-        report.append("Recorded in cycle `").append(cycle).append("` (")
+        report.append("Recorded in mission `").append(mission).append("` (")
                 .append(recordRelPath).append(").\n");
         return new WorkspaceReportSpec(goal, report.toString());
     }
@@ -283,7 +299,7 @@ public class WsRecordReleaseDraftMojo extends AbstractWorkspaceMojo {
         }
         report.append("\nRecord one with:\n\n```\nmvn ")
                 .append(WsGoal.RECORD_RELEASE_PUBLISH.qualified())
-                .append(" -Dmember=<name> -Dcycle=<cycle>\n```\n");
+                .append(" -Dmember=<name> -Dmission=<mission>\n```\n");
         return report.toString();
     }
 

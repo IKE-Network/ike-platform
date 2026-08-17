@@ -63,14 +63,14 @@ import java.util.stream.Stream;
  * order. Before each subproject's release, a single
  * <em>catch-up alignment commit</em> bumps every workspace-internal
  * upstream version reference (parent and {@code <X.version>} property)
- * to the upstream's current target version — this-cycle's new version
- * if the upstream is releasing this cycle, otherwise the upstream's
+ * to the upstream's current target version — this-mission's new version
+ * if the upstream is releasing this mission, otherwise the upstream's
  * current published version on disk. All upstream bumps for a single
  * subproject batch into one commit (never two).</p>
  *
  * <p>Catch-up never expands the release set: a subproject with stale
  * upstream properties but no source changes <em>and</em> no upstream
- * releasing in this cycle is not pulled in.</p>
+ * releasing in this mission is not pulled in.</p>
  *
  * <p>If catch-up alignment fails for any subproject (POM rewrite or
  * commit error), the release halts at that subproject with a
@@ -98,7 +98,7 @@ import java.util.stream.Stream;
  *       leakage class of bug at its source (see issues #175, #177).</li>
  *   <li>{@link PreflightCondition#NO_EXTERNAL_SNAPSHOT_DEPENDENCIES} —
  *       no releasing member's POMs may carry a literal
- *       {@code -SNAPSHOT} version the cycle neither releases nor
+ *       {@code -SNAPSHOT} version the mission neither releases nor
  *       retargets. The literal complement of the property gate:
  *       komet-desktop shipped two releases pinning a never-released
  *       external snapshot inside OS profiles (ike-issues#1021), which
@@ -179,38 +179,47 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
                     + "\n\nRefs: IKE-Network/ike-issues#377";
 
     /**
-     * The release-cycle label naming the record file
-     * ({@code releases/release-<cycle>.yaml}) and the tag messages.
+     * The release-mission label naming the record file
+     * ({@code releases/release-<mission>.yaml}) and the tag messages.
      * Defaults to {@code <root-artifactId>-<root-release-version>}.
      * An explicit label that diverges from that canonical form warns at
-     * draft and refuses at publish unless {@link #acceptCycleLabel}
+     * draft and refuses at publish unless {@link #acceptMissionLabel}
      * confirms it — the delivery chain resolves the record by the
      * canonical name, so a drifted label silently breaks downstream
      * publishing (IKE-Network/ike-issues#1035).
      */
-    @Parameter(property = "cycle")
-    String cycleLabel;
+    @Parameter(property = "mission")
+    String missionLabel;
 
     /**
-     * Confirms a deliberately non-canonical {@link #cycleLabel}.
+     * Deprecated spelling of {@link #missionLabel} from before the
+     * cycle-to-mission rename (IKE-Network/ike-issues#1038). Honoured
+     * with a deprecation warning when {@code -Dmission} is absent;
+     * removed after one platform generation.
+     */
+    @Parameter(property = "cycle")
+    String cycleLabelDeprecated;
+
+    /**
+     * Confirms a deliberately non-canonical {@link #missionLabel}.
      * Without it, an explicit label that diverges from
      * {@code <root-artifactId>-<root-release-version>} refuses at
      * publish (IKE-Network/ike-issues#1035).
      */
-    @Parameter(property = "acceptCycleLabel", defaultValue = "false")
-    boolean acceptCycleLabel;
+    @Parameter(property = "acceptMissionLabel", defaultValue = "false")
+    boolean acceptMissionLabel;
 
     /**
-     * Skip tests in the cycle's reactor verify. The verify is the one
+     * Skip tests in the mission's reactor verify. The verify is the one
      * full build of the working set at release versions; tests run
-     * there by default because nothing else in the cycle runs them.
+     * there by default because nothing else in the mission runs them.
      */
     @Parameter(property = "skipCycleTests", defaultValue = "false")
     boolean skipCycleTests;
 
     /**
      * How this working set names release tags, in both directions —
-     * the tags the cycle writes and the tags detection reads back as
+     * the tags the mission writes and the tags detection reads back as
      * "the last release". Workspaces whose members are repositories
      * IKE does not own must follow those repositories' own convention:
      * the komet working set's ikmdev members carry bare version tags,
@@ -285,7 +294,7 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
         // Both modes compute the alignment plan; only publish applies
         // it (drafts preview, never mutate). The draft reports the
         // plan and folds planned members into the release set below,
-        // so draft and publish describe the same cycle
+        // so draft and publish describe the same mission
         // (ike-issues#1000 finding 1).
         Map<String, List<String>> alignmentPlan =
                 computeUpstreamAlignmentPlan(graph, root);
@@ -303,7 +312,7 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
 
         // (The release preflight runs AFTER release-set detection — see
         //  below — so NO_SNAPSHOT_PROPERTIES can exempt properties this
-        //  cycle's own catch-up alignment resolves, ike-issues#981.
+        //  mission's own catch-up alignment resolves, ike-issues#981.
         //  Detection is read-only, so the reorder mutates nothing
         //  earlier than before.)
 
@@ -359,7 +368,7 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
             }
 
             // A planned-but-unapplied upstream alignment is a change
-            // this cycle WILL make (publish commits it before this
+            // this mission WILL make (publish commits it before this
             // detection runs). Folding it in here keeps the draft's
             // release set identical to the publish's
             // (ike-issues#1000 finding 1).
@@ -382,7 +391,7 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
         // so its parent/property references can pick up the new upstream
         // version. Catch-up never expands the release set: subprojects
         // with stale properties but no source change and no upstream in
-        // this cycle stay out.
+        // this mission stay out.
         Set<String> releaseSet = computeReleaseSet(graph, sourceChanged);
         for (String name : releaseSet) {
             if (releasable.containsKey(name)) continue;
@@ -426,7 +435,7 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
         //                                          release-set-aware
         //                                          since #981
         //   NO_EXTERNAL_SNAPSHOT_DEPENDENCIES    — literal snapshot
-        //                                          references the cycle
+        //                                          references the mission
         //                                          neither releases nor
         //                                          retargets (#1022)
         //   SUBPROJECT_HAS_DISTRIBUTION_MANAGEMENT — site:stage gate
@@ -438,15 +447,15 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
         //                                          newer goals
         //   PARENT_COHERENCE                     — #324 release gate
         //                                          form
-        // Runs after detection so the context can carry this cycle's
+        // Runs after detection so the context can carry this mission's
         // release set (#981): a SNAPSHOT property tracking a member
-        // that releases in this cycle is resolved by the loop's
+        // that releases in this mission is resolved by the loop's
         // catch-up alignment before its consumer releases, and must
         // not refuse the publish.
         // ── 2b. Topological order + release plan ─────────────────────
         // The plan is pure computation over the checked-out POMs, and
         // the preflight needs it: only the plan knows which version
-        // properties this cycle de-qualifies (ike-issues#1004). It is
+        // properties this mission de-qualifies (ike-issues#1004). It is
         // logged and written further down, where the report reads.
         List<String> releaseOrder = graph.topologicalSort().stream()
                 .filter(releasable::containsKey)
@@ -458,17 +467,17 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
             throw new MojoException(
                     "Release plan compute failed: " + e.getMessage(), e);
         }
-        Set<String> cycleResolvedProperties = new LinkedHashSet<>();
+        Set<String> missionResolvedProperties = new LinkedHashSet<>();
         for (ReleasePlan.PropertyReleasePlan property : plan.properties()) {
-            cycleResolvedProperties.add(property.declaringSubproject()
+            missionResolvedProperties.add(property.declaringSubproject()
                     + "::" + property.propertyName());
         }
         // The artifacts the plan de-qualifies: references to them are
         // retargeted by the version pass, so the external-snapshot gate
         // (ike-issues#1022) must not refuse them.
-        Set<String> cycleReleasedArtifacts = new LinkedHashSet<>();
+        Set<String> missionReleasedArtifacts = new LinkedHashSet<>();
         for (ReleasePlan.GA ga : plan.artifacts().keySet()) {
-            cycleReleasedArtifacts.add(ga.toString());
+            missionReleasedArtifacts.add(ga.toString());
         }
 
         PreflightResult releasePreflight = Preflight.of(
@@ -481,8 +490,8 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
                         PreflightCondition.NO_FOUNDATION_PROPERTY_SHADOWING,
                         PreflightCondition.PARENT_COHERENCE),
                 PreflightContext.of(root, graph, candidates,
-                        releasable.keySet(), cycleResolvedProperties,
-                        cycleReleasedArtifacts));
+                        releasable.keySet(), missionResolvedProperties,
+                        missionReleasedArtifacts));
         if (draft) {
             releasePreflight.warnIfFailed(getLog(), WsGoal.RELEASE_PUBLISH);
         } else {
@@ -510,10 +519,10 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
         logReleasePlan(plan);
         writeReleasePlan(root, plan);
 
-        // ── 4b. Reactor-pass cycle (ike-issues#997) ───────────────────
+        // ── 4b. Reactor-pass mission (ike-issues#997) ───────────────────
         // One version pass, one reactor verify, deploy scoped to the
         // releasing set, tags per repository, published at the
-        // working-set level. The draft describes the cycle leniently —
+        // working-set level. The draft describes the mission leniently —
         // an assembly problem (missing root POM, underivable version)
         // becomes a report line, because a draft is a preview; the
         // publish assembles strictly and fails fast.
@@ -522,13 +531,13 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
         if (draft) {
             getLog().info("");
             try {
-                WorkspaceReleaseCycle preview = buildCycle(releaseOrder,
+                WorkspaceReleaseMission preview = buildMission(releaseOrder,
                         releasable, plan, root);
                 for (String line : preview.describe(mvnLauncher)) {
                     getLog().info(line);
                 }
             } catch (Exception assembly) {
-                getLog().warn("  ⚠ Cycle assembly would fail on publish: "
+                getLog().warn("  ⚠ Mission assembly would fail on publish: "
                         + assembly.getMessage());
             }
             getLog().info("");
@@ -537,7 +546,7 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
                     buildReleasePlanMarkdownReport(releaseOrder, releasable));
         }
 
-        WorkspaceReleaseCycle cycle = buildCycle(releaseOrder, releasable,
+        WorkspaceReleaseMission mission = buildMission(releaseOrder, releasable,
                 plan, root);
 
         // ── 5. Pre-release checkpoint ─────────────────────────────────
@@ -549,18 +558,18 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
             writeCheckpoint(root, graph, checkpointName);
         }
 
-        // ── 6. Execute the reactor-pass cycle (ike-issues#997) ────────
+        // ── 6. Execute the reactor-pass mission (ike-issues#997) ────────
         // One version pass across every releasing repository, one
         // reactor verify at release versions, deploy scoped to the
-        // releasing set, tags per repository, the cycle record in the
+        // releasing set, tags per repository, the mission record in the
         // root's release commit, post-bump, push. The commit subjects
-        // are release-cadence forms, so an interrupted cycle's re-run
+        // are release-cadence forms, so an interrupted mission's re-run
         // never counts them as source changes.
         Map<String, String> releasedVersions;
         try {
-            releasedVersions = cycle.execute(mvnLauncher, skipCycleTests);
+            releasedVersions = mission.execute(mvnLauncher, skipCycleTests);
         } catch (MojoException e) {
-            getLog().error(Ansi.red("  ✗ ") + "Release cycle failed: "
+            getLog().error(Ansi.red("  ✗ ") + "Release mission failed: "
                     + e.getMessage());
             getLog().error("  Roll forward: fix the cause and re-run —"
                     + " completed phases resume, they do not repeat.");
@@ -612,34 +621,43 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
     }
 
     /**
-     * Assemble the reactor-pass cycle (ike-issues#997) from the detected
+     * Assemble the reactor-pass mission (ike-issues#997) from the detected
      * release set: every releasing member plus the workspace root, which
-     * releases each cycle as the record's anchor (one cycle, one root
+     * releases each mission as the record's anchor (one mission, one root
      * increment).
      *
      * @param releaseOrder releasing member names in dependency order
      * @param releasable   the detected release candidates
      * @param plan         the computed release plan
      * @param root         the workspace root directory
-     * @return the executable cycle
+     * @return the executable mission
      */
-    private WorkspaceReleaseCycle buildCycle(List<String> releaseOrder,
+    private WorkspaceReleaseMission buildMission(List<String> releaseOrder,
             Map<String, ReleaseCandidate> releasable, ReleasePlan plan,
             File root) {
-        List<WorkspaceReleaseCycle.ReleasingRepo> repos = new ArrayList<>();
+        List<WorkspaceReleaseMission.ReleasingRepo> repos = new ArrayList<>();
         for (String name : releaseOrder) {
             repos.add(releasingRepo(name, releasable.get(name).dir));
         }
-        WorkspaceReleaseCycle.ReleasingRepo rootRepo =
+        WorkspaceReleaseMission.ReleasingRepo rootRepo =
                 releasingRepo("(workspace root)", root);
         String canonical =
                 rootRepo.artifactId() + "-" + rootRepo.releaseVersion();
-        String label = (cycleLabel != null && !cycleLabel.isBlank())
-                ? cycleLabel
+        String explicit = missionLabel;
+        if ((explicit == null || explicit.isBlank())
+                && cycleLabelDeprecated != null
+                && !cycleLabelDeprecated.isBlank()) {
+            getLog().warn("-Dcycle is deprecated — the release iteration"
+                    + " is a mission; use -Dmission"
+                    + " (ike-issues#1038).");
+            explicit = cycleLabelDeprecated;
+        }
+        String label = (explicit != null && !explicit.isBlank())
+                ? explicit
                 : canonical;
-        guardCycleLabel(label, canonical, publish, acceptCycleLabel,
+        guardMissionLabel(label, canonical, publish, acceptMissionLabel,
                 getLog());
-        return new WorkspaceReleaseCycle(root, repos, rootRepo, plan,
+        return new WorkspaceReleaseMission(root, repos, rootRepo, plan,
                 label, java.time.LocalDate.now().toString(), tagStyle,
                 getLog(),
                 (dir, command) ->
@@ -647,37 +665,37 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
     }
 
     /**
-     * Refuse (publish) or warn about (draft) a cycle label that
+     * Refuse (publish) or warn about (draft) a mission label that
      * diverges from the canonical
      * {@code <root artifactId>-<root release version>}. The delivery
-     * chain resolves the cycle record by the canonical name, so a
+     * chain resolves the mission record by the canonical name, so a
      * drifted label publishes the release against a stale record
-     * (IKE-Network/ike-issues#1035 — cycle 6 shipped with cycle 5's
+     * (IKE-Network/ike-issues#1035 — mission 6 shipped with mission 5's
      * release body this way). Static and pure for direct unit testing.
      *
-     * @param label     the resolved cycle label
-     * @param canonical the canonical label for this cycle
+     * @param label     the resolved mission label
+     * @param canonical the canonical label for this mission
      * @param publish   whether this run publishes (refuse) or drafts
      *                  (warn)
      * @param accepted  whether the operator confirmed the divergence
-     *                  ({@code -DacceptCycleLabel=true})
+     *                  ({@code -DacceptMissionLabel=true})
      * @param log       Maven logger for the draft warning
      * @throws MojoException when publishing with an unconfirmed
      *                       divergent label
      */
-    static void guardCycleLabel(String label, String canonical,
+    static void guardMissionLabel(String label, String canonical,
             boolean publish, boolean accepted, Log log)
             throws MojoException {
         if (label.equals(canonical) || accepted) {
             return;
         }
-        String message = "Cycle label `" + label + "` diverges from the"
+        String message = "Mission label `" + label + "` diverges from the"
                 + " canonical `" + canonical + "` — the delivery chain"
                 + " resolves the record releases/release-" + canonical
                 + ".yaml by that name, so a drifted label publishes"
                 + " against a stale record (ike-issues#1035). Omit"
-                + " -Dcycle to use the canonical label, or confirm the"
-                + " custom label with -DacceptCycleLabel=true.";
+                + " -Dmission to use the canonical label, or confirm the"
+                + " custom label with -DacceptMissionLabel=true.";
         if (publish) {
             throw new MojoException(message);
         }
@@ -685,16 +703,16 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
     }
 
     /**
-     * A repository's release identity for the cycle: versions derived
+     * A repository's release identity for the mission: versions derived
      * from its root POM (pre = the current development SNAPSHOT,
      * release = the de-qualified form, post = the next SNAPSHOT), the
      * artifactId for the scoped-deploy selector.
      *
      * @param name the display name
      * @param dir  the repository directory
-     * @return the cycle repo record
+     * @return the mission repo record
      */
-    private WorkspaceReleaseCycle.ReleasingRepo releasingRepo(String name,
+    private WorkspaceReleaseMission.ReleasingRepo releasingRepo(String name,
             File dir) {
         String pre = currentVersion(dir);
         String release = pre.replace("-SNAPSHOT", "");
@@ -707,7 +725,7 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
             throw new MojoException("Cannot read artifactId for " + name
                     + ": " + e.getMessage(), e);
         }
-        return new WorkspaceReleaseCycle.ReleasingRepo(name, dir,
+        return new WorkspaceReleaseMission.ReleasingRepo(name, dir,
                 artifactId, pre, release, post);
     }
 
@@ -728,7 +746,7 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
      *
      * @param graph         the workspace dependency graph
      * @param sourceChanged subproject names whose own commits warrant
-     *                      a release this cycle
+     *                      a release this mission
      * @return release set in topological order (dependencies first)
      */
     public static Set<String> computeReleaseSet(WorkspaceGraph graph,
@@ -1316,7 +1334,7 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
      * stale foundation references (parent block, {@code <X.version>}
      * properties) and return the would-be bumps plus the rewritten
      * text. Never writes or commits — the draft path reports this
-     * plan verbatim so draft and publish describe the same cycle
+     * plan verbatim so draft and publish describe the same mission
      * (ike-issues#1000 finding 1).
      *
      * @param pomFile         the pom to scan
@@ -1339,7 +1357,7 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
         // Align <parent> block — forward only. A stale local foundation
         // clone resolves an OLDER "latest" than the pom already pins;
         // proposing that as an alignment would downgrade the pom
-        // (ike-issues#1000, cycle two).
+        // (ike-issues#1000, mission two).
         try {
             PomParentSupport.ParentInfo parent =
                     PomParentSupport.readParent(pomFile.toPath());
@@ -1362,7 +1380,7 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
         // Align <X.version> properties — forward only, and never an
         // expression value: `<ike-platform.version>${project.parent.version}`
         // delegates elsewhere by design, and replacing it with a literal
-        // would freeze the delegation (ike-issues#1000, cycle two).
+        // would freeze the delegation (ike-issues#1000, mission two).
         for (Map.Entry<String, String> entry : PROPERTY_TO_GROUP.entrySet()) {
             String propertyName = entry.getKey();
             String groupId = entry.getValue();
@@ -1480,7 +1498,7 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
      * <p>Failures are logged but do not abort the cascade: the
      * subproject release tags + Nexus deploys have already shipped,
      * so a manifest-sync hiccup is recoverable via
-     * {@code ws:scaffold-publish} or the next release cycle.
+     * {@code ws:scaffold-publish} or the next release mission.
      * ike-issues#371.
      *
      * @param root              workspace root
@@ -1849,7 +1867,7 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
             // Commit it: an untracked artifact the goal itself just
             // wrote would fail the very next preflight's clean-tree
             // check — the goal blocking on its own output
-            // (ike-issues#1000, cycle two).
+            // (ike-issues#1000, mission two).
             String relative = root.toPath().relativize(file).toString();
             try {
                 ReleaseSupport.exec(root, getLog(), "git", "add", "--", relative);

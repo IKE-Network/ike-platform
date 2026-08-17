@@ -10,14 +10,14 @@ import java.util.LinkedHashSet;
 import java.util.List;
 
 /**
- * Preview rolling the working set back from a failed release cycle
+ * Preview rolling the working set back from a failed release mission
  * (IKE-Network/ike-issues#1010).
  *
  * <p>For the root and every cloned member, reports the release-cadence
  * commits sitting unpushed on top of the branch, the local tags on
  * them, and the commit a rollback would reset to. Pushed history is
  * never touched; repositories with uncommitted changes, no upstream,
- * or cycle commits buried beneath later work are reported as refusals
+ * or mission commits buried beneath later work are reported as refusals
  * — and {@code ws:release-rollback-publish} is all-or-nothing over the
  * set, refusing while any repository refuses.
  *
@@ -115,7 +115,7 @@ public class WsReleaseRollbackDraftMojo extends AbstractWorkspaceMojo {
                 publish ? WsGoal.RELEASE_ROLLBACK_PUBLISH
                         : WsGoal.RELEASE_ROLLBACK_DRAFT,
                 "# Release rollback\n\n" + discarding
-                        + " repositories with cycle commits; "
+                        + " repositories with mission commits; "
                         + refusals.size() + " refusals.\n");
     }
 }

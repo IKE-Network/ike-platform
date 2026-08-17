@@ -353,12 +353,12 @@ final class ReleasePlanCompute {
      * sit at {@code 1-SNAPSHOT} — the property name breaks the tie
      * only if it names exactly one of them ({@code <artifactId>.version}
      * or {@code <subproject>.version}). Anything still ambiguous stays
-     * unplanned, and the release preflight refuses the cycle rather
+     * unplanned, and the release preflight refuses the mission rather
      * than guessing.
      *
      * @param propertyName  the declared property name
      * @param propertyValue the property's current (pre-release) value
-     * @param intents       this cycle's releasing artifacts
+     * @param intents       this mission's releasing artifacts
      * @return the tracked artifact, or {@code null} when no unambiguous
      *         answer exists
      */

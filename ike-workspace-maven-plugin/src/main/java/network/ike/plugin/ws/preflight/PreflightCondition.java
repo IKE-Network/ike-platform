@@ -134,10 +134,10 @@ public enum PreflightCondition {
                         : SnapshotScanner.scanSourceProperties(pom)) {
                     // Release-set-aware exemption (ike-issues#981): a
                     // property tracking a member that releases in this
-                    // cycle is substituted with the member's released
+                    // mission is substituted with the member's released
                     // version by the loop's catch-up alignment before
                     // its consumer releases — it never leaks.
-                    if (!resolvedByReleaseCycle(ctx, name, violation)) {
+                    if (!resolvedByReleaseMission(ctx, name, violation)) {
                         all.add(violation);
                     }
                 }
@@ -158,7 +158,7 @@ public enum PreflightCondition {
     /**
      * No releasing member's POMs — every module, profiles included —
      * may carry a literal {@code -SNAPSHOT} version on a dependency,
-     * parent, or plugin reference the cycle does not itself resolve
+     * parent, or plugin reference the mission does not itself resolve
      * (ike-issues#1022).
      *
      * <p>The property channel is guarded by
@@ -171,12 +171,12 @@ public enum PreflightCondition {
      * (ike-issues#1021), while warm caches kept every machine green
      * and the cold CI agent alone resolved honestly.
      *
-     * <p>Exempt, because the cycle resolves them before anything
-     * deploys: references to artifacts this cycle's release plan
+     * <p>Exempt, because the mission resolves them before anything
+     * deploys: references to artifacts this mission's release plan
      * de-qualifies (retargeted by the version pass), and references to
      * coordinates produced inside the same repository (the member's
      * own version pass moves those). Bystanders' POMs are not scanned
-     * — they do not deploy this cycle. Without a release set the
+     * — they do not deploy this mission. Without a release set the
      * condition is inert: development trees legitimately reference
      * snapshots.
      */
@@ -210,7 +210,7 @@ public enum PreflightCondition {
                     root,
                     external.size() + " external SNAPSHOT reference(s) would"
                             + " ship in released POMs:",
-                    "  Each site names a version this cycle neither releases\n"
+                    "  Each site names a version this mission neither releases\n"
                     + "  nor retargets, so the deployed POM would reference a\n"
                     + "  SNAPSHOT no repository is required to have. Pin each\n"
                     + "  site to a released version (or remove the version and\n"
@@ -376,7 +376,7 @@ public enum PreflightCondition {
             sb.append("  These property names control plugin resolution for\n");
             sb.append("  every project inheriting ike-parent. Local overrides\n");
             sb.append("  pin plugins to whatever version the subproject\n");
-            sb.append("  declares, often pre-dating goals the release cycle\n");
+            sb.append("  declares, often pre-dating goals the release mission\n");
             sb.append("  expects (e.g. ike-tooling 126 lacks #335's\n");
             sb.append("  render-spdx-licenses). Rename the local property to\n");
             sb.append("  an `it.*` / `local.*` namespace and update any\n");
@@ -546,7 +546,7 @@ public enum PreflightCondition {
      *   <li>{@code <parent><version>} matches the workspace's.</li>
      *   <li>{@code <parent>} block includes an empty
      *       {@code <relativePath/>} to prevent the Maven 4
-     *       parent-cycle error.</li>
+     *       parent-mission error.</li>
      * </ol>
      *
      * <p>This preflight is the release-gate analog of
@@ -584,7 +584,7 @@ public enum PreflightCondition {
                 // outside the release cascade (#973): their parent
                 // matches the pinned tag's era by design, not the
                 // workspace tip's, so coherence-with-the-tip does not
-                // apply to them (ike-issues#1000, cycle two).
+                // apply to them (ike-issues#1000, mission two).
                 if (ctx.graph() != null) {
                     network.ike.workspace.Subproject sub =
                             ctx.graph().manifest().subprojects().get(name);
@@ -618,7 +618,7 @@ public enum PreflightCondition {
                         .hasEmptyRelativePathInContent(content)) {
                     violations.add(name + " parent " + subParentGA + ":"
                             + subParentVersion + " missing empty "
-                            + "<relativePath/> (#324 cycle prevention)");
+                            + "<relativePath/> (#324 mission prevention)");
                 }
             }
 
@@ -633,7 +633,7 @@ public enum PreflightCondition {
             sb.append("  Subprojects sharing the workspace's parent GA must\n");
             sb.append("  agree on parent version AND declare an empty\n");
             sb.append("  <relativePath/> to prevent the Maven 4\n");
-            sb.append("  \"parents form a cycle\" error. "
+            sb.append("  \"parents form a mission\" error. "
                     + WsGoal.SCAFFOLD_DRAFT.qualified() + "\n");
             sb.append("  reports the same coherence check as a warning (folded\n");
             sb.append("  from the retired ws:verify per #393); the release gate\n");
@@ -932,8 +932,8 @@ public enum PreflightCondition {
     /**
      * Every {@code pom.xml} inside a member repository — build output
      * and nested repositories excluded. The same tree the release
-     * cycle's version pass walks, so what this gate scans is exactly
-     * what the cycle deploys.
+     * mission's version pass walks, so what this gate scans is exactly
+     * what the mission deploys.
      *
      * @param memberDir the member repository directory
      * @return the member's POM files; on a walk failure, just the root
@@ -957,7 +957,7 @@ public enum PreflightCondition {
 
     /**
      * Whether a POM lies inside a repository nested under this one —
-     * a twin of the release cycle's repository-boundary guard: such a
+     * a twin of the release mission's repository-boundary guard: such a
      * POM belongs to another member and is scanned (or not) as part of
      * that member, never through an enclosing tree.
      *
@@ -1059,9 +1059,9 @@ public enum PreflightCondition {
     }
 
     /**
-     * Whether the current release cycle resolves a snapshot reference
+     * Whether the current release mission resolves a snapshot reference
      * before anything deploys: the referenced coordinate is either one
-     * the cycle's release plan de-qualifies (the version pass retargets
+     * the mission's release plan de-qualifies (the version pass retargets
      * every reference to it) or one the member's own tree produces
      * (the member's version pass moves it). The
      * {@code ${project.groupId}} sibling idiom leaves the groupId
@@ -1070,10 +1070,10 @@ public enum PreflightCondition {
      * resolution rule.
      *
      * @param ctx       the preflight context carrying
-     *                  {@link PreflightContext#cycleReleasedArtifacts()}
+     *                  {@link PreflightContext#missionReleasedArtifacts()}
      * @param ownKeys   the member's own coordinate keys
      * @param violation the scanned SNAPSHOT reference
-     * @return true when the cycle itself resolves the reference
+     * @return true when the mission itself resolves the reference
      */
     private static boolean cycleResolvesReference(
             PreflightContext ctx, Set<String> ownKeys,
@@ -1087,8 +1087,8 @@ public enum PreflightCondition {
         } else {
             ga = location.substring(location.lastIndexOf('/') + 1);
         }
-        Set<String> released = ctx.cycleReleasedArtifacts() == null
-                ? Set.of() : ctx.cycleReleasedArtifacts();
+        Set<String> released = ctx.missionReleasedArtifacts() == null
+                ? Set.of() : ctx.missionReleasedArtifacts();
         if (ownKeys.contains(ga) || released.contains(ga)) {
             return true;
         }
@@ -1115,10 +1115,10 @@ public enum PreflightCondition {
 
     /**
      * Whether a SNAPSHOT property violation is resolved by the current
-     * release cycle rather than leaking (ike-issues#981): the property
+     * release mission rather than leaking (ike-issues#981): the property
      * is the owning member's manifest-declared {@code version-property}
      * hint for a depends-on edge whose target member releases in this
-     * cycle. The release loop's catch-up alignment substitutes the
+     * mission. The release loop's catch-up alignment substitutes the
      * target's released version before the owning consumer releases, so
      * the SNAPSHOT value never reaches a released POM. Everything else —
      * a property tracking a member outside the release set, or an
@@ -1129,9 +1129,9 @@ public enum PreflightCondition {
      *                  {@link PreflightContext#graph()}
      * @param owner     the subproject whose POM carries the violation
      * @param violation the scanned SNAPSHOT property violation
-     * @return true when the cycle's catch-up alignment resolves it
+     * @return true when the mission's catch-up alignment resolves it
      */
-    private static boolean resolvedByReleaseCycle(
+    private static boolean resolvedByReleaseMission(
             PreflightContext ctx, String owner,
             SnapshotScanner.Violation violation) {
         if (ctx.releaseSet() == null || ctx.graph() == null) {
@@ -1145,15 +1145,15 @@ public enum PreflightCondition {
         }
         String property = location.substring(slash + 1);
 
-        // The cycle's own release plan is the authority: any property
+        // The mission's own release plan is the authority: any property
         // it rewrites is de-qualified before the reactor builds, so it
         // cannot reach a released POM as a SNAPSHOT. The manifest-hint
         // path below stays for callers that have no plan to offer, but
         // it exempts strictly less than the plan resolves — which is
-        // how six already-planned properties blocked the komet cycle
+        // how six already-planned properties blocked the komet mission
         // (ike-issues#1004).
-        if (ctx.cycleResolvedProperties() != null
-                && ctx.cycleResolvedProperties()
+        if (ctx.missionResolvedProperties() != null
+                && ctx.missionResolvedProperties()
                         .contains(owner + "::" + property)) {
             return true;
         }

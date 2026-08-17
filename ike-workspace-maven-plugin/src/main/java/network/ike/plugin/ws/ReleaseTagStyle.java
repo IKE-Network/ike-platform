@@ -9,7 +9,7 @@ import java.util.regex.Pattern;
  * ikmdev members carry bare version tags ({@code 1.127.1}), while IKE's
  * own repositories carry {@code v}-prefixed ones ({@code v160}).
  *
- * <p>The style governs both directions: the tags a release cycle
+ * <p>The style governs both directions: the tags a release mission
  * writes, and the tags detection reads back as "the last release".
  * Getting only one side right would either orphan a repository's
  * release history or write a second, competing convention beside it.

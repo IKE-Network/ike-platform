@@ -20,7 +20,7 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Executes one checkpoint-shaped release cycle of a working set — the
+ * Executes one checkpoint-shaped release mission of a working set — the
  * reactor-pass release model (IKE-Network/ike-issues#997, settled
  * 2026-08-11/12): one operation from the workspace root, with the
  * reactor as the coherence mechanism, replacing the per-member
@@ -36,9 +36,9 @@ import java.util.Set;
  *       release value — all committed per repository as
  *       {@code release: set version to <V>} (a release-cadence subject,
  *       so retries never count these commits as source changes). The
- *       workspace root's release commit also carries the cycle's
- *       {@code releases/release-<cycle>.yaml} record, so the tagged
- *       root tree contains the cycle record.</li>
+ *       workspace root's release commit also carries the mission's
+ *       {@code releases/release-<mission>.yaml} record, so the tagged
+ *       root tree contains the mission record.</li>
  *   <li><b>Reactor verify</b> — one build of the whole working set at
  *       release versions ({@code clean install -P release}), replacing
  *       N per-member subprocess builds.</li>
@@ -56,12 +56,12 @@ import java.util.Set;
  *   <li><b>Push</b> — every touched repository's branch and tag.</li>
  * </ol>
  *
- * <p><b>First-cycle-complete scope:</b> references from releasing
+ * <p><b>First-mission-complete scope:</b> references from releasing
  * members to members OUTSIDE the release set are not rewritten by this
  * class; the release-set-aware SNAPSHOT preflight (ike-issues#981)
- * refuses such cycles with remediation. The first cycle — where every
+ * refuses such missions with remediation. The first mission — where every
  * member is release-pending — has no such references by construction;
- * bystander backward-pinning for later partial cycles is the named
+ * bystander backward-pinning for later partial missions is the named
  * second increment on the design issue.
  *
  * <p>Subprocess Maven invocations go through the {@link Runner} seam so
@@ -69,20 +69,20 @@ import java.util.Set;
  * (the house pattern from the bare-mode release tests); git operations
  * run for real against the working set's repositories.
  */
-final class WorkspaceReleaseCycle {
+final class WorkspaceReleaseMission {
 
     /**
-     * One repository releasing in this cycle.
+     * One repository releasing in this mission.
      *
      * @param name           the working-set member name; the root uses
      *                       its artifactId
      * @param dir            the repository directory
      * @param artifactId     the Maven artifactId used for the
      *                       {@code -pl :artifactId} deploy selector
-     * @param preVersion     the development version before the cycle
+     * @param preVersion     the development version before the mission
      *                       (must end in {@code -SNAPSHOT})
-     * @param releaseVersion the version this cycle releases
-     * @param postVersion    the next development version after the cycle
+     * @param releaseVersion the version this mission releases
+     * @param postVersion    the next development version after the mission
      */
     record ReleasingRepo(String name, File dir, String artifactId,
                          String preVersion, String releaseVersion,
@@ -90,7 +90,7 @@ final class WorkspaceReleaseCycle {
 
     /**
      * Subprocess seam: runs one command in a directory, failing the
-     * cycle on a non-zero exit.
+     * mission on a non-zero exit.
      */
     interface Runner {
         /**
@@ -107,29 +107,29 @@ final class WorkspaceReleaseCycle {
     private final List<ReleasingRepo> members;
     private final ReleasingRepo rootRepo;
     private final ReleasePlan plan;
-    private final String cycleLabel;
+    private final String missionLabel;
     private final String recordDate;
     private final ReleaseTagStyle tagStyle;
     private final Log log;
     private final Runner runner;
 
     /**
-     * Create a cycle over the given releasing set.
+     * Create a mission over the given releasing set.
      *
      * @param root       the workspace root directory
      * @param members    the releasing members, dependency order
      * @param rootRepo   the workspace root's own release identity
      * @param plan       the computed release plan (version truth for
      *                   every artifact and tracking property)
-     * @param cycleLabel the cycle label naming the record file
-     * @param recordDate the date recorded on the cycle rows (caller
+     * @param missionLabel the mission label naming the record file
+     * @param recordDate the date recorded on the mission rows (caller
      *                   supplies; typically today's ISO date)
      * @param log        Maven logger
      * @param runner     subprocess seam for the verify/deploy builds
      */
-    WorkspaceReleaseCycle(File root, List<ReleasingRepo> members,
+    WorkspaceReleaseMission(File root, List<ReleasingRepo> members,
                           ReleasingRepo rootRepo, ReleasePlan plan,
-                          String cycleLabel, String recordDate,
+                          String missionLabel, String recordDate,
                           ReleaseTagStyle tagStyle,
                           Log log, Runner runner) {
         this.root = root;
@@ -137,14 +137,14 @@ final class WorkspaceReleaseCycle {
         this.members = List.copyOf(members);
         this.rootRepo = rootRepo;
         this.plan = plan;
-        this.cycleLabel = cycleLabel;
+        this.missionLabel = missionLabel;
         this.recordDate = recordDate;
         this.log = log;
         this.runner = runner;
     }
 
     /**
-     * Execute the full cycle.
+     * Execute the full mission.
      *
      * @param mvn       the Maven launcher for the reactor builds
      * @param skipTests whether the verify pass skips tests
@@ -173,7 +173,7 @@ final class WorkspaceReleaseCycle {
     }
 
     /**
-     * Describe the cycle's phases for the draft report, without
+     * Describe the mission's phases for the draft report, without
      * mutating anything.
      *
      * @param mvn the Maven launcher the publish would use
@@ -181,7 +181,7 @@ final class WorkspaceReleaseCycle {
      */
     List<String> describe(String mvn) {
         List<String> lines = new ArrayList<>();
-        lines.add("Reactor-pass cycle `" + cycleLabel + "` — one version"
+        lines.add("Reactor-pass mission `" + missionLabel + "` — one version"
                 + " pass, one reactor verify, deploy scoped to the"
                 + " releasing set:");
         for (ReleasingRepo m : allRepos()) {
@@ -200,16 +200,16 @@ final class WorkspaceReleaseCycle {
     // ── Phases ───────────────────────────────────────────────────────
 
     /**
-     * Refuse to start when a prior cycle is in flight: a releasing
+     * Refuse to start when a prior mission is in flight: a releasing
      * repository whose POM already carries a non-SNAPSHOT version was
-     * left mid-cycle (crash between version pass and post-bump).
+     * left mid-mission (crash between version pass and post-bump).
      */
     private void guardNotInFlight() {
         for (ReleasingRepo m : allRepos()) {
             if (!m.preVersion().endsWith("-SNAPSHOT")) {
-                throw new MojoException("In-flight release cycle detected: "
+                throw new MojoException("In-flight release mission detected: "
                         + m.name() + " is at " + m.preVersion()
-                        + " (not a -SNAPSHOT). Recover the interrupted cycle"
+                        + " (not a -SNAPSHOT). Recover the interrupted mission"
                         + " first — roll forward per IKE-RELEASE-RECOVERY.md"
                         + " — then re-run.");
             }
@@ -225,7 +225,7 @@ final class WorkspaceReleaseCycle {
     /**
      * The version pass: self-versions to release values, plan-tracked
      * reference sites to the referenced artifacts' release values, the
-     * cycle record into the root — one release-cadence commit per
+     * mission record into the root — one release-cadence commit per
      * repository.
      */
     private void applyReleaseVersions() {
@@ -297,8 +297,8 @@ final class WorkspaceReleaseCycle {
         }
 
         pinWorkingSetState(workingSetDirs());
-        writeCycleRecord();
-        writeCycleNotes();
+        writeMissionRecord();
+        writeMissionNotes();
 
         commitRepo(rootRepo.dir(), "release: set version to "
                 + rootRepo.releaseVersion());
@@ -345,7 +345,7 @@ final class WorkspaceReleaseCycle {
             String tag = tagStyle.tagFor(m.releaseVersion());
             ReleaseSupport.exec(m.dir(), log, "git", "tag", "-a", tag,
                     "-m", "release: " + m.name() + " " + m.releaseVersion()
-                            + " (cycle " + cycleLabel + ")");
+                            + " (mission " + missionLabel + ")");
             log.info(Ansi.green("  ✓ ") + "tagged " + m.name() + " " + tag);
         }
     }
@@ -544,10 +544,10 @@ final class WorkspaceReleaseCycle {
     }
 
     /**
-     * Commit a cycle repository's pending changes. The version pass and
+     * Commit a mission repository's pending changes. The version pass and
      * post-bump author every tracked change (preflight guaranteed clean
      * trees), staged with {@code git add -u}; the root additionally
-     * stages the cycle's (new, untracked) record file by exact path.
+     * stages the mission's (new, untracked) record file by exact path.
      */
     private void commitRepo(File dir, String message) {
         ReleaseSupport.exec(dir, log, "git", "add", "-u");
@@ -560,16 +560,16 @@ final class WorkspaceReleaseCycle {
 
     private String rootRelativeRecordPath() {
         return root.toPath().relativize(
-                ReleaseRecordFile.pathFor(root.toPath(), cycleLabel))
+                ReleaseRecordFile.pathFor(root.toPath(), missionLabel))
                 .toString();
     }
 
     /**
-     * The cycle's what-changed notes file, beside the record
-     * ({@code releases/release-<cycle>-notes.md}).
+     * The mission's what-changed notes file, beside the record
+     * ({@code releases/release-<mission>-notes.md}).
      */
     private Path notesPath() {
-        Path record = ReleaseRecordFile.pathFor(root.toPath(), cycleLabel);
+        Path record = ReleaseRecordFile.pathFor(root.toPath(), missionLabel);
         return record.resolveSibling(record.getFileName().toString()
                 .replace(".yaml", "-notes.md"));
     }
@@ -583,7 +583,7 @@ final class WorkspaceReleaseCycle {
      * now — the state being released — so the manifest carried in the
      * tagged root tree describes a coherent, buildable working set.
      *
-     * <p>All members, not only the releasing ones. The cycle record
+     * <p>All members, not only the releasing ones. The mission record
      * names what was released, which is a smaller set by design
      * (#997); the installers are built from the whole working set, so
      * something has to say what the whole set was. Before this, a
@@ -617,14 +617,14 @@ final class WorkspaceReleaseCycle {
                 + " member(s) at their released commits");
     }
 
-    /** Write the cycle's record with a row per releasing repository. */
-    private void writeCycleRecord() {
+    /** Write the mission's record with a row per releasing repository. */
+    private void writeMissionRecord() {
         try {
             Path recordPath = ReleaseRecordFile.pathFor(root.toPath(),
-                    cycleLabel);
+                    missionLabel);
             ReleaseRecord record = Files.exists(recordPath)
                     ? ReleaseRecordFile.read(recordPath)
-                    : ReleaseRecord.start(cycleLabel, recordDate);
+                    : ReleaseRecord.start(missionLabel, recordDate);
             for (ReleasingRepo m : allRepos()) {
                 String sha = ReleaseSupport.execCapture(m.dir(),
                         "git", "rev-parse", "HEAD").trim();
@@ -634,13 +634,13 @@ final class WorkspaceReleaseCycle {
             }
             ReleaseRecordFile.write(recordPath, record);
         } catch (Exception e) {
-            throw new MojoException("Cycle record write failed: "
+            throw new MojoException("Mission record write failed: "
                     + e.getMessage(), e);
         }
     }
 
     /**
-     * Write the cycle's what-changed notes beside the record
+     * Write the mission's what-changed notes beside the record
      * (IKE-Network/ike-issues#1016): for each releasing repository, the
      * non-mechanical commits between its previous release tag and the
      * release commit — subjects with their bodies, goal-authored cadence
@@ -650,9 +650,9 @@ final class WorkspaceReleaseCycle {
      * on one summary line; a repository with no previous release tag is
      * noted as a first release rather than dumping its whole history.
      */
-    private void writeCycleNotes() {
+    private void writeMissionNotes() {
         StringBuilder md = new StringBuilder();
-        md.append("# What changed — cycle ").append(cycleLabel)
+        md.append("# What changed — mission ").append(missionLabel)
                 .append(" (").append(recordDate).append(")\n");
         List<String> alignmentOnly = new ArrayList<>();
         for (ReleasingRepo m : allRepos()) {
@@ -686,7 +686,7 @@ final class WorkspaceReleaseCycle {
             Files.writeString(notesPath(), md.toString(),
                     StandardCharsets.UTF_8);
         } catch (IOException e) {
-            throw new MojoException("Cycle notes write failed: "
+            throw new MojoException("Mission notes write failed: "
                     + e.getMessage(), e);
         }
     }
@@ -708,7 +708,7 @@ final class WorkspaceReleaseCycle {
                     previousTag + "..HEAD", "--no-merges",
                     "--pretty=format:%s%x1f%b%x1e");
         } catch (Exception e) {
-            throw new MojoException("Cycle notes: cannot read "
+            throw new MojoException("Mission notes: cannot read "
                     + dir.getName() + " history since " + previousTag
                     + ": " + e.getMessage(), e);
         }

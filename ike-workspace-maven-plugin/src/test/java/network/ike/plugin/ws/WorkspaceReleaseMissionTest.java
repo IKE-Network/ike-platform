@@ -21,15 +21,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * End-to-end coverage for {@link WorkspaceReleaseCycle} — the
+ * End-to-end coverage for {@link WorkspaceReleaseMission} — the
  * reactor-pass release (ike-issues#997) — against real git
  * repositories with bare {@code file://} origins. The two reactor
- * builds go through a recording {@link WorkspaceReleaseCycle.Runner},
+ * builds go through a recording {@link WorkspaceReleaseMission.Runner},
  * so the exact command lines are asserted without executing Maven
  * (the bare-mode release tests' house pattern); every git effect —
- * commits, tags, pushes, the cycle record — is real.
+ * commits, tags, pushes, the mission record — is real.
  */
-class WorkspaceReleaseCycleTest {
+class WorkspaceReleaseMissionTest {
 
     @TempDir
     Path tempDir;
@@ -86,9 +86,9 @@ class WorkspaceReleaseCycleTest {
     @Test
     void full_cycle_versions_tags_records_bumps_and_pushes()
             throws Exception {
-        WorkspaceReleaseCycle cycle = cycle("test-cycle-1");
+        WorkspaceReleaseMission mission = mission("test-mission-1");
 
-        Map<String, String> released = cycle.execute("mvnw", true);
+        Map<String, String> released = mission.execute("mvnw", true);
 
         // Released identities, root included.
         assertThat(released).containsExactly(
@@ -120,12 +120,12 @@ class WorkspaceReleaseCycleTest {
         assertThat(git(root, "show", "v1:pom.xml"))
                 .contains("<version>1</version>");
 
-        // The tagged root tree carries the cycle record; rows are real.
+        // The tagged root tree carries the mission record; rows are real.
         assertThat(git(root, "show",
-                "v1:releases/release-test-cycle-1.yaml"))
+                "v1:releases/release-test-mission-1.yaml"))
                 .contains("lib-a").contains("\"1.0.0\"");
         ReleaseRecord record = ReleaseRecordFile.read(
-                ReleaseRecordFile.pathFor(root.toPath(), "test-cycle-1"));
+                ReleaseRecordFile.pathFor(root.toPath(), "test-mission-1"));
         assertThat(record.members().keySet())
                 .containsExactly("lib-a", "lib-b", "(workspace root)");
         assertThat(record.members().get("lib-b").tag()).isEqualTo("v2.0.0");
@@ -187,7 +187,7 @@ class WorkspaceReleaseCycleTest {
         git(libA, "add", ".");
         git(libA, "commit", "-m", "add modules");
 
-        cycle("multi-module").execute("mvnw", true);
+        mission("multi-module").execute("mvnw", true);
 
         // Released tree: no module left behind at the old version.
         String groupAtTag = git(libA, "show", "v1.0.0:group/pom.xml");
@@ -233,7 +233,7 @@ class WorkspaceReleaseCycleTest {
         git(libA, "add", ".");
         git(libA, "commit", "-m", "add child");
 
-        cycle("inheritance").execute("mvnw", true);
+        mission("inheritance").execute("mvnw", true);
 
         String released = git(libA, "show", "v1.0.0:child/pom.xml");
 
@@ -265,7 +265,7 @@ class WorkspaceReleaseCycleTest {
      */
     @Test
     void the_tagged_manifest_pins_the_released_commits() throws Exception {
-        cycle("pins").execute("mvnw", true);
+        mission("pins").execute("mvnw", true);
 
         String manifest = git(root, "show", "v1:workspace.yaml");
         String libAReleaseSha = git(libA, "rev-parse", "v1.0.0^{commit}");
@@ -284,7 +284,7 @@ class WorkspaceReleaseCycleTest {
      * their own release lines; a member whose version string happened
      * to match the root's was rewritten as though it were one of the
      * root's modules, leaving five members with uncommitted version
-     * changes after cycle 2 (IKE-Network/ike-issues#1011 follow-up).
+     * changes after mission 2 (IKE-Network/ike-issues#1011 follow-up).
      */
     @Test
     void the_roots_version_pass_stops_at_a_members_repository()
@@ -303,7 +303,7 @@ class WorkspaceReleaseCycleTest {
         String before = Files.readString(twin.toPath().resolve("pom.xml"),
                 StandardCharsets.UTF_8);
 
-        cycle("boundary").execute("mvnw", true);
+        mission("boundary").execute("mvnw", true);
 
         // Untouched: not released, not rewritten, nothing uncommitted.
         assertThat(Files.readString(twin.toPath().resolve("pom.xml"),
@@ -313,45 +313,45 @@ class WorkspaceReleaseCycleTest {
 
     @Test
     void in_flight_cycle_is_refused() {
-        WorkspaceReleaseCycle cycle = new WorkspaceReleaseCycle(root,
-                List.of(new WorkspaceReleaseCycle.ReleasingRepo("lib-a",
+        WorkspaceReleaseMission mission = new WorkspaceReleaseMission(root,
+                List.of(new WorkspaceReleaseMission.ReleasingRepo("lib-a",
                         libA, "lib-a", "1.0.0", "1.0.0", "1.0.1-SNAPSHOT")),
                 rootRepo(), emptyPlan(), "c1", "2026-08-12",
                 ReleaseTagStyle.V_PREFIXED, new TestLog(), recorder());
-        assertThatThrownBy(() -> cycle.execute("mvnw", true))
+        assertThatThrownBy(() -> mission.execute("mvnw", true))
                 .isInstanceOf(MojoException.class)
-                .hasMessageContaining("In-flight release cycle");
+                .hasMessageContaining("In-flight release mission");
     }
 
     @Test
     void existing_release_tag_is_refused() throws Exception {
         git(libA, "tag", "-a", "v1.0.0", "-m", "stale");
-        assertThatThrownBy(() -> cycle("c1").execute("mvnw", true))
+        assertThatThrownBy(() -> mission("c1").execute("mvnw", true))
                 .isInstanceOf(MojoException.class)
                 .hasMessageContaining("v1.0.0 already exists");
     }
 
     // ── Fixture ──────────────────────────────────────────────────────
 
-    private WorkspaceReleaseCycle cycle(String label) {
-        List<WorkspaceReleaseCycle.ReleasingRepo> members = List.of(
-                new WorkspaceReleaseCycle.ReleasingRepo("lib-a", libA,
+    private WorkspaceReleaseMission mission(String label) {
+        List<WorkspaceReleaseMission.ReleasingRepo> members = List.of(
+                new WorkspaceReleaseMission.ReleasingRepo("lib-a", libA,
                         "lib-a", "1.0.0-SNAPSHOT", "1.0.0",
                         "1.0.1-SNAPSHOT"),
-                new WorkspaceReleaseCycle.ReleasingRepo("lib-b", libB,
+                new WorkspaceReleaseMission.ReleasingRepo("lib-b", libB,
                         "lib-b", "2.0.0-SNAPSHOT", "2.0.0",
                         "2.0.1-SNAPSHOT"));
-        return new WorkspaceReleaseCycle(root, members, rootRepo(),
+        return new WorkspaceReleaseMission(root, members, rootRepo(),
                 plan(), label, "2026-08-12", ReleaseTagStyle.V_PREFIXED,
                 new TestLog(), recorder());
     }
 
-    private WorkspaceReleaseCycle.ReleasingRepo rootRepo() {
-        return new WorkspaceReleaseCycle.ReleasingRepo("(workspace root)",
+    private WorkspaceReleaseMission.ReleasingRepo rootRepo() {
+        return new WorkspaceReleaseMission.ReleasingRepo("(workspace root)",
                 root, "wsr-root", "1-SNAPSHOT", "1", "2-SNAPSHOT");
     }
 
-    private WorkspaceReleaseCycle.Runner recorder() {
+    private WorkspaceReleaseMission.Runner recorder() {
         return (dir, command) -> ranCommands.add(String.join(" ", command));
     }
 
@@ -380,7 +380,7 @@ class WorkspaceReleaseCycleTest {
 
 
     /**
-     * The cycle's what-changed notes (ike-issues#1016): committed into
+     * The mission's what-changed notes (ike-issues#1016): committed into
      * the tagged root tree beside the record; per-member sections carry
      * the non-mechanical commits since the member's previous release
      * tag (bodies indented, trailers dropped); a member whose only
@@ -407,12 +407,12 @@ class WorkspaceReleaseCycleTest {
         // lib-b: previously released, nothing since — pure cascade.
         git(libB, "tag", "v1.9.0");
 
-        cycle("notes-cycle").execute("mvnw", true);
+        mission("notes-mission").execute("mvnw", true);
 
         String notes = git(root, "show",
-                "v1:releases/release-notes-cycle-notes.md");
+                "v1:releases/release-notes-mission-notes.md");
         assertThat(notes)
-                .contains("# What changed — cycle notes-cycle")
+                .contains("# What changed — mission notes-mission")
                 .contains("## lib-a 1.0.0  ·  v0.9.0 → v1.0.0")
                 .contains("- **Teach lib-a to fly**")
                 .contains("\n  Wings are load-bearing.")
@@ -434,7 +434,7 @@ class WorkspaceReleaseCycleTest {
                 "Fix the flux capacitor\u001fNeeds 1.21 gigawatts.\n\n"
                         + "Fixes: IKE-Network/ike-issues#88\n"
                         + "Co-Authored-By: Doc <doc@test>");
-        assertThat(WorkspaceReleaseCycle.formatNotesEntries(raw))
+        assertThat(WorkspaceReleaseMission.formatNotesEntries(raw))
                 .containsExactly("- **Fix the flux capacitor**"
                         + "\n  Needs 1.21 gigawatts.");
     }
@@ -442,17 +442,17 @@ class WorkspaceReleaseCycleTest {
     /** Bodiless commits format as a bare bullet; empty input is empty. */
     @Test
     void notes_formatting_handles_bodiless_and_empty() {
-        assertThat(WorkspaceReleaseCycle.formatNotesEntries(
+        assertThat(WorkspaceReleaseMission.formatNotesEntries(
                 "Add a knob"))
                 .containsExactly("- **Add a knob**");
-        assertThat(WorkspaceReleaseCycle.formatNotesEntries("")).isEmpty();
-        assertThat(WorkspaceReleaseCycle.formatNotesEntries(null)).isEmpty();
+        assertThat(WorkspaceReleaseMission.formatNotesEntries("")).isEmpty();
+        assertThat(WorkspaceReleaseMission.formatNotesEntries(null)).isEmpty();
     }
 
     /**
-     * The workspace root, with the manifest the cycle pins into. The
+     * The workspace root, with the manifest the mission pins into. The
      * pins start deliberately stale — a checkpoint-era value — so a test
-     * can tell "the cycle wrote them" from "they happened to be right".
+     * can tell "the mission wrote them" from "they happened to be right".
      */
     private File repoWithManifest(String name, String pomXml) throws Exception {
         File f = repo(name, pomXml);

@@ -25,7 +25,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *       source-changed subprojects</li>
  *   <li>Catch-up does not expand the release set — a subproject with
  *       only stale properties (no source changes, no upstream in this
- *       cycle) stays out</li>
+ *       mission) stays out</li>
  * </ul>
  */
 class WsReleaseCascadeTest {
@@ -116,7 +116,7 @@ class WsReleaseCascadeTest {
     void catchUp_doesNotExpandReleaseSet_unrelatedSubprojectStaysOut() {
         // {A → C, B → C, only A changed}. C cascades because of A.
         // B has stale property to C (now releasing) but B has no
-        // source change and no upstream in cycle → B stays out.
+        // source change and no upstream in mission → B stays out.
         // Release set must be {A, C}, not {A, B, C}.
         WorkspaceGraph graph = graphOf(
                 node("A"),
@@ -150,7 +150,7 @@ class WsReleaseCascadeTest {
     void catchUp_staleUpstreamButNoCycleMember_staysOut() {
         // A → B, A → C. Only B has source changes (B is a leaf-ish).
         // Release set: {B}. C has stale A.version property (A != A's
-        // current pom version) but A is not in cycle and C has no
+        // current pom version) but A is not in mission and C has no
         // source changes → C stays out.
         WorkspaceGraph graph = graphOf(
                 node("A"),

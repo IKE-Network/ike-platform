@@ -66,13 +66,13 @@ class ReleasePlanInferenceTest {
     @Test
     void ambiguity_is_refused_rather_than_guessed() {
         // Shares the value with two members and names neither: the
-        // release preflight should refuse the cycle, not the planner
+        // release preflight should refuse the mission, not the planner
         // pick a winner.
         assertThat(ReleasePlanCompute.inferTrackedArtifact(
                 "some-plugin.version", "1-SNAPSHOT", CYCLE)).isNull();
 
         // Names a member but disagrees on the value — that property is
-        // pinning a released version, not tracking this cycle.
+        // pinning a released version, not tracking this mission.
         assertThat(ReleasePlanCompute.inferTrackedArtifact(
                 "tinkar-core.version", "1.127.1", CYCLE)).isNull();
     }

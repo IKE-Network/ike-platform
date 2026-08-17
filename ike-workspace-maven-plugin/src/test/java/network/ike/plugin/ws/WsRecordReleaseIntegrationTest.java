@@ -74,7 +74,7 @@ class WsRecordReleaseIntegrationTest {
                 TestLog.createMojo(WsRecordReleasePublishMojo.class);
         mojo.manifest = helper.workspaceYaml().toFile();
         mojo.member = "lib-a";
-        mojo.cycle = "test-cycle-1";
+        mojo.mission = "test-mission-1";
         mojo.execute();
 
         String manifest = Files.readString(helper.workspaceYaml());
@@ -87,10 +87,13 @@ class WsRecordReleaseIntegrationTest {
                 "lib-b:");
 
         Path recordPath = ReleaseRecordFile.pathFor(
-                tempDir, "test-cycle-1");
+                tempDir, "test-mission-1");
         assertThat(recordPath).exists();
         ReleaseRecord record = ReleaseRecordFile.read(recordPath);
-        assertThat(record.cycle()).isEqualTo("test-cycle-1");
+        // cycle() is the deprecated bridge for mission() — this module still
+        // compiles against the pre-rename tooling until the next foundation
+        // cascade adopts it (ike-issues#1038); flip to mission() then.
+        assertThat(record.cycle()).isEqualTo("test-mission-1");
         ReleaseRecord.MemberRelease row = record.members().get("lib-a");
         assertThat(row.version()).isEqualTo("1.0.0");
         assertThat(row.tag()).isEqualTo("v1.0.0");
@@ -110,12 +113,12 @@ class WsRecordReleaseIntegrationTest {
         File libA = tempDir.resolve("lib-a").toFile();
         exec(libA, "git", "tag", "-a", "v1.0.0", "-m", "release 1.0.0");
 
-        runPublish("lib-a", "test-cycle-1");
+        runPublish("lib-a", "test-mission-1");
         String manifestAfterFirst = Files.readString(helper.workspaceYaml());
         String logAfterFirst = exec(tempDir.toFile(),
                 "git", "rev-list", "--count", "HEAD").trim();
 
-        runPublish("lib-a", "test-cycle-1");
+        runPublish("lib-a", "test-mission-1");
 
         assertThat(Files.readString(helper.workspaceYaml()))
                 .isEqualTo(manifestAfterFirst);
@@ -132,11 +135,11 @@ class WsRecordReleaseIntegrationTest {
         exec(tempDir.resolve("lib-b").toFile(),
                 "git", "tag", "-a", "v2.0.0", "-m", "r");
 
-        runPublish("lib-a", "test-cycle-1");
-        runPublish("lib-b", "test-cycle-1");
+        runPublish("lib-a", "test-mission-1");
+        runPublish("lib-b", "test-mission-1");
 
         ReleaseRecord record = ReleaseRecordFile.read(
-                ReleaseRecordFile.pathFor(tempDir, "test-cycle-1"));
+                ReleaseRecordFile.pathFor(tempDir, "test-mission-1"));
         assertThat(record.members().keySet())
                 .containsExactly("lib-a", "lib-b");
         assertThat(record.members().get("lib-b").version())
@@ -149,7 +152,7 @@ class WsRecordReleaseIntegrationTest {
                 TestLog.createMojo(WsRecordReleasePublishMojo.class);
         mojo.manifest = helper.workspaceYaml().toFile();
         mojo.member = "lib-b";
-        mojo.cycle = "test-cycle-1";
+        mojo.mission = "test-mission-1";
 
         assertThatThrownBy(mojo::execute)
                 .isInstanceOf(MojoException.class)
@@ -174,7 +177,7 @@ class WsRecordReleaseIntegrationTest {
         noCycle.member = "lib-a";
         assertThatThrownBy(noCycle::execute)
                 .isInstanceOf(MojoException.class)
-                .hasMessageContaining("-Dcycle");
+                .hasMessageContaining("-Dmission");
     }
 
     @Test
@@ -218,12 +221,12 @@ class WsRecordReleaseIntegrationTest {
 
     // ── Helpers ──────────────────────────────────────────────────────
 
-    private void runPublish(String member, String cycle) throws Exception {
+    private void runPublish(String member, String mission) throws Exception {
         WsRecordReleasePublishMojo mojo =
                 TestLog.createMojo(WsRecordReleasePublishMojo.class);
         mojo.manifest = helper.workspaceYaml().toFile();
         mojo.member = member;
-        mojo.cycle = cycle;
+        mojo.mission = mission;
         // Emulate Maven's parameter injection, which applies the
         // inherited publish parameter's defaultValue="false" AFTER
         // construction. The publish subclass must therefore assert

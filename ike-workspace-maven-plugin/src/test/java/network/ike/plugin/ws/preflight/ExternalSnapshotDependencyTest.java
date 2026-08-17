@@ -19,7 +19,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * The external-snapshot gate
  * {@link PreflightCondition#NO_EXTERNAL_SNAPSHOT_DEPENDENCIES}
  * (ike-issues#1022): a releasing member's literal {@code -SNAPSHOT}
- * reference refuses the release unless the cycle itself resolves it —
+ * reference refuses the release unless the mission itself resolves it —
  * the coordinate is a plan-released artifact, or one the member's own
  * tree produces. Modeled on the defect that shipped twice: an OS
  * profile pinning a never-released external snapshot
@@ -98,7 +98,7 @@ class ExternalSnapshotDependencyTest {
     }
 
     /**
-     * A literal snapshot naming an artifact the cycle releases is
+     * A literal snapshot naming an artifact the mission releases is
      * retargeted by the version pass — never refused.
      */
     @Test
@@ -236,7 +236,7 @@ class ExternalSnapshotDependencyTest {
         assertThat(failure).isEmpty();
     }
 
-    /** Bystanders' POMs do not deploy this cycle — never scanned. */
+    /** Bystanders' POMs do not deploy this mission — never scanned. */
     @Test
     void bystander_member_with_external_snapshot_is_not_scanned()
             throws Exception {
@@ -260,7 +260,7 @@ class ExternalSnapshotDependencyTest {
         assertThat(failure).isEmpty();
     }
 
-    /** Outside a release cycle the condition is inert. */
+    /** Outside a release mission the condition is inert. */
     @Test
     void without_a_release_set_the_condition_passes() throws Exception {
         pom("app", """
@@ -330,7 +330,7 @@ class ExternalSnapshotDependencyTest {
     }
 
     /**
-     * Run the gate with both members releasing and the cycle's plan
+     * Run the gate with both members releasing and the mission's plan
      * releasing {@code com.test:app} and {@code com.test:helper} — the
      * shape the release mojo passes after plan compute.
      */

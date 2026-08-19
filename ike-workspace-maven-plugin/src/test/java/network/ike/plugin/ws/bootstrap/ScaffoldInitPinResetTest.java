@@ -149,6 +149,24 @@ class ScaffoldInitPinResetTest {
                 .isEqualTo("main");
     }
 
+    /**
+     * Every clone the initializer creates carries a repo-local
+     * {@code core.fsmonitor=false}: a fresh repo's first fsmonitor daemon
+     * query can deadlock on macOS under a file watcher such as Syncthing
+     * (IKE-Network/ike-issues#1052).
+     */
+    @Test
+    void scaffoldClones_optOutOfFsmonitorRepoLocally() throws Exception {
+        scaffold(/*resetToPin*/ false);
+
+        for (String name : ALL) {
+            assertThat(capture(new File(tempDir.toFile(), name),
+                    "git", "config", "--local", "core.fsmonitor"))
+                    .as(name + " clone opts out of fsmonitor (#1052)")
+                    .isEqualTo("false");
+        }
+    }
+
     private static String currentBranchOf(File dir) throws Exception {
         Process p = new ProcessBuilder("git", "branch", "--show-current")
                 .directory(dir).redirectErrorStream(true).start();

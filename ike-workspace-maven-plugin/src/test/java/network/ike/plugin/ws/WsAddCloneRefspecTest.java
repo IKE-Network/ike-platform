@@ -108,6 +108,22 @@ class WsAddCloneRefspecTest {
                 "refs/remotes/origin/main")).isNotBlank();
     }
 
+    /**
+     * The clone carries a repo-local {@code core.fsmonitor=false}: a fresh
+     * repo's first fsmonitor daemon query can deadlock on macOS under a file
+     * watcher such as Syncthing (IKE-Network/ike-issues#1052).
+     */
+    @Test
+    void branchClone_optsOutOfFsmonitorRepoLocally() throws Exception {
+        WsAddMojo.cloneSubprojectFull(wsDir, repoUrl, "sub3", FEATURE_BRANCH,
+                new TestLog());
+
+        assertThat(capture(wsDir.resolve("sub3").toFile(),
+                "git", "config", "--local", "core.fsmonitor"))
+                .as("ws:add clone opts out of fsmonitor (#1052)")
+                .isEqualTo("false");
+    }
+
     // ── helpers ──────────────────────────────────────────────────
 
     private void hermetic(Path dir) throws Exception {

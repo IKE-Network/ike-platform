@@ -104,6 +104,34 @@ class FeatureStartSiblingPublishIntegrationTest {
         }
     }
 
+    /**
+     * Every repo the goal creates carries a repo-local
+     * {@code core.fsmonitor=false}: on macOS the {@code --dissociate}
+     * repack queries the fresh clone's just-spawned fsmonitor daemon, which
+     * under a file watcher such as Syncthing reliably never answers,
+     * deadlocking the goal (IKE-Network/ike-issues#1052).
+     */
+    @Test
+    void siblingCreate_optsEveryCloneOutOfFsmonitor() throws Exception {
+        FeatureStartSiblingPublishMojo mojo =
+                TestLog.createMojo(FeatureStartSiblingPublishMojo.class);
+        mojo.manifest = primary.resolve("workspace.yaml").toFile();
+        mojo.feature = "jira-456";
+
+        mojo.execute();
+
+        Path sibling = tempDir.resolve("primary꞉jira-456");
+        assertThat(execCapture(sibling, "git", "config", "--local", "core.fsmonitor"))
+                .as("sibling root clone opts out of fsmonitor (#1052)")
+                .isEqualTo("false");
+        for (String name : COMPONENTS) {
+            assertThat(execCapture(sibling.resolve(name),
+                    "git", "config", "--local", "core.fsmonitor"))
+                    .as(name + " clone opts out of fsmonitor (#1052)")
+                    .isEqualTo("false");
+        }
+    }
+
     @Test
     void siblingCreate_refusesWhenSiblingDirectoryAlreadyExists() throws Exception {
         Files.createDirectories(tempDir.resolve("primary꞉dup"));

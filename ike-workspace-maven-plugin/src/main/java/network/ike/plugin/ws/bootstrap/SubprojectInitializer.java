@@ -288,6 +288,10 @@ public final class SubprojectInitializer {
     private void initSyncthingRepo(File dir, String repo, String branch)
             throws MojoException {
         ReleaseSupport.exec(dir, log, "git", "init");
+        // Repo-local fsmonitor opt-out before the first fetch/reset — a fresh
+        // repo's first fsmonitor daemon query can deadlock on macOS under a
+        // file watcher such as Syncthing (IKE-Network/ike-issues#1052).
+        ReleaseSupport.exec(dir, log, "git", "config", "core.fsmonitor", "false");
         ReleaseSupport.exec(dir, log, "git", "remote", "add", "origin", repo);
         ReleaseSupport.exec(dir, log, "git", "fetch", "origin", branch);
         // Mixed reset: updates HEAD and index to match remote, keeps working tree
@@ -298,7 +302,8 @@ public final class SubprojectInitializer {
     private void cloneRepo(File root, String name, String repo, String branch)
             throws MojoException {
         ReleaseSupport.exec(root, log,
-                "git", "clone", "-b", branch, repo, name);
+                "git", "clone", "-c", "core.fsmonitor=false",
+                "-b", branch, repo, name);
     }
 
     /**

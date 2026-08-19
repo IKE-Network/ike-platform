@@ -52,8 +52,9 @@ import java.util.Map;
  *       {@link SiblingBaseResolution}).</li>
  *   <li>Clones the workspace root, then each subproject in topological
  *       order, into the sibling with
- *       {@code git clone --reference <primary>/<component> --dissociate -b
- *       <base> <remote> <sibling>/<component>}. {@code --reference} borrows
+ *       {@code git clone -c core.fsmonitor=false --reference
+ *       <primary>/<component> --dissociate -b <base> <remote>
+ *       <sibling>/<component>}. {@code --reference} borrows
  *       the object database from the primary's local clone (the
  *       order-of-magnitude win for large histories like tinkar-core's
  *       492 MB); {@code --dissociate} then copies the borrowed objects so
@@ -567,6 +568,14 @@ public class FeatureStartSiblingPublishMojo extends AbstractWorkspaceMojo {
      * and a full clone is performed (with a warning) so a not-yet-cloned
      * primary component doesn't fail the whole goal.
      *
+     * <p>Every clone is created with {@code core.fsmonitor=false} written to
+     * its repo-local config ({@code clone -c}): on macOS (git ≥ 2.37) the
+     * {@code --dissociate} repack's {@code pack-objects} queries the fresh
+     * clone's just-spawned fsmonitor daemon, which under a file watcher such
+     * as Syncthing reliably never answers, deadlocking the goal
+     * (IKE-Network/ike-issues#1052). The repo-local setting also covers every
+     * later git operation in the sibling.
+     *
      * @param workDir       directory the clone is created under
      * @param targetName    name of the directory to create under {@code workDir}
      * @param referenceDir  the primary's local clone to borrow objects from
@@ -582,6 +591,11 @@ public class FeatureStartSiblingPublishMojo extends AbstractWorkspaceMojo {
         List<String> args = new ArrayList<>();
         args.add("git");
         args.add("clone");
+        // Repo-local fsmonitor opt-out — without it the --dissociate repack
+        // deadlocks on macOS querying the just-spawned fsmonitor daemon
+        // (IKE-Network/ike-issues#1052).
+        args.add("-c");
+        args.add("core.fsmonitor=false");
         if (new File(referenceDir, ".git").exists()) {
             args.add("--reference");
             args.add(referenceDir.getAbsolutePath());

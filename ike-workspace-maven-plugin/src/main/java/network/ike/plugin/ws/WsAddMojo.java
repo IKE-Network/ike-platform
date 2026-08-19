@@ -756,6 +756,11 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
      * history makes merge-base report unrelated histories). Branch
      * selection governs only the checkout, never the refspec or depth.
      *
+     * <p>The clone carries {@code core.fsmonitor=false} in its repo-local
+     * config: a freshly created repo's first fsmonitor daemon query can
+     * deadlock on macOS under a file watcher such as Syncthing
+     * (IKE-Network/ike-issues#1052).
+     *
      * @param wsDir      the workspace root directory to clone under
      * @param repo       the repository URL
      * @param subproject the target directory / subproject name
@@ -768,7 +773,7 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
                                     org.apache.maven.api.plugin.Log log)
             throws MojoException {
         ReleaseSupport.exec(wsDir.toFile(), log,
-                "git", "clone", repo, subproject);
+                "git", "clone", "-c", "core.fsmonitor=false", repo, subproject);
 
         File dir = wsDir.resolve(subproject).toFile();
         String defaultBranch = VcsOperations.currentBranch(dir);

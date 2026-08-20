@@ -1,6 +1,7 @@
 package network.ike.plugin.ws.reconcile;
 
 import network.ike.plugin.ReleaseSupport;
+import network.ike.plugin.ws.QualificationCascade;
 import network.ike.plugin.ws.WsGoal;
 import network.ike.workspace.ManifestWriter;
 import network.ike.workspace.Subproject;
@@ -28,8 +29,14 @@ import java.util.Map;
  * and its feature build collides with its own main SNAPSHOT. This
  * reconciler self-heals that on {@code scaffold-publish}.
  *
- * <p>Scope is each subproject's own {@code <version>} (its POM) plus the
- * denormalized {@code version} field in {@code workspace.yaml}.
+ * <p>Scope is each subproject's own version across its <em>whole module
+ * tree</em> — the root POM's {@code <version>}, every child's in-tree
+ * {@code <parent><version>}, and any child's redundant own
+ * {@code <version>} (IKE-Network/ike-issues#1051, via
+ * {@link QualificationCascade}) — plus the denormalized {@code version}
+ * field in {@code workspace.yaml}. Detection likewise sees a tree whose
+ * root is already qualified but whose children were left at the base
+ * version, the state a root-only read could not see (#1051).
  * Propagating the new version into <em>consumers'</em> dependency
  * references is left to {@link AlignmentReconciler}, which runs after
  * this one in {@link ReconcilerRegistry}.
@@ -92,9 +99,9 @@ public class FeatureVersionReconciler implements Reconciler {
             Path manifestPath = ctx.manifestPath();
             String yaml = Files.readString(manifestPath, StandardCharsets.UTF_8);
             for (Change c : changes) {
-                File pom = new File(
-                        new File(ctx.workspaceRoot(), c.name()), "pom.xml");
-                rewriteOwnVersion(pom.toPath(), c.before(), c.after());
+                File dir = new File(ctx.workspaceRoot(), c.name());
+                QualificationCascade.apply(dir.toPath(), c.before(),
+                        c.after(), ctx.log());
                 yaml = ManifestWriter.updateSubprojectField(
                         yaml, c.name(), "version", c.after());
             }
@@ -149,43 +156,20 @@ public class FeatureVersionReconciler implements Reconciler {
                     VersionSupport.branchQualifiedVersion(current, branch);
             if (!qualified.equals(current)) {
                 changes.add(new Change(name, branch, current, qualified));
+                continue;
+            }
+            // Root already qualified — the children may still be at the
+            // base version if qualification ran before it cascaded
+            // (#1051). Detect through the tree, not the root alone.
+            String base = VersionSupport.extractNumericBase(
+                    VersionSupport.stripSnapshot(current)) + "-SNAPSHOT";
+            if (!base.equals(current) && QualificationCascade.hasStaleTree(
+                    new File(ctx.workspaceRoot(), name).toPath(), base,
+                    ctx.log())) {
+                changes.add(new Change(name, branch, base, current));
             }
         }
         return changes;
     }
 
-    /**
-     * Rewrite a POM's own {@code <version>} from {@code oldVersion} to
-     * {@code newVersion}. Searches past the {@code <parent>} block first,
-     * so a parent whose version coincidentally equals {@code oldVersion}
-     * is not mistaken for the project version (the project {@code <version>}
-     * precedes {@code <dependencies>}, so the first match after
-     * {@code </parent>} is the project's own). Public — also reused by
-     * {@code ws:add}'s add-time qualification (#574).
-     *
-     * @param pom        the POM path
-     * @param oldVersion the current project version
-     * @param newVersion the qualified version
-     * @throws IOException if the POM cannot be read or written
-     */
-    public static void rewriteOwnVersion(Path pom, String oldVersion,
-                                  String newVersion) throws IOException {
-        String content = Files.readString(pom, StandardCharsets.UTF_8);
-        int searchFrom = 0;
-        int parentEnd = content.indexOf("</parent>");
-        if (parentEnd >= 0) {
-            searchFrom = parentEnd + "</parent>".length();
-        }
-        String needle = "<version>" + oldVersion + "</version>";
-        int idx = content.indexOf(needle, searchFrom);
-        if (idx < 0) {
-            return;
-        }
-        String updated = content.substring(0, idx)
-                + "<version>" + newVersion + "</version>"
-                + content.substring(idx + needle.length());
-        if (!updated.equals(content)) {
-            Files.writeString(pom, updated, StandardCharsets.UTF_8);
-        }
-    }
 }

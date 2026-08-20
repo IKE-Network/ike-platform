@@ -122,29 +122,71 @@ class FeatureVersionReconcilerTest {
         assertThat(Files.readString(pom)).isEqualTo(before);
     }
 
-    @Test
-    void rewriteOwnVersion_skips_matching_parent(@TempDir Path tmp)
-            throws IOException {
-        Path pom = tmp.resolve("pom.xml");
-        Files.writeString(pom, """
-                <project>
-                  <parent>
-                    <artifactId>p</artifactId>
-                    <version>1-SNAPSHOT</version>
-                  </parent>
-                  <artifactId>x</artifactId>
-                  <version>1-SNAPSHOT</version>
+    // ── #1051: trees whose root is already qualified ─────────────
+
+    /**
+     * Fixture with a child module whose in-tree {@code <parent>} ref was
+     * left at the base version by a pre-#1051 root-only qualification.
+     */
+    private static Path writeStaleChildWorkspace(Path tmp) throws IOException {
+        Files.writeString(tmp.resolve("workspace.yaml"),
+                MANIFEST_FEATURE.replace("version: \"1-SNAPSHOT\"",
+                        "version: \"1-claude-assistant-SNAPSHOT\""),
+                StandardCharsets.UTF_8);
+        Path dir = tmp.resolve("komet-claude-plugin");
+        Files.createDirectories(dir.resolve("child"));
+        Files.writeString(dir.resolve("pom.xml"), """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <project xmlns="http://maven.apache.org/POM/4.0.0">
+                    <modelVersion>4.0.0</modelVersion>
+                    <groupId>network.ike.komet</groupId>
+                    <artifactId>komet-claude-plugin</artifactId>
+                    <version>1-claude-assistant-SNAPSHOT</version>
+                    <packaging>pom</packaging>
+                    <modules>
+                        <module>child</module>
+                    </modules>
                 </project>
                 """, StandardCharsets.UTF_8);
+        Files.writeString(dir.resolve("child/pom.xml"), """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <project xmlns="http://maven.apache.org/POM/4.0.0">
+                    <modelVersion>4.0.0</modelVersion>
+                    <parent>
+                        <groupId>network.ike.komet</groupId>
+                        <artifactId>komet-claude-plugin</artifactId>
+                        <version>1-SNAPSHOT</version>
+                    </parent>
+                    <artifactId>kcp-child</artifactId>
+                </project>
+                """, StandardCharsets.UTF_8);
+        return dir.resolve("child/pom.xml");
+    }
 
-        FeatureVersionReconciler.rewriteOwnVersion(pom, "1-SNAPSHOT",
-                "1-foo-SNAPSHOT");
+    @Test
+    void detect_flags_stale_child_refs_behind_qualified_root(@TempDir Path tmp)
+            throws IOException {
+        writeStaleChildWorkspace(tmp);
+        DriftReport r = new FeatureVersionReconciler().detect(ctx(tmp));
+        assertThat(r.hasDrift())
+                .as("root qualified but child parent ref at base (#1051)")
+                .isTrue();
+        assertThat(r.detailLines().get(0)).contains("komet-claude-plugin");
+    }
 
-        String c = Files.readString(pom);
-        assertThat(c).contains("<version>1-foo-SNAPSHOT</version>");
-        long remainingPlain = c.split("<version>1-SNAPSHOT</version>", -1)
-                .length - 1;
-        assertThat(remainingPlain)
-                .as("only the parent's 1-SNAPSHOT remains").isEqualTo(1);
+    @Test
+    void apply_heals_stale_child_refs_behind_qualified_root(@TempDir Path tmp)
+            throws IOException {
+        Path childPom = writeStaleChildWorkspace(tmp);
+
+        new FeatureVersionReconciler().apply(ctx(tmp));
+
+        assertThat(Files.readString(childPom))
+                .as("child parent ref pulled up to the qualified version")
+                .contains("<version>1-claude-assistant-SNAPSHOT</version>")
+                .doesNotContain("<version>1-SNAPSHOT</version>");
+        // Converged: a second pass sees no drift.
+        assertThat(new FeatureVersionReconciler().detect(ctx(tmp)).hasDrift())
+                .isFalse();
     }
 }

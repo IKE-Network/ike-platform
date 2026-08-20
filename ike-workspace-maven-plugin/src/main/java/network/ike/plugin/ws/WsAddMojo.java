@@ -6,7 +6,6 @@ import network.ike.plugin.support.GoalReportBuilder;
 import network.ike.plugin.ws.preflight.Preflight;
 import network.ike.plugin.ws.preflight.PreflightCondition;
 import network.ike.plugin.ws.preflight.PreflightContext;
-import network.ike.plugin.ws.reconcile.FeatureVersionReconciler;
 import network.ike.plugin.ws.vcs.VcsOperations;
 import network.ike.workspace.Subproject;
 import network.ike.workspace.Dependency;
@@ -261,7 +260,8 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
             // No-op on main; scaffold-publish's FeatureVersionReconciler
             // self-heals if this is skipped, so failures are non-fatal.
             try {
-                version = qualifyForBranch(subprojectDir, version, branch);
+                version = qualifyForBranch(subprojectDir, version, branch,
+                        getLog());
             } catch (IOException e) {
                 getLog().warn("  Could not branch-qualify version: "
                         + e.getMessage());
@@ -461,22 +461,29 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
 
     /**
      * On a feature branch, branch-qualify the added subproject's version
-     * and rewrite its POM so it is isolated like the rest of the
-     * workspace (IKE-Network/ike-issues#574). No-op on {@code main} and
-     * when already qualified ({@link VersionSupport#branchQualifiedVersion}
-     * is idempotent). {@code scaffold-publish}'s
-     * {@code FeatureVersionReconciler} self-heals if this is skipped, so
-     * the caller treats a rewrite failure as non-fatal. Package-private
-     * for tests.
+     * across its whole module tree so it is isolated like the rest of the
+     * workspace (IKE-Network/ike-issues#574): the root POM's own
+     * {@code <version>} plus every child's in-tree
+     * {@code <parent><version>} and redundant own {@code <version>}, via
+     * {@link QualificationCascade} — a root-only rewrite left multi-module
+     * subprojects internally split (IKE-Network/ike-issues#1051). No-op on
+     * {@code main} and when already qualified
+     * ({@link VersionSupport#branchQualifiedVersion} is idempotent).
+     * {@code scaffold-publish}'s {@code FeatureVersionReconciler}
+     * self-heals if this is skipped, so the caller treats a rewrite
+     * failure as non-fatal. Package-private for tests.
      *
      * @param subprojectDir the cloned subproject directory
      * @param version       the version about to be recorded (may be null)
      * @param branch        the branch the subproject will track
+     * @param log           Maven logger for the cascade's per-file output
      * @return the version to record — branch-qualified on a feature branch
-     * @throws IOException if the subproject POM cannot be rewritten
+     * @throws IOException if the subproject POMs cannot be rewritten
      */
     static String qualifyForBranch(Path subprojectDir, String version,
-                                   String branch) throws IOException {
+                                   String branch,
+                                   org.apache.maven.api.plugin.Log log)
+            throws IOException {
         if (version == null || version.isBlank()
                 || branch == null || branch.isBlank()
                 || "main".equals(branch)) {
@@ -484,12 +491,9 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
         }
         String qualified =
                 VersionSupport.branchQualifiedVersion(version, branch);
-        if (!qualified.equals(version)) {
-            Path pom = subprojectDir.resolve("pom.xml");
-            if (Files.exists(pom)) {
-                FeatureVersionReconciler.rewriteOwnVersion(
-                        pom, version, qualified);
-            }
+        if (!qualified.equals(version)
+                && Files.exists(subprojectDir.resolve("pom.xml"))) {
+            QualificationCascade.apply(subprojectDir, version, qualified, log);
         }
         return qualified;
     }

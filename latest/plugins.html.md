@@ -1,6 +1,6 @@
 ---
-date_published: 2026-08-16
-date_modified: 2026-08-16
+date_published: 2026-08-19
+date_modified: 2026-08-19
 canonical_url: https://ike.network/ike-platform/plugins.html
 ---
 
@@ -8,7 +8,7 @@ canonical_url: https://ike.network/ike-platform/plugins.html
 
 | GroupId | ArtifactId | Version |
 | --- | --- | --- |
-| network.ike.tooling | [ike-maven-plugin](https://ike.network/ike-tooling/ike-maven-plugin/)[1] | 249 |
+| network.ike.tooling | [ike-maven-plugin](https://ike.network/ike-tooling/ike-maven-plugin/)[1] | 250 |
 | org.apache.maven.plugins | [maven-assembly-plugin](https://maven.apache.org/plugins/maven-assembly-plugin/)[2] | 3.7.1 |
 | org.apache.maven.plugins | [maven-clean-plugin](https://maven.apache.org/plugins/maven-clean-plugin/)[3] | 3.4.0 |
 | org.apache.maven.plugins | [maven-compiler-plugin](https://maven.apache.org/plugins/maven-compiler-plugin/)[4] | 3.14.0 |

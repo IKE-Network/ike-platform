@@ -60,15 +60,15 @@ class FeatureStartSiblingDraftTest {
             assertThat(report).as("plan row for " + name).contains(name);
         }
 
-        // Preflight section with the checks.
+        // Preflight section with the checks (local-origin model, #992).
         assertThat(report).contains("Preflight");
         assertThat(report).contains("already exist");
-        assertThat(report).contains("origin");
+        assertThat(report).contains("materialized");
         assertThat(report).contains("Base branch");
 
-        // Clone-cost note.
+        // Clone-cost note: local-path clone, origin = parent member (#992).
         assertThat(report).contains("Clone cost")
-                .contains("--reference").contains("--dissociate");
+                .contains("local member path").contains("origin");
 
         // Base resolved from main (the manifest base).
         assertThat(report).contains("**Base:** `main`");

@@ -16,6 +16,7 @@ import org.apache.maven.api.plugin.annotations.Parameter;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -51,14 +52,15 @@ import java.util.Map;
  *       not silently cut from an unexpected branch (see
  *       {@link SiblingBaseResolution}).</li>
  *   <li>Clones the workspace root, then each subproject in topological
- *       order, into the sibling with
- *       {@code git clone -c core.fsmonitor=false --reference
- *       <primary>/<component> --dissociate -b <base> <remote>
- *       <sibling>/<component>}. {@code --reference} borrows
- *       the object database from the primary's local clone (the
- *       order-of-magnitude win for large histories like tinkar-core's
- *       492 MB); {@code --dissociate} then copies the borrowed objects so
- *       the sibling is fully self-contained.</li>
+ *       order, from the <em>primary's local member paths</em>:
+ *       {@code git clone -c core.fsmonitor=false -b <base>
+ *       <primary>/<component> <sibling>/<component>}. The clone source is
+ *       the parent, so {@code origin} in every sibling member IS the
+ *       parent member — the sibling chains sibling → parent → GitHub
+ *       (IKE-Network/ike-issues#992). Objects arrive hardlinked (fast,
+ *       offline, no transport or credential machinery), and
+ *       {@code origin/<base>} is fresh by definition. The derived-from
+ *       parent is recorded in {@code .ike/parent-workspace}.</li>
  *   <li>Creates {@code feature/<name>} in each clone and applies the same
  *       version qualification and BOM/property cascade that
  *       {@code ws:feature-start-publish} produces in-place, via the shared
@@ -249,14 +251,14 @@ public class FeatureStartSiblingPublishMojo extends AbstractWorkspaceMojo {
                     + ". Remove it (rm -rf) or pick a different feature name.");
         }
 
-        // The workspace root must be a git repo with an origin so the sibling
-        // clones from the real upstream (not the primary's local path).
-        String rootRemote = gitOriginUrl(primaryRoot);
-        if (rootRemote == null) {
+        // The workspace root must itself be a git repository — the sibling
+        // clones from the primary's local paths (ike-issues#992), so an
+        // unmaterialized primary root has nothing to chain to.
+        if (!new File(primaryRoot, ".git").exists()) {
             throw new MojoException(
-                    "Workspace root '" + baseName + "' has no git 'origin' remote; "
-                    + "ws:feature-start-sibling clones the root from its upstream. "
-                    + "Add one (git remote add origin <url>) and try again.");
+                    "Workspace root '" + baseName + "' has no git repository; "
+                    + "the sibling chains through its local parent "
+                    + "(ike-issues#992). Materialize it (git clone) and try again.");
         }
 
         getLog().info("");
@@ -274,23 +276,38 @@ public class FeatureStartSiblingPublishMojo extends AbstractWorkspaceMojo {
         //    root first materializes the sibling directory itself. Every clone
         //    is cut from the same resolved base branch.
         getLog().info("  Cloning workspace root → " + siblingName);
-        cloneOnFeatureBranch(parent, siblingName, primaryRoot, rootRemote,
-                base, branchName);
+        cloneOnFeatureBranch(parent, siblingName, primaryRoot, base, branchName);
 
-        // 2. Clone each subproject into <sibling>/<name>, in topological order.
+        // Record the derived-from parent durably (ike-issues#992): the
+        // sibling's finish pushes to and merges in this parent.
+        recordParentWorkspace(siblingRoot, primaryRoot);
+
+        // 2. Clone each subproject into <sibling>/<name>, in topological
+        //    order, each from the primary's local member path. A member the
+        //    primary never materialized has nothing to chain to: skip it
+        //    only when the manifest has no repo URL for it either (a
+        //    deliberately unclonable member), refuse otherwise.
         List<String> branched = new ArrayList<>();
         for (String name : sorted) {
             Subproject sub = graph.manifest().subprojects().get(name);
-            String remote = sub.repo();
-            if (remote == null || remote.isEmpty()) {
-                getLog().warn("  ⚠ " + name
-                        + " — no repo URL in workspace.yaml, skipping");
-                continue;
-            }
             File primaryComp = new File(primaryRoot, name);
+            if (!new File(primaryComp, ".git").exists()) {
+                String remote = sub.repo();
+                if (remote == null || remote.isEmpty()) {
+                    getLog().warn("  ⚠ " + name
+                            + " — no repo URL in the manifest and no local "
+                            + "clone in the primary, skipping");
+                    continue;
+                }
+                throw new MojoException(
+                        "Cannot create sibling member '" + name + "': the primary "
+                        + "has no local clone at " + primaryComp.getAbsolutePath()
+                        + ", and the sibling chains through its local parent "
+                        + "(ike-issues#992). Materialize the primary first "
+                        + "(mvn ws:scaffold-init in the primary), then re-run.");
+            }
             getLog().info("  Cloning " + name + " → " + siblingName + "/" + name);
-            cloneOnFeatureBranch(siblingRoot, name, primaryComp, remote,
-                    base, branchName);
+            cloneOnFeatureBranch(siblingRoot, name, primaryComp, base, branchName);
             branched.add(name);
         }
 
@@ -437,20 +454,22 @@ public class FeatureStartSiblingPublishMojo extends AbstractWorkspaceMojo {
     }
 
     /**
-     * Bare mode (no {@code workspace.yaml}): fork the current single repo
-     * into {@code <parent>/<repo>-<feature>/} on the feature branch. The
+     * Bare mode (no manifest): fork the current single repo into
+     * {@code <parent>/<repo>꞉<feature>/} on the feature branch. The
      * single-repo case of the same operation — a working set of one
      * (ike-issues#601). No manifest to rewrite and no cascade; otherwise
-     * identical to one component of the workspace flow. The sibling-dir base
-     * is the repo's {@code baseName} (its dir name), and the base branch is
-     * resolved + guarded the same way (manifest base is {@code main}, there
-     * being no manifest).
+     * identical to one component of the workspace flow. The sibling clones
+     * from the repo's local path and chains to it as {@code origin}
+     * (ike-issues#992) — no {@code origin} remote is required on the repo,
+     * the fork works fully offline. The sibling-dir base is the repo's
+     * {@code baseName} (its dir name), and the base branch is resolved +
+     * guarded the same way (manifest base is {@code main}, there being no
+     * manifest).
      *
      * @param featureName the validated feature name
      * @param branchName  the {@code feature/<name>} branch to create
      * @return the goal's report
-     * @throws MojoException if the repo has no origin, the sibling exists,
-     *                       or a git step fails
+     * @throws MojoException if the sibling exists or a git step fails
      */
     private WorkspaceReportSpec executeBareMode(FeatureName featureName,
                                                 String branchName)
@@ -464,13 +483,6 @@ public class FeatureStartSiblingPublishMojo extends AbstractWorkspaceMojo {
                     "ws:feature-start-sibling: " + repo + " is not a git repository "
                     + "and no workspace.yaml was found — run it inside a repo or a "
                     + "workspace.");
-        }
-        String remote = gitOriginUrl(repo);
-        if (remote == null) {
-            throw new MojoException(
-                    "Repository '" + repo.getName() + "' has no git 'origin' "
-                    + "remote; ws:feature-start-sibling clones from the upstream. "
-                    + "Add one (git remote add origin <url>) and try again.");
         }
         File parent = repo.getParentFile();
         if (parent == null) {
@@ -502,7 +514,8 @@ public class FeatureStartSiblingPublishMojo extends AbstractWorkspaceMojo {
         getLog().info("");
 
         getLog().info("  Cloning " + repo.getName() + " → " + siblingName);
-        cloneOnFeatureBranch(parent, siblingName, repo, remote, base, branchName);
+        cloneOnFeatureBranch(parent, siblingName, repo, base, branchName);
+        recordParentWorkspace(siblingRoot, repo);
 
         String qualified = "—";
         if (!skipVersion) {
@@ -560,58 +573,101 @@ public class FeatureStartSiblingPublishMojo extends AbstractWorkspaceMojo {
     }
 
     /**
-     * Clone {@code remote} into {@code workDir/targetName} on
-     * {@code baseBranch}, borrowing objects from {@code referenceDir} when it
-     * is a local clone, then create and check out {@code branchName}.
+     * Clone the primary's member at {@code sourceDir} into
+     * {@code workDir/targetName} on {@code baseBranch}, then create and
+     * check out {@code branchName}.
      *
-     * <p>When {@code referenceDir} has no {@code .git}, the borrow is skipped
-     * and a full clone is performed (with a warning) so a not-yet-cloned
-     * primary component doesn't fail the whole goal.
+     * <p>The clone source is the parent's <em>local member path</em>, never
+     * the member's upstream URL, so {@code origin} in the sibling IS the
+     * parent member (IKE-Network/ike-issues#992): the sibling chains
+     * sibling → parent → GitHub, objects arrive hardlinked (fast, offline,
+     * no transport or credential machinery), and {@code origin/<base>} is
+     * fresh by definition. The finish pushes the feature branch to this
+     * local origin and the merge executes in the parent; GitHub enters
+     * only when the parent pushes.
      *
-     * <p>Every clone is created with {@code core.fsmonitor=false} written to
-     * its repo-local config ({@code clone -c}): on macOS (git ≥ 2.37) the
-     * {@code --dissociate} repack's {@code pack-objects} queries the fresh
-     * clone's just-spawned fsmonitor daemon, which under a file watcher such
-     * as Syncthing reliably never answers, deadlocking the goal
-     * (IKE-Network/ike-issues#1052). The repo-local setting also covers every
-     * later git operation in the sibling.
+     * <p>Every clone is created with {@code core.fsmonitor=false} written
+     * to its repo-local config ({@code clone -c}): a freshly created
+     * repo's first fsmonitor daemon query can deadlock on macOS under a
+     * file watcher such as Syncthing (IKE-Network/ike-issues#1052), and
+     * the repo-local setting also covers every later git operation in the
+     * sibling.
      *
-     * @param workDir       directory the clone is created under
-     * @param targetName    name of the directory to create under {@code workDir}
-     * @param referenceDir  the primary's local clone to borrow objects from
-     * @param remote        the upstream URL to clone from
-     * @param baseBranch    the mainline branch to clone and branch from
-     * @param branchName    the feature branch to create and check out
-     * @throws MojoException if a git invocation fails
+     * @param workDir    directory the clone is created under
+     * @param targetName name of the directory to create under {@code workDir}
+     * @param sourceDir  the primary's local clone to chain to
+     * @param baseBranch the mainline branch to clone and branch from
+     * @param branchName the feature branch to create and check out
+     * @throws MojoException if {@code sourceDir} is not a git repository,
+     *                       or a git invocation fails
      */
     private void cloneOnFeatureBranch(File workDir, String targetName,
-                                      File referenceDir, String remote,
-                                      String baseBranch, String branchName)
-            throws MojoException {
-        List<String> args = new ArrayList<>();
-        args.add("git");
-        args.add("clone");
-        // Repo-local fsmonitor opt-out — without it the --dissociate repack
-        // deadlocks on macOS querying the just-spawned fsmonitor daemon
-        // (IKE-Network/ike-issues#1052).
-        args.add("-c");
-        args.add("core.fsmonitor=false");
-        if (new File(referenceDir, ".git").exists()) {
-            args.add("--reference");
-            args.add(referenceDir.getAbsolutePath());
-            args.add("--dissociate");
-        } else {
-            getLog().warn("  ⚠ no local clone at " + referenceDir
-                    + " to borrow from — full clone of " + targetName);
+                                      File sourceDir, String baseBranch,
+                                      String branchName) throws MojoException {
+        if (!new File(sourceDir, ".git").exists()) {
+            throw new MojoException(
+                    "Cannot create sibling member '" + targetName + "': "
+                    + sourceDir.getAbsolutePath() + " has no git repository to "
+                    + "clone from, and the sibling chains through its local "
+                    + "parent (ike-issues#992). Materialize the primary first, "
+                    + "then re-run.");
         }
-        args.add("-b");
-        args.add(baseBranch);
-        args.add(remote);
-        args.add(targetName);
-        ReleaseSupport.exec(workDir, getLog(), args.toArray(new String[0]));
+        ReleaseSupport.exec(workDir, getLog(), "git", "clone",
+                "-c", "core.fsmonitor=false",
+                "-b", baseBranch,
+                sourceDir.getAbsolutePath(), targetName);
 
         File target = new File(workDir, targetName);
         ReleaseSupport.exec(target, getLog(), "git", "checkout", "-b", branchName);
+    }
+
+    /**
+     * Record the derived-from parent in the sibling's
+     * {@code .ike/parent-workspace} (IKE-Network/ike-issues#992): the
+     * relative path from the sibling root to the primary it chains through
+     * — machine-independent, since siblings live beside their primary, and
+     * carried to paired machines by the sync layer. The finish reads it to
+     * locate the parent; the lease daemon's git-state materialization
+     * (ike-issues#1002) reads it to re-wire the same local chain on
+     * another machine.
+     *
+     * <p>The record is workspace-instance state, never content to merge
+     * back into the parent, so it is kept out of the sibling root's git
+     * status via the fresh clone's {@code .git/info/exclude} — no tracked
+     * {@code .gitignore} is modified. The materialization path must mirror
+     * this exclusion when it creates git state on another machine.
+     *
+     * @param siblingRoot the freshly cloned sibling workspace root
+     * @param primaryRoot the primary this sibling was derived from
+     * @throws MojoException if the record cannot be written
+     */
+    private void recordParentWorkspace(File siblingRoot, File primaryRoot)
+            throws MojoException {
+        try {
+            Path ikeDir = siblingRoot.toPath().resolve(".ike");
+            Files.createDirectories(ikeDir);
+            Path relative = siblingRoot.toPath().toAbsolutePath().normalize()
+                    .relativize(primaryRoot.toPath().toAbsolutePath().normalize());
+            Files.writeString(ikeDir.resolve("parent-workspace"),
+                    relative + System.lineSeparator(), StandardCharsets.UTF_8);
+
+            Path exclude = siblingRoot.toPath().resolve(".git/info/exclude");
+            Files.createDirectories(exclude.getParent());
+            String line = ".ike/parent-workspace";
+            String existing = Files.exists(exclude)
+                    ? Files.readString(exclude, StandardCharsets.UTF_8) : "";
+            if (existing.lines().noneMatch(l -> l.trim().equals(line))) {
+                String separator = existing.isEmpty() || existing.endsWith("\n")
+                        ? "" : "\n";
+                Files.writeString(exclude,
+                        existing + separator + line + "\n",
+                        StandardCharsets.UTF_8);
+            }
+        } catch (IOException e) {
+            throw new MojoException(
+                    "Could not record the sibling's parent workspace: "
+                    + e.getMessage(), e);
+        }
     }
 
     /**
@@ -637,26 +693,6 @@ public class FeatureStartSiblingPublishMojo extends AbstractWorkspaceMojo {
             }
         }
         return null;
-    }
-
-    /**
-     * Read the {@code origin} remote URL of a git repository.
-     *
-     * @param dir the repository directory
-     * @return the origin URL, or {@code null} if {@code dir} is not a git
-     *         repository or has no {@code origin} remote
-     */
-    private String gitOriginUrl(File dir) {
-        if (!new File(dir, ".git").exists()) {
-            return null;
-        }
-        try {
-            String url = ReleaseSupport.execCapture(dir,
-                    "git", "remote", "get-url", "origin");
-            return url.isBlank() ? null : url.trim();
-        } catch (MojoException e) {
-            return null;
-        }
     }
 
     /**
@@ -715,10 +751,12 @@ public class FeatureStartSiblingPublishMojo extends AbstractWorkspaceMojo {
 
         WorkingSetReportTable.render(report, "Working set", rows);
 
-        report.paragraph("Each component is a self-contained clone on `"
-                + branchName + "`, cut from `" + base
-                + "` with `--reference --dissociate` against the primary."
-                + " The primary stays on its current branch.");
+        report.paragraph("Each component is a clone of the primary's local "
+                + "member on `" + branchName + "`, cut from `" + base
+                + "`; `origin` is the parent member, so the sibling chains "
+                + "sibling → parent → GitHub and finishes locally to the "
+                + "parent (ike-issues#992). The primary stays on its current "
+                + "branch.");
 
         if (verified) {
             report.paragraph("**Verified** — `" + verifyGoals

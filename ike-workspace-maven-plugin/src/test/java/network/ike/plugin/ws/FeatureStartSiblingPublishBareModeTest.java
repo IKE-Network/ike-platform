@@ -20,8 +20,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  *
  * <p>Like {@link FeatureStartBareModeTest}, uses
  * {@code System.setProperty("user.dir", ...)} to simulate running Maven from
- * inside the repo. The repo is a clone of a bare upstream so the goal's
- * {@code git clone <origin>} has a real remote to fork from.
+ * inside the repo. The sibling clones from the repo's local path and chains
+ * to it as {@code origin} (ike-issues#992) — the bare upstream exists only
+ * to prove the upstream URL never leaks into the sibling.
  */
 class FeatureStartSiblingPublishBareModeTest {
 
@@ -83,9 +84,16 @@ class FeatureStartSiblingPublishBareModeTest {
         assertThat(Files.readString(sibling.resolve("pom.xml"), StandardCharsets.UTF_8))
                 .contains("solo").contains("SNAPSHOT");
 
-        // Sibling origin points at the real upstream, not the local repo.
-        assertThat(execCapture(sibling, "git", "remote", "get-url", "origin"))
-                .contains("app.git");
+        // Sibling origin IS the local repo — the local-origin chain
+        // sibling → parent → GitHub (#992); the upstream URL appears
+        // nowhere in the sibling's remotes.
+        String origin = execCapture(sibling, "git", "remote", "get-url", "origin");
+        assertThat(origin).endsWith("/app");
+        assertThat(origin).doesNotContain("app.git");
+
+        // The derived-from parent is recorded relative to the sibling.
+        assertThat(Files.readString(sibling.resolve(".ike/parent-workspace"),
+                StandardCharsets.UTF_8).trim()).isEqualTo("../app");
 
         // The primary repo is untouched — still on main, version unqualified.
         assertThat(branch(repo)).isEqualTo("main");
@@ -121,8 +129,10 @@ class FeatureStartSiblingPublishBareModeTest {
     }
 
     @Test
-    void bareMode_refusesWhenNoOrigin() throws Exception {
-        // A standalone repo with no origin remote — nothing to clone from.
+    void bareMode_worksWithoutOrigin_purelyLocalFork() throws Exception {
+        // A standalone repo with NO origin remote. Under the local-origin
+        // model (#992) the fork chains to the local repo itself, so this
+        // succeeds fully offline — the inversion of the pre-#992 refusal.
         Path noRemote = tempDir.resolve("no-remote");
         Files.createDirectories(noRemote);
         Files.writeString(noRemote.resolve("pom.xml"), pom("9.9.9-SNAPSHOT"),
@@ -137,9 +147,12 @@ class FeatureStartSiblingPublishBareModeTest {
             FeatureStartSiblingPublishMojo mojo =
                     TestLog.createMojo(FeatureStartSiblingPublishMojo.class);
             mojo.feature = "x";
-            assertThatThrownBy(mojo::execute)
-                    .isInstanceOf(MojoException.class)
-                    .hasMessageContaining("origin");
+            mojo.execute();
+
+            Path sibling = tempDir.resolve("no-remote꞉x");
+            assertThat(branch(sibling)).isEqualTo("feature/x");
+            assertThat(execCapture(sibling, "git", "remote", "get-url", "origin"))
+                    .endsWith("/no-remote");
         } finally {
             System.setProperty("user.dir", saved);
         }

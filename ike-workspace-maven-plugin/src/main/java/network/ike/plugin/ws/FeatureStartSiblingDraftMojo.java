@@ -31,13 +31,14 @@ import java.util.List;
  *       feature branch, the base branch, and the members that would be
  *       cloned and version-qualified;</li>
  *   <li>preflight checks, each with copy-pasteable remediation when failing:
- *       the sibling dir must not already exist; the workspace root and every
- *       member must have an {@code origin} remote; the base branch must exist
- *       upstream;</li>
- *   <li>a clone-cost note — objects are borrowed from the primary via
- *       {@code --reference} (network: delta only) and {@code --dissociate}
- *       copies them for a self-contained, {@code rm -rf}-safe sibling (disk:
- *       roughly a full object DB per sibling, not shared).</li>
+ *       the sibling dir must not already exist; the primary root and every
+ *       member with a repo URL must be materialized locally — the sibling
+ *       chains through its local parent (IKE-Network/ike-issues#992); the
+ *       base branch must exist locally in the primary;</li>
+ *   <li>a clone-cost note — members clone from the primary's local paths
+ *       (origin = the parent member): offline, no transport or credential
+ *       machinery, objects hardlinked where the filesystem allows, and the
+ *       sibling stays {@code rm -rf}-safe.</li>
  * </ul>
  *
  * <pre>{@code
@@ -135,33 +136,48 @@ public class FeatureStartSiblingDraftMojo extends AbstractWorkspaceMojo {
                                 + "remove it: `rm -rf " + siblingRoot.getAbsolutePath() + "`"
                         : "`" + siblingRoot.getAbsolutePath() + "`"));
 
-        String rootRemote = gitOriginUrl(primaryRoot);
+        boolean rootMaterialized = new File(primaryRoot, ".git").exists();
         preflight.add(new Preflight(
-                "Workspace root has an `origin` remote",
-                rootRemote != null,
-                rootRemote != null ? rootRemote
-                        : "add one: `git -C " + primaryRoot.getAbsolutePath()
-                                + " remote add origin <url>`"));
+                "Primary root is a git repository (the sibling chains to it)",
+                rootMaterialized,
+                rootMaterialized ? "`" + primaryRoot.getAbsolutePath() + "`"
+                        : "materialize it first: `git clone <url> "
+                                + primaryRoot.getAbsolutePath() + "`"));
 
-        // base branch exists upstream on the root
+        // base branch exists locally in the primary — the clone source
+        // under the local-origin model (ike-issues#992).
         preflight.add(baseBranchPreflight(primaryRoot, base));
 
+        List<String> unmaterialized = new ArrayList<>();
         for (String name : sorted) {
             Subproject sub = graph.manifest().subprojects().get(name);
-            String remote = sub.repo();
             File comp = new File(primaryRoot, name);
             String versionLabel = skipVersion
                     ? "—"
                     : currentVersionLabel(comp, branchName);
-            if (remote == null || remote.isEmpty()) {
-                planRows.add(new String[]{name, "skip (no repo URL)", "—"});
-                continue;
+            // Each member clones from the primary's local path — origin in
+            // the sibling is the parent member (ike-issues#992). A member
+            // the primary never materialized either skips (deliberately
+            // unclonable: no repo URL) or fails the preflight below.
+            if (!new File(comp, ".git").exists()) {
+                String remote = sub.repo();
+                if (remote == null || remote.isEmpty()) {
+                    planRows.add(new String[]{name,
+                            "skip (no repo URL, no local clone)", "—"});
+                    continue;
+                }
+                unmaterialized.add(name);
             }
-            // Each member clones from its workspace.yaml `repo:` URL (not its
-            // local origin), shown in the plan row above; the load-bearing
-            // preflights are the workspace-root origin + the base-branch check.
             planRows.add(new String[]{name, "clone + branch", versionLabel});
         }
+        preflight.add(new Preflight(
+                "Every member is materialized in the primary",
+                unmaterialized.isEmpty(),
+                unmaterialized.isEmpty()
+                        ? "all clone sources present"
+                        : "missing local clone(s): "
+                                + String.join(", ", unmaterialized)
+                                + " — run `mvn ws:scaffold-init` in the primary"));
 
         return new WorkspaceReportSpec(WsGoal.FEATURE_START_SIBLING_DRAFT,
                 buildReport(siblingName, siblingRoot, branchName, base,
@@ -208,13 +224,12 @@ public class FeatureStartSiblingDraftMojo extends AbstractWorkspaceMojo {
                         ? "`" + siblingRoot.getAbsolutePath() + "` exists — "
                                 + "remove it: `rm -rf " + siblingRoot.getAbsolutePath() + "`"
                         : "`" + siblingRoot.getAbsolutePath() + "`"));
-        String remote = gitOriginUrl(repo);
+        boolean repoMaterialized = new File(repo, ".git").exists();
         preflight.add(new Preflight(
-                "Repo has an `origin` remote",
-                remote != null,
-                remote != null ? remote
-                        : "add one: `git -C " + repo.getAbsolutePath()
-                                + " remote add origin <url>`"));
+                "Repo is a git repository (the sibling chains to it)",
+                repoMaterialized,
+                repoMaterialized ? "`" + repo.getAbsolutePath() + "`"
+                        : "not a git repository — nothing to fork"));
         preflight.add(baseBranchPreflight(repo, base));
 
         return new WorkspaceReportSpec(WsGoal.FEATURE_START_SIBLING_DRAFT,
@@ -223,26 +238,26 @@ public class FeatureStartSiblingDraftMojo extends AbstractWorkspaceMojo {
     }
 
     /**
-     * Preflight that the base branch exists upstream on {@code dir}'s origin,
-     * via {@code git ls-remote origin <base>}.
+     * Preflight that the base branch exists <em>locally</em> in {@code dir}
+     * — the clone source under the local-origin model
+     * (IKE-Network/ike-issues#992); no remote is consulted.
      */
     private Preflight baseBranchPreflight(File dir, String base) {
-        boolean exists = false;
-        String detail;
+        boolean exists;
         try {
-            String out = ReleaseSupport.execCapture(dir,
-                    "git", "ls-remote", "origin", base);
+            String out = ReleaseSupport.execCapture(dir, "git", "rev-parse",
+                    "--verify", "--quiet", "refs/heads/" + base);
             exists = out != null && !out.isBlank();
-            detail = exists
-                    ? "`origin/" + base + "` resolves"
-                    : "`origin` has no branch `" + base + "` — push it, or pass"
-                            + " `-Dfrom=<existing-branch>`";
         } catch (Exception e) {
-            detail = "could not query `origin` (" + e.getMessage()
-                    + ") — check connectivity / the remote";
+            exists = false;
         }
+        String detail = exists
+                ? "local branch `" + base + "` resolves in the clone source"
+                : "no local branch `" + base + "` there — check it out once,"
+                        + " or pass `-Dfrom=<existing-branch>`";
         return new Preflight(
-                "Base branch `" + base + "` exists upstream", exists, detail);
+                "Base branch `" + base + "` exists in the clone source",
+                exists, detail);
     }
 
     /**
@@ -268,23 +283,6 @@ public class FeatureStartSiblingDraftMojo extends AbstractWorkspaceMojo {
             getLog().debug("Could not read POM version for " + dir + ": "
                     + e.getMessage());
             return "—";
-        }
-    }
-
-    /**
-     * Read the {@code origin} remote URL of a git repository, or {@code null}
-     * when it is not a git repo or has no {@code origin}.
-     */
-    private String gitOriginUrl(File dir) {
-        if (!new File(dir, ".git").exists()) {
-            return null;
-        }
-        try {
-            String url = ReleaseSupport.execCapture(dir,
-                    "git", "remote", "get-url", "origin");
-            return url.isBlank() ? null : url.trim();
-        } catch (MojoException e) {
-            return null;
         }
     }
 
@@ -323,14 +321,15 @@ public class FeatureStartSiblingDraftMojo extends AbstractWorkspaceMojo {
                         + feature + "`.");
 
         report.section("Clone cost")
-                .paragraph("Each component is cloned with `--reference "
-                        + "<primary>/<component> --dissociate`. `--reference` "
-                        + "borrows the primary's object database, so over the "
-                        + "network only the delta transfers; `--dissociate` "
-                        + "then copies the borrowed objects so the sibling is "
-                        + "self-contained and `rm -rf`-safe. Disk cost: roughly "
-                        + "a full object DB per sibling — objects are copied, "
-                        + "not shared.");
+                .paragraph("Each component is cloned from the primary's local "
+                        + "member path, which becomes the sibling's `origin` — "
+                        + "the sibling chains sibling → parent → GitHub "
+                        + "(ike-issues#992). The clone is offline (no "
+                        + "transport, no credentials), objects are hardlinked "
+                        + "where the filesystem allows, so creation is fast "
+                        + "and disk cost stays far below a full object DB "
+                        + "until histories diverge. Deleting the sibling "
+                        + "(`rm -rf`) never affects the primary.");
 
         report.section("Next")
                 .paragraph("```bash\nmvn ws:feature-start-sibling-publish"

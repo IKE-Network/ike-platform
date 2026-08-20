@@ -82,13 +82,25 @@ class FeatureStartSiblingPublishIntegrationTest {
                 sibling.resolve("workspace.yaml"), StandardCharsets.UTF_8);
         assertThat(yaml).contains("branch: feature/jira-456");
 
-        // 5. Each sibling component's origin points at the real upstream — not
-        //    the primary's local path (proving --reference did not leak into
-        //    the remote, which would break ws:push).
+        // 5. Each sibling component's origin IS the primary's local member —
+        //    the local-origin chain sibling → parent → GitHub (#992); the
+        //    upstream URL appears nowhere in the sibling's remotes.
         String originLibA = execCapture(sibling.resolve("lib-a"),
                 "git", "remote", "get-url", "origin");
-        assertThat(originLibA).contains("upstream-lib-a.git");
-        assertThat(originLibA).doesNotContain(File.separator + "primary" + File.separator);
+        assertThat(originLibA).endsWith(File.separator + "primary"
+                + File.separator + "lib-a");
+        assertThat(originLibA).doesNotContain("upstream-lib-a.git");
+
+        // 5a. The derived-from parent is recorded, machine-independently
+        //     (relative path — siblings live beside their primary), and the
+        //     record stays out of the sibling root's git status.
+        assertThat(Files.readString(sibling.resolve(".ike/parent-workspace"),
+                StandardCharsets.UTF_8).trim())
+                .as("parent record written (#992)")
+                .isEqualTo(".." + File.separator + "primary");
+        assertThat(execCapture(sibling, "git", "status", "--porcelain"))
+                .as("the record is excluded from the sibling's git status")
+                .doesNotContain(".ike");
 
         // 6. The primary is untouched: still on main, versions not qualified
         //    — including the primary's own aggregator root pom.
@@ -105,11 +117,41 @@ class FeatureStartSiblingPublishIntegrationTest {
     }
 
     /**
+     * A primary that never materialized one of its members has nothing for
+     * the sibling to chain to (IKE-Network/ike-issues#992) — the goal
+     * refuses with the scaffold-init remedy rather than quietly falling
+     * back to an upstream clone that would break the local-origin chain.
+     */
+    @Test
+    void siblingCreate_refusesWhenPrimaryMemberUnmaterialized() throws Exception {
+        deleteRecursively(primary.resolve("lib-b").resolve(".git"));
+
+        FeatureStartSiblingPublishMojo mojo =
+                TestLog.createMojo(FeatureStartSiblingPublishMojo.class);
+        mojo.manifest = primary.resolve("workspace.yaml").toFile();
+        mojo.feature = "jira-999";
+
+        assertThatThrownBy(mojo::execute)
+                .isInstanceOf(MojoException.class)
+                .hasMessageContaining("lib-b")
+                .hasMessageContaining("scaffold-init");
+    }
+
+    private static void deleteRecursively(Path root) throws Exception {
+        if (!Files.exists(root)) {
+            return;
+        }
+        try (Stream<Path> walk = Files.walk(root)) {
+            walk.sorted(java.util.Comparator.reverseOrder())
+                    .forEach(p -> p.toFile().delete());
+        }
+    }
+
+    /**
      * Every repo the goal creates carries a repo-local
-     * {@code core.fsmonitor=false}: on macOS the {@code --dissociate}
-     * repack queries the fresh clone's just-spawned fsmonitor daemon, which
-     * under a file watcher such as Syncthing reliably never answers,
-     * deadlocking the goal (IKE-Network/ike-issues#1052).
+     * {@code core.fsmonitor=false}: a freshly created repo's first
+     * fsmonitor daemon query can deadlock on macOS under a file watcher
+     * such as Syncthing (IKE-Network/ike-issues#1052).
      */
     @Test
     void siblingCreate_optsEveryCloneOutOfFsmonitor() throws Exception {

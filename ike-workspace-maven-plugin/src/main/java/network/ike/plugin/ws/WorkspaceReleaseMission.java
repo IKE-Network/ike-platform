@@ -13,6 +13,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -649,22 +650,52 @@ final class WorkspaceReleaseMission {
      * Repositories whose only movement is version alignment are listed
      * on one summary line; a repository with no previous release tag is
      * noted as a first release rather than dumping its whole history.
+     *
+     * <p>A change made across the whole working set — a parent adoption,
+     * a hygiene sweep — lands as the same commit in every member, and
+     * reproducing it under all fifteen headings buried the members' own
+     * news (mission 7's notes were 31&nbsp;KB, mostly one repeated
+     * adoption). Entries common to every diffed repository are therefore
+     * hoisted into a single <em>Across the working set</em> section and
+     * dropped from the per-member ones.
      */
     private void writeMissionNotes() {
         StringBuilder md = new StringBuilder();
         md.append("# What changed — mission ").append(missionLabel)
                 .append(" (").append(recordDate).append(")\n");
-        List<String> alignmentOnly = new ArrayList<>();
+
+        // Diff every repository first: the shared entries can only be
+        // known once every member's entries are in hand.
+        Map<String, String> previousTags = new LinkedHashMap<>();
+        Map<String, List<String>> entriesByRepo = new LinkedHashMap<>();
         for (ReleasingRepo m : allRepos()) {
             String previousTag =
                     WsReleaseDraftMojo.latestReleaseTag(m.dir(), tagStyle);
+            if (previousTag == null) {
+                continue;
+            }
+            previousTags.put(m.name(), previousTag);
+            entriesByRepo.put(m.name(), notesEntriesFor(m.dir(), previousTag));
+        }
+        List<String> shared = sharedByEveryMember(entriesByRepo);
+        if (!shared.isEmpty()) {
+            md.append("\n## Across the working set\n\n");
+            for (String entry : shared) {
+                md.append(entry).append('\n');
+            }
+        }
+
+        List<String> alignmentOnly = new ArrayList<>();
+        for (ReleasingRepo m : allRepos()) {
+            String previousTag = previousTags.get(m.name());
             if (previousTag == null) {
                 md.append("\n## ").append(m.name()).append(' ')
                         .append(m.releaseVersion()).append("\n\n")
                         .append("- _First release of this member._\n");
                 continue;
             }
-            List<String> entries = notesEntriesFor(m.dir(), previousTag);
+            List<String> entries = new ArrayList<>(entriesByRepo.get(m.name()));
+            entries.removeAll(shared);
             if (entries.isEmpty()) {
                 alignmentOnly.add(m.name() + " " + m.releaseVersion());
             } else {
@@ -679,7 +710,12 @@ final class WorkspaceReleaseMission {
             }
         }
         if (!alignmentOnly.isEmpty()) {
-            md.append("\nMoved for version alignment only: ")
+            // These members did carry the shared change — by
+            // construction it is in every diffed repository — so claiming
+            // they moved for version alignment alone would be false.
+            md.append(shared.isEmpty()
+                            ? "\nMoved for version alignment only: "
+                            : "\nCarried only the change made across the working set: ")
                     .append(String.join(", ", alignmentOnly)).append(".\n");
         }
         try {
@@ -689,6 +725,38 @@ final class WorkspaceReleaseMission {
             throw new MojoException("Mission notes write failed: "
                     + e.getMessage(), e);
         }
+    }
+
+    /**
+     * The entries every diffed repository shares — a change made across
+     * the whole working set, such as a parent adoption or a hygiene
+     * sweep, which git records once per member.
+     *
+     * <p>Membership is exact: an entry qualifies only when it appears in
+     * <em>every</em> repository that was diffed, which admits no judgment
+     * and cannot mistake a change shared by several members for one made
+     * to all. A single diffed repository yields nothing — its entries are
+     * its own news, not the working set's. Order follows the first
+     * repository's, so the hoisted section reads in commit order.
+     *
+     * <p>Static and pure for direct unit testing.
+     *
+     * @param entriesByRepo formatted entries per repository name, in
+     *                      release order
+     * @return the shared entries, first repository's order; empty when
+     *         fewer than two repositories were diffed or nothing is common
+     */
+    static List<String> sharedByEveryMember(
+            Map<String, List<String>> entriesByRepo) {
+        if (entriesByRepo.size() < 2) {
+            return List.of();
+        }
+        Iterator<List<String>> repos = entriesByRepo.values().iterator();
+        List<String> shared = new ArrayList<>(repos.next());
+        while (repos.hasNext()) {
+            shared.retainAll(repos.next());
+        }
+        return shared;
     }
 
     /**
@@ -770,7 +838,13 @@ final class WorkspaceReleaseMission {
                                     .matches()) {
                         continue;
                     }
-                    entry.append("\n  ").append(stripped);
+                    // A quoted body's own headings would nest inside the
+                    // member sections — a merge commit's body did exactly
+                    // that in mission 7, splitting one member's news across
+                    // headings of its own. The text stays; only the heading
+                    // markers go.
+                    entry.append("\n  ")
+                            .append(stripped.replaceFirst("^#{1,6}\\s*", ""));
                 }
             }
             entries.add(entry.toString());

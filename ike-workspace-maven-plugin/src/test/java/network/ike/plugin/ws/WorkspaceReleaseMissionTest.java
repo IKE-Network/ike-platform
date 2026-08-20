@@ -423,6 +423,78 @@ class WorkspaceReleaseMissionTest {
                 .contains("- _First release of this member._");
     }
 
+    /**
+     * A change made across the whole working set lands as the same commit
+     * in every member; the notes hoist it into one shared section
+     * instead of reproducing it under every heading (mission 7's notes
+     * were 31 KB, mostly one repeated parent adoption).
+     */
+    @Test
+    void notes_hoist_the_change_every_member_carries() throws Exception {
+        git(libA, "tag", "v0.9.0");
+        git(libB, "tag", "v1.9.0");
+        String adoption = "Adopt platform 172 across the working set\n\n"
+                + "Root and all members move together.";
+        for (File repo : List.of(libA, libB)) {
+            Files.writeString(repo.toPath().resolve("parent.txt"), "172",
+                    StandardCharsets.UTF_8);
+            git(repo, "add", ".");
+            git(repo, "commit", "-m", adoption);
+        }
+        // One member also has news of its own.
+        Files.writeString(libA.toPath().resolve("flight.txt"), "wings",
+                StandardCharsets.UTF_8);
+        git(libA, "add", ".");
+        git(libA, "commit", "-m", "Teach lib-a to fly");
+
+        mission("hoist-mission").execute("mvnw", true);
+
+        String notes = git(root, "show",
+                "v1:releases/release-hoist-mission-notes.md");
+        assertThat(notes)
+                .contains("## Across the working set")
+                .contains("- **Adopt platform 172 across the working set**")
+                .contains("- **Teach lib-a to fly**")
+                // Hoisted once, not under the member that also has news.
+                .containsOnlyOnce("Adopt platform 172 across the working set")
+                // lib-b carried only the shared change, and the tail says so.
+                .contains("Carried only the change made across the working set: lib-b 2.0.0.")
+                .doesNotContain("Moved for version alignment only");
+    }
+
+    /** Shared across every diffed repository is the whole test. */
+    @Test
+    void shared_entries_need_every_repository_and_at_least_two() {
+        Map<String, List<String>> two = new LinkedHashMap<>();
+        two.put("a", List.of("- **shared**", "- **a-only**"));
+        two.put("b", List.of("- **b-only**", "- **shared**"));
+        assertThat(WorkspaceReleaseMission.sharedByEveryMember(two))
+                .containsExactly("- **shared**");
+
+        Map<String, List<String>> notAll = new LinkedHashMap<>(two);
+        notAll.put("c", List.of("- **c-only**"));
+        assertThat(WorkspaceReleaseMission.sharedByEveryMember(notAll))
+                .isEmpty();
+
+        Map<String, List<String>> lone = new LinkedHashMap<>();
+        lone.put("a", List.of("- **its own news**"));
+        assertThat(WorkspaceReleaseMission.sharedByEveryMember(lone))
+                .isEmpty();
+    }
+
+    /** A quoted body's headings must not nest inside member sections. */
+    @Test
+    void notes_formatting_demotes_headings_inside_commit_bodies() {
+        String raw = "Merge a feature branch\u001f## komet-desktop (3 commits)\n"
+                + "- update: merge main\n"
+                + "#### deeper\u001e";
+        assertThat(WorkspaceReleaseMission.formatNotesEntries(raw))
+                .containsExactly("- **Merge a feature branch**"
+                        + "\n  komet-desktop (3 commits)"
+                        + "\n  - update: merge main"
+                        + "\n  deeper");
+    }
+
     /** Cadence, hygiene, trailers, and blanks never reach the notes. */
     @Test
     void notes_formatting_filters_mechanical_and_trailers() {

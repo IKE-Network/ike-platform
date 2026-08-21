@@ -326,61 +326,51 @@ public class FeatureFinishMergeDraftMojo extends AbstractWorkspaceMojo {
                     manifestPath, needsYamlReconcile, targetBranch, feature, getLog());
         }
 
-        // ── Push phase (#858/#791): verified pushes for every member +
-        // the workspace root; no branch deletion until all confirmed.
-        List<FeatureFinishSupport.PushResult> pushResults = List.of();
-        if (publish && push && (merged > 0 || !alreadyDone.isEmpty())) {
-            getLog().info("");
-            getLog().info("  " + Ansi.cyan("→ ") + "Pushing " + targetBranch
-                    + " for every member (verified)...");
-            java.util.LinkedHashMap<String, File> memberDirs =
-                    new java.util.LinkedHashMap<>();
-            for (String name : needsYamlReconcile) {
-                memberDirs.put(name, new File(root, name));
-            }
-            memberDirs.put(RefreshMainSupport.ROOT_LABEL, root);
-            pushResults = FeatureFinishSupport.pushTargetsVerified(
-                    memberDirs, targetBranch, getLog());
+        // ── Landing phase: verified pushes to origin (#858/#791), or —
+        // for a local-origin sibling — a fast-forward absorb into the
+        // parent working set with nothing pushed (#992). No branch is
+        // deleted until the landing is confirmed, in either model.
+        FinishLanding.Landing landing = FinishLanding.Landing.none(root);
+        if (publish && (merged > 0 || !alreadyDone.isEmpty())) {
+            landing = FinishLanding.land(root, needsYamlReconcile,
+                    targetBranch, push, getLog());
         }
-        List<FeatureFinishSupport.PushResult> pushFailures = pushResults.stream()
-                .filter(r -> !r.pushed()).toList();
+        List<FeatureFinishSupport.PushResult> pushResults = landing.pushed();
 
-        // ── Delete phase (#858): gated on the confirmed push phase (or a
-        // fully local working set with no remote to strand against).
+        // ── Delete phase (#858): gated on the confirmed landing (or a
+        // fully local working set with nothing to strand against).
         String branchesKeptReason = null;
         if (publish) {
             branchesKeptReason = FeatureFinishSupport.deletePhase(
                     root, needsYamlReconcile, branchName, targetBranch,
-                    keepBranch, push, !pushFailures.isEmpty(),
+                    keepBranch, push, landing.failed(),
                     keepRemoteBranch, undeletedRemote, getLog());
         }
 
         // Offer stale branch cleanup (#100)
-        if (publish && merged > 0 && pushFailures.isEmpty()) {
+        if (publish && merged > 0 && !landing.failed()) {
             FeatureFinishSupport.promptStaleBranchCleanup(
                     root, eligible, branchName, targetBranch,
                     getPrompter(), getLog());
         }
 
         // #934: FF-only parent-workspace sync after a fully confirmed
-        // push phase; draft previews the intent.
-        if (syncParent && push) {
-            if (publish && pushFailures.isEmpty()
+        // push phase — for remote-origin siblings only; a local-origin
+        // sibling's parent was already advanced by the landing itself.
+        if (syncParent && push && !landing.toLocalParent()) {
+            if (publish && !landing.failed()
                     && (merged > 0 || !alreadyDone.isEmpty())) {
                 FeatureFinishSupport.propagateToParent(
                         root, targetBranch, getLog());
             } else if (draft) {
-                FeatureFinishSupport.deriveParentWorkspace(root).ifPresent(
-                        parent -> getLog().info("  Parent workspace '"
-                                + parent.getName() + "' will be fast-forwarded"
-                                + " after pushes confirm"
-                                + " (-DsyncParent=false to skip)."));
+                FinishLanding.previewLanding(root, targetBranch, getLog());
             }
+        } else if (draft && landing.toLocalParent()) {
+            FinishLanding.previewLanding(root, targetBranch, getLog());
         }
 
-        if (!pushFailures.isEmpty()) {
-            throw new MojoException(FeatureFinishSupport.pushPhaseFailureMessage(
-                    pushFailures, targetBranch));
+        if (landing.failed()) {
+            throw new MojoException(landing.failureMessage());
         }
 
         getLog().info("");
@@ -394,6 +384,14 @@ public class FeatureFinishMergeDraftMojo extends AbstractWorkspaceMojo {
                     + pushResults.stream().filter(
                             FeatureFinishSupport.PushResult::pushed).count()
                     + "/" + pushResults.size() + " members verified");
+        }
+        if (publish && !landing.absorbed().isEmpty()) {
+            getLog().info("  Landed in parent '"
+                    + landing.localParent().orElseThrow().getName() + "': "
+                    + landing.absorbed().stream()
+                            .filter(SiblingFinish.Absorbed::ok).count()
+                    + "/" + landing.absorbed().size()
+                    + " members — nothing pushed (ike-issues#992)");
         }
         if (branchesKeptReason != null) {
             getLog().info("  Branch kept: " + branchName

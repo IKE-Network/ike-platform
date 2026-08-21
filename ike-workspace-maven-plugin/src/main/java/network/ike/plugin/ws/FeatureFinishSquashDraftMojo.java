@@ -435,72 +435,61 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
                     manifestPath, needsYamlReconcile, targetBranch, feature, getLog());
         }
 
-        // ── Push phase (#858/#791): push every member's target branch —
+        // ── Landing phase: for a remote-origin working set, verified
+        // pushes of every member's target branch (#858/#791) —
         // subprojects squashed this run, subprojects landed by a prior
-        // partial run (their squashes may still be local-only), and the
-        // workspace root — verifying each push against the remote. No
-        // branch is deleted until every push is confirmed.
-        List<FeatureFinishSupport.PushResult> pushResults = List.of();
-        if (publish && push && (merged > 0 || !alreadyDone.isEmpty())) {
-            getLog().info("");
-            getLog().info("  " + Ansi.cyan("→ ") + "Pushing " + targetBranch
-                    + " for every member (verified)...");
-            java.util.LinkedHashMap<String, File> memberDirs =
-                    new java.util.LinkedHashMap<>();
-            for (String name : needsYamlReconcile) {
-                memberDirs.put(name, new File(root, name));
-            }
-            memberDirs.put(RefreshMainSupport.ROOT_LABEL, root);
-            pushResults = FeatureFinishSupport.pushTargetsVerified(
-                    memberDirs, targetBranch, getLog());
+        // partial run, and the workspace root. For a local-origin
+        // sibling, the parent working set absorbs the landing by
+        // fast-forward and nothing is pushed (#992). No branch is
+        // deleted until the landing is confirmed, in either model.
+        FinishLanding.Landing landing = FinishLanding.Landing.none(root);
+        if (publish && (merged > 0 || !alreadyDone.isEmpty())) {
+            landing = FinishLanding.land(root, needsYamlReconcile,
+                    targetBranch, push, getLog());
         }
-        List<FeatureFinishSupport.PushResult> pushFailures = pushResults.stream()
-                .filter(r -> !r.pushed()).toList();
+        List<FeatureFinishSupport.PushResult> pushResults = landing.pushed();
 
-        // ── Delete phase (#858): gated on the push phase. Feature
-        // branches are deleted only when every member's target push is
-        // confirmed (or no member has a remote to strand against); with
-        // -Dpush=false against a remote-backed working set, or any push
-        // failure, they are kept so no squash can ever exist on no remote.
+        // ── Delete phase (#858): gated on the landing. Feature branches
+        // are deleted only when the landing is confirmed (or there is
+        // nothing to strand against); with -Dpush=false, or any landing
+        // failure, they are kept so no squash can exist nowhere else.
         String branchesKeptReason = null;
         if (publish) {
             branchesKeptReason = FeatureFinishSupport.deletePhase(
                     root, needsYamlReconcile, branchName, targetBranch,
-                    keepBranch, push, !pushFailures.isEmpty(),
+                    keepBranch, push, landing.failed(),
                     keepRemoteBranch, undeletedRemote, getLog());
         }
 
         // Offer stale branch cleanup (#100)
-        if (publish && merged > 0 && pushFailures.isEmpty()) {
+        if (publish && merged > 0 && !landing.failed()) {
             FeatureFinishSupport.promptStaleBranchCleanup(
                     root, eligible, branchName, targetBranch,
                     getPrompter(), getLog());
         }
 
         // #934: propagate the finished target back to the parent
-        // workspace this sibling was cut from — only after the push
-        // phase confirmed every member (origin is current), FF-only,
-        // best-effort. Draft previews the intent.
-        if (syncParent && push) {
-            if (publish && pushFailures.isEmpty()
+        // workspace this sibling was cut from — for remote-origin
+        // siblings only, after the push phase confirmed every member.
+        // A local-origin sibling's parent was already advanced by the
+        // landing itself. Draft previews whichever applies.
+        if (syncParent && push && !landing.toLocalParent()) {
+            if (publish && !landing.failed()
                     && (merged > 0 || !alreadyDone.isEmpty())) {
                 FeatureFinishSupport.propagateToParent(
                         root, targetBranch, getLog());
             } else if (draft) {
-                FeatureFinishSupport.deriveParentWorkspace(root).ifPresent(
-                        parent -> getLog().info("  Parent workspace '"
-                                + parent.getName() + "' will be fast-forwarded"
-                                + " after pushes confirm"
-                                + " (-DsyncParent=false to skip)."));
+                FinishLanding.previewLanding(root, targetBranch, getLog());
             }
+        } else if (draft && landing.toLocalParent()) {
+            FinishLanding.previewLanding(root, targetBranch, getLog());
         }
 
-        // A failed push phase is a build failure — after the state above
-        // is safe (branches kept, nothing deleted). The message names
-        // the stranded members and the exact recovery (#858).
-        if (!pushFailures.isEmpty()) {
-            throw new MojoException(FeatureFinishSupport.pushPhaseFailureMessage(
-                    pushFailures, targetBranch));
+        // A failed landing is a build failure — after the state above is
+        // safe (branches kept, nothing deleted). The message names the
+        // stranded members and the exact recovery (#858/#992).
+        if (landing.failed()) {
+            throw new MojoException(landing.failureMessage());
         }
 
         getLog().info("");
@@ -514,6 +503,14 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
                     + pushResults.stream().filter(
                             FeatureFinishSupport.PushResult::pushed).count()
                     + "/" + pushResults.size() + " members verified");
+        }
+        if (publish && !landing.absorbed().isEmpty()) {
+            getLog().info("  Landed in parent '"
+                    + landing.localParent().orElseThrow().getName() + "': "
+                    + landing.absorbed().stream()
+                            .filter(SiblingFinish.Absorbed::ok).count()
+                    + "/" + landing.absorbed().size()
+                    + " members — nothing pushed (ike-issues#992)");
         }
         if (branchesKeptReason != null) {
             getLog().info("  Branch kept: " + branchName

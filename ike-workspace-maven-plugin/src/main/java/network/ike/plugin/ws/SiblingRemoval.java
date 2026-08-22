@@ -82,6 +82,27 @@ final class SiblingRemoval {
     }
 
     /**
+     * Assesses a sibling already in hand — the delete-on-finish path
+     * (IKE-Network/ike-issues#992), where the finish runs inside the
+     * sibling and needs no discovery or target resolution.
+     *
+     * @param siblingRoot the sibling's root directory
+     * @param conformant  whether the local-origin chain is confirmed
+     * @return the target, fully assessed (origins fetched first)
+     */
+    static Target assessKnown(File siblingRoot, boolean conformant) {
+        String name = siblingRoot.getName();
+        int separator = name.indexOf(FeatureName.SIBLING_SEPARATOR);
+        String feature = separator >= 0
+                ? name.substring(separator + FeatureName.SIBLING_SEPARATOR.length())
+                : name;
+        return new Target(
+                new SiblingInventory.Sibling(name, siblingRoot, feature,
+                        conformant),
+                SiblingInventory.assess(siblingRoot, false));
+    }
+
+    /**
      * Renders the preflight into report rows and an overall verdict.
      *
      * @param target the resolved target

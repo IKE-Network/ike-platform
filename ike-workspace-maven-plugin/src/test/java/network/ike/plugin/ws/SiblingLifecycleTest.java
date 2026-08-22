@@ -170,6 +170,95 @@ class SiblingLifecycleTest {
         assertThat(sibling).doesNotExist();
     }
 
+    // ── delete-on-finish (#992, settled 2026-08-22) ──────────────
+
+    @Test
+    void finishWithDeleteSibling_removesAfterTheLanding() throws Exception {
+        Path sibling = createSibling("auto");
+        Path libA = sibling.resolve("lib-a");
+        Files.writeString(libA.resolve("feature.txt"), "the work\n",
+                StandardCharsets.UTF_8);
+        exec(libA, "git", "add", "feature.txt");
+        exec(libA, "git", "commit", "-m", "feat: work in the sibling");
+
+        FeatureFinishSquashPublishMojo finish =
+                TestLog.createMojo(FeatureFinishSquashPublishMojo.class);
+        finish.targetBranch = "main";
+        finish.push = true;
+        finish.syncParent = true;
+        finish.manifest = sibling.resolve("workspace.yaml").toFile();
+        finish.feature = "auto";
+        finish.message = "feat: auto";
+        finish.deleteSibling = true;
+        finish.execute();
+
+        assertThat(sibling)
+                .as("the landing succeeded, so the sibling is removed")
+                .doesNotExist();
+        assertThat(capture(primary.resolve("lib-a"), "git", "show",
+                "--stat", "--oneline", "main"))
+                .as("the work landed in the parent before the removal")
+                .contains("feature.txt");
+        assertThat(primary.resolve("ws꞉feature-finish-squash-publish.md"))
+                .as("the finish receipt lives in the parent — its own home "
+                        + "is gone")
+                .exists();
+        assertThat(Files.readString(
+                primary.resolve("ws꞉feature-finish-squash-publish.md"),
+                StandardCharsets.UTF_8))
+                .contains("Sibling removed");
+    }
+
+    @Test
+    void finishWithDeleteSibling_keepsTheSiblingWhenAStashRemains()
+            throws Exception {
+        Path sibling = createSibling("cautious");
+        Path libA = sibling.resolve("lib-a");
+        Files.writeString(libA.resolve("feature.txt"), "the work\n",
+                StandardCharsets.UTF_8);
+        exec(libA, "git", "add", "feature.txt");
+        exec(libA, "git", "commit", "-m", "feat: work in the sibling");
+        // A stash survives every landing — the one thing no upstream
+        // comparison reveals — so delete-on-finish must keep the sibling.
+        // Edit a TRACKED file: a plain `git stash` ignores untracked ones.
+        Path libB = sibling.resolve("lib-b");
+        Files.writeString(libB.resolve("pom.xml"),
+                Files.readString(libB.resolve("pom.xml"),
+                        StandardCharsets.UTF_8) + "<!-- stashed edit -->\n",
+                StandardCharsets.UTF_8);
+        exec(libB, "git", "stash");
+
+        FeatureFinishSquashPublishMojo finish =
+                TestLog.createMojo(FeatureFinishSquashPublishMojo.class);
+        finish.targetBranch = "main";
+        finish.push = true;
+        finish.syncParent = true;
+        finish.manifest = sibling.resolve("workspace.yaml").toFile();
+        finish.feature = "cautious";
+        finish.message = "feat: cautious";
+        finish.deleteSibling = true;
+        finish.execute();
+
+        assertThat(sibling)
+                .as("a stash would die with the tree; the sibling stays")
+                .exists();
+        assertThat(Files.readString(
+                sibling.resolve("ws꞉feature-finish-squash-publish.md"),
+                StandardCharsets.UTF_8))
+                .contains("Sibling kept")
+                .contains("sibling-remove-draft");
+    }
+
+    private static String capture(Path dir, String... command)
+            throws Exception {
+        Process p = new ProcessBuilder(command)
+                .directory(dir.toFile()).redirectErrorStream(true).start();
+        String out = new String(p.getInputStream().readAllBytes(),
+                StandardCharsets.UTF_8).trim();
+        p.waitFor();
+        return out;
+    }
+
     @Test
     void remove_unknownTarget_pointsAtTheListing() {
         SiblingRemoveDraftMojo draft =

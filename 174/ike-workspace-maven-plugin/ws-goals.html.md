@@ -36,10 +36,14 @@ Draft / publish split Most state-mutating goals come in two forms — `**-draft*
 | [ws:feature-finish-merge — no-fast-forward merge](#feature-finish-merge-publish) | feature | Execute the no-ff merge |
 | [feature-finish-squash](#feature-finish-squash-draft) | feature | Preview a squash-merge back to main (recommended) |
 | [ws:feature-finish-squash — squash-merge back to main](#feature-finish-squash-publish) | feature | Execute the squash-merge |
+| [feature-pr](#feature-pr-draft) | feature | Preview one review PR per subproject, cross-linked as a set |
+| [ws:feature-pr — one review PR per subproject, as a set](#feature-pr-publish) | feature | Open the pull-request set |
 | [feature-start](#feature-start-draft) | feature | Preview a coordinated feature branch |
 | [ws:feature-start — coordinated feature branch](#feature-start-publish) | feature | Create the feature branch with auto-alignment |
 | [feature-start-sibling](#feature-start-sibling-draft) | sibling | Preview a sibling working set beside the parent |
 | [ws:feature-start-sibling — an isolated working set for one feature](#feature-start-sibling-publish) | sibling | Create the sibling: `꞉` directory, feature branch, local origins |
+| [feature-track](#feature-track-draft) | feature | Preview adopting an existing feature branch in selected subprojects |
+| [ws:feature-track — adopt an existing feature branch](#feature-track-publish) | feature | Check out the existing branch and align `workspace.yaml` |
 | [ws:graph — dependency graph](#graph) | inspection | Print or DOT-render the workspace dependency graph |
 | [ws:lint — preflight hygiene gate](#lint) | inspection | Surface preflight hygiene conditions (report-only) |
 | [ws:overview — consolidated dashboard](#overview) | inspection | Consolidated manifest + graph + status + cascade |
@@ -54,6 +58,8 @@ Draft / publish split Most state-mutating goals come in two forms — `**-draft*
 | [ws:release-draft — preview a coordinated release](#release-draft) | release | Preview a coordinated multi-repo release |
 | [ws:release-notes — milestone-derived release notes](#release-notes) | release | Generate notes from a GitHub milestone |
 | [ws:release-publish — execute the reactor-pass release cycle](#release-publish) | release | Execute the coordinated release |
+| [release-rollback](#release-rollback-draft) | recovery | Preview rolling back a failed release mission (unpushed commits/tags) |
+| [ws:release-rollback — roll back a failed release mission](#release-rollback-publish) | recovery | Execute the rollback, all-or-nothing |
 | [ws:release-status — diagnose in-flight releases](#release-status) | inspection | Diagnose any in-flight or partial release |
 | [ws:remove — remove a subproject](#remove) | setup | Remove a subproject from `workspace.yaml` |
 | [ws:report — open per-goal reports](#report) | inspection | List and open per-goal markdown reports |
@@ -194,6 +200,15 @@ Performs no mutations. Run this any time you suspect a release went sideways.
 mvn ws:release-status
 ```
 
+### [#ws-release-rollback--roll-back-a-failed-release-mi](#ws-release-rollback--roll-back-a-failed-release-mi)ws:release-rollback — roll back a failed release mission
+
+Roll the working set back from a failed release mission (ike-issues#1010). For the root and every cloned member, the draft reports the release-cadence commits sitting unpushed on top of the branch, the local tags on them, and the commit a rollback would reset to. Pushed history is never touched; repositories with uncommitted changes, no upstream, or mission commits buried beneath later work are reported as refusals — and the publish is all-or-nothing over the refusal-free set.
+
+```
+mvn ws:release-rollback-draft
+mvn ws:release-rollback-publish
+```
+
 ### [#ws-check-branch--defensive-git-hook](#ws-check-branch--defensive-git-hook)ws:check-branch — defensive git hook
 
 Defensive git hook — warns when a branch is created or switched outside the workspace tooling. Intended to be called from a `post-checkout` git hook:
@@ -325,6 +340,24 @@ Remove a sibling working set safely. The draft enumerates any unlanded work with
 ```
 mvn ws:sibling-remove-draft -Dsibling=issue-42     # assess
 mvn ws:sibling-remove-publish -Dsibling=issue-42   # remove + lease GC
+```
+
+### [#ws-feature-pr--one-review-pr-per-subproject-as-a-s](#ws-feature-pr--one-review-pr-per-subproject-as-a-s)ws:feature-pr — one review PR per subproject, as a set
+
+A workspace feature routinely spans several repositories, and GitHub has no pull request that covers more than one. This goal opens one review PR per subproject carrying the feature branch and cross-links them, so a reviewer sees the whole change set rather than approving an incomplete picture. The draft previews the set; the publish opens it.
+
+```
+mvn ws:feature-pr-draft -Dfeature=my-feature
+mvn ws:feature-pr-publish -Dfeature=my-feature
+```
+
+### [#ws-feature-track--adopt-an-existing-feature-branch](#ws-feature-track--adopt-an-existing-feature-branch)ws:feature-track — adopt an existing feature branch
+
+Where `ws:feature-start` **creates** `feature/<name>` from the current tip, this goal checks out a branch that already exists — typically pushed from another clone or by another developer — in exactly the subprojects named by `-Daffected`, and aligns `workspace.yaml’s `branch:` fields with the result.
+
+```
+mvn ws:feature-track-draft -Dfeature=my-feature -Daffected=komet,tinkar-core
+mvn ws:feature-track-publish -Dfeature=my-feature -Daffected=komet,tinkar-core
 ```
 
 ### [#ws-update-feature--incorporate-main-into-feature](#ws-update-feature--incorporate-main-into-feature)ws:update-feature — incorporate main into feature

@@ -1,0 +1,286 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>SiblingFinish.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">SiblingFinish.java</span></div><h1>SiblingFinish.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.plugin.ReleaseSupport;
+import network.ike.plugin.ws.vcs.VcsOperations;
+import org.apache.maven.api.plugin.Log;
+import org.apache.maven.api.plugin.MojoException;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+
+/**
+ * The finish half of the local-origin sibling model
+ * (IKE-Network/ike-issues#992): a sibling finishes &lt;em&gt;locally to its
+ * local origin&lt;/em&gt; — the working set it was derived from — and GitHub
+ * enters only when that parent later pushes.
+ *
+ * &lt;p&gt;Under the model, {@code origin} in every sibling member is the
+ * parent's member path, so the finish's old &quot;push {@code main} to
+ * origin&quot; phase cannot apply: git refuses to update a non-bare
+ * repository's checked-out branch ({@code denyCurrentBranch}), and that
+ * refusal is the right invariant — a sibling must not mutate the
+ * parent's mainline from outside. Instead the mutation executes
+ * &lt;em&gt;in the parent&lt;/em&gt;:
+ *
+ * &lt;ol&gt;
+ *   &lt;li&gt;the sibling squash- or merge-lands the feature on its own local
+ *       target branch, exactly as before (a purely local act);&lt;/li&gt;
+ *   &lt;li&gt;each parent member fetches that target from its sibling member
+ *       and fast-forwards — {@code --ff-only} when the branch is checked
+ *       out, a refusing ref update when it is not. The sibling's target
+ *       is the parent's target plus the landing commit, so this is a
+ *       fast-forward by construction;&lt;/li&gt;
+ *   &lt;li&gt;nothing is pushed anywhere. Externalization is the parent's own
+ *       explicit {@code ws:push}.&lt;/li&gt;
+ * &lt;/ol&gt;
+ *
+ * &lt;p&gt;A member whose parent side is not a fast-forward (the parent moved
+ * on independently) is reported, never forced and never merged: the
+ * operator reconciles in the parent. Feature-branch deletion in the
+ * sibling is gated on the parent having absorbed the landing — the
+ * local-origin analogue of the {@code #858} no-stranded-squash contract,
+ * with the parent playing the role the remote played.
+ *
+ * @see FeatureStartSiblingPublishMojo for the creation half
+ */
+final class SiblingFinish {
+
+    /** Where the creation half records the derived-from parent (#992). */
+    static final String PARENT_RECORD = &quot;.ike/parent-workspace&quot;;
+
+    private SiblingFinish() {}
+
+    /**
+     * The parent working set this sibling was derived from, when the
+     * sibling really does chain to it locally.
+     *
+     * &lt;p&gt;Resolution order: the {@link #PARENT_RECORD} written at
+     * creation, then the {@code &lt;parent&gt;꞉&lt;feature&gt;} naming convention
+     * (so siblings created before the record existed still resolve).
+     * Either way the result is confirmed against the sibling root's
+     * {@code origin}: only when origin resolves to the parent's path is
+     * this a local-origin sibling. A sibling still pointing at GitHub —
+     * every sibling created before #992 — resolves to empty here and
+     * keeps the remote-origin finish path.
+     *
+     * @param siblingRoot the workspace root the finish is running in
+     * @return the parent workspace root, or empty when this is not a
+     *         local-origin sibling
+     */
+    static Optional&lt;File&gt; localParent(File siblingRoot) {
+<span class="fc" id="L79">        Optional&lt;File&gt; candidate = recordedParent(siblingRoot)</span>
+<span class="fc" id="L80">                .or(() -&gt; FeatureFinishSupport.deriveParentWorkspace(siblingRoot));</span>
+<span class="fc bfc" id="L81" title="All 2 branches covered.">        if (candidate.isEmpty()) {</span>
+<span class="fc" id="L82">            return Optional.empty();</span>
+        }
+<span class="fc" id="L84">        File parent = candidate.get();</span>
+<span class="pc bpc" id="L85" title="1 of 2 branches missed.">        if (!new File(parent, &quot;.git&quot;).exists()) {</span>
+<span class="nc" id="L86">            return Optional.empty();</span>
+        }
+<span class="fc bfc" id="L88" title="All 2 branches covered.">        return originResolvesTo(siblingRoot, parent)</span>
+<span class="fc" id="L89">                ? Optional.of(parent) : Optional.empty();</span>
+    }
+
+    /**
+     * The parent recorded at creation in {@link #PARENT_RECORD}, resolved
+     * against the sibling root. The record holds a relative path, so it
+     * stays valid on every machine the sync layer carries it to.
+     */
+    private static Optional&lt;File&gt; recordedParent(File siblingRoot) {
+<span class="fc" id="L98">        Path record = siblingRoot.toPath().resolve(PARENT_RECORD);</span>
+<span class="fc bfc" id="L99" title="All 2 branches covered.">        if (!Files.exists(record)) {</span>
+<span class="fc" id="L100">            return Optional.empty();</span>
+        }
+        try {
+<span class="fc" id="L103">            String value = Files.readString(record, StandardCharsets.UTF_8).trim();</span>
+<span class="pc bpc" id="L104" title="1 of 2 branches missed.">            if (value.isEmpty()) {</span>
+<span class="nc" id="L105">                return Optional.empty();</span>
+            }
+<span class="fc" id="L107">            return Optional.of(siblingRoot.toPath().resolve(value)</span>
+<span class="fc" id="L108">                    .normalize().toFile());</span>
+<span class="nc" id="L109">        } catch (IOException e) {</span>
+<span class="nc" id="L110">            return Optional.empty();</span>
+        }
+    }
+
+    /** Whether {@code dir}'s {@code origin} is {@code expected}'s path. */
+    private static boolean originResolvesTo(File dir, File expected) {
+<span class="pc bpc" id="L116" title="1 of 2 branches missed.">        if (!ReleaseSupport.hasRemote(dir, &quot;origin&quot;)) {</span>
+<span class="nc" id="L117">            return false;</span>
+        }
+        try {
+<span class="fc" id="L120">            String url = ReleaseSupport.execCapture(dir,</span>
+<span class="fc" id="L121">                    &quot;git&quot;, &quot;remote&quot;, &quot;get-url&quot;, &quot;origin&quot;).trim();</span>
+<span class="pc bpc" id="L122" title="1 of 2 branches missed.">            if (url.isEmpty()) {</span>
+<span class="nc" id="L123">                return false;</span>
+            }
+<span class="fc bfc" id="L125" title="All 2 branches covered.">            File origin = url.startsWith(&quot;file://&quot;)</span>
+<span class="fc" id="L126">                    ? new File(java.net.URI.create(url))</span>
+<span class="fc" id="L127">                    : new File(url);</span>
+<span class="fc" id="L128">            return origin.getAbsoluteFile().toPath().normalize()</span>
+<span class="fc" id="L129">                    .equals(expected.getAbsoluteFile().toPath().normalize());</span>
+<span class="nc" id="L130">        } catch (MojoException | IllegalArgumentException e) {</span>
+<span class="nc" id="L131">            return false;</span>
+        }
+    }
+
+    /** One member's parent-side outcome. */
+<span class="fc" id="L136">    record Absorbed(String member, boolean ok, String detail) {}</span>
+
+    /**
+     * Fast-forward every parent member from its sibling member, landing
+     * the finished target branch in the parent.
+     *
+     * &lt;p&gt;Members are addressed by name against both roots, with the
+     * workspace root itself included last (mirroring the push phase's
+     * member set). A member missing on either side is reported as
+     * absorbed-with-nothing-to-do rather than failing the finish: the
+     * sibling may legitimately carry members the parent never
+     * materialized.
+     *
+     * @param siblingRoot  the sibling workspace root the finish ran in
+     * @param parentRoot   the parent workspace root it chains to
+     * @param members      member names finished this run
+     * @param targetBranch the branch that was finished into (e.g. main)
+     * @param log          Maven logger
+     * @return one result per member (root included), in order
+     */
+    static List&lt;Absorbed&gt; absorbIntoParent(File siblingRoot, File parentRoot,
+                                           List&lt;String&gt; members,
+                                           String targetBranch, Log log) {
+<span class="fc" id="L159">        Map&lt;String, File&gt; siblingDirs = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc bfc" id="L160" title="All 2 branches covered.">        for (String name : members) {</span>
+<span class="fc" id="L161">            siblingDirs.put(name, new File(siblingRoot, name));</span>
+<span class="fc" id="L162">        }</span>
+<span class="fc" id="L163">        siblingDirs.put(RefreshMainSupport.ROOT_LABEL, siblingRoot);</span>
+
+<span class="fc" id="L165">        List&lt;Absorbed&gt; results = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L166">        log.info(&quot;&quot;);</span>
+<span class="fc" id="L167">        log.info(&quot;  &quot; + Ansi.cyan(&quot;→ &quot;) + &quot;Landing &quot; + targetBranch</span>
+<span class="fc" id="L168">                + &quot; in the parent working set '&quot; + parentRoot.getName()</span>
+                + &quot;' (fast-forward only)...&quot;);
+<span class="fc bfc" id="L170" title="All 2 branches covered.">        for (Map.Entry&lt;String, File&gt; entry : siblingDirs.entrySet()) {</span>
+<span class="fc" id="L171">            String member = entry.getKey();</span>
+<span class="fc" id="L172">            File siblingDir = entry.getValue();</span>
+<span class="fc bfc" id="L173" title="All 2 branches covered.">            File parentDir = RefreshMainSupport.ROOT_LABEL.equals(member)</span>
+<span class="fc" id="L174">                    ? parentRoot : new File(parentRoot, member);</span>
+<span class="fc" id="L175">            results.add(absorbMember(member, siblingDir, parentDir,</span>
+                    targetBranch, log));
+<span class="fc" id="L177">        }</span>
+<span class="fc" id="L178">        return results;</span>
+    }
+
+    /**
+     * Fast-forward one parent member from its sibling counterpart:
+     * fetch the sibling's target into {@code FETCH_HEAD}, verify the
+     * parent's target is an ancestor of it, then fast-forward — with
+     * {@code merge --ff-only} when the parent has the branch checked
+     * out, or a refusing {@code fetch &lt;path&gt; &lt;target&gt;:&lt;target&gt;} ref
+     * update when it does not (never touching the parent's working
+     * tree).
+     */
+    private static Absorbed absorbMember(String member, File siblingDir,
+                                         File parentDir, String targetBranch,
+                                         Log log) {
+<span class="pc bpc" id="L193" title="1 of 2 branches missed.">        if (!new File(siblingDir, &quot;.git&quot;).exists()</span>
+<span class="pc bpc" id="L194" title="1 of 2 branches missed.">                || !new File(parentDir, &quot;.git&quot;).exists()) {</span>
+<span class="nc" id="L195">            log.debug(&quot;    &quot; + member + &quot; — no counterpart pair; skipped&quot;);</span>
+<span class="nc" id="L196">            return new Absorbed(member, true, &quot;no counterpart&quot;);</span>
+        }
+<span class="fc" id="L198">        String source = siblingDir.getAbsolutePath();</span>
+        try {
+<span class="pc bpc" id="L200" title="1 of 2 branches missed.">            if (!VcsOperations.localBranchExists(siblingDir, targetBranch)) {</span>
+<span class="nc" id="L201">                return new Absorbed(member, true,</span>
+                        &quot;no &quot; + targetBranch + &quot; in the sibling&quot;);
+            }
+<span class="fc" id="L204">            String siblingSha = VcsOperations.branchSha(siblingDir, targetBranch);</span>
+
+<span class="pc bpc" id="L206" title="1 of 2 branches missed.">            if (!VcsOperations.localBranchExists(parentDir, targetBranch)) {</span>
+<span class="nc" id="L207">                ReleaseSupport.exec(parentDir, log, &quot;git&quot;, &quot;fetch&quot;, source,</span>
+                        targetBranch + &quot;:&quot; + targetBranch);
+<span class="nc" id="L209">                log.info(&quot;    &quot; + Ansi.green(&quot;✓ &quot;) + member + &quot; — &quot;</span>
+                        + targetBranch + &quot; created in the parent (&quot; + siblingSha + &quot;)&quot;);
+<span class="nc" id="L211">                return new Absorbed(member, true, siblingSha);</span>
+            }
+
+<span class="fc" id="L214">            String parentSha = VcsOperations.branchSha(parentDir, targetBranch);</span>
+<span class="fc bfc" id="L215" title="All 2 branches covered.">            if (parentSha.equals(siblingSha)) {</span>
+<span class="fc" id="L216">                log.info(&quot;    &quot; + member + &quot; — parent already at &quot; + siblingSha);</span>
+<span class="fc" id="L217">                return new Absorbed(member, true, siblingSha);</span>
+            }
+
+            // Fetch the sibling's target so ancestry can be tested
+            // against a local ref, then fast-forward if and only if the
+            // parent has not moved on independently.
+<span class="fc" id="L223">            ReleaseSupport.exec(parentDir, log, &quot;git&quot;, &quot;fetch&quot;, source, targetBranch);</span>
+<span class="fc bfc" id="L224" title="All 2 branches covered.">            if (!VcsOperations.isAncestor(parentDir, targetBranch, siblingSha)) {</span>
+<span class="fc" id="L225">                log.warn(&quot;    &quot; + Ansi.yellow(&quot;⚠ &quot;) + member + &quot; — parent &quot;</span>
+                        + targetBranch + &quot; is not an ancestor of the sibling's;&quot;
+                        + &quot; left alone&quot;);
+<span class="fc" id="L228">                return new Absorbed(member, false,</span>
+                        &quot;parent &quot; + targetBranch + &quot; diverged (&quot; + parentSha
+                        + &quot; vs &quot; + siblingSha + &quot;) — reconcile in the parent&quot;);
+            }
+
+<span class="pc bpc" id="L233" title="1 of 2 branches missed.">            if (targetBranch.equals(VcsOperations.currentBranch(parentDir))) {</span>
+<span class="fc" id="L234">                VcsOperations.mergeFfOnly(parentDir, log, siblingSha);</span>
+            } else {
+                // Refuses on non-fast-forward rather than discarding work.
+<span class="nc" id="L237">                ReleaseSupport.exec(parentDir, log, &quot;git&quot;, &quot;fetch&quot;, source,</span>
+                        targetBranch + &quot;:&quot; + targetBranch);
+            }
+<span class="fc" id="L240">            int landed = VcsOperations.commitLog(</span>
+<span class="fc" id="L241">                    parentDir, parentSha, siblingSha).size();</span>
+<span class="fc" id="L242">            log.info(&quot;    &quot; + Ansi.green(&quot;✓ &quot;) + member + &quot; — fast-forwarded (&quot;</span>
+<span class="fc bfc" id="L243" title="All 2 branches covered.">                    + landed + &quot; commit&quot; + (landed == 1 ? &quot;&quot; : &quot;s&quot;) + &quot;)&quot;);</span>
+<span class="fc" id="L244">            return new Absorbed(member, true, siblingSha);</span>
+<span class="nc" id="L245">        } catch (MojoException e) {</span>
+<span class="nc" id="L246">            log.warn(&quot;    &quot; + Ansi.red(&quot;✗ &quot;) + member</span>
+<span class="nc" id="L247">                    + &quot; — could not land in the parent: &quot; + e.getMessage());</span>
+<span class="nc" id="L248">            return new Absorbed(member, false, e.getMessage());</span>
+        }
+    }
+
+    /**
+     * The failure message when the parent could not absorb every member:
+     * names each member and its reason, states that no feature branch was
+     * deleted, and gives the recovery. The local-origin analogue of
+     * {@code FeatureFinishSupport.pushPhaseFailureMessage} — the parent
+     * plays the role the remote played in {@code #858}.
+     *
+     * @param failures     members the parent could not fast-forward
+     * @param targetBranch the branch being landed
+     * @param parentRoot   the parent working set
+     * @return the formatted failure message
+     */
+    static String absorbFailureMessage(List&lt;Absorbed&gt; failures,
+                                       String targetBranch, File parentRoot) {
+<span class="fc" id="L266">        StringBuilder sb = new StringBuilder();</span>
+<span class="fc" id="L267">        sb.append(&quot;Feature-finish stopped: the parent working set '&quot;)</span>
+<span class="fc" id="L268">                .append(parentRoot.getName()).append(&quot;' could not absorb &quot;)</span>
+<span class="fc" id="L269">                .append(failures.size()).append(&quot; member(s) — the landing &quot;</span>
+<span class="fc" id="L270">                        + &quot;exists on the sibling's &quot;).append(targetBranch)</span>
+<span class="fc" id="L271">                .append(&quot; only:\n&quot;);</span>
+<span class="fc bfc" id="L272" title="All 2 branches covered.">        for (Absorbed f : failures) {</span>
+<span class="fc" id="L273">            sb.append(&quot;  &quot;).append(f.member()).append(&quot; — &quot;)</span>
+<span class="fc" id="L274">                    .append(f.detail()).append(&quot;\n&quot;);</span>
+<span class="fc" id="L275">        }</span>
+<span class="fc" id="L276">        sb.append(&quot;\nNo feature branch was deleted. Reconcile the parent, &quot;</span>
+                + &quot;then re-run the finish:\n&quot;)
+<span class="fc" id="L278">                .append(&quot;  cd &quot;).append(parentRoot.getAbsolutePath())</span>
+<span class="fc" id="L279">                .append(&quot;\n  mvn &quot;).append(WsGoal.PULL.qualified())</span>
+<span class="fc" id="L280">                .append(&quot;   # reconcile &quot;).append(targetBranch)</span>
+<span class="fc" id="L281">                .append(&quot;\n\nThe sibling's work is intact — nothing was forced &quot;</span>
+                        + &quot;or discarded.&quot;);
+<span class="fc" id="L283">        return sb.toString();</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

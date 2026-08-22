@@ -1,7 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>FeatureFinishSquashPublishMojo.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">FeatureFinishSquashPublishMojo.java</span></div><h1>FeatureFinishSquashPublishMojo.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
 
+import network.ike.workspace.FeatureName;
 import org.apache.maven.api.plugin.MojoException;
 import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
+
+import java.io.File;
+import java.nio.file.Path;
+import java.util.Optional;
 
 /**
  * Execute a squash-merge of a feature branch.
@@ -11,21 +17,117 @@ import org.apache.maven.api.plugin.annotations.Mojo;
  *
  * &lt;p&gt;Usage: {@code mvn ws:feature-finish-squash-publish -Dfeature=done -Dmessage=&quot;Ship it&quot;}
  *
+ * &lt;p&gt;{@code -DdeleteSibling=true} (IKE-Network/ike-issues#992, settled
+ * 2026-08-22) removes the sibling working set after a successful landing:
+ * at that moment everything is landed by construction, so the removal
+ * preflight (IKE-Network/ike-issues#600) is re-run as a cheap guard and
+ * anything it still finds — a stash, an unrelated branch, a bare tree —
+ * keeps the sibling in place with a warning rather than deleting it.
+ * There is deliberately no force here; deliberate discard belongs to
+ * {@code ws:sibling-remove-publish -Dforce=true}. The lease held by
+ * {@link #confirmWorkingSetLease()} covers the deletion, and the finish
+ * receipt is persisted to the &lt;em&gt;parent&lt;/em&gt; first, because its own home
+ * vanishes with the sibling.
+ *
  * @see FeatureFinishSquashDraftMojo
+ * @see SiblingRemovePublishMojo
  */
 @Mojo(name = &quot;feature-finish-squash-publish&quot;, projectRequired = false, aggregator = true)
 public class FeatureFinishSquashPublishMojo extends FeatureFinishSquashDraftMojo {
 
+    /**
+     * Remove the sibling working set after a successful landing. Ignored
+     * with a warning when the working set is not a local-origin sibling;
+     * skipped with a warning when the post-landing preflight still finds
+     * anything that would be lost.
+     */
+    @Parameter(property = &quot;deleteSibling&quot;, defaultValue = &quot;false&quot;)
+    boolean deleteSibling;
+
     /** Creates this goal instance. */
-<span class="nc" id="L20">    public FeatureFinishSquashPublishMojo() {}</span>
+<span class="fc" id="L48">    public FeatureFinishSquashPublishMojo() {}</span>
 
     @Override
     protected WorkspaceReportSpec runGoal() throws MojoException {
-<span class="nc" id="L24">        confirmWorkingSetLease();</span>
-<span class="nc" id="L25">        publish = true;</span>
-<span class="nc" id="L26">        WorkspaceReportSpec spec = super.runGoal();</span>
-<span class="nc" id="L27">        PostMutationSync.refresh(workspaceRoot(), getLog());</span>
-<span class="nc" id="L28">        return spec;</span>
+<span class="fc" id="L52">        confirmWorkingSetLease();</span>
+<span class="fc" id="L53">        publish = true;</span>
+        WorkspaceReportSpec spec;
+        // The landing absorbs into the parent, which makes this goal a
+        // writer of the parent too — so its lease is short-held across
+        // the landing (#992's parent leasing, #1005's ws: half). A hold
+        // acquired fresh is given back on close, success or failure.
+<span class="fc" id="L59">        try (ParentLeaseHold hold =</span>
+<span class="fc" id="L60">                ParentLeaseHold.acquire(workspaceRoot(), getLog())) {</span>
+<span class="fc" id="L61">            spec = super.runGoal();</span>
+<span class="fc" id="L62">            PostMutationSync.refresh(workspaceRoot(), getLog());</span>
+        }
+<span class="fc bfc" id="L64" title="All 2 branches covered.">        if (deleteSibling) {</span>
+<span class="fc" id="L65">            spec = deleteSiblingAfterLanding(spec);</span>
+        }
+<span class="fc" id="L67">        return spec;</span>
+    }
+
+    /**
+     * The delete-on-finish tail: re-assess, then remove the sibling or
+     * explain why it stays.
+     *
+     * &lt;p&gt;When the sibling is deleted, the framework's own receipt write
+     * (into the now-gone sibling root) fails silently by design; the
+     * receipt written here into the parent is the durable record.
+     *
+     * @param spec the finish's report so far
+     * @return the report, extended with the removal (or kept) section
+     */
+    private WorkspaceReportSpec deleteSiblingAfterLanding(
+            WorkspaceReportSpec spec) {
+<span class="fc" id="L83">        File root = workspaceRoot();</span>
+<span class="fc" id="L84">        Optional&lt;File&gt; parent = SiblingFinish.localParent(root);</span>
+<span class="fc" id="L85">        boolean named = root.getName()</span>
+<span class="fc" id="L86">                .contains(FeatureName.SIBLING_SEPARATOR);</span>
+<span class="pc bpc" id="L87" title="2 of 4 branches missed.">        if (!named || parent.isEmpty()) {</span>
+<span class="nc" id="L88">            getLog().warn(&quot;  -DdeleteSibling: '&quot; + root.getName()</span>
+                    + &quot;' is not a local-origin sibling; nothing is deleted.&quot;);
+<span class="nc" id="L90">            return spec;</span>
+        }
+
+<span class="fc" id="L93">        SiblingRemoval.Target target = SiblingRemoval.assessKnown(root, true);</span>
+<span class="fc bfc" id="L94" title="All 2 branches covered.">        if (!SiblingRemoval.clean(target)) {</span>
+<span class="fc" id="L95">            getLog().warn(&quot;  -DdeleteSibling: the sibling still holds &quot;</span>
+                    + &quot;something the landing did not carry — kept in place.&quot;);
+<span class="fc bfc" id="L97" title="All 2 branches covered.">            for (String[] row : SiblingRemoval.preflightRows(target)) {</span>
+<span class="fc bfc" id="L98" title="All 2 branches covered.">                if (&quot;✗&quot;.equals(row[0])) {</span>
+<span class="fc" id="L99">                    getLog().warn(&quot;    &quot; + row[1] + &quot;: &quot; + row[2]);</span>
+                }
+<span class="fc" id="L101">            }</span>
+<span class="fc" id="L102">            return new WorkspaceReportSpec(spec.goal(), spec.content()</span>
+                    + &quot;\n## Sibling kept\n\nThe post-landing check still &quot;
+                    + &quot;found work that would die with the tree (see the &quot;
+                    + &quot;warnings above). Review with `&quot;
+<span class="fc" id="L106">                    + WsGoal.SIBLING_REMOVE_DRAFT.qualified()</span>
+<span class="fc" id="L107">                    + &quot; -Dfeature=&quot; + target.sibling().feature()</span>
+                    + &quot;`; discard deliberately with `&quot;
+<span class="fc" id="L109">                    + WsGoal.SIBLING_REMOVE_PUBLISH.qualified()</span>
+                    + &quot; -Dforce=true`.\n&quot;);
+        }
+
+<span class="fc" id="L113">        String removedNote = &quot;\n## Sibling removed\n\n`&quot;</span>
+<span class="fc" id="L114">                + root.getAbsolutePath() + &quot;` was deleted after the landing &quot;</span>
+                + &quot;(-DdeleteSibling=true): every member was clean and &quot;
+                + &quot;landed. The sync layer propagates the deletion; &quot;
+                + &quot;staggered file versioning is the net. This receipt &quot;
+                + &quot;lives in the parent because the sibling is gone.\n&quot;;
+<span class="fc" id="L119">        WorkspaceReportSpec extended = new WorkspaceReportSpec(spec.goal(),</span>
+<span class="fc" id="L120">                spec.content() + removedNote);</span>
+        // The parent copy first: after the deletion there is nowhere else
+        // for this record to live.
+<span class="fc" id="L123">        WorkspaceReport.write(parent.get().toPath(),</span>
+<span class="fc" id="L124">                extended.goal().qualified(), extended.content(), getLog());</span>
+<span class="fc" id="L125">        Path gcRecord = SiblingRemoval.delete(target);</span>
+<span class="fc" id="L126">        getLog().info(&quot;  Sibling removed: &quot; + root.getAbsolutePath());</span>
+<span class="pc bpc" id="L127" title="1 of 2 branches missed.">        if (gcRecord != null) {</span>
+<span class="nc" id="L128">            getLog().info(&quot;  Lease record GC'd: &quot; + gcRecord.getFileName());</span>
+        }
+<span class="fc" id="L130">        return extended;</span>
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

@@ -31,13 +31,14 @@ import java.util.List;
  *       feature branch, the base branch, and the members that would be
  *       cloned and version-qualified;&lt;/li&gt;
  *   &lt;li&gt;preflight checks, each with copy-pasteable remediation when failing:
- *       the sibling dir must not already exist; the workspace root and every
- *       member must have an {@code origin} remote; the base branch must exist
- *       upstream;&lt;/li&gt;
- *   &lt;li&gt;a clone-cost note — objects are borrowed from the primary via
- *       {@code --reference} (network: delta only) and {@code --dissociate}
- *       copies them for a self-contained, {@code rm -rf}-safe sibling (disk:
- *       roughly a full object DB per sibling, not shared).&lt;/li&gt;
+ *       the sibling dir must not already exist; the primary root and every
+ *       member with a repo URL must be materialized locally — the sibling
+ *       chains through its local parent (IKE-Network/ike-issues#992); the
+ *       base branch must exist locally in the primary;&lt;/li&gt;
+ *   &lt;li&gt;a clone-cost note — members clone from the primary's local paths
+ *       (origin = the parent member): offline, no transport or credential
+ *       machinery, objects hardlinked where the filesystem allows, and the
+ *       sibling stays {@code rm -rf}-safe.&lt;/li&gt;
  * &lt;/ul&gt;
  *
  * &lt;pre&gt;{@code
@@ -72,99 +73,114 @@ public class FeatureStartSiblingDraftMojo extends AbstractWorkspaceMojo {
     String from;
 
     /** Creates this goal instance. */
-<span class="fc" id="L75">    public FeatureStartSiblingDraftMojo() {}</span>
+<span class="fc" id="L76">    public FeatureStartSiblingDraftMojo() {}</span>
 
     /** A single preflight check row: the check, pass/fail, and remediation. */
-<span class="fc" id="L78">    private record Preflight(String check, boolean ok, String detail) {}</span>
+<span class="fc" id="L79">    private record Preflight(String check, boolean ok, String detail) {}</span>
 
     @Override
     protected WorkspaceReportSpec runGoal() throws MojoException {
-<span class="fc" id="L82">        feature = requireParam(feature, &quot;feature&quot;,</span>
+<span class="fc" id="L83">        feature = requireParam(feature, &quot;feature&quot;,</span>
                 &quot;Feature name (without feature/ prefix)&quot;);
-<span class="fc" id="L84">        FeatureName featureName = validateFeatureName(feature);</span>
-<span class="fc" id="L85">        String branchName = &quot;feature/&quot; + feature;</span>
+<span class="fc" id="L85">        FeatureName featureName = validateFeatureName(feature);</span>
+<span class="fc" id="L86">        String branchName = &quot;feature/&quot; + feature;</span>
 
-<span class="pc bpc" id="L87" title="1 of 2 branches missed.">        if (!isWorkspaceMode()) {</span>
-<span class="nc" id="L88">            return previewBareMode(featureName, branchName);</span>
+<span class="pc bpc" id="L88" title="1 of 2 branches missed.">        if (!isWorkspaceMode()) {</span>
+<span class="nc" id="L89">            return previewBareMode(featureName, branchName);</span>
         }
 
-<span class="fc" id="L91">        WorkspaceGraph graph = loadGraph();</span>
-<span class="fc" id="L92">        File primaryRoot = workspaceRoot();</span>
-<span class="fc" id="L93">        Defaults defaults = graph.manifest().defaults();</span>
-<span class="pc bpc" id="L94" title="2 of 4 branches missed.">        String manifestBase = (defaults != null &amp;&amp; defaults.branch() != null)</span>
-<span class="pc" id="L95">                ? defaults.branch() : &quot;main&quot;;</span>
+<span class="fc" id="L92">        WorkspaceGraph graph = loadGraph();</span>
+<span class="fc" id="L93">        File primaryRoot = workspaceRoot();</span>
+<span class="fc" id="L94">        Defaults defaults = graph.manifest().defaults();</span>
+<span class="pc bpc" id="L95" title="2 of 4 branches missed.">        String manifestBase = (defaults != null &amp;&amp; defaults.branch() != null)</span>
+<span class="pc" id="L96">                ? defaults.branch() : &quot;main&quot;;</span>
 
         // Resolve base + apply the SAME guard the publish mojo does. A guard
         // violation aborts the preview with the remediation message.
-<span class="fc" id="L99">        String base = SiblingBaseResolution.resolveAndGuard(</span>
-<span class="fc" id="L100">                from, gitBranch(primaryRoot), manifestBase);</span>
+<span class="fc" id="L100">        String base = SiblingBaseResolution.resolveAndGuard(</span>
+<span class="fc" id="L101">                from, gitBranch(primaryRoot), manifestBase);</span>
 
-<span class="fc" id="L102">        String baseName = resolveWorkingSet().baseName();</span>
-<span class="fc" id="L103">        File parent = primaryRoot.getParentFile();</span>
-<span class="pc bpc" id="L104" title="1 of 2 branches missed.">        if (parent == null) {</span>
-<span class="nc" id="L105">            throw new MojoException(</span>
+<span class="fc" id="L103">        String baseName = resolveWorkingSet().baseName();</span>
+<span class="fc" id="L104">        File parent = primaryRoot.getParentFile();</span>
+<span class="pc bpc" id="L105" title="1 of 2 branches missed.">        if (parent == null) {</span>
+<span class="nc" id="L106">            throw new MojoException(</span>
                     &quot;Cannot resolve the parent of the workspace root &quot; + primaryRoot
                     + &quot;; sibling clones live alongside the primary.&quot;);
         }
-<span class="fc" id="L109">        String siblingName = featureName.siblingDirectoryName(baseName);</span>
-<span class="fc" id="L110">        File siblingRoot = new File(parent, siblingName);</span>
+<span class="fc" id="L110">        String siblingName = featureName.siblingDirectoryName(baseName);</span>
+<span class="fc" id="L111">        File siblingRoot = new File(parent, siblingName);</span>
 
-<span class="fc" id="L112">        List&lt;String&gt; sorted = graph.topologicalSort();</span>
+<span class="fc" id="L113">        List&lt;String&gt; sorted = graph.topologicalSort();</span>
 
-<span class="fc" id="L114">        getLog().info(&quot;&quot;);</span>
-<span class="fc" id="L115">        getLog().info(header(&quot;Feature Start (sibling) — DRAFT&quot;));</span>
-<span class="fc" id="L116">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
-<span class="fc" id="L117">        getLog().info(&quot;  Feature: &quot; + feature);</span>
-<span class="fc" id="L118">        getLog().info(&quot;  Branch:  &quot; + branchName);</span>
-<span class="fc" id="L119">        getLog().info(&quot;  Base:    &quot; + base);</span>
-<span class="fc" id="L120">        getLog().info(&quot;  Sibling: &quot; + siblingRoot.getAbsolutePath());</span>
-<span class="fc" id="L121">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L115">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L116">        getLog().info(header(&quot;Feature Start (sibling) — DRAFT&quot;));</span>
+<span class="fc" id="L117">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+<span class="fc" id="L118">        getLog().info(&quot;  Feature: &quot; + feature);</span>
+<span class="fc" id="L119">        getLog().info(&quot;  Branch:  &quot; + branchName);</span>
+<span class="fc" id="L120">        getLog().info(&quot;  Base:    &quot; + base);</span>
+<span class="fc" id="L121">        getLog().info(&quot;  Sibling: &quot; + siblingRoot.getAbsolutePath());</span>
+<span class="fc" id="L122">        getLog().info(&quot;&quot;);</span>
 
         // --- Plan rows: aggregator + each subproject that would be cloned. ---
-<span class="fc" id="L124">        List&lt;String[]&gt; planRows = new ArrayList&lt;&gt;();</span>
-<span class="fc" id="L125">        planRows.add(new String[]{baseName + &quot; (aggregator)&quot;,</span>
-<span class="fc" id="L126">                &quot;clone + branch&quot;, currentVersionLabel(primaryRoot, branchName)});</span>
+<span class="fc" id="L125">        List&lt;String[]&gt; planRows = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L126">        planRows.add(new String[]{baseName + &quot; (aggregator)&quot;,</span>
+<span class="fc" id="L127">                &quot;clone + branch&quot;, currentVersionLabel(primaryRoot, branchName)});</span>
 
         // --- Preflight checks. ---
-<span class="fc" id="L129">        List&lt;Preflight&gt; preflight = new ArrayList&lt;&gt;();</span>
-<span class="fc" id="L130">        preflight.add(new Preflight(</span>
+<span class="fc" id="L130">        List&lt;Preflight&gt; preflight = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L131">        preflight.add(new Preflight(</span>
                 &quot;Sibling dir does not already exist&quot;,
-<span class="pc bpc" id="L132" title="1 of 2 branches missed.">                !siblingRoot.exists(),</span>
-<span class="pc bpc" id="L133" title="1 of 2 branches missed.">                siblingRoot.exists()</span>
-<span class="nc" id="L134">                        ? &quot;`&quot; + siblingRoot.getAbsolutePath() + &quot;` exists — &quot;</span>
-<span class="nc" id="L135">                                + &quot;remove it: `rm -rf &quot; + siblingRoot.getAbsolutePath() + &quot;`&quot;</span>
-<span class="fc" id="L136">                        : &quot;`&quot; + siblingRoot.getAbsolutePath() + &quot;`&quot;));</span>
+<span class="pc bpc" id="L133" title="1 of 2 branches missed.">                !siblingRoot.exists(),</span>
+<span class="pc bpc" id="L134" title="1 of 2 branches missed.">                siblingRoot.exists()</span>
+<span class="nc" id="L135">                        ? &quot;`&quot; + siblingRoot.getAbsolutePath() + &quot;` exists — &quot;</span>
+<span class="nc" id="L136">                                + &quot;remove it: `rm -rf &quot; + siblingRoot.getAbsolutePath() + &quot;`&quot;</span>
+<span class="fc" id="L137">                        : &quot;`&quot; + siblingRoot.getAbsolutePath() + &quot;`&quot;));</span>
 
-<span class="fc" id="L138">        String rootRemote = gitOriginUrl(primaryRoot);</span>
-<span class="pc bpc" id="L139" title="1 of 2 branches missed.">        preflight.add(new Preflight(</span>
-                &quot;Workspace root has an `origin` remote&quot;,
-                rootRemote != null,
-<span class="pc bpc" id="L142" title="1 of 2 branches missed.">                rootRemote != null ? rootRemote</span>
-<span class="pc" id="L143">                        : &quot;add one: `git -C &quot; + primaryRoot.getAbsolutePath()</span>
-<span class="nc" id="L144">                                + &quot; remote add origin &lt;url&gt;`&quot;));</span>
+<span class="fc" id="L139">        boolean rootMaterialized = new File(primaryRoot, &quot;.git&quot;).exists();</span>
+<span class="fc" id="L140">        preflight.add(new Preflight(</span>
+                &quot;Primary root is a git repository (the sibling chains to it)&quot;,
+                rootMaterialized,
+<span class="pc bpc" id="L143" title="1 of 2 branches missed.">                rootMaterialized ? &quot;`&quot; + primaryRoot.getAbsolutePath() + &quot;`&quot;</span>
+                        : &quot;materialize it first: `git clone &lt;url&gt; &quot;
+<span class="pc" id="L145">                                + primaryRoot.getAbsolutePath() + &quot;`&quot;));</span>
 
-        // base branch exists upstream on the root
-<span class="fc" id="L147">        preflight.add(baseBranchPreflight(primaryRoot, base));</span>
+        // base branch exists locally in the primary — the clone source
+        // under the local-origin model (ike-issues#992).
+<span class="fc" id="L149">        preflight.add(baseBranchPreflight(primaryRoot, base));</span>
 
-<span class="fc bfc" id="L149" title="All 2 branches covered.">        for (String name : sorted) {</span>
-<span class="fc" id="L150">            Subproject sub = graph.manifest().subprojects().get(name);</span>
-<span class="fc" id="L151">            String remote = sub.repo();</span>
-<span class="fc" id="L152">            File comp = new File(primaryRoot, name);</span>
-<span class="pc bpc" id="L153" title="1 of 2 branches missed.">            String versionLabel = skipVersion</span>
-<span class="nc" id="L154">                    ? &quot;—&quot;</span>
-<span class="fc" id="L155">                    : currentVersionLabel(comp, branchName);</span>
-<span class="pc bpc" id="L156" title="2 of 4 branches missed.">            if (remote == null || remote.isEmpty()) {</span>
-<span class="nc" id="L157">                planRows.add(new String[]{name, &quot;skip (no repo URL)&quot;, &quot;—&quot;});</span>
-<span class="nc" id="L158">                continue;</span>
+<span class="fc" id="L151">        List&lt;String&gt; unmaterialized = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L152" title="All 2 branches covered.">        for (String name : sorted) {</span>
+<span class="fc" id="L153">            Subproject sub = graph.manifest().subprojects().get(name);</span>
+<span class="fc" id="L154">            File comp = new File(primaryRoot, name);</span>
+<span class="pc bpc" id="L155" title="1 of 2 branches missed.">            String versionLabel = skipVersion</span>
+<span class="nc" id="L156">                    ? &quot;—&quot;</span>
+<span class="fc" id="L157">                    : currentVersionLabel(comp, branchName);</span>
+            // Each member clones from the primary's local path — origin in
+            // the sibling is the parent member (ike-issues#992). A member
+            // the primary never materialized either skips (deliberately
+            // unclonable: no repo URL) or fails the preflight below.
+<span class="pc bpc" id="L162" title="1 of 2 branches missed.">            if (!new File(comp, &quot;.git&quot;).exists()) {</span>
+<span class="nc" id="L163">                String remote = sub.repo();</span>
+<span class="nc bnc" id="L164" title="All 4 branches missed.">                if (remote == null || remote.isEmpty()) {</span>
+<span class="nc" id="L165">                    planRows.add(new String[]{name,</span>
+                            &quot;skip (no repo URL, no local clone)&quot;, &quot;—&quot;});
+<span class="nc" id="L167">                    continue;</span>
+                }
+<span class="nc" id="L169">                unmaterialized.add(name);</span>
             }
-            // Each member clones from its workspace.yaml `repo:` URL (not its
-            // local origin), shown in the plan row above; the load-bearing
-            // preflights are the workspace-root origin + the base-branch check.
-<span class="fc" id="L163">            planRows.add(new String[]{name, &quot;clone + branch&quot;, versionLabel});</span>
-<span class="fc" id="L164">        }</span>
+<span class="fc" id="L171">            planRows.add(new String[]{name, &quot;clone + branch&quot;, versionLabel});</span>
+<span class="fc" id="L172">        }</span>
+<span class="fc" id="L173">        preflight.add(new Preflight(</span>
+                &quot;Every member is materialized in the primary&quot;,
+<span class="fc" id="L175">                unmaterialized.isEmpty(),</span>
+<span class="pc bpc" id="L176" title="1 of 2 branches missed.">                unmaterialized.isEmpty()</span>
+<span class="fc" id="L177">                        ? &quot;all clone sources present&quot;</span>
+                        : &quot;missing local clone(s): &quot;
+<span class="pc" id="L179">                                + String.join(&quot;, &quot;, unmaterialized)</span>
+<span class="nc" id="L180">                                + &quot; — run `mvn ws:scaffold-init` in the primary&quot;));</span>
 
-<span class="fc" id="L166">        return new WorkspaceReportSpec(WsGoal.FEATURE_START_SIBLING_DRAFT,</span>
-<span class="fc" id="L167">                buildReport(siblingName, siblingRoot, branchName, base,</span>
+<span class="fc" id="L182">        return new WorkspaceReportSpec(WsGoal.FEATURE_START_SIBLING_DRAFT,</span>
+<span class="fc" id="L183">                buildReport(siblingName, siblingRoot, branchName, base,</span>
                         planRows, preflight));
     }
 
@@ -175,74 +191,73 @@ public class FeatureStartSiblingDraftMojo extends AbstractWorkspaceMojo {
     private WorkspaceReportSpec previewBareMode(FeatureName featureName,
                                                 String branchName)
             throws MojoException {
-<span class="nc" id="L178">        WorkingSet workingSet = resolveWorkingSet();</span>
-<span class="nc" id="L179">        File repo = workingSet.members().getFirst().directory().toFile();</span>
-<span class="nc" id="L180">        String base = SiblingBaseResolution.resolveAndGuard(</span>
-<span class="nc" id="L181">                from, gitBranch(repo), &quot;main&quot;);</span>
-<span class="nc" id="L182">        File parent = repo.getParentFile();</span>
-<span class="nc" id="L183">        String siblingName = featureName.siblingDirectoryName(workingSet.baseName());</span>
-<span class="nc bnc" id="L184" title="All 2 branches missed.">        File siblingRoot = (parent != null)</span>
-<span class="nc" id="L185">                ? new File(parent, siblingName)</span>
-<span class="nc" id="L186">                : new File(siblingName);</span>
+<span class="nc" id="L194">        WorkingSet workingSet = resolveWorkingSet();</span>
+<span class="nc" id="L195">        File repo = workingSet.members().getFirst().directory().toFile();</span>
+<span class="nc" id="L196">        String base = SiblingBaseResolution.resolveAndGuard(</span>
+<span class="nc" id="L197">                from, gitBranch(repo), &quot;main&quot;);</span>
+<span class="nc" id="L198">        File parent = repo.getParentFile();</span>
+<span class="nc" id="L199">        String siblingName = featureName.siblingDirectoryName(workingSet.baseName());</span>
+<span class="nc bnc" id="L200" title="All 2 branches missed.">        File siblingRoot = (parent != null)</span>
+<span class="nc" id="L201">                ? new File(parent, siblingName)</span>
+<span class="nc" id="L202">                : new File(siblingName);</span>
 
-<span class="nc" id="L188">        getLog().info(&quot;&quot;);</span>
-<span class="nc" id="L189">        getLog().info(header(&quot;Feature Start (sibling) — DRAFT&quot;));</span>
-<span class="nc" id="L190">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
-<span class="nc" id="L191">        getLog().info(&quot;  Feature: &quot; + feature);</span>
-<span class="nc" id="L192">        getLog().info(&quot;  Branch:  &quot; + branchName);</span>
-<span class="nc" id="L193">        getLog().info(&quot;  Base:    &quot; + base);</span>
-<span class="nc" id="L194">        getLog().info(&quot;  Sibling: &quot; + siblingRoot.getAbsolutePath());</span>
-<span class="nc" id="L195">        getLog().info(&quot;  Mode:    single repo (no workspace.yaml)&quot;);</span>
-<span class="nc" id="L196">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L204">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L205">        getLog().info(header(&quot;Feature Start (sibling) — DRAFT&quot;));</span>
+<span class="nc" id="L206">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+<span class="nc" id="L207">        getLog().info(&quot;  Feature: &quot; + feature);</span>
+<span class="nc" id="L208">        getLog().info(&quot;  Branch:  &quot; + branchName);</span>
+<span class="nc" id="L209">        getLog().info(&quot;  Base:    &quot; + base);</span>
+<span class="nc" id="L210">        getLog().info(&quot;  Sibling: &quot; + siblingRoot.getAbsolutePath());</span>
+<span class="nc" id="L211">        getLog().info(&quot;  Mode:    single repo (no workspace.yaml)&quot;);</span>
+<span class="nc" id="L212">        getLog().info(&quot;&quot;);</span>
 
-<span class="nc" id="L198">        List&lt;String[]&gt; planRows = new ArrayList&lt;&gt;();</span>
-<span class="nc" id="L199">        planRows.add(new String[]{workingSet.baseName() + &quot; (aggregator)&quot;,</span>
+<span class="nc" id="L214">        List&lt;String[]&gt; planRows = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L215">        planRows.add(new String[]{workingSet.baseName() + &quot; (aggregator)&quot;,</span>
                 &quot;clone + branch&quot;,
-<span class="nc bnc" id="L201" title="All 2 branches missed.">                skipVersion ? &quot;—&quot; : currentVersionLabel(repo, branchName)});</span>
+<span class="nc bnc" id="L217" title="All 2 branches missed.">                skipVersion ? &quot;—&quot; : currentVersionLabel(repo, branchName)});</span>
 
-<span class="nc" id="L203">        List&lt;Preflight&gt; preflight = new ArrayList&lt;&gt;();</span>
-<span class="nc" id="L204">        preflight.add(new Preflight(</span>
+<span class="nc" id="L219">        List&lt;Preflight&gt; preflight = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L220">        preflight.add(new Preflight(</span>
                 &quot;Sibling dir does not already exist&quot;,
-<span class="nc bnc" id="L206" title="All 2 branches missed.">                !siblingRoot.exists(),</span>
-<span class="nc bnc" id="L207" title="All 2 branches missed.">                siblingRoot.exists()</span>
-<span class="nc" id="L208">                        ? &quot;`&quot; + siblingRoot.getAbsolutePath() + &quot;` exists — &quot;</span>
-<span class="nc" id="L209">                                + &quot;remove it: `rm -rf &quot; + siblingRoot.getAbsolutePath() + &quot;`&quot;</span>
-<span class="nc" id="L210">                        : &quot;`&quot; + siblingRoot.getAbsolutePath() + &quot;`&quot;));</span>
-<span class="nc" id="L211">        String remote = gitOriginUrl(repo);</span>
-<span class="nc bnc" id="L212" title="All 2 branches missed.">        preflight.add(new Preflight(</span>
-                &quot;Repo has an `origin` remote&quot;,
-                remote != null,
-<span class="nc bnc" id="L215" title="All 2 branches missed.">                remote != null ? remote</span>
-<span class="nc" id="L216">                        : &quot;add one: `git -C &quot; + repo.getAbsolutePath()</span>
-<span class="nc" id="L217">                                + &quot; remote add origin &lt;url&gt;`&quot;));</span>
-<span class="nc" id="L218">        preflight.add(baseBranchPreflight(repo, base));</span>
+<span class="nc bnc" id="L222" title="All 2 branches missed.">                !siblingRoot.exists(),</span>
+<span class="nc bnc" id="L223" title="All 2 branches missed.">                siblingRoot.exists()</span>
+<span class="nc" id="L224">                        ? &quot;`&quot; + siblingRoot.getAbsolutePath() + &quot;` exists — &quot;</span>
+<span class="nc" id="L225">                                + &quot;remove it: `rm -rf &quot; + siblingRoot.getAbsolutePath() + &quot;`&quot;</span>
+<span class="nc" id="L226">                        : &quot;`&quot; + siblingRoot.getAbsolutePath() + &quot;`&quot;));</span>
+<span class="nc" id="L227">        boolean repoMaterialized = new File(repo, &quot;.git&quot;).exists();</span>
+<span class="nc" id="L228">        preflight.add(new Preflight(</span>
+                &quot;Repo is a git repository (the sibling chains to it)&quot;,
+                repoMaterialized,
+<span class="nc bnc" id="L231" title="All 2 branches missed.">                repoMaterialized ? &quot;`&quot; + repo.getAbsolutePath() + &quot;`&quot;</span>
+<span class="nc" id="L232">                        : &quot;not a git repository — nothing to fork&quot;));</span>
+<span class="nc" id="L233">        preflight.add(baseBranchPreflight(repo, base));</span>
 
-<span class="nc" id="L220">        return new WorkspaceReportSpec(WsGoal.FEATURE_START_SIBLING_DRAFT,</span>
-<span class="nc" id="L221">                buildReport(siblingName, siblingRoot, branchName, base,</span>
+<span class="nc" id="L235">        return new WorkspaceReportSpec(WsGoal.FEATURE_START_SIBLING_DRAFT,</span>
+<span class="nc" id="L236">                buildReport(siblingName, siblingRoot, branchName, base,</span>
                         planRows, preflight));
     }
 
     /**
-     * Preflight that the base branch exists upstream on {@code dir}'s origin,
-     * via {@code git ls-remote origin &lt;base&gt;}.
+     * Preflight that the base branch exists &lt;em&gt;locally&lt;/em&gt; in {@code dir}
+     * — the clone source under the local-origin model
+     * (IKE-Network/ike-issues#992); no remote is consulted.
      */
     private Preflight baseBranchPreflight(File dir, String base) {
-<span class="fc" id="L230">        boolean exists = false;</span>
-        String detail;
+        boolean exists;
         try {
-<span class="fc" id="L233">            String out = ReleaseSupport.execCapture(dir,</span>
-                    &quot;git&quot;, &quot;ls-remote&quot;, &quot;origin&quot;, base);
-<span class="pc bpc" id="L235" title="1 of 4 branches missed.">            exists = out != null &amp;&amp; !out.isBlank();</span>
-<span class="fc bfc" id="L236" title="All 2 branches covered.">            detail = exists</span>
-<span class="fc" id="L237">                    ? &quot;`origin/&quot; + base + &quot;` resolves&quot;</span>
-<span class="fc" id="L238">                    : &quot;`origin` has no branch `&quot; + base + &quot;` — push it, or pass&quot;</span>
-                            + &quot; `-Dfrom=&lt;existing-branch&gt;`&quot;;
-<span class="nc" id="L240">        } catch (Exception e) {</span>
-<span class="nc" id="L241">            detail = &quot;could not query `origin` (&quot; + e.getMessage()</span>
-                    + &quot;) — check connectivity / the remote&quot;;
-<span class="fc" id="L243">        }</span>
-<span class="fc" id="L244">        return new Preflight(</span>
-                &quot;Base branch `&quot; + base + &quot;` exists upstream&quot;, exists, detail);
+<span class="fc" id="L248">            String out = ReleaseSupport.execCapture(dir, &quot;git&quot;, &quot;rev-parse&quot;,</span>
+                    &quot;--verify&quot;, &quot;--quiet&quot;, &quot;refs/heads/&quot; + base);
+<span class="pc bpc" id="L250" title="2 of 4 branches missed.">            exists = out != null &amp;&amp; !out.isBlank();</span>
+<span class="nc" id="L251">        } catch (Exception e) {</span>
+<span class="nc" id="L252">            exists = false;</span>
+<span class="fc" id="L253">        }</span>
+<span class="pc bpc" id="L254" title="1 of 2 branches missed.">        String detail = exists</span>
+<span class="fc" id="L255">                ? &quot;local branch `&quot; + base + &quot;` resolves in the clone source&quot;</span>
+<span class="pc" id="L256">                : &quot;no local branch `&quot; + base + &quot;` there — check it out once,&quot;</span>
+                        + &quot; or pass `-Dfrom=&lt;existing-branch&gt;`&quot;;
+<span class="fc" id="L258">        return new Preflight(</span>
+                &quot;Base branch `&quot; + base + &quot;` exists in the clone source&quot;,
+                exists, detail);
     }
 
     /**
@@ -250,41 +265,24 @@ public class FeatureStartSiblingDraftMojo extends AbstractWorkspaceMojo {
      * qualified to on {@code branchName}, for the plan table.
      */
     private String currentVersionLabel(File dir, String branchName) {
-<span class="fc" id="L253">        File pom = new File(dir, &quot;pom.xml&quot;);</span>
-<span class="pc bpc" id="L254" title="1 of 2 branches missed.">        if (!pom.exists()) {</span>
-<span class="nc" id="L255">            return &quot;—&quot;;</span>
-        }
-        try {
-<span class="fc" id="L258">            String version = ReleaseSupport.readPomVersion(pom);</span>
-<span class="pc bpc" id="L259" title="2 of 4 branches missed.">            if (version == null || version.isEmpty()) {</span>
-<span class="nc" id="L260">                return &quot;—&quot;;</span>
-            }
-<span class="fc" id="L262">            String qualified = network.ike.workspace.VersionSupport</span>
-<span class="fc" id="L263">                    .branchQualifiedVersion(version, branchName);</span>
-<span class="pc bpc" id="L264" title="1 of 2 branches missed.">            return qualified.equals(version)</span>
-<span class="nc" id="L265">                    ? version</span>
-<span class="fc" id="L266">                    : version + &quot; → &quot; + qualified;</span>
-<span class="nc" id="L267">        } catch (MojoException e) {</span>
-<span class="nc" id="L268">            getLog().debug(&quot;Could not read POM version for &quot; + dir + &quot;: &quot;</span>
-<span class="nc" id="L269">                    + e.getMessage());</span>
+<span class="fc" id="L268">        File pom = new File(dir, &quot;pom.xml&quot;);</span>
+<span class="pc bpc" id="L269" title="1 of 2 branches missed.">        if (!pom.exists()) {</span>
 <span class="nc" id="L270">            return &quot;—&quot;;</span>
         }
-    }
-
-    /**
-     * Read the {@code origin} remote URL of a git repository, or {@code null}
-     * when it is not a git repo or has no {@code origin}.
-     */
-    private String gitOriginUrl(File dir) {
-<span class="pc bpc" id="L279" title="1 of 2 branches missed.">        if (!new File(dir, &quot;.git&quot;).exists()) {</span>
-<span class="nc" id="L280">            return null;</span>
-        }
         try {
-<span class="fc" id="L283">            String url = ReleaseSupport.execCapture(dir,</span>
-                    &quot;git&quot;, &quot;remote&quot;, &quot;get-url&quot;, &quot;origin&quot;);
-<span class="pc bpc" id="L285" title="1 of 2 branches missed.">            return url.isBlank() ? null : url.trim();</span>
-<span class="nc" id="L286">        } catch (MojoException e) {</span>
-<span class="nc" id="L287">            return null;</span>
+<span class="fc" id="L273">            String version = ReleaseSupport.readPomVersion(pom);</span>
+<span class="pc bpc" id="L274" title="2 of 4 branches missed.">            if (version == null || version.isEmpty()) {</span>
+<span class="nc" id="L275">                return &quot;—&quot;;</span>
+            }
+<span class="fc" id="L277">            String qualified = network.ike.workspace.VersionSupport</span>
+<span class="fc" id="L278">                    .branchQualifiedVersion(version, branchName);</span>
+<span class="pc bpc" id="L279" title="1 of 2 branches missed.">            return qualified.equals(version)</span>
+<span class="nc" id="L280">                    ? version</span>
+<span class="fc" id="L281">                    : version + &quot; → &quot; + qualified;</span>
+<span class="nc" id="L282">        } catch (MojoException e) {</span>
+<span class="nc" id="L283">            getLog().debug(&quot;Could not read POM version for &quot; + dir + &quot;: &quot;</span>
+<span class="nc" id="L284">                    + e.getMessage());</span>
+<span class="nc" id="L285">            return &quot;—&quot;;</span>
         }
     }
 
@@ -296,49 +294,50 @@ public class FeatureStartSiblingDraftMojo extends AbstractWorkspaceMojo {
                                String branchName, String base,
                                List&lt;String[]&gt; planRows,
                                List&lt;Preflight&gt; preflight) {
-<span class="fc" id="L299">        GoalReportBuilder report = new GoalReportBuilder();</span>
-<span class="fc" id="L300">        report.paragraph(&quot;**Preview — no clone is made.**&quot;)</span>
-<span class="fc" id="L301">                .paragraph(&quot;**Sibling:** `&quot; + siblingName + &quot;`&quot;)</span>
-<span class="fc" id="L302">                .paragraph(&quot;**Branch:** `&quot; + branchName + &quot;`&quot;)</span>
-<span class="fc" id="L303">                .paragraph(&quot;**Base:** `&quot; + base + &quot;`&quot;)</span>
-<span class="fc" id="L304">                .paragraph(&quot;**Location:** `&quot; + siblingRoot.getAbsolutePath() + &quot;`&quot;);</span>
+<span class="fc" id="L297">        GoalReportBuilder report = new GoalReportBuilder();</span>
+<span class="fc" id="L298">        report.paragraph(&quot;**Preview — no clone is made.**&quot;)</span>
+<span class="fc" id="L299">                .paragraph(&quot;**Sibling:** `&quot; + siblingName + &quot;`&quot;)</span>
+<span class="fc" id="L300">                .paragraph(&quot;**Branch:** `&quot; + branchName + &quot;`&quot;)</span>
+<span class="fc" id="L301">                .paragraph(&quot;**Base:** `&quot; + base + &quot;`&quot;)</span>
+<span class="fc" id="L302">                .paragraph(&quot;**Location:** `&quot; + siblingRoot.getAbsolutePath() + &quot;`&quot;);</span>
 
-<span class="fc" id="L306">        report.section(&quot;Plan&quot;)</span>
-<span class="fc" id="L307">                .table(List.of(&quot;Member&quot;, &quot;Action&quot;, &quot;Version&quot;), planRows);</span>
+<span class="fc" id="L304">        report.section(&quot;Plan&quot;)</span>
+<span class="fc" id="L305">                .table(List.of(&quot;Member&quot;, &quot;Action&quot;, &quot;Version&quot;), planRows);</span>
 
-<span class="fc" id="L309">        boolean allOk = true;</span>
-<span class="fc" id="L310">        List&lt;String[]&gt; checkRows = new ArrayList&lt;&gt;();</span>
-<span class="fc bfc" id="L311" title="All 2 branches covered.">        for (Preflight p : preflight) {</span>
-<span class="pc bpc" id="L312" title="1 of 4 branches missed.">            allOk = allOk &amp;&amp; p.ok();</span>
-<span class="fc" id="L313">            checkRows.add(new String[]{</span>
-<span class="fc bfc" id="L314" title="All 2 branches covered.">                    p.ok() ? &quot;✓&quot; : &quot;✗&quot;, p.check(), p.detail()});</span>
-<span class="fc" id="L315">        }</span>
-<span class="fc" id="L316">        report.section(&quot;Preflight&quot;)</span>
-<span class="fc" id="L317">                .table(List.of(&quot;&quot;, &quot;Check&quot;, &quot;Detail&quot;), checkRows);</span>
-<span class="fc bfc" id="L318" title="All 2 branches covered.">        report.paragraph(allOk</span>
+<span class="fc" id="L307">        boolean allOk = true;</span>
+<span class="fc" id="L308">        List&lt;String[]&gt; checkRows = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L309" title="All 2 branches covered.">        for (Preflight p : preflight) {</span>
+<span class="pc bpc" id="L310" title="2 of 4 branches missed.">            allOk = allOk &amp;&amp; p.ok();</span>
+<span class="fc" id="L311">            checkRows.add(new String[]{</span>
+<span class="pc bpc" id="L312" title="1 of 2 branches missed.">                    p.ok() ? &quot;✓&quot; : &quot;✗&quot;, p.check(), p.detail()});</span>
+<span class="fc" id="L313">        }</span>
+<span class="fc" id="L314">        report.section(&quot;Preflight&quot;)</span>
+<span class="fc" id="L315">                .table(List.of(&quot;&quot;, &quot;Check&quot;, &quot;Detail&quot;), checkRows);</span>
+<span class="pc bpc" id="L316" title="1 of 2 branches missed.">        report.paragraph(allOk</span>
                 ? &quot;All preflight checks pass — `ws:feature-start-sibling-publish&quot;
-<span class="fc" id="L320">                        + &quot; -Dfeature=&quot; + feature + &quot;` should proceed.&quot;</span>
+<span class="fc" id="L318">                        + &quot; -Dfeature=&quot; + feature + &quot;` should proceed.&quot;</span>
                 : &quot;**Resolve the ✗ checks above, then run** &quot;
                         + &quot;`ws:feature-start-sibling-publish -Dfeature=&quot;
-<span class="fc" id="L323">                        + feature + &quot;`.&quot;);</span>
+<span class="nc" id="L321">                        + feature + &quot;`.&quot;);</span>
 
-<span class="fc" id="L325">        report.section(&quot;Clone cost&quot;)</span>
-<span class="fc" id="L326">                .paragraph(&quot;Each component is cloned with `--reference &quot;</span>
-                        + &quot;&lt;primary&gt;/&lt;component&gt; --dissociate`. `--reference` &quot;
-                        + &quot;borrows the primary's object database, so over the &quot;
-                        + &quot;network only the delta transfers; `--dissociate` &quot;
-                        + &quot;then copies the borrowed objects so the sibling is &quot;
-                        + &quot;self-contained and `rm -rf`-safe. Disk cost: roughly &quot;
-                        + &quot;a full object DB per sibling — objects are copied, &quot;
-                        + &quot;not shared.&quot;);
+<span class="fc" id="L323">        report.section(&quot;Clone cost&quot;)</span>
+<span class="fc" id="L324">                .paragraph(&quot;Each component is cloned from the primary's local &quot;</span>
+                        + &quot;member path, which becomes the sibling's `origin` — &quot;
+                        + &quot;the sibling chains sibling → parent → GitHub &quot;
+                        + &quot;(ike-issues#992). The clone is offline (no &quot;
+                        + &quot;transport, no credentials), objects are hardlinked &quot;
+                        + &quot;where the filesystem allows, so creation is fast &quot;
+                        + &quot;and disk cost stays far below a full object DB &quot;
+                        + &quot;until histories diverge. Deleting the sibling &quot;
+                        + &quot;(`rm -rf`) never affects the primary.&quot;);
 
-<span class="fc" id="L335">        report.section(&quot;Next&quot;)</span>
-<span class="fc" id="L336">                .paragraph(&quot;```bash\nmvn ws:feature-start-sibling-publish&quot;</span>
+<span class="fc" id="L334">        report.section(&quot;Next&quot;)</span>
+<span class="fc" id="L335">                .paragraph(&quot;```bash\nmvn ws:feature-start-sibling-publish&quot;</span>
                         + &quot; -Dfeature=&quot; + feature
-<span class="pc bpc" id="L338" title="1 of 4 branches missed.">                        + (from != null &amp;&amp; !from.isBlank()</span>
-<span class="fc" id="L339">                                ? &quot; -Dfrom=&quot; + from : &quot;&quot;)</span>
+<span class="pc bpc" id="L337" title="1 of 4 branches missed.">                        + (from != null &amp;&amp; !from.isBlank()</span>
+<span class="fc" id="L338">                                ? &quot; -Dfrom=&quot; + from : &quot;&quot;)</span>
                         + &quot;\n```&quot;);
-<span class="fc" id="L341">        return report.build();</span>
+<span class="fc" id="L340">        return report.build();</span>
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

@@ -1,25 +1,25 @@
 ---
-date_published: 2026-08-19
-date_modified: 2026-08-19
+date_published: 2026-08-21
+date_modified: 2026-08-21
 canonical_url: https://ike.network/ike-platform/ike-workspace-maven-plugin/licenses.html
 ---
 
 # Licenses (SPDX)
 
-Licenses for declared dependencies of `ike-workspace-maven-plugin` 173, grouped by SPDX expression. Rendered from `[bom.json](bom.json)[1]` (CycloneDX) at `pre-site` phase by `ike:render-spdx-licenses` (ike-issues#335).
+Licenses for declared dependencies of `ike-workspace-maven-plugin` 174, grouped by SPDX expression. Rendered from `[bom.json](bom.json)[1]` (CycloneDX) at `pre-site` phase by `ike:render-spdx-licenses` (ike-issues#335).
 
 ## [#summary](#summary)Summary
 
 | SPDX Expression | Components |
 | --- | --- |
-| `Apache-2.0` | 43 |
+| `Apache-2.0` | 44 |
 | `Apache-2.0 OR LGPL-2.1-or-later` | 2 |
 | `BSD-2-Clause` | 1 |
 | `BSD-2-Clause OR CC0-1.0` | 1 |
 | `BSD-3-Clause` | 5 |
 | `CC0-1.0` | 1 |
 | `MIT` | 2 |
-| **Total** | **55** |
+| **Total** | **56** |
 
 ## [#apache-2-0](#apache-2-0)Apache-2.0
 
@@ -43,11 +43,12 @@ Reference: [Apache-2.0 on spdx.org](https://spdx.org/licenses/Apache-2.0.html)[2
 | `io.quarkus.gizmo` | `gizmo` | `1.0.11.Final` |
 | `network.ike` | `ike-base-parent` | `15` |
 | `network.ike` | `ike-java-support` | `10` |
-| `network.ike.tooling` | `ike-build-standards` | `250` |
-| `network.ike.tooling` | `ike-build-standards` | `250` |
-| `network.ike.tooling` | `ike-build-standards` | `250` |
-| `network.ike.tooling` | `ike-maven-plugin-support` | `250` |
-| `network.ike.tooling` | `ike-workspace-model` | `250` |
+| `network.ike` | `ike-lease-core` | `5` |
+| `network.ike.tooling` | `ike-build-standards` | `251` |
+| `network.ike.tooling` | `ike-build-standards` | `251` |
+| `network.ike.tooling` | `ike-build-standards` | `251` |
+| `network.ike.tooling` | `ike-maven-plugin-support` | `251` |
+| `network.ike.tooling` | `ike-workspace-model` | `251` |
 | `org.apache.commons` | `commons-lang3` | `3.20.0` |
 | `org.apache.commons` | `commons-text` | `1.15.0` |
 | `org.apache.maven` | `maven-api-annotations` | `4.0.0-rc-5` |

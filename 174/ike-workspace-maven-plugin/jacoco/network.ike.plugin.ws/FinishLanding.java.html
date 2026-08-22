@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>FinishLanding.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">FinishLanding.java</span></div><h1>FinishLanding.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import org.apache.maven.api.plugin.Log;
+
+import java.io.File;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+
+/**
+ * Where a finished feature &lt;em&gt;lands&lt;/em&gt; once the working set has
+ * squash- or merge-landed it on its local target branch — the one phase
+ * that differs between a remote-origin working set and a local-origin
+ * sibling (IKE-Network/ike-issues#992).
+ *
+ * &lt;ul&gt;
+ *   &lt;li&gt;&lt;strong&gt;Remote origin&lt;/strong&gt; (a primary, or a sibling created
+ *       before #992): verified pushes of the target branch to
+ *       {@code origin}, the {@code #858} contract — no feature branch is
+ *       deleted until every member's push is confirmed.&lt;/li&gt;
+ *   &lt;li&gt;&lt;strong&gt;Local origin&lt;/strong&gt; (a #992 sibling, whose origin is
+ *       its parent's member path): the parent absorbs the landing by
+ *       fast-forward, and nothing is pushed anywhere. Externalization is
+ *       the parent's own explicit {@code ws:push}.&lt;/li&gt;
+ * &lt;/ul&gt;
+ *
+ * &lt;p&gt;Either way the caller sees one uniform result: whether the landing
+ * succeeded, and the message to fail with when it did not. Feature-branch
+ * deletion gates on {@link Landing#failed()} in both models, so the
+ * no-stranded-landing invariant holds with the parent playing the role
+ * the remote plays for a primary.
+ */
+final class FinishLanding {
+
+    private FinishLanding() {}
+
+    /**
+     * The outcome of the landing phase.
+     *
+     * @param pushed         per-member push results (remote-origin model;
+     *                       empty under the local-origin model)
+     * @param absorbed       per-member parent results (local-origin model;
+     *                       empty under the remote-origin model)
+     * @param localParent    the parent absorbed into, when this working
+     *                       set is a local-origin sibling
+     * @param failureMessage the message to fail the goal with, or
+     *                       {@code null} when the landing succeeded
+     */
+<span class="fc" id="L50">    record Landing(List&lt;FeatureFinishSupport.PushResult&gt; pushed,</span>
+                   List&lt;SiblingFinish.Absorbed&gt; absorbed,
+                   Optional&lt;File&gt; localParent,
+                   String failureMessage) {
+
+        /** Whether the landing left work stranded. */
+        boolean failed() {
+<span class="fc bfc" id="L57" title="All 2 branches covered.">            return failureMessage != null;</span>
+        }
+
+        /** Whether this working set landed into a local parent (#992). */
+        boolean toLocalParent() {
+<span class="fc" id="L62">            return localParent.isPresent();</span>
+        }
+
+        /** A landing that did not run at all (draft, or nothing landed). */
+        static Landing none(File root) {
+<span class="fc" id="L67">            return new Landing(List.of(), List.of(),</span>
+<span class="fc" id="L68">                    SiblingFinish.localParent(root), null);</span>
+        }
+    }
+
+    /**
+     * Run the landing phase for {@code members} plus the workspace root.
+     *
+     * @param root         the working set root the finish ran in
+     * @param members      member names whose target branch must land
+     * @param targetBranch the branch finished into (e.g. {@code main})
+     * @param push         the {@code -Dpush} flag: {@code false} keeps the
+     *                     landing local — no push, and no parent absorb —
+     *                     which in both models also keeps every feature
+     *                     branch
+     * @param log          Maven logger
+     * @return the uniform landing result
+     */
+    static Landing land(File root, List&lt;String&gt; members, String targetBranch,
+                        boolean push, Log log) {
+<span class="fc" id="L87">        Optional&lt;File&gt; localParent = SiblingFinish.localParent(root);</span>
+<span class="fc bfc" id="L88" title="All 2 branches covered.">        if (!push) {</span>
+<span class="fc" id="L89">            return new Landing(List.of(), List.of(), localParent, null);</span>
+        }
+
+<span class="fc bfc" id="L92" title="All 2 branches covered.">        if (localParent.isPresent()) {</span>
+<span class="fc" id="L93">            File parent = localParent.get();</span>
+<span class="fc" id="L94">            List&lt;SiblingFinish.Absorbed&gt; absorbed =</span>
+<span class="fc" id="L95">                    SiblingFinish.absorbIntoParent(root, parent, members,</span>
+                            targetBranch, log);
+<span class="fc" id="L97">            List&lt;SiblingFinish.Absorbed&gt; failures =</span>
+<span class="pc bpc" id="L98" title="1 of 2 branches missed.">                    absorbed.stream().filter(a -&gt; !a.ok()).toList();</span>
+<span class="fc" id="L99">            return new Landing(List.of(), absorbed, localParent,</span>
+<span class="pc bpc" id="L100" title="1 of 2 branches missed.">                    failures.isEmpty() ? null</span>
+<span class="pc" id="L101">                            : SiblingFinish.absorbFailureMessage(</span>
+                                    failures, targetBranch, parent));
+        }
+
+<span class="fc" id="L105">        log.info(&quot;&quot;);</span>
+<span class="fc" id="L106">        log.info(&quot;  &quot; + Ansi.cyan(&quot;→ &quot;) + &quot;Pushing &quot; + targetBranch</span>
+                + &quot; for every member (verified)...&quot;);
+<span class="fc" id="L108">        Map&lt;String, File&gt; memberDirs = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc bfc" id="L109" title="All 2 branches covered.">        for (String name : members) {</span>
+<span class="fc" id="L110">            memberDirs.put(name, new File(root, name));</span>
+<span class="fc" id="L111">        }</span>
+<span class="fc" id="L112">        memberDirs.put(RefreshMainSupport.ROOT_LABEL, root);</span>
+<span class="fc" id="L113">        List&lt;FeatureFinishSupport.PushResult&gt; pushed =</span>
+<span class="fc" id="L114">                FeatureFinishSupport.pushTargetsVerified(</span>
+                        memberDirs, targetBranch, log);
+<span class="fc" id="L116">        List&lt;FeatureFinishSupport.PushResult&gt; failures =</span>
+<span class="fc bfc" id="L117" title="All 2 branches covered.">                pushed.stream().filter(r -&gt; !r.pushed()).toList();</span>
+<span class="fc" id="L118">        return new Landing(pushed, List.of(), localParent,</span>
+<span class="fc bfc" id="L119" title="All 2 branches covered.">                failures.isEmpty() ? null</span>
+<span class="fc" id="L120">                        : FeatureFinishSupport.pushPhaseFailureMessage(</span>
+                                failures, targetBranch));
+    }
+
+    /**
+     * Preview line for the draft goals: what the landing phase would do.
+     *
+     * @param root         the working set root
+     * @param targetBranch the branch that would be finished into
+     * @param log          Maven logger
+     */
+    static void previewLanding(File root, String targetBranch, Log log) {
+<span class="nc" id="L132">        Optional&lt;File&gt; localParent = SiblingFinish.localParent(root);</span>
+<span class="nc bnc" id="L133" title="All 2 branches missed.">        if (localParent.isPresent()) {</span>
+<span class="nc" id="L134">            log.info(&quot;  Landing: &quot; + targetBranch + &quot; fast-forwards into the&quot;</span>
+<span class="nc" id="L135">                    + &quot; parent working set '&quot; + localParent.get().getName()</span>
+                    + &quot;' — nothing is pushed (ike-issues#992). Publish from&quot;
+<span class="nc" id="L137">                    + &quot; the parent with &quot; + WsGoal.PUSH.qualified() + &quot;.&quot;);</span>
+<span class="nc" id="L138">            return;</span>
+        }
+<span class="nc" id="L140">        FeatureFinishSupport.deriveParentWorkspace(root).ifPresent(</span>
+<span class="nc" id="L141">                parent -&gt; log.info(&quot;  Parent workspace '&quot; + parent.getName()</span>
+                        + &quot;' will be fast-forwarded after pushes confirm&quot;
+                        + &quot; (-DsyncParent=false to skip).&quot;));
+<span class="nc" id="L144">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

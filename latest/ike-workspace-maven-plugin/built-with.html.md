@@ -1,12 +1,12 @@
 ---
-date_published: 2026-08-19
-date_modified: 2026-08-19
+date_published: 2026-08-21
+date_modified: 2026-08-21
 canonical_url: https://ike.network/ike-platform/ike-workspace-maven-plugin/built-with.html
 ---
 
 # Built With
 
-Open-source software that `ike-workspace-maven-plugin` 173 depends on, links against, ships within, or invokes at runtime.
+Open-source software that `ike-workspace-maven-plugin` 174 depends on, links against, ships within, or invokes at runtime.
 
 Three layers of attribution ship with each release:
 
@@ -87,14 +87,14 @@ Direct dependencies of this module, grouped by SPDX expression. Generated from `
 
 | SPDX Expression | Components |
 | --- | --- |
-| `Apache-2.0` | 43 |
+| `Apache-2.0` | 44 |
 | `BSD-2-Clause` | 1 |
 | `BSD-3-Clause` | 5 |
 | `Apache-2.0 OR LGPL-2.1-or-later` | 2 |
 | `MIT` | 2 |
 | `BSD-2-Clause OR CC0-1.0` | 1 |
 | `CC0-1.0` | 1 |
-| **Total** | **55** |
+| **Total** | **56** |
 
 For full per-component detail (group, artifact, version, hashes, transitive deps), see [bom.json](bom.json)[1] or [licenses.html](licenses.html)[2].
 

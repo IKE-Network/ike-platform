@@ -6,7 +6,7 @@ canonical_url: https://ike.network/ike-platform/ike-parent/built-with.html
 
 # Built With
 
-Open-source software that `ike-parent` 174 depends on, links against, ships within, or invokes at runtime.
+Open-source software that `ike-parent` 175-SNAPSHOT depends on, links against, ships within, or invokes at runtime.
 
 Three layers of attribution ship with each release:
 

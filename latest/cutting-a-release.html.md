@@ -106,11 +106,12 @@ mvn ws:overview                # what cascade impact looks like
 Or from inside a single repo:
 
 ```
-mvn ike:release-status         # current/in-flight release state
-mvn ike:release-draft          # what the release will do
+mvn ike:release-draft          # what the release will do (read-only)
 ```
 
 The draft writes a markdown report and makes no on-disk changes. Both gate variants run the full preflight check set (`WORKING_TREE_CLEAN`, `NO_ON_DISK_GHPAGES_LEAK`, `NO_SNAPSHOT_PROPERTIES`, `PARENT_COHERENCE`, etc.) so a green draft means a green publish on the same workspace state.
+
+The `ws:` publish additionally **confirms the working-set lease** before mutating (single writer per working set, ike-issues#1005). If it reports the working set as leased to another machine, release from that machine — or take the lease over deliberately from the IDE — rather than retrying.
 
 ### [#2-publish](#2-publish)2. Publish
 
@@ -143,7 +144,7 @@ The goal hits six public-URL targets in one pass and reports green/red for each.
 | `[https://ike.network/<repo>/](https://ike.network/<repo>/)[3]` | Current release served at the root path. |
 | `[https://ike.network/<repo>/<N>/](https://ike.network/<repo>/<N>/)[4]` | Version-pinned snapshot for the just-released `<N>`. |
 | `[https://ike.network/<repo>/latest/](https://ike.network/<repo>/latest/)[5]` | Mirror of the just-released `<N>` (auto-updated by ike-issues#303). |
-| `[https://ike.network/](https://ike.network/)[2]` | Org landing page (auto-updated by ike-issues#367’s wiring of `ike:register-site-publish`). |
+| `[https://ike.network/](https://ike.network/)[2]` | Org landing page (auto-updated — registration is part of the `ike:site-publish` flow; ike-issues#367, #398). |
 | Nexus | Artifact at the released version is resolvable. |
 | GitHub release | Tag `v<N>` with auto-generated notes. |
 
@@ -200,7 +201,7 @@ The release flow’s own commits already use explicit paths; the risk is in huma
 | Preflight fails on `NO_ON_DISK_GHPAGES_LEAK` | `rm -rf <listed directories>`. Safe — see the gotcha above. |
 | `mvn site:stage` fails with "untracked content" error | You’re hitting ike-issues#358. Run the on-disk leak detection above and delete the leak directory. |
 | Nexus deploy fails with auth error | Check `~/.m2/settings.xml` for current credentials. Bouncy Castle GPG signing is wired through the same settings. |
-| GitHub Pages publishes but ike.network landing page didn’t update | Auto-register may have hit a transient git lock or network issue. From a checkout of the release tag, run `mvn ike:register-site-publish`. The release itself is complete; this is just the org-site sync. |
+| GitHub Pages publishes but ike.network landing page didn’t update | Auto-register may have hit a transient git lock or network issue. From a checkout of the release tag, run `mvn ike:site-publish`. The release itself is complete; this is just the org-site sync. |
 | `git checkout main` fails after a release | Your worktree has uncommitted changes (likely something a tool wrote mid-flight). Commit or stash them, then push the release tag + main, then create the GitHub release manually: `gh release create v<N> --title <N> --generate-notes --verify-tag`. See feedback_release_roll_forward in the operator memory. |
 
 ## [#tests-run-during-the-release--keep-sandboxes-herme](#tests-run-during-the-release--keep-sandboxes-herme)Tests run during the release — keep sandboxes hermetic

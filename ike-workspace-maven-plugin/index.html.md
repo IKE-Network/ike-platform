@@ -6,7 +6,7 @@ canonical_url: https://ike.network/ike-platform/ike-workspace-maven-plugin/index
 
 # IKE Workspace Maven Plugin
 
-The `ike-workspace-maven-plugin` provides the `ws:*` goal prefix — 50 goals that coordinate cross-repository operations across an IKE workspace. Where bare git only sees one repo at a time, the workspace plugin fans out across every checked-out subproject in topological order.
+The `ike-workspace-maven-plugin` provides the `ws:*` goal prefix — 58 goals that coordinate cross-repository operations across an IKE workspace. Where bare git only sees one repo at a time, the workspace plugin fans out across every checked-out subproject in topological order.
 
 | Coordinate | Value |
 | --- | --- |
@@ -59,7 +59,7 @@ Open the workspace project in IntelliJ. The Maven tool window (right sidebar, **
 
 ![Maven tool window with ws plugin expanded](images/intellij-maven-tool-window.png) 
 
-Expand the `ws (network.ike.platform:ike-workspace-maven-plugin:…​)` entry to see all 50 goals as clickable items:
+Expand the `ws (network.ike.platform:ike-workspace-maven-plugin:…​)` entry to see all 58 goals as clickable items:
 
 ![ws goals expanded in Maven tool window](images/intellij-ws-goals.png) 
 

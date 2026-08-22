@@ -27,5 +27,5 @@ canonical_url: https://ike.network/ike-platform/ike-bom/summary.html
 | --- | --- |
 | GroupId | network.ike.platform |
 | ArtifactId | ike-bom |
-| Version | 174 |
+| Version | 175-SNAPSHOT |
 | Type | pom |

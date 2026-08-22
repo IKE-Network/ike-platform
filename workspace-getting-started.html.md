@@ -6,7 +6,7 @@ canonical_url: https://ike.network/ike-platform/workspace-getting-started.html
 
 # Workspace Developer Getting Started
 
-This guide walks you through setting up an IKE workspace and working on tinkar/komet components day to day. For conventions and architecture rationale, see the [Workspace Conventions](workspace-conventions.html)[1] reference.
+This guide walks you through setting up an IKE workspace and working on tinkar/komet components day to day. For conventions and architecture rationale, see `ike-workspace-conventions.adoc` in `ike-build-standards` (the docs classifier) and the goal reference at [ws-goals](ike-workspace-maven-plugin/ws-goals.html)[1].
 
 ## [#prerequisites](#prerequisites)Prerequisites
 
@@ -109,7 +109,7 @@ Shows what would happen: which branches merge, version changes, tag names. Use `
 mvn ws:feature-finish-squash-publish -Dfeature=my-feature
 ```
 
-Merges `feature/my-feature` to `main` with `--no-ff` in every affected component, strips the branch qualifier from POM versions, tags the merge commit, and pushes to origin.
+Squash-merges the feature into `main` in every affected component — one clean commit per member, no tag — strips the branch qualifier from POM versions, then lands two-phase: a verified push confirms every member on origin before any feature branch is deleted (a failed push keeps all branches). In a sibling working set the finish also fast-forwards the parent, and `-DdeleteSibling` removes the sibling afterwards. The no-ff-merge variant is `ws:feature-finish-merge-publish` when history must be preserved.
 
 ## [#releasing](#releasing)Releasing
 
@@ -162,14 +162,17 @@ Writes `.stignore` files that exclude `target/`, `.git/`, `.idea/`, `.DS_Store`,
 
 ### [#resume-on-another-machine](#resume-on-another-machine)Resume on another machine
 
-Walk away from machine A. Syncthing propagates source files to machine B. On machine B:
+Walk away from machine A. Syncthing propagates source files to machine B — uncommitted work included. On machine B, **open the working set in IntelliJ**: the open gesture acquires the working-set lease (one writer per working set, epoch-fenced; taking over a still-live lease is a question the IDE asks), materializes git state for any bare tree from the synced origin manifest, and aligns stale refs to where machine A left them — tree untouched, synced drift preserved as the ordinary status delta.
+
+Headless (scripts, CI, a terminal without the IDE):
 
 ```
-cd ike-workspace
-mvn ws:pull
+~/ike-dev/scripts/lease.sh status <working-set>
+java -cp "<IntelliJ plugins>/ike-lease-plugin/lib/ike-lease-core-*.jar" \
+  network.ike.lease.core.MaterializeCli verify <working-set>
 ```
 
-This syncs Git history for all components. `ws:scaffold-init` is Syncthing-aware: if a directory already exists (synced files, but no `.git`), it runs `git init` + `git reset` instead of `git clone`.
+`ws:pull` remains the everyday **fetch-committed-history** step once the lease is yours; it never substitutes for materialization.
 
 ## [#troubleshooting](#troubleshooting)Troubleshooting
 
@@ -189,9 +192,9 @@ mvn ws:feature-finish-squash-publish -Dfeature=my-feature
 
 The goal detects already-merged components and skips them.
 
-### [#ws-scaffold-init-on-a-syncthing-directory](#ws-scaffold-init-on-a-syncthing-directory)`ws:scaffold-init` on a Syncthing directory
+### [#a-synced-directory-has-no-git-state](#a-synced-directory-has-no-git-state)A synced directory has no git state
 
-Handled automatically. When a component directory already exists but has no `.git` directory, `ws:scaffold-init` runs `git init` followed by `git reset` to the manifest branch instead of cloning.
+Handled at the IDE open gesture: the lease plugin materializes bare trees automatically (and `MaterializeCli materialize <working-set>` does it headlessly). Materialization never clones and never touches the tree — metadata is brought **to** the synced tree. Do not `git clone` into, or delete `.git` entries inside, the synced folder.
 
 ### [#plugin-not-found-ike-goals-fail](#plugin-not-found-ike-goals-fail)Plugin not found: `ike:*` goals fail
 

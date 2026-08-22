@@ -157,7 +157,7 @@ invoke raw `git` for workspace-wide operations — always use the `ws:`
 goals.
 
 `ike-maven-plugin` (prefix `ike:`) is consumed from `ike-tooling` —
-`ike:prepare-release`, `ike:release-status`, etc., drive the release
+`ike:release-draft` / `ike:release-publish` drive the release
 of *this* repo.
 
 `ike-doc-maven-plugin` (prefix `idoc:`) is consumed from `ike-docs`

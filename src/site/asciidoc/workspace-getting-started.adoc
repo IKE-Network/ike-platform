@@ -5,8 +5,10 @@
 
 This guide walks you through setting up an IKE workspace and
 working on tinkar/komet components day to day.
-For conventions and architecture rationale,
-see the link:workspace-conventions.html[Workspace Conventions] reference.
+For conventions and architecture rationale, see
+`ike-workspace-conventions.adoc` in `ike-build-standards` (the docs
+classifier) and the goal reference at
+link:ike-workspace-maven-plugin/ws-goals.html[ws-goals].
 
 == Prerequisites
 
@@ -152,9 +154,14 @@ merge that preserves the feature-branch history.
 mvn ws:feature-finish-squash-publish -Dfeature=my-feature
 ----
 
-Merges `feature/my-feature` to `main` with `--no-ff` in every affected component,
-strips the branch qualifier from POM versions, tags the merge commit,
-and pushes to origin.
+Squash-merges the feature into `main` in every affected component —
+one clean commit per member, no tag — strips the branch qualifier from
+POM versions, then lands two-phase: a verified push confirms every
+member on origin before any feature branch is deleted (a failed push
+keeps all branches). In a sibling working set the finish also
+fast-forwards the parent, and `-DdeleteSibling` removes the sibling
+afterwards. The no-ff-merge variant is `ws:feature-finish-merge-publish`
+when history must be preserved.
 
 == Releasing
 
@@ -213,20 +220,26 @@ Writes `.stignore` files that exclude `target/`, `.git/`, `.idea/`,
 
 === Resume on another machine
 
-Walk away from machine A.
-Syncthing propagates source files to machine B.
-On machine B:
+Walk away from machine A. Syncthing propagates source files to
+machine B — uncommitted work included. On machine B, *open the working
+set in IntelliJ*: the open gesture acquires the working-set lease
+(one writer per working set, epoch-fenced; taking over a still-live
+lease is a question the IDE asks), materializes git state for any bare
+tree from the synced origin manifest, and aligns stale refs to where
+machine A left them — tree untouched, synced drift preserved as the
+ordinary status delta.
+
+Headless (scripts, CI, a terminal without the IDE):
 
 [source,bash]
 ----
-cd ike-workspace
-mvn ws:pull
+~/ike-dev/scripts/lease.sh status <working-set>
+java -cp "<IntelliJ plugins>/ike-lease-plugin/lib/ike-lease-core-*.jar" \
+  network.ike.lease.core.MaterializeCli verify <working-set>
 ----
 
-This syncs Git history for all components.
-`ws:scaffold-init` is Syncthing-aware: if a directory already exists
-(synced files, but no `.git`), it runs `git init` + `git reset`
-instead of `git clone`.
+`ws:pull` remains the everyday *fetch-committed-history* step once the
+lease is yours; it never substitutes for materialization.
 
 == Troubleshooting
 
@@ -254,12 +267,13 @@ mvn ws:feature-finish-squash-publish -Dfeature=my-feature
 
 The goal detects already-merged components and skips them.
 
-=== `ws:scaffold-init` on a Syncthing directory
+=== A synced directory has no git state
 
-Handled automatically.
-When a component directory already exists but has no `.git` directory,
-`ws:scaffold-init` runs `git init` followed by `git reset` to the manifest
-branch instead of cloning.
+Handled at the IDE open gesture: the lease plugin materializes bare
+trees automatically (and `MaterializeCli materialize <working-set>`
+does it headlessly). Materialization never clones and never touches
+the tree — metadata is brought *to* the synced tree. Do not
+`git clone` into, or delete `.git` entries inside, the synced folder.
 
 === Plugin not found: `ike:*` goals fail
 

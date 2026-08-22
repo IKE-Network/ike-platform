@@ -87,6 +87,8 @@ Use `ws:report` to list and open them.
 | <<feature-finish-squash-publish>>                    | feature     | Execute the squash-merge
 | <<feature-start-draft,feature-start>>                | feature     | Preview a coordinated feature branch
 | <<feature-start-publish>>                            | feature     | Create the feature branch with auto-alignment
+| <<feature-start-sibling-draft,feature-start-sibling>>| sibling     | Preview a sibling working set beside the parent
+| <<feature-start-sibling-publish>>                    | sibling     | Create the sibling: `꞉` directory, feature branch, local origins
 | <<graph>>                        | inspection  | Print or DOT-render the workspace dependency graph
 | <<lint>>                         | inspection  | Surface preflight hygiene conditions (report-only)
 | <<overview>>                     | inspection  | Consolidated manifest + graph + status + cascade
@@ -107,6 +109,9 @@ Use `ws:report` to list and open them.
 | <<scaffold-draft,scaffold>>      | convergence | Drift report — manifest consistency, git state, denormalized field sync, parent cascade, scaffold conventions, inter-subproject alignment (preview)
 | <<scaffold-init>>                | setup       | Bootstrap a workspace — create `workspace.yaml` if absent and clone declared-but-missing subprojects
 | <<scaffold-publish>>             | convergence | Apply the convergence drift — single reconciler-driven goal for routine workspace upkeep
+| <<sibling-list>>                 | sibling     | Inventory every sibling: git state, origin wiring, landed-ness
+| <<sibling-remove-draft,sibling-remove>>              | sibling     | Preview an assessed sibling removal
+| <<sibling-remove-publish>>                           | sibling     | Remove the sibling working set and GC its lease
 | <<stignore>>                     | setup       | Generate Syncthing `.stignore` files
 | <<switch-draft,switch>>          | feature     | Preview a coordinated branch checkout
 | <<switch-publish>>               | feature     | Execute the coordinated checkout
@@ -481,6 +486,67 @@ mvn ws:feature-start-draft -Dfeature=my-feature       # preview
 mvn ws:feature-start-publish -Dfeature=my-feature     # execute
 ----
 
+[#feature-start-sibling-draft]
+[#feature-start-sibling-publish]
+=== ws:feature-start-sibling — an isolated working set for one feature
+
+Create a *sibling working set*: a whole second copy of the workspace,
+`<parent>꞉<feature>` beside its parent (the separator is `꞉`, U+A789 —
+filesystem-legal where a plain colon is not), every member on branch
+`feature/<feature>`. The parent stays on its mainline; isolation comes
+from the directory boundary, so both can build, run, and be open in
+IDEs at the same time — or on different machines.
+
+The wiring is the sibling model's contract (ike-issues#992): each
+member's `origin` is the **local parent member path, never GitHub**.
+Per-issue WIP history is disposable and per-machine; the synced tree is
+the medium of exchange; the finish squashes into the sibling and
+fast-forwards the parent. A pre-push guard — in the IDE plugin and the
+Claude fence alike — refuses any push from a sibling to a non-local
+remote. The `.ike/parent-workspace` record ties the sibling to its
+parent and syncs with the tree, so a sibling started on one machine is
+finishable on another (git state materializes at the open gesture).
+
+`-publish-verify` extends the creation with a reactor build of the new
+sibling before declaring it ready.
+
+[source,bash]
+----
+mvn ws:feature-start-sibling-draft -Dfeature=issue-42     # preview
+mvn ws:feature-start-sibling-publish -Dfeature=issue-42   # create ike-komet-wsr꞉issue-42
+----
+
+[#sibling-list]
+=== ws:sibling-list — inventory the siblings
+
+List every sibling of this workspace with the facts that matter for
+lifecycle decisions: real git state (husk-aware), origin wiring (local
+parent vs the legacy remote-remote shape awaiting repair), and
+*landed-ness* — whether the sibling's work is contained in the parent,
+its tree matches the parent tip, or its only commits are goal-authored
+`ws:` bookkeeping.
+
+[source,bash]
+----
+mvn ws:sibling-list
+----
+
+[#sibling-remove-draft]
+[#sibling-remove-publish]
+=== ws:sibling-remove — assessed removal
+
+Remove a sibling working set safely. The draft enumerates any unlanded
+work with remediation (finish it, or force-discard deliberately); the
+publish deletes the sibling directory sync-safely and garbage-collects
+its lease record. This is the supported way to delete a sibling —
+never remove `.git` entries by hand inside the synced folder.
+
+[source,bash]
+----
+mvn ws:sibling-remove-draft -Dsibling=issue-42     # assess
+mvn ws:sibling-remove-publish -Dsibling=issue-42   # remove + lease GC
+----
+
 [#update-feature-draft]
 [#update-feature-publish]
 === ws:update-feature — incorporate main into feature
@@ -555,7 +621,22 @@ mvn ws:feature-finish-squash-draft -Dfeature=done
 mvn ws:feature-finish-squash-publish -Dfeature=done -Dmessage="Ship it"
 mvn ws:feature-finish-squash-publish -Dfeature=done -Dpush=false        # stay local; branches kept
 mvn ws:feature-finish-squash-publish -Dfeature=done -DsyncParent=false  # skip parent-workspace sync
+mvn ws:feature-finish-squash-publish -Dfeature=done -DdeleteSibling     # sibling only: remove the working set after the finish
 ----
+
+In a sibling, `-DdeleteSibling` removes the whole sibling working set
+after the finish lands — a receipt is written into the parent first,
+and the removal runs the same assessment as `ws:sibling-remove`.
+
+[NOTE]
+====
+Finish and release goals *confirm the working-set lease* before
+mutating (single writer per working set, ike-issues#1005), and a
+sibling finish takes a confirmed short-hold on the *parent's* lease
+while it fast-forwards. A goal that reports the working set as leased
+to another machine is telling you to finish there — or to take the
+lease over deliberately from the IDE — not to retry.
+====
 
 [#feature-finish-merge-draft]
 [#feature-finish-merge-publish]

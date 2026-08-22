@@ -96,6 +96,42 @@ final class WorkingSetLease {
     }
 
     /**
+     * A read-only look at a working set's lease, for draft goals and
+     * listings that must not acquire anything.
+     *
+     * @param liveElsewhere {@code true} when another machine holds the
+     *                      lease live — the one state that refuses a write
+     * @param line          the protocol's own one-line description
+     */
+    record Status(boolean liveElsewhere, String line) { }
+
+    /**
+     * Reads a working set's lease state without changing it.
+     *
+     * @param workingSetRoot the working set's directory
+     * @return the status, or empty when the lease machinery is absent or
+     *         the path is not a working set — the not-applicable cases
+     */
+    static java.util.Optional<Status> status(Path workingSetRoot) {
+        Path script = script();
+        if (script == null || workingSetRoot == null) {
+            return java.util.Optional.empty();
+        }
+        Result resolved = run(script, 10L, "resolve", workingSetRoot.toString());
+        if (resolved.exitCode() != 0 || resolved.output().isBlank()) {
+            return java.util.Optional.empty();
+        }
+        Result status = run(script, 10L, "status", resolved.output().trim());
+        if (status.exitCode() < 0) {
+            return java.util.Optional.empty();
+        }
+        // lease.sh status exits 1 exactly when the lease is LIVE on
+        // another machine; 0 covers FREE, MINE and EXPIRED.
+        return java.util.Optional.of(new Status(status.exitCode() == 1,
+                status.output().trim()));
+    }
+
+    /**
      * Locates the lease script, requiring the machine identity beside it.
      *
      * @return the script path, or {@code null} when this machine has no

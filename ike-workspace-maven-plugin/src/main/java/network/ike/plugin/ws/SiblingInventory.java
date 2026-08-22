@@ -133,7 +133,7 @@ final class SiblingInventory {
             String label = member.equals(siblingRoot) ? "(root)"
                     : siblingRoot.toPath().relativize(member.toPath())
                             .toString();
-            if (!new File(member, ".git").exists()) {
+            if (!hasRealGit(member)) {
                 states.add(new MemberState(label, true, "—", 0, 0, null,
                         false));
                 continue;
@@ -265,12 +265,27 @@ final class SiblingInventory {
             if (name.startsWith(".") || SKIPPED_DIRECTORIES.contains(name)) {
                 continue;
             }
-            if (new File(child, ".git").exists()) {
+            if (hasRealGit(child)) {
                 members.add(child);
             } else {
                 collectMembers(child, depth + 1, members);
             }
         }
+    }
+
+    /**
+     * Real git state, as opposed to a sync-layer husk. The synced folder's
+     * {@code (?d).git/} ignore carries the {@code .git} directory entry but
+     * none of its contents, so peer machines hold empty {@code .git} husks
+     * (measured fleet-wide 2026-08-22); a gitfile, or a directory with a
+     * {@code HEAD}, is the honest test.
+     *
+     * @param directory the candidate repository directory
+     * @return {@code true} when git state is actually present
+     */
+    private static boolean hasRealGit(File directory) {
+        File git = new File(directory, ".git");
+        return git.isFile() || new File(git, "HEAD").exists();
     }
 
     private static boolean sameDirectory(File a, File b) {

@@ -23,8 +23,15 @@ public class FeatureFinishMergePublishMojo extends FeatureFinishMergeDraftMojo {
     protected WorkspaceReportSpec runGoal() throws MojoException {
         confirmWorkingSetLease();
         publish = true;
-        WorkspaceReportSpec spec = super.runGoal();
-        PostMutationSync.refresh(workspaceRoot(), getLog());
+        WorkspaceReportSpec spec;
+        // A sibling's merge landing absorbs into the parent exactly as the
+        // squash does (FinishLanding unifies the two), so the parent's
+        // lease is short-held here too (#992, #1005).
+        try (ParentLeaseHold hold =
+                ParentLeaseHold.acquire(workspaceRoot(), getLog())) {
+            spec = super.runGoal();
+            PostMutationSync.refresh(workspaceRoot(), getLog());
+        }
         return spec;
     }
 }

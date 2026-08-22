@@ -1,48 +1,45 @@
 package network.ike.plugin.ws;
 
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStreamReader;
-import java.nio.charset.StandardCharsets;
+import network.ike.lease.core.LeaseProtocol;
+
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.List;
-import java.util.concurrent.TimeUnit;
+import java.util.Optional;
 
 /**
- * Bridge to the working-set lease protocol in {@code ~/ike-dev/scripts/lease.sh}.
+ * The {@code ws:} goals' bridge to the working-set lease protocol —
+ * in-process on {@code ike-lease-core} since the protocol port
+ * (IKE-Network/ike-issues#1067), which is what retired this class's
+ * original shape: a Maven-published plugin shelling out to a
+ * {@code $HOME} script. The single-implementation rule survives intact —
+ * the very same {@code LeaseProtocol} the {@code lease.sh} wrapper execs
+ * and the IDE plugin embeds runs here, so the fencing system's halves
+ * cannot drift.
  *
  * <p>A working set — any project root under {@code ~/ike-dev} — has one
  * writer at a time across the machines that share that folder. A
  * {@code ws:} goal that rewrites branches, versions and history is
  * emphatically a writer, so it confirms it holds the lease before it
- * starts. Design: {@code dev-working-set-lease} in ike-lab-documents,
+ * starts; a finish that lands in the <em>parent</em> working set
+ * short-holds that lease too ({@link ParentLeaseHold}). Design:
+ * {@code dev-working-set-lease} in ike-lab-documents,
  * IKE-Network/ike-issues#1002; this half is #1005.
  *
- * <p><strong>Inert outside that setup.</strong> Every check is an
- * existence check first: no {@code lease.sh}, no {@code ~/.ike-machine-id},
- * or a project that is not under {@code ~/ike-dev}, and the goal proceeds
- * exactly as it did before. That matters because this plugin is published
- * and run by people with no Syncthing-paired fleet, for whom the lease
- * protocol does not exist. It fails open for the same reason the Claude
- * fence does: a coordination aid that can wedge a build is worse than no
- * coordination aid.
+ * <p><strong>Inert outside that setup.</strong> No
+ * {@code ~/.ike-machine-id}, no development folder, or a path that does
+ * not resolve to a working set, and the goal proceeds exactly as it did
+ * before — this plugin is published and run by people with no
+ * Syncthing-paired fleet, for whom the lease protocol does not exist. It
+ * fails open for the same reason the Claude fence does: a coordination
+ * aid that can wedge a build is worse than no coordination aid.
  *
- * <p><strong>The protocol is not reimplemented here.</strong> Epoch
- * arithmetic, staleness horizons and conflict reconciliation live once, in
- * the shell script that the IDE plugin and the Claude hook also call. A
- * fencing system whose halves disagree is worse than one with no fencing
- * at all.
+ * <p>System properties {@code ike.lease.home}, {@code ike.lease.ikeDev}
+ * and {@code ike.lease.settleSeconds} override the environment
+ * ({@code HOME}, {@code IKE_DEV}, {@code IKE_LEASE_SETTLE_SECONDS}) —
+ * the seam sandboxed tests set, since a JVM cannot re-point its
+ * environment per test.
  */
 final class WorkingSetLease {
-
-    /**
-     * Seconds to allow the confirming call. It deliberately sleeps out the
-     * sync layer's propagation window — about 25 seconds — before reading
-     * the record back, so this has to be generous. Cutting it short would
-     * report a race lost that was never run.
-     */
-    private static final long CONFIRM_TIMEOUT_SECONDS = 120L;
 
     private WorkingSetLease() { }
 
@@ -66,36 +63,6 @@ final class WorkingSetLease {
     }
 
     /**
-     * Confirms this machine holds the working set's lease, waiting out the
-     * sync layer's propagation window and reading the record back.
-     *
-     * @param workspaceRoot the directory the goal is about to write to
-     * @return the decision; never {@code null}
-     */
-    static Decision confirm(Path workspaceRoot) {
-        Path script = script();
-        if (script == null || workspaceRoot == null) {
-            return new Decision(Verdict.NOT_APPLICABLE, "");
-        }
-        Result resolved = run(script, 10L, "resolve", workspaceRoot.toString());
-        if (resolved.exitCode() != 0 || resolved.output().isBlank()) {
-            return new Decision(Verdict.NOT_APPLICABLE, "");
-        }
-        String workingSet = resolved.output().trim();
-        Result confirmed = run(script, CONFIRM_TIMEOUT_SECONDS,
-                "ensure", workingSet, "--confirm");
-        if (confirmed.exitCode() == 0) {
-            return new Decision(Verdict.HELD, workingSet);
-        }
-        // A negative exit is this bridge failing to run the script at all —
-        // not the protocol refusing. Fail open.
-        if (confirmed.exitCode() < 0) {
-            return new Decision(Verdict.NOT_APPLICABLE, "");
-        }
-        return new Decision(Verdict.FENCED, confirmed.output().trim());
-    }
-
-    /**
      * A read-only look at a working set's lease, for draft goals and
      * listings that must not acquire anything.
      *
@@ -106,80 +73,118 @@ final class WorkingSetLease {
     record Status(boolean liveElsewhere, String line) { }
 
     /**
+     * Confirms this machine holds the working set's lease, waiting out the
+     * sync layer's propagation window and reading the record back — the
+     * #1005 confirmed acquisition, for consequential steps.
+     *
+     * @param workingSetRoot the directory the goal is about to write to
+     * @return the decision; never {@code null}
+     */
+    static Decision confirm(Path workingSetRoot) {
+        Optional<Context> context = Context.of(workingSetRoot);
+        if (context.isEmpty()) {
+            return new Decision(Verdict.NOT_APPLICABLE, "");
+        }
+        LeaseProtocol.Outcome outcome =
+                context.get().protocol().ensure(context.get().workingSet(), true);
+        return switch (outcome.exitCode()) {
+            case 0 -> new Decision(Verdict.HELD, context.get().workingSet());
+            case 1 -> new Decision(Verdict.FENCED, outcome.stdout().trim());
+            default -> new Decision(Verdict.NOT_APPLICABLE, "");
+        };
+    }
+
+    /**
      * Reads a working set's lease state without changing it.
      *
      * @param workingSetRoot the working set's directory
      * @return the status, or empty when the lease machinery is absent or
      *         the path is not a working set — the not-applicable cases
      */
-    static java.util.Optional<Status> status(Path workingSetRoot) {
-        Path script = script();
-        if (script == null || workingSetRoot == null) {
-            return java.util.Optional.empty();
-        }
-        Result resolved = run(script, 10L, "resolve", workingSetRoot.toString());
-        if (resolved.exitCode() != 0 || resolved.output().isBlank()) {
-            return java.util.Optional.empty();
-        }
-        Result status = run(script, 10L, "status", resolved.output().trim());
-        if (status.exitCode() < 0) {
-            return java.util.Optional.empty();
-        }
-        // lease.sh status exits 1 exactly when the lease is LIVE on
-        // another machine; 0 covers FREE, MINE and EXPIRED.
-        return java.util.Optional.of(new Status(status.exitCode() == 1,
-                status.output().trim()));
+    static Optional<Status> status(Path workingSetRoot) {
+        return Context.of(workingSetRoot).map(context -> {
+            LeaseProtocol.Outcome outcome =
+                    context.protocol().status(context.workingSet());
+            return new Status(outcome.exitCode() == 1,
+                    outcome.stdout().trim());
+        });
     }
 
     /**
-     * Locates the lease script, requiring the machine identity beside it.
+     * Releases a lease this machine holds — the closing half of a
+     * short-hold. The protocol refuses politely when the lease is not
+     * held here; anything but a clean release is the caller's to log,
+     * never to fail on.
      *
-     * @return the script path, or {@code null} when this machine has no
-     *         lease machinery
+     * @param workingSetRoot the working set's directory
+     * @return {@code true} when the lease was released (or no record
+     *         existed); {@code false} otherwise
      */
-    private static Path script() {
-        String home = System.getProperty("user.home");
-        if (home == null) {
-            return null;
-        }
-        Path script = Path.of(home, "ike-dev", "scripts", "lease.sh");
-        Path identity = Path.of(home, ".ike-machine-id");
-        return Files.isExecutable(script) && Files.exists(identity) ? script : null;
+    static boolean release(Path workingSetRoot) {
+        return Context.of(workingSetRoot)
+                .map(context -> context.protocol()
+                        .release(context.workingSet()).exitCode() == 0)
+                .orElse(true);
     }
 
-    private static Result run(Path script, long timeoutSeconds, String... args) {
-        try {
-            Process process = new ProcessBuilder(
-                    concat(script.toString(), args))
-                    .redirectErrorStream(true)
-                    .start();
-            StringBuilder output = new StringBuilder();
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(
-                    process.getInputStream(), StandardCharsets.UTF_8))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    output.append(line).append('\n');
+    /**
+     * The resolved protocol instance and working-set name for a path, or
+     * empty in every not-applicable case.
+     *
+     * @param protocol   the in-process protocol
+     * @param workingSet the resolved working-set name
+     */
+    private record Context(LeaseProtocol protocol, String workingSet) {
+
+        static Optional<Context> of(Path workingSetRoot) {
+            if (workingSetRoot == null) {
+                return Optional.empty();
+            }
+            String home = firstNonBlank(
+                    System.getProperty("ike.lease.home"),
+                    System.getenv("HOME"),
+                    System.getProperty("user.home"));
+            String ikeDev = firstNonBlank(
+                    System.getProperty("ike.lease.ikeDev"),
+                    System.getenv("IKE_DEV"),
+                    home + "/ike-dev");
+            if (!Files.isRegularFile(Path.of(home, ".ike-machine-id"))
+                    || !Files.isDirectory(Path.of(ikeDev))) {
+                return Optional.empty();
+            }
+            long settle = parseLong(firstNonBlank(
+                    System.getProperty("ike.lease.settleSeconds"),
+                    System.getenv("IKE_LEASE_SETTLE_SECONDS"),
+                    "25"), 25L);
+            String ttl = firstNonBlank(System.getenv("IKE_LEASE_TTL"),
+                    "PT10M");
+            LeaseProtocol protocol = new LeaseProtocol(Path.of(ikeDev),
+                    Path.of(home), Path.of(System.getProperty("user.dir")),
+                    ttl, settle);
+            LeaseProtocol.Outcome resolved =
+                    protocol.resolve(workingSetRoot.toString());
+            if (resolved.exitCode() != 0) {
+                return Optional.empty();
+            }
+            return Optional.of(new Context(protocol,
+                    resolved.stdout().trim()));
+        }
+
+        private static String firstNonBlank(String... values) {
+            for (String value : values) {
+                if (value != null && !value.isBlank()) {
+                    return value;
                 }
             }
-            if (!process.waitFor(timeoutSeconds, TimeUnit.SECONDS)) {
-                process.destroyForcibly();
-                return new Result(-1, output.toString());
+            return "";
+        }
+
+        private static long parseLong(String value, long fallback) {
+            try {
+                return Long.parseLong(value.trim());
+            } catch (NumberFormatException e) {
+                return fallback;
             }
-            return new Result(process.exitValue(), output.toString());
-        } catch (IOException e) {
-            return new Result(-1, "");
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return new Result(-1, "");
         }
     }
-
-    private static List<String> concat(String head, String... tail) {
-        java.util.ArrayList<String> command = new java.util.ArrayList<>();
-        command.add(head);
-        command.addAll(List.of(tail));
-        return command;
-    }
-
-    private record Result(int exitCode, String output) { }
 }

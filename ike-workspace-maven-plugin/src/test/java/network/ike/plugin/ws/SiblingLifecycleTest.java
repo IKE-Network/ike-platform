@@ -283,6 +283,137 @@ class SiblingLifecycleTest {
                 .hasMessageContaining("exactly one");
     }
 
+    // ── the parent-lease short-hold (#992's last thread, #1005) ──
+
+    /**
+     * Builds a fixture whose primary sits inside a fake development
+     * folder with lease machinery live: a machine identity, a leases
+     * directory, and the sysprops that point {@code WorkingSetLease} at
+     * it with a zero settle window.
+     */
+    private Path leasedFixture() throws Exception {
+        Path ikeDev = tempDir.resolve("ike-dev");
+        Path home = tempDir.resolve("home");
+        Files.createDirectories(ikeDev.resolve("leases"));
+        Files.createDirectories(home);
+        Files.writeString(home.resolve(".ike-machine-id"),
+                "Test-Machine-LEASE\n", StandardCharsets.UTF_8);
+        System.setProperty("ike.lease.home", home.toString());
+        System.setProperty("ike.lease.ikeDev", ikeDev.toString());
+        System.setProperty("ike.lease.settleSeconds", "0");
+
+        Path leasedPrimary = new TestWorkspaceHelper(ikeDev)
+                .buildSiblingScenario();
+        Files.writeString(leasedPrimary.resolve(".gitignore"), """
+                /lib-a/
+                /lib-b/
+                /app-c/
+                ws꞉*.md
+                .ike/
+                """, StandardCharsets.UTF_8);
+        exec(leasedPrimary, "git", "add", ".gitignore");
+        exec(leasedPrimary, "git", "commit", "-m", "chore: ignore members");
+        return leasedPrimary;
+    }
+
+    @org.junit.jupiter.api.AfterEach
+    void clearLeaseSysprops() {
+        System.clearProperty("ike.lease.home");
+        System.clearProperty("ike.lease.ikeDev");
+        System.clearProperty("ike.lease.settleSeconds");
+    }
+
+    @Test
+    void finish_shortHoldsAndReleasesTheParentLease() throws Exception {
+        Path leasedPrimary = leasedFixture();
+        FeatureStartSiblingPublishMojo start =
+                TestLog.createMojo(FeatureStartSiblingPublishMojo.class);
+        start.manifest = leasedPrimary.resolve("workspace.yaml").toFile();
+        start.feature = "hold";
+        start.execute();
+        Path sibling = tempDir.resolve("ike-dev/primary꞉hold");
+        Path libA = sibling.resolve("lib-a");
+        Files.writeString(libA.resolve("feature.txt"), "the work\n",
+                StandardCharsets.UTF_8);
+        exec(libA, "git", "add", "feature.txt");
+        exec(libA, "git", "commit", "-m", "feat: work");
+        // Creation confirmed the primary's lease as this machine, and a
+        // lease already MINE is exactly what a short-hold must NOT
+        // release. Clear the record so the finish exercises the other
+        // half: acquire fresh, land, give it back.
+        Files.deleteIfExists(tempDir.resolve("ike-dev/leases/primary.lease"));
+
+        FeatureFinishSquashPublishMojo finish =
+                TestLog.createMojo(FeatureFinishSquashPublishMojo.class);
+        finish.targetBranch = "main";
+        finish.push = true;
+        finish.syncParent = true;
+        finish.manifest = sibling.resolve("workspace.yaml").toFile();
+        finish.feature = "hold";
+        finish.message = "feat: hold";
+        finish.execute();
+
+        Path parentRecord = tempDir.resolve("ike-dev/leases/primary.lease");
+        assertThat(parentRecord)
+                .as("the landing short-held the parent's lease, leaving "
+                        + "its record behind")
+                .exists();
+        var record = network.ike.lease.core.LeaseRecord.read(parentRecord)
+                .orElseThrow();
+        assertThat(record.state())
+                .as("a lease acquired fresh for the landing is released "
+                        + "when the hold closes")
+                .isEqualTo("released");
+        assertThat(record.holder()).isEqualTo("Test-Machine-LEASE");
+        assertThat(capture(leasedPrimary.resolve("lib-a"), "git", "show",
+                "--stat", "--oneline", "main"))
+                .as("the landing itself happened")
+                .contains("feature.txt");
+    }
+
+    @Test
+    void finish_refusesWhenAnotherMachineHoldsTheParentLive()
+            throws Exception {
+        Path leasedPrimary = leasedFixture();
+        FeatureStartSiblingPublishMojo start =
+                TestLog.createMojo(FeatureStartSiblingPublishMojo.class);
+        start.manifest = leasedPrimary.resolve("workspace.yaml").toFile();
+        start.feature = "fenced";
+        start.execute();
+        Path sibling = tempDir.resolve("ike-dev/primary꞉fenced");
+        // The other machine's live claim on the parent lands by sync.
+        String now = java.time.format.DateTimeFormatter
+                .ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'")
+                .withZone(java.time.ZoneOffset.UTC)
+                .format(java.time.Instant.now());
+        Files.writeString(tempDir.resolve("ike-dev/leases/primary.lease"),
+                new network.ike.lease.core.LeaseRecord("primary", "held",
+                        "Other-Machine-ZZZZ", 9, now, now, "PT10M")
+                        .serialize(),
+                StandardCharsets.UTF_8);
+
+        FeatureFinishSquashPublishMojo finish =
+                TestLog.createMojo(FeatureFinishSquashPublishMojo.class);
+        finish.targetBranch = "main";
+        finish.push = true;
+        finish.syncParent = true;
+        finish.manifest = sibling.resolve("workspace.yaml").toFile();
+        finish.feature = "fenced";
+        finish.message = "feat: fenced";
+
+        assertThatThrownBy(finish::execute)
+                .isInstanceOf(MojoException.class)
+                .hasMessageContaining("holds it live");
+        assertThat(sibling)
+                .as("a fenced finish lands nothing and deletes nothing")
+                .exists();
+        assertThat(network.ike.lease.core.LeaseRecord
+                .read(tempDir.resolve("ike-dev/leases/primary.lease"))
+                .orElseThrow().holder())
+                .as("the other machine's live claim is untouched")
+                .isEqualTo("Other-Machine-ZZZZ");
+    }
+
     // ── helpers ──────────────────────────────────────────────────
 
     private Path createSibling(String feature) throws Exception {

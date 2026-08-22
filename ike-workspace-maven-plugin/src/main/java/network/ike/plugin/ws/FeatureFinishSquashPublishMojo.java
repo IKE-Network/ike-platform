@@ -51,8 +51,16 @@ public class FeatureFinishSquashPublishMojo extends FeatureFinishSquashDraftMojo
     protected WorkspaceReportSpec runGoal() throws MojoException {
         confirmWorkingSetLease();
         publish = true;
-        WorkspaceReportSpec spec = super.runGoal();
-        PostMutationSync.refresh(workspaceRoot(), getLog());
+        WorkspaceReportSpec spec;
+        // The landing absorbs into the parent, which makes this goal a
+        // writer of the parent too — so its lease is short-held across
+        // the landing (#992's parent leasing, #1005's ws: half). A hold
+        // acquired fresh is given back on close, success or failure.
+        try (ParentLeaseHold hold =
+                ParentLeaseHold.acquire(workspaceRoot(), getLog())) {
+            spec = super.runGoal();
+            PostMutationSync.refresh(workspaceRoot(), getLog());
+        }
         if (deleteSibling) {
             spec = deleteSiblingAfterLanding(spec);
         }

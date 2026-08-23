@@ -1,6 +1,6 @@
 ---
-date_published: 2026-08-21
-date_modified: 2026-08-21
+date_published: 2026-08-22
+date_modified: 2026-08-22
 canonical_url: https://ike.network/ike-platform/dependency-info.html
 ---
 
@@ -12,7 +12,7 @@ canonical_url: https://ike.network/ike-platform/dependency-info.html
 <dependency>
   <groupId>network.ike.platform</groupId>
   <artifactId>ike-platform</artifactId>
-  <version>175-SNAPSHOT</version>
+  <version>175</version>
   <type>pom</type>
 </dependency>
 ```
@@ -20,7 +20,7 @@ canonical_url: https://ike.network/ike-platform/dependency-info.html
 ## [Apache Ivy](#apache-ivy)
 
 ```
-<dependency org="network.ike.platform" name="ike-platform" rev="175-SNAPSHOT">
+<dependency org="network.ike.platform" name="ike-platform" rev="175">
   <artifact name="ike-platform" type="pom" />
 </dependency>
 ```
@@ -29,24 +29,24 @@ canonical_url: https://ike.network/ike-platform/dependency-info.html
 
 ```
 @Grapes(
-@Grab(group='network.ike.platform', module='ike-platform', version='175-SNAPSHOT')
+@Grab(group='network.ike.platform', module='ike-platform', version='175')
 )
 ```
 
 ## [Gradle/Grails](#gradle-grails)
 
 ```
-implementation 'network.ike.platform:ike-platform:175-SNAPSHOT'
+implementation 'network.ike.platform:ike-platform:175'
 ```
 
 ## [Scala SBT](#scala-sbt)
 
 ```
-libraryDependencies += "network.ike.platform" % "ike-platform" % "175-SNAPSHOT"
+libraryDependencies += "network.ike.platform" % "ike-platform" % "175"
 ```
 
 ## [Leiningen](#leiningen)
 
 ```
-[network.ike.platform/ike-platform "175-SNAPSHOT"]
+[network.ike.platform/ike-platform "175"]
 ```

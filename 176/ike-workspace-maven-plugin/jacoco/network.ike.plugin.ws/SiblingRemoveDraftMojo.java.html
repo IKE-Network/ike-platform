@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>SiblingRemoveDraftMojo.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">SiblingRemoveDraftMojo.java</span></div><h1>SiblingRemoveDraftMojo.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.plugin.support.GoalReportBuilder;
+import network.ike.workspace.WorkingSet;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
+
+import java.io.File;
+import java.util.List;
+
+/**
+ * Preview removing a sibling working set — the read-only counterpart of
+ * {@link SiblingRemovePublishMojo} (IKE-Network/ike-issues#600).
+ *
+ * &lt;p&gt;The documented cleanup used to be {@code rm -rf}: correct, but
+ * unguarded against exactly the things that die silently with a deleted
+ * tree. This preview names them per member repository — uncommitted
+ * changes, stashes, unlanded branches (squash-aware), bare member trees —
+ * and reads the sibling's lease without acquiring anything. Every finding
+ * comes with its remediation; {@code rm -rf} remains valid for the
+ * I-know-what-I-am-doing case, and {@code -Dforce=true} is its
+ * goal-shaped equivalent.
+ *
+ * &lt;pre&gt;{@code
+ * mvn ws:sibling-remove-draft   -Dfeature=jira-456
+ * mvn ws:sibling-remove-publish -Dfeature=jira-456
+ * }&lt;/pre&gt;
+ *
+ * @see SiblingRemovePublishMojo for the executing counterpart
+ * @see SiblingListMojo for the inventory these previews start from
+ */
+@Mojo(name = &quot;sibling-remove-draft&quot;, projectRequired = false, aggregator = true)
+public class SiblingRemoveDraftMojo extends AbstractWorkspaceMojo {
+
+    /** Feature whose sibling ({@code &lt;primary&gt;꞉&lt;feature&gt;}) to remove. */
+    @Parameter(property = &quot;feature&quot;)
+    String feature;
+
+    /** Explicit sibling directory name; alternative to {@code -Dfeature}. */
+    @Parameter(property = &quot;name&quot;)
+    String name;
+
+    /** Creates this goal instance. */
+<span class="fc" id="L45">    public SiblingRemoveDraftMojo() {}</span>
+
+    @Override
+    protected WorkspaceReportSpec runGoal() throws MojoException {
+<span class="fc" id="L49">        WorkingSet workingSet = resolveWorkingSet();</span>
+<span class="pc bpc" id="L50" title="1 of 2 branches missed.">        File primaryRoot = isWorkspaceMode()</span>
+<span class="fc" id="L51">                ? workspaceRoot()</span>
+<span class="pc" id="L52">                : workingSet.members().getFirst().directory().toFile();</span>
+<span class="fc" id="L53">        SiblingRemoval.Target target = SiblingRemoval.resolve(</span>
+<span class="fc" id="L54">                primaryRoot, workingSet.baseName(), feature, name);</span>
+
+<span class="fc" id="L56">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L57">        getLog().info(header(&quot;Sibling Remove — DRAFT&quot;));</span>
+<span class="fc" id="L58">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+<span class="fc" id="L59">        getLog().info(&quot;  Sibling: &quot; + target.sibling().root().getAbsolutePath());</span>
+<span class="fc" id="L60">        getLog().info(&quot;&quot;);</span>
+
+<span class="fc" id="L62">        boolean clean = SiblingRemoval.clean(target);</span>
+<span class="fc" id="L63">        String lease = WorkingSetLease.status(target.sibling().root().toPath())</span>
+<span class="pc" id="L64">                .map(status -&gt; status.line()</span>
+<span class="nc bnc" id="L65" title="All 2 branches missed.">                        + (status.liveElsewhere()</span>
+<span class="nc" id="L66">                                ? &quot; — **removal will refuse; force does not &quot;</span>
+<span class="nc" id="L67">                                        + &quot;override a live lease**&quot; : &quot;&quot;))</span>
+<span class="fc" id="L68">                .orElse(&quot;no lease machinery on this machine&quot;);</span>
+
+<span class="fc" id="L70">        GoalReportBuilder report = new GoalReportBuilder();</span>
+<span class="fc" id="L71">        report.paragraph(&quot;**Preview — nothing is deleted.**&quot;);</span>
+<span class="fc" id="L72">        SiblingRemoval.describeTarget(report, target);</span>
+<span class="fc" id="L73">        report.paragraph(&quot;**Lease:** &quot; + lease);</span>
+<span class="fc" id="L74">        report.section(&quot;Preflight&quot;)</span>
+<span class="fc" id="L75">                .table(List.of(&quot;&quot;, &quot;Member&quot;, &quot;Finding&quot;),</span>
+<span class="fc" id="L76">                        SiblingRemoval.preflightRows(target));</span>
+<span class="pc bpc" id="L77" title="1 of 2 branches missed.">        report.paragraph(clean</span>
+                ? &quot;Every member is clean and landed — `&quot;
+<span class="nc" id="L79">                        + WsGoal.SIBLING_REMOVE_PUBLISH.qualified()</span>
+<span class="nc" id="L80">                        + invocationSuffix() + &quot;` will remove the sibling &quot;</span>
+                        + &quot;and garbage-collect its lease record.&quot;
+                : &quot;**Resolve the ✗ rows above** — finish the work &quot;
+                        + &quot;(`ws:feature-finish-squash-publish` in the &quot;
+                        + &quot;sibling), commit or drop stashes — **or pass &quot;
+                        + &quot;`-Dforce=true`** to `&quot;
+<span class="fc" id="L86">                        + WsGoal.SIBLING_REMOVE_PUBLISH.qualified()</span>
+<span class="fc" id="L87">                        + &quot;` to discard them deliberately. Force never &quot;</span>
+                        + &quot;overrides a lease held live elsewhere.&quot;);
+<span class="fc" id="L89">        report.section(&quot;What removal does&quot;)</span>
+<span class="fc" id="L90">                .paragraph(&quot;Deletes the sibling directory (whole-working-set &quot;</span>
+                        + &quot;removal is the supported operation — the sync &quot;
+                        + &quot;layer propagates it, staggered file versioning is &quot;
+                        + &quot;the net) and deletes `leases/&quot;
+<span class="fc" id="L94">                        + target.sibling().name() + &quot;.lease`, the record a &quot;</span>
+                        + &quot;working set leaves behind (ike-issues#1006's GC, &quot;
+                        + &quot;done eagerly).&quot;);
+<span class="fc" id="L97">        return new WorkspaceReportSpec(WsGoal.SIBLING_REMOVE_DRAFT,</span>
+<span class="fc" id="L98">                report.build());</span>
+    }
+
+    private String invocationSuffix() {
+<span class="nc bnc" id="L102" title="All 4 branches missed.">        return name != null &amp;&amp; !name.isBlank()</span>
+<span class="nc" id="L103">                ? &quot; -Dname=&quot; + name : &quot; -Dfeature=&quot; + feature;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

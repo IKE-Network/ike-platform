@@ -1,0 +1,220 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>SiblingRemoval.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">SiblingRemoval.java</span></div><h1>SiblingRemoval.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.plugin.support.GoalReportBuilder;
+import network.ike.workspace.FeatureName;
+import org.apache.maven.api.plugin.MojoException;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.stream.Stream;
+
+/**
+ * The shared substrate of {@code ws:sibling-remove-draft} and
+ * {@code -publish} (IKE-Network/ike-issues#600): target resolution,
+ * the safety preflight, and the deletion itself.
+ *
+ * &lt;p&gt;The preflight names exactly what dies with a deleted tree, per
+ * member repository: uncommitted changes, stashes, and unlanded branches
+ * (squash-aware — see {@link SiblingInventory}). Bare member trees are
+ * unverifiable, so they block too. {@code -Dforce=true} overrides those
+ * content checks; it never overrides a live lease on another machine —
+ * displacing a live holder stays a human decision on every surface.
+ */
+final class SiblingRemoval {
+
+    private SiblingRemoval() {}
+
+    /**
+     * The resolved removal target and its assessed state.
+     *
+     * @param sibling the sibling to remove
+     * @param states  per-member assessment, root first
+     */
+<span class="fc" id="L38">    record Target(SiblingInventory.Sibling sibling,</span>
+                  List&lt;SiblingInventory.MemberState&gt; states) {}
+
+    /**
+     * Resolves the removal target from the goal's parameters.
+     *
+     * @param primaryRoot the primary working set's root
+     * @param baseName    the primary's directory name
+     * @param feature     the {@code -Dfeature} value, or {@code null}
+     * @param name        the {@code -Dname} value, or {@code null}
+     * @return the target, fully assessed (origins fetched first)
+     * @throws MojoException if neither or both parameters are given, the
+     *                       directory is missing, it is not a sibling of
+     *                       this primary, or the goal runs inside it
+     */
+    static Target resolve(File primaryRoot, String baseName,
+                          String feature, String name) throws MojoException {
+<span class="pc bpc" id="L55" title="1 of 4 branches missed.">        boolean hasFeature = feature != null &amp;&amp; !feature.isBlank();</span>
+<span class="pc bpc" id="L56" title="3 of 4 branches missed.">        boolean hasName = name != null &amp;&amp; !name.isBlank();</span>
+<span class="fc bfc" id="L57" title="All 2 branches covered.">        if (hasFeature == hasName) {</span>
+<span class="fc" id="L58">            throw new MojoException(&quot;Name the sibling to remove with exactly &quot;</span>
+                    + &quot;one of -Dfeature=&lt;name&gt; (→ &quot; + baseName
+                    + FeatureName.SIBLING_SEPARATOR + &quot;&lt;name&gt;) or &quot;
+                    + &quot;-Dname=&lt;directory&gt;.&quot;);
+        }
+<span class="pc bpc" id="L63" title="1 of 2 branches missed.">        String directoryName = hasName ? name.trim()</span>
+<span class="fc" id="L64">                : AbstractWorkspaceMojo.validateFeatureName(feature.trim())</span>
+<span class="fc" id="L65">                        .siblingDirectoryName(baseName);</span>
+<span class="fc" id="L66">        List&lt;SiblingInventory.Sibling&gt; siblings =</span>
+<span class="fc" id="L67">                SiblingInventory.discover(primaryRoot, baseName);</span>
+<span class="fc" id="L68">        SiblingInventory.Sibling sibling = siblings.stream()</span>
+<span class="fc" id="L69">                .filter(candidate -&gt; candidate.name().equals(directoryName))</span>
+<span class="fc" id="L70">                .findFirst()</span>
+<span class="fc" id="L71">                .orElseThrow(() -&gt; new MojoException(&quot;'&quot; + directoryName</span>
+                        + &quot;' is not a sibling of &quot; + baseName + &quot; (looked &quot;
+<span class="fc" id="L73">                        + &quot;beside &quot; + primaryRoot.getAbsolutePath() + &quot;). &quot;</span>
+                        + &quot;`ws:sibling-list` shows what exists.&quot;));
+<span class="pc bpc" id="L75" title="1 of 2 branches missed.">        if (isSelfOrAncestor(sibling.root(), primaryRoot)) {</span>
+<span class="nc" id="L76">            throw new MojoException(&quot;Refusing: the goal is running inside &quot;</span>
+                    + &quot;the sibling it would delete. Run it from the primary: &quot;
+<span class="nc" id="L78">                    + &quot;cd &quot; + primaryRoot.getAbsolutePath());</span>
+        }
+<span class="fc" id="L80">        return new Target(sibling,</span>
+<span class="fc" id="L81">                SiblingInventory.assess(sibling.root(), false));</span>
+    }
+
+    /**
+     * Assesses a sibling already in hand — the delete-on-finish path
+     * (IKE-Network/ike-issues#992), where the finish runs inside the
+     * sibling and needs no discovery or target resolution.
+     *
+     * @param siblingRoot the sibling's root directory
+     * @param conformant  whether the local-origin chain is confirmed
+     * @return the target, fully assessed (origins fetched first)
+     */
+    static Target assessKnown(File siblingRoot, boolean conformant) {
+<span class="fc" id="L94">        String name = siblingRoot.getName();</span>
+<span class="fc" id="L95">        int separator = name.indexOf(FeatureName.SIBLING_SEPARATOR);</span>
+<span class="pc bpc" id="L96" title="1 of 2 branches missed.">        String feature = separator &gt;= 0</span>
+<span class="fc" id="L97">                ? name.substring(separator + FeatureName.SIBLING_SEPARATOR.length())</span>
+<span class="pc" id="L98">                : name;</span>
+<span class="fc" id="L99">        return new Target(</span>
+                new SiblingInventory.Sibling(name, siblingRoot, feature,
+                        conformant),
+<span class="fc" id="L102">                SiblingInventory.assess(siblingRoot, false));</span>
+    }
+
+    /**
+     * Renders the preflight into report rows and an overall verdict.
+     *
+     * @param target the resolved target
+     * @return rows of {@code [mark, member, finding]}; every row marked
+     *         {@code ✗} blocks removal without {@code -Dforce=true}
+     */
+    static List&lt;String[]&gt; preflightRows(Target target) {
+<span class="fc" id="L113">        List&lt;String[]&gt; rows = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L114" title="All 2 branches covered.">        for (SiblingInventory.MemberState state : target.states()) {</span>
+<span class="fc" id="L115">            List&lt;String&gt; findings = new ArrayList&lt;&gt;();</span>
+<span class="pc bpc" id="L116" title="1 of 2 branches missed.">            if (state.bare()) {</span>
+<span class="nc" id="L117">                findings.add(&quot;bare tree — no git state to verify; its &quot;</span>
+                        + &quot;content dies with the removal&quot;);
+            } else {
+<span class="fc bfc" id="L120" title="All 2 branches covered.">                if (state.uncommitted() &gt; 0) {</span>
+<span class="fc" id="L121">                    findings.add(state.uncommitted() + &quot; uncommitted&quot;);</span>
+                }
+<span class="fc bfc" id="L123" title="All 2 branches covered.">                if (state.stashes() &gt; 0) {</span>
+<span class="fc" id="L124">                    findings.add(state.stashes() + &quot; stash(es) — stashes &quot;</span>
+                            + &quot;live only in this repository&quot;);
+                }
+<span class="pc bpc" id="L127" title="1 of 4 branches missed.">                if (state.unlanded() != null &amp;&amp; !state.unlanded().isEmpty()) {</span>
+<span class="fc" id="L128">                    findings.add(&quot;unlanded: &quot;</span>
+<span class="fc" id="L129">                            + String.join(&quot;, &quot;, state.unlanded()));</span>
+                }
+<span class="pc bpc" id="L131" title="1 of 2 branches missed.">                if (state.unlanded() == null) {</span>
+<span class="nc" id="L132">                    findings.add(&quot;landed-state not determinable &quot;</span>
+                            + &quot;(no origin, or fetch failed)&quot;);
+                }
+            }
+<span class="fc" id="L136">            boolean ok = state.removable();</span>
+<span class="fc bfc" id="L137" title="All 2 branches covered.">            rows.add(new String[]{ok ? &quot;✓&quot; : &quot;✗&quot;, state.path(),</span>
+<span class="fc bfc" id="L138" title="All 2 branches covered.">                    ok ? &quot;clean, landed&quot; : String.join(&quot;; &quot;, findings)});</span>
+<span class="fc" id="L139">        }</span>
+<span class="fc" id="L140">        return rows;</span>
+    }
+
+    /**
+     * Reports whether every member passed the preflight.
+     *
+     * @param target the resolved target
+     * @return {@code true} when nothing blocks removal
+     */
+    static boolean clean(Target target) {
+<span class="fc" id="L150">        return target.states().stream()</span>
+<span class="fc" id="L151">                .allMatch(SiblingInventory.MemberState::removable);</span>
+    }
+
+    /**
+     * Deletes the sibling tree, then garbage-collects its lease record —
+     * a record for a working set that no longer exists is the exact thing
+     * the reconciliation daemon's GC removes (IKE-Network/ike-issues#1006),
+     * done eagerly here. Removing a whole working set is the supported
+     * operation; the sync layer propagates the deletion and staggered file
+     * versioning is the net.
+     *
+     * @param target the resolved target
+     * @return the deleted lease-record path, or {@code null} when none
+     *         existed
+     * @throws MojoException if the tree cannot be fully deleted
+     */
+    static Path delete(Target target) throws MojoException {
+<span class="fc" id="L168">        Path root = target.sibling().root().toPath();</span>
+<span class="fc" id="L169">        try (Stream&lt;Path&gt; tree = Files.walk(root)) {</span>
+<span class="fc bfc" id="L170" title="All 2 branches covered.">            for (Path path : tree.sorted(Comparator.reverseOrder()).toList()) {</span>
+<span class="fc" id="L171">                Files.deleteIfExists(path);</span>
+<span class="fc" id="L172">            }</span>
+<span class="nc" id="L173">        } catch (IOException e) {</span>
+<span class="nc" id="L174">            throw new MojoException(&quot;Could not delete &quot;</span>
+<span class="nc" id="L175">                    + root + &quot;: &quot; + e.getMessage() + &quot;. The tree may be &quot;</span>
+                    + &quot;partially removed; re-run to finish.&quot;, e);
+<span class="fc" id="L177">        }</span>
+<span class="fc" id="L178">        Path record = root.getParent()</span>
+<span class="fc" id="L179">                .resolve(&quot;leases&quot;)</span>
+<span class="fc" id="L180">                .resolve(target.sibling().name() + &quot;.lease&quot;);</span>
+        try {
+<span class="pc bpc" id="L182" title="1 of 2 branches missed.">            return Files.deleteIfExists(record) ? record : null;</span>
+<span class="nc" id="L183">        } catch (IOException e) {</span>
+            // The record is now garbage either way; the daemon's GC or the
+            // operator can sweep it. Removal itself has succeeded.
+<span class="nc" id="L186">            return null;</span>
+        }
+    }
+
+    /**
+     * The report preamble both goals share.
+     *
+     * @param report the report under construction
+     * @param target the resolved target
+     */
+    static void describeTarget(GoalReportBuilder report, Target target) {
+<span class="fc" id="L197">        SiblingInventory.Sibling sibling = target.sibling();</span>
+<span class="fc" id="L198">        report.paragraph(&quot;**Sibling:** `&quot; + sibling.name() + &quot;`&quot;)</span>
+<span class="fc" id="L199">                .paragraph(&quot;**Feature:** `&quot; + sibling.feature() + &quot;`&quot;)</span>
+<span class="fc" id="L200">                .paragraph(&quot;**Location:** `&quot;</span>
+<span class="fc" id="L201">                        + sibling.root().getAbsolutePath() + &quot;`&quot;)</span>
+<span class="fc" id="L202">                .paragraph(&quot;**Origin chain:** &quot;</span>
+<span class="pc bpc" id="L203" title="1 of 2 branches missed.">                        + (sibling.conformant()</span>
+<span class="fc" id="L204">                                ? &quot;local parent ✓ (ike-issues#992)&quot;</span>
+<span class="pc" id="L205">                                : &quot;legacy remote-remote — landed-state is &quot;</span>
+                                        + &quot;measured against that remote&quot;));
+<span class="fc" id="L207">    }</span>
+
+    private static boolean isSelfOrAncestor(File sibling, File primaryRoot) {
+        try {
+<span class="fc" id="L211">            Path siblingPath = sibling.getCanonicalFile().toPath();</span>
+<span class="fc" id="L212">            Path cwd = Path.of(&quot;&quot;).toAbsolutePath();</span>
+<span class="fc" id="L213">            Path primary = primaryRoot.getCanonicalFile().toPath();</span>
+<span class="pc bpc" id="L214" title="2 of 4 branches missed.">            return cwd.startsWith(siblingPath) || primary.startsWith(siblingPath);</span>
+<span class="nc" id="L215">        } catch (IOException e) {</span>
+<span class="nc" id="L216">            return false;</span>
+        }
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

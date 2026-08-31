@@ -112,15 +112,26 @@ public class WsCommitDraftMojo extends AbstractWorkspaceMojo {
     // ── Per-repo status capture ─────────────────────────────────
 
     /**
-     * Per-repo status snapshot: the repo's label and the raw
+     * Per-repo status snapshot: the repo's label, the raw
      * {@code git status --porcelain} output lines (each carries the
-     * two-character status flag and the path).
+     * two-character status flag and the path), and any stale-drift
+     * findings for the pending changes
+     * (IKE-Network/ike-issues#1082 — the same analysis
+     * {@code ws:commit-publish} gates on, so the draft previews the
+     * refusal the publish would give).
      *
      * @param label           the human-readable repo label
      * @param porcelainLines  one porcelain line per changed file;
      *                        empty list means the repo is clean
+     * @param staleLines      one line per stale-shaped pending change
+     *                        (from {@link StaleDrift#describeStale});
+     *                        empty when the delta is novel or analysis
+     *                        was unavailable
+     * @param whollyStale     whether every pending change is
+     *                        stale-shaped — the publish-refusal shape
      */
-    private record RepoStatus(String label, List<String> porcelainLines) {
+    private record RepoStatus(String label, List<String> porcelainLines,
+                              List<String> staleLines, boolean whollyStale) {
         boolean hasWork() { return !porcelainLines.isEmpty(); }
         int fileCount() { return porcelainLines.size(); }
     }
@@ -141,7 +152,7 @@ public class WsCommitDraftMojo extends AbstractWorkspaceMojo {
             String output = ReleaseSupport.execCapture(dir,
                     "git", "status", "--porcelain");
             if (output == null || output.isBlank()) {
-                return new RepoStatus(label, List.of());
+                return new RepoStatus(label, List.of(), List.of(), false);
             }
             List<String> lines = new ArrayList<>();
             for (String line : output.split("\n")) {
@@ -149,10 +160,22 @@ public class WsCommitDraftMojo extends AbstractWorkspaceMojo {
                     lines.add(line);
                 }
             }
-            return new RepoStatus(label, lines);
+            List<String> staleLines = List.of();
+            boolean whollyStale = false;
+            // Advisory only — the draft never fails because the drift
+            // analysis does (the publish gate fails open the same way).
+            try {
+                StaleDrift.Analysis drift = StaleDrift.analyzeWorktree(dir);
+                staleLines = StaleDrift.describeStale(drift);
+                whollyStale = drift.whollyStale();
+            } catch (RuntimeException e) {
+                getLog().debug(label + " — stale-drift analysis"
+                        + " unavailable: " + e.getMessage());
+            }
+            return new RepoStatus(label, lines, staleLines, whollyStale);
         } catch (RuntimeException e) {
             getLog().warn(label + " — git status failed: " + e.getMessage());
-            return new RepoStatus(label, List.of());
+            return new RepoStatus(label, List.of(), List.of(), false);
         }
     }
 
@@ -165,6 +188,14 @@ public class WsCommitDraftMojo extends AbstractWorkspaceMojo {
                 + s.fileCount() + " file(s):");
         for (String line : s.porcelainLines) {
             getLog().info("      " + line);
+        }
+        if (s.whollyStale()) {
+            getLog().warn(Ansi.yellow("      ⚠ every pending change is"
+                    + " stale-shaped — ws:commit-publish will refuse"
+                    + " (stale drift, not WIP):"));
+        }
+        for (String line : s.staleLines()) {
+            getLog().warn("      ⚠ " + line);
         }
     }
 
@@ -191,6 +222,14 @@ public class WsCommitDraftMojo extends AbstractWorkspaceMojo {
                     .append(s.fileCount()).append(" file(s)\n");
                 for (String line : s.porcelainLines) {
                     body.append("- `").append(line).append("`\n");
+                }
+                if (s.whollyStale()) {
+                    body.append("\n**⚠ Every pending change is"
+                            + " stale-shaped — `ws:commit-publish` will"
+                            + " refuse (stale drift, not WIP).**\n");
+                }
+                for (String line : s.staleLines()) {
+                    body.append("- ⚠ ").append(line).append("\n");
                 }
             }
             body.append("\nRun `")

@@ -35,6 +35,14 @@ import java.util.List;
  * committing changes in each. When run from a single repository, operates
  * on the current directory only.
  *
+ * <p>Before each repo's commit, a stale-drift gate
+ * (IKE-Network/ike-issues#1082, {@link StaleDrift}) classifies the
+ * staged delta against history: a delta whose every path byte-matches
+ * an older committed state is time-reversed synced drift — a tree
+ * lagging its refs — and is refused with per-path findings
+ * (escape hatch {@code -Dallow-stale-drift=true} for deliberate
+ * reverts); a mixed delta is committed with per-path warnings.
+ *
  * <p>The {@code -publish} half of the commit pair — it mutates
  * (stages, commits, optionally pushes). The read-only preview is
  * {@link WsCommitDraftMojo ws:commit-draft}.
@@ -81,6 +89,20 @@ public class WsCommitPublishMojo extends AbstractWorkspaceMojo {
      */
     @Parameter(property = "push", defaultValue = "false")
     boolean push;
+
+    /**
+     * Commit even when every staged change is stale-shaped — its
+     * content byte-matches an older committed state of the same path
+     * (IKE-Network/ike-issues#1082). The default refuses such a commit:
+     * in a synced working set a wholly historical delta is
+     * time-reversed drift (the tree lagging its refs), not WIP, and
+     * committing it re-commits history backwards. Pass
+     * {@code -Dallow-stale-drift=true} only for a deliberate
+     * hand-authored revert, after reading the per-path findings the
+     * refusal reports.
+     */
+    @Parameter(property = "allow-stale-drift", defaultValue = "false")
+    boolean allowStaleDrift;
 
     /**
      * Skip the {@code .mvn/jvm.config} hash-comment lint check that
@@ -305,6 +327,38 @@ public class WsCommitPublishMojo extends AbstractWorkspaceMojo {
                 return Outcome.SKIPPED_UNSTAGED;
             }
 
+            // Stale-drift gate (IKE-Network/ike-issues#1082): a staged
+            // delta whose every path byte-matches an older committed
+            // state is time-reversed synced drift, not WIP — refuse it.
+            // Mixed deltas warn per stale path and proceed. Fails open:
+            // an analysis failure never blocks the commit.
+            StaleDrift.Analysis drift = analyzeStagedTolerant(dir, label);
+            if (drift.whollyStale() && !allowStaleDrift) {
+                StringBuilder cause = new StringBuilder(
+                        "every staged change matches an older committed"
+                                + " state (stale drift, not WIP):\n");
+                for (String line : StaleDrift.describeStale(drift)) {
+                    cause.append("      ").append(line).append("\n");
+                }
+                cause.append("    A synced tree lagging its refs presents"
+                        + " old content as pending changes. If this is a"
+                        + " deliberate revert, re-run with"
+                        + " -Dallow-stale-drift=true.");
+                getLog().warn(Ansi.red("  ✗ ") + label
+                        + " — refused: " + cause);
+                commitFailures.add(new RepoFailure(label, "",
+                        cause.toString()));
+                return Outcome.FAILED;
+            }
+            if (drift.hasStale()) {
+                getLog().warn(Ansi.yellow("  ⚠ ") + label
+                        + " — stale-shaped paths in this commit"
+                        + " (committing anyway; novel changes present):");
+                for (String line : StaleDrift.describeStale(drift)) {
+                    getLog().warn("      " + line);
+                }
+            }
+
             VcsOperations.commit(dir, getLog(), message);
             VcsOperations.writeVcsState(dir, VcsState.Action.COMMIT);
         } catch (MojoException e) {
@@ -333,6 +387,26 @@ public class WsCommitPublishMojo extends AbstractWorkspaceMojo {
         getLog().info(Ansi.green("  ✓ ") + label
                 + " — " + previewSummary(modCount, newFiles));
         return Outcome.COMMITTED;
+    }
+
+    /**
+     * Runs the stale-drift analysis, failing open: any analysis error
+     * is logged and an empty (no-finding) analysis returned, so the
+     * guard can never wedge a commit (IKE-Network/ike-issues#1082).
+     *
+     * @param dir   the repository root directory
+     * @param label the member label for the log line
+     * @return the analysis, or {@link StaleDrift.Analysis#EMPTY} when
+     *         analysis fails
+     */
+    private StaleDrift.Analysis analyzeStagedTolerant(File dir, String label) {
+        try {
+            return StaleDrift.analyzeStaged(dir);
+        } catch (RuntimeException e) {
+            getLog().warn(label + " — stale-drift analysis failed ("
+                    + e.getMessage() + "); committing without it");
+            return StaleDrift.Analysis.EMPTY;
+        }
     }
 
     /**

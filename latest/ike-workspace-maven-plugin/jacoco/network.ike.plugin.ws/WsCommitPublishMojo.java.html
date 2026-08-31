@@ -35,6 +35,14 @@ import java.util.List;
  * committing changes in each. When run from a single repository, operates
  * on the current directory only.
  *
+ * &lt;p&gt;Before each repo's commit, a stale-drift gate
+ * (IKE-Network/ike-issues#1082, {@link StaleDrift}) classifies the
+ * staged delta against history: a delta whose every path byte-matches
+ * an older committed state is time-reversed synced drift — a tree
+ * lagging its refs — and is refused with per-path findings
+ * (escape hatch {@code -Dallow-stale-drift=true} for deliberate
+ * reverts); a mixed delta is committed with per-path warnings.
+ *
  * &lt;p&gt;The {@code -publish} half of the commit pair — it mutates
  * (stages, commits, optionally pushes). The read-only preview is
  * {@link WsCommitDraftMojo ws:commit-draft}.
@@ -55,7 +63,7 @@ import java.util.List;
 public class WsCommitPublishMojo extends AbstractWorkspaceMojo {
 
     /** Creates this goal instance. */
-<span class="fc" id="L58">    public WsCommitPublishMojo() {}</span>
+<span class="fc" id="L66">    public WsCommitPublishMojo() {}</span>
 
     /**
      * Commit message. Required. When omitted on the command line, the
@@ -83,6 +91,20 @@ public class WsCommitPublishMojo extends AbstractWorkspaceMojo {
     boolean push;
 
     /**
+     * Commit even when every staged change is stale-shaped — its
+     * content byte-matches an older committed state of the same path
+     * (IKE-Network/ike-issues#1082). The default refuses such a commit:
+     * in a synced working set a wholly historical delta is
+     * time-reversed drift (the tree lagging its refs), not WIP, and
+     * committing it re-commits history backwards. Pass
+     * {@code -Dallow-stale-drift=true} only for a deliberate
+     * hand-authored revert, after reading the per-path findings the
+     * refusal reports.
+     */
+    @Parameter(property = &quot;allow-stale-drift&quot;, defaultValue = &quot;false&quot;)
+    boolean allowStaleDrift;
+
+    /**
      * Skip the {@code .mvn/jvm.config} hash-comment lint check that
      * runs before commit (ike-issues#217). Default is to run the
      * check; pass {@code -Dws.commit.skipLint=true} to opt out (rare —
@@ -94,124 +116,124 @@ public class WsCommitPublishMojo extends AbstractWorkspaceMojo {
 
     @Override
     protected WorkspaceReportSpec runGoal() throws MojoException {
-<span class="fc" id="L97">        WorkingSet workingSet = resolveWorkingSet();</span>
+<span class="fc" id="L119">        WorkingSet workingSet = resolveWorkingSet();</span>
 
         // Pre-commit hygiene (workspace mode): catch # comments in
         // .mvn/jvm.config before they reach git or Syncthing (#217). The
         // check is graph-scoped, so it runs only for a declared workspace.
-<span class="fc bfc" id="L102" title="All 4 branches covered.">        if (workingSet.isWorkspace() &amp;&amp; !skipLint) {</span>
-<span class="fc" id="L103">            WorkspaceGraph graph = loadGraph();</span>
-<span class="fc" id="L104">            network.ike.plugin.ws.preflight.Preflight.of(</span>
-<span class="fc" id="L105">                    java.util.List.of(network.ike.plugin.ws.preflight</span>
+<span class="fc bfc" id="L124" title="All 4 branches covered.">        if (workingSet.isWorkspace() &amp;&amp; !skipLint) {</span>
+<span class="fc" id="L125">            WorkspaceGraph graph = loadGraph();</span>
+<span class="fc" id="L126">            network.ike.plugin.ws.preflight.Preflight.of(</span>
+<span class="fc" id="L127">                    java.util.List.of(network.ike.plugin.ws.preflight</span>
                             .PreflightCondition.JVM_CONFIG_NO_HASH_COMMENTS),
-<span class="fc" id="L107">                    network.ike.plugin.ws.preflight.PreflightContext.of(</span>
-<span class="fc" id="L108">                            workingSet.root().toFile(), graph,</span>
-<span class="fc" id="L109">                            graph.topologicalSort()))</span>
-<span class="fc" id="L110">                    .requirePassed(WsGoal.COMMIT_PUBLISH);</span>
+<span class="fc" id="L129">                    network.ike.plugin.ws.preflight.PreflightContext.of(</span>
+<span class="fc" id="L130">                            workingSet.root().toFile(), graph,</span>
+<span class="fc" id="L131">                            graph.topologicalSort()))</span>
+<span class="fc" id="L132">                    .requirePassed(WsGoal.COMMIT_PUBLISH);</span>
         }
 
         // Resolve the message once — it applies to every repo this
         // invocation.
-<span class="fc" id="L115">        message = requireParam(message, &quot;message&quot;, &quot;Commit message&quot;);</span>
+<span class="fc" id="L137">        message = requireParam(message, &quot;message&quot;, &quot;Commit message&quot;);</span>
 
-<span class="fc" id="L117">        getLog().info(&quot;&quot;);</span>
-<span class="fc" id="L118">        getLog().info(header(&quot;Commit&quot;));</span>
-<span class="fc" id="L119">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
-<span class="fc" id="L120">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L139">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L140">        getLog().info(header(&quot;Commit&quot;));</span>
+<span class="fc" id="L141">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+<span class="fc" id="L142">        getLog().info(&quot;&quot;);</span>
 
-<span class="fc" id="L122">        int committed = 0;</span>
-<span class="fc" id="L123">        int skippedClean = 0;</span>
-<span class="fc" id="L124">        int skippedUnstaged = 0;</span>
+<span class="fc" id="L144">        int committed = 0;</span>
+<span class="fc" id="L145">        int skippedClean = 0;</span>
+<span class="fc" id="L146">        int skippedUnstaged = 0;</span>
         // #841: commit failures and push failures are DIFFERENT states with
         // different recoveries — a repo whose commit landed but whose push
         // failed must never be reported as a failed commit (the natural
         // response to that message — inspect or redo the commit — is the
         // wrong move on a repo whose commit is fine).
-<span class="fc" id="L130">        List&lt;RepoFailure&gt; commitFailures = new java.util.ArrayList&lt;&gt;();</span>
-<span class="fc" id="L131">        List&lt;RepoFailure&gt; pushFailures = new java.util.ArrayList&lt;&gt;();</span>
+<span class="fc" id="L152">        List&lt;RepoFailure&gt; commitFailures = new java.util.ArrayList&lt;&gt;();</span>
+<span class="fc" id="L153">        List&lt;RepoFailure&gt; pushFailures = new java.util.ArrayList&lt;&gt;();</span>
 
-<span class="fc bfc" id="L133" title="All 2 branches covered.">        for (WorkingSet.Member member : workingSet.members()) {</span>
-<span class="fc" id="L134">            File dir = member.directory().toFile();</span>
-<span class="fc bfc" id="L135" title="All 2 branches covered.">            if (!new File(dir, &quot;.git&quot;).exists()) {</span>
-<span class="fc" id="L136">                getLog().debug(member.name() + &quot; — not cloned, skipping&quot;);</span>
-<span class="fc" id="L137">                skippedClean++;</span>
-<span class="fc" id="L138">                continue;</span>
+<span class="fc bfc" id="L155" title="All 2 branches covered.">        for (WorkingSet.Member member : workingSet.members()) {</span>
+<span class="fc" id="L156">            File dir = member.directory().toFile();</span>
+<span class="fc bfc" id="L157" title="All 2 branches covered.">            if (!new File(dir, &quot;.git&quot;).exists()) {</span>
+<span class="fc" id="L158">                getLog().debug(member.name() + &quot; — not cloned, skipping&quot;);</span>
+<span class="fc" id="L159">                skippedClean++;</span>
+<span class="fc" id="L160">                continue;</span>
             }
-<span class="fc bfc" id="L140" title="All 2 branches covered.">            String label = workingSet.isWorkspace()</span>
-<span class="fc bfc" id="L141" title="All 2 branches covered.">                    &amp;&amp; member.directory().equals(workingSet.root())</span>
-<span class="fc" id="L142">                    ? &quot;workspace root&quot; : member.name();</span>
-<span class="pc bpc" id="L143" title="2 of 4 branches missed.">            switch (commitOne(dir, label, commitFailures, pushFailures)) {</span>
-<span class="fc" id="L144">                case COMMITTED -&gt; committed++;</span>
-<span class="fc" id="L145">                case SKIPPED_CLEAN -&gt; skippedClean++;</span>
-<span class="nc" id="L146">                case SKIPPED_UNSTAGED -&gt; skippedUnstaged++;</span>
+<span class="fc bfc" id="L162" title="All 2 branches covered.">            String label = workingSet.isWorkspace()</span>
+<span class="fc bfc" id="L163" title="All 2 branches covered.">                    &amp;&amp; member.directory().equals(workingSet.root())</span>
+<span class="fc" id="L164">                    ? &quot;workspace root&quot; : member.name();</span>
+<span class="pc bpc" id="L165" title="1 of 4 branches missed.">            switch (commitOne(dir, label, commitFailures, pushFailures)) {</span>
+<span class="fc" id="L166">                case COMMITTED -&gt; committed++;</span>
+<span class="fc" id="L167">                case SKIPPED_CLEAN -&gt; skippedClean++;</span>
+<span class="nc" id="L168">                case SKIPPED_UNSTAGED -&gt; skippedUnstaged++;</span>
                 case FAILED -&gt; { /* recorded in the failure lists */ }
             }
-<span class="fc" id="L149">        }</span>
+<span class="fc" id="L171">        }</span>
 
-<span class="fc" id="L151">        getLog().info(&quot;&quot;);</span>
-<span class="fc" id="L152">        StringBuilder summary = new StringBuilder();</span>
-<span class="fc" id="L153">        summary.append(committed).append(&quot; committed&quot;);</span>
-<span class="fc bfc" id="L154" title="All 2 branches covered.">        if (skippedClean &gt; 0) {</span>
-<span class="fc" id="L155">            summary.append(&quot;, &quot;).append(skippedClean).append(&quot; clean&quot;);</span>
+<span class="fc" id="L173">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L174">        StringBuilder summary = new StringBuilder();</span>
+<span class="fc" id="L175">        summary.append(committed).append(&quot; committed&quot;);</span>
+<span class="fc bfc" id="L176" title="All 2 branches covered.">        if (skippedClean &gt; 0) {</span>
+<span class="fc" id="L177">            summary.append(&quot;, &quot;).append(skippedClean).append(&quot; clean&quot;);</span>
         }
-<span class="pc bpc" id="L157" title="1 of 2 branches missed.">        if (skippedUnstaged &gt; 0) {</span>
-<span class="nc" id="L158">            summary.append(&quot;, &quot;).append(skippedUnstaged)</span>
-<span class="nc" id="L159">                    .append(&quot; skipped (uncommitted — drop -DstagedOnly to include)&quot;);</span>
+<span class="pc bpc" id="L179" title="1 of 2 branches missed.">        if (skippedUnstaged &gt; 0) {</span>
+<span class="nc" id="L180">            summary.append(&quot;, &quot;).append(skippedUnstaged)</span>
+<span class="nc" id="L181">                    .append(&quot; skipped (uncommitted — drop -DstagedOnly to include)&quot;);</span>
         }
-<span class="pc bpc" id="L161" title="1 of 2 branches missed.">        if (!commitFailures.isEmpty()) {</span>
-<span class="nc" id="L162">            summary.append(&quot;, &quot;).append(commitFailures.size())</span>
-<span class="nc" id="L163">                    .append(&quot; commit failed&quot;);</span>
+<span class="fc bfc" id="L183" title="All 2 branches covered.">        if (!commitFailures.isEmpty()) {</span>
+<span class="fc" id="L184">            summary.append(&quot;, &quot;).append(commitFailures.size())</span>
+<span class="fc" id="L185">                    .append(&quot; commit failed&quot;);</span>
         }
-<span class="fc bfc" id="L165" title="All 2 branches covered.">        if (!pushFailures.isEmpty()) {</span>
-<span class="fc" id="L166">            summary.append(&quot;, &quot;).append(pushFailures.size())</span>
-<span class="fc" id="L167">                    .append(&quot; push failed (committed, local only)&quot;);</span>
+<span class="fc bfc" id="L187" title="All 2 branches covered.">        if (!pushFailures.isEmpty()) {</span>
+<span class="fc" id="L188">            summary.append(&quot;, &quot;).append(pushFailures.size())</span>
+<span class="fc" id="L189">                    .append(&quot; push failed (committed, local only)&quot;);</span>
         }
-<span class="fc" id="L169">        getLog().info(&quot;  Done: &quot; + summary);</span>
-<span class="fc" id="L170">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L191">        getLog().info(&quot;  Done: &quot; + summary);</span>
+<span class="fc" id="L192">        getLog().info(&quot;&quot;);</span>
 
-<span class="fc bfc" id="L172" title="All 2 branches covered.">        if (workingSet.isWorkspace()) {</span>
-<span class="fc" id="L173">            File root = workingSet.root().toFile();</span>
-<span class="fc" id="L174">            boolean manifestCommitted =</span>
-<span class="fc" id="L175">                    PostMutationSync.refresh(root, getLog());</span>
+<span class="fc bfc" id="L194" title="All 2 branches covered.">        if (workingSet.isWorkspace()) {</span>
+<span class="fc" id="L195">            File root = workingSet.root().toFile();</span>
+<span class="fc" id="L196">            boolean manifestCommitted =</span>
+<span class="fc" id="L197">                    PostMutationSync.refresh(root, getLog());</span>
             // The refresh runs after the commit loop, so a manifest commit
             // it makes is not covered by this goal's own push. When the
             // caller asked to push, push the root again so the re-derived
             // manifest reaches origin too (#774). A failure here is a PUSH
             // failure of the root — never reported as a commit failure (#841).
-<span class="fc bfc" id="L181" title="All 4 branches covered.">            if (manifestCommitted &amp;&amp; push) {</span>
+<span class="fc bfc" id="L203" title="All 4 branches covered.">            if (manifestCommitted &amp;&amp; push) {</span>
                 try {
-<span class="fc" id="L183">                    VcsOperations.push(root, getLog(), &quot;origin&quot;,</span>
-<span class="fc" id="L184">                            VcsOperations.currentBranch(root));</span>
-<span class="nc" id="L185">                } catch (MojoException e) {</span>
-<span class="nc" id="L186">                    pushFailures.add(new RepoFailure(&quot;workspace root&quot;,</span>
-<span class="nc" id="L187">                            shortHead(root), e.getMessage()));</span>
-<span class="fc" id="L188">                }</span>
+<span class="fc" id="L205">                    VcsOperations.push(root, getLog(), &quot;origin&quot;,</span>
+<span class="fc" id="L206">                            VcsOperations.currentBranch(root));</span>
+<span class="nc" id="L207">                } catch (MojoException e) {</span>
+<span class="nc" id="L208">                    pushFailures.add(new RepoFailure(&quot;workspace root&quot;,</span>
+<span class="nc" id="L209">                            shortHead(root), e.getMessage()));</span>
+<span class="fc" id="L210">                }</span>
             }
         }
 
         // #841: name the operation, the member repo, and the cause — and
         // when only pushes failed, say plainly that every commit is sound
         // and hand over the copy-pasteable completion command.
-<span class="pc bpc" id="L195" title="1 of 4 branches missed.">        if (!commitFailures.isEmpty() || !pushFailures.isEmpty()) {</span>
-<span class="fc" id="L196">            StringBuilder sb = new StringBuilder();</span>
-<span class="pc bpc" id="L197" title="1 of 2 branches missed.">            for (RepoFailure f : commitFailures) {</span>
-<span class="nc" id="L198">                sb.append(f.label()).append(&quot; — commit failed: &quot;)</span>
-<span class="nc" id="L199">                        .append(f.cause()).append(&quot;\n&quot;);</span>
-<span class="nc" id="L200">            }</span>
-<span class="fc bfc" id="L201" title="All 2 branches covered.">            for (RepoFailure f : pushFailures) {</span>
-<span class="fc" id="L202">                sb.append(f.label()).append(&quot; — push failed (commit &quot;)</span>
-<span class="fc" id="L203">                        .append(f.sha()).append(&quot; is committed, local only): &quot;)</span>
-<span class="fc" id="L204">                        .append(f.cause()).append(&quot;\n&quot;);</span>
-<span class="fc" id="L205">            }</span>
-<span class="pc bpc" id="L206" title="1 of 2 branches missed.">            if (commitFailures.isEmpty()) {</span>
-<span class="fc" id="L207">                sb.append(&quot;\nEvery commit succeeded — only pushes failed. &quot;)</span>
-<span class="fc" id="L208">                        .append(&quot;Finish with:\n  ./mvnw &quot;)</span>
-<span class="fc" id="L209">                        .append(WsGoal.PUSH.qualified());</span>
+<span class="fc bfc" id="L217" title="All 4 branches covered.">        if (!commitFailures.isEmpty() || !pushFailures.isEmpty()) {</span>
+<span class="fc" id="L218">            StringBuilder sb = new StringBuilder();</span>
+<span class="fc bfc" id="L219" title="All 2 branches covered.">            for (RepoFailure f : commitFailures) {</span>
+<span class="fc" id="L220">                sb.append(f.label()).append(&quot; — commit failed: &quot;)</span>
+<span class="fc" id="L221">                        .append(f.cause()).append(&quot;\n&quot;);</span>
+<span class="fc" id="L222">            }</span>
+<span class="fc bfc" id="L223" title="All 2 branches covered.">            for (RepoFailure f : pushFailures) {</span>
+<span class="fc" id="L224">                sb.append(f.label()).append(&quot; — push failed (commit &quot;)</span>
+<span class="fc" id="L225">                        .append(f.sha()).append(&quot; is committed, local only): &quot;)</span>
+<span class="fc" id="L226">                        .append(f.cause()).append(&quot;\n&quot;);</span>
+<span class="fc" id="L227">            }</span>
+<span class="fc bfc" id="L228" title="All 2 branches covered.">            if (commitFailures.isEmpty()) {</span>
+<span class="fc" id="L229">                sb.append(&quot;\nEvery commit succeeded — only pushes failed. &quot;)</span>
+<span class="fc" id="L230">                        .append(&quot;Finish with:\n  ./mvnw &quot;)</span>
+<span class="fc" id="L231">                        .append(WsGoal.PUSH.qualified());</span>
             }
-<span class="fc" id="L211">            throw new MojoException(sb.toString().stripTrailing());</span>
+<span class="fc" id="L233">            throw new MojoException(sb.toString().stripTrailing());</span>
         }
 
-<span class="fc" id="L214">        return new WorkspaceReportSpec(WsGoal.COMMIT_PUBLISH, summary + &quot;\n&quot;);</span>
+<span class="fc" id="L236">        return new WorkspaceReportSpec(WsGoal.COMMIT_PUBLISH, summary + &quot;\n&quot;);</span>
     }
 
     /**
@@ -223,10 +245,10 @@ public class WsCommitPublishMojo extends AbstractWorkspaceMojo {
      * @param sha   short SHA of the local commit (push failures), or &quot;&quot;
      * @param cause the underlying git error message
      */
-<span class="fc" id="L226">    private record RepoFailure(String label, String sha, String cause) {}</span>
+<span class="fc" id="L248">    private record RepoFailure(String label, String sha, String cause) {}</span>
 
     /** Per-repo outcome classification; failures carry detail separately. */
-<span class="fc" id="L229">    private enum Outcome {COMMITTED, SKIPPED_CLEAN, SKIPPED_UNSTAGED, FAILED}</span>
+<span class="fc" id="L251">    private enum Outcome {COMMITTED, SKIPPED_CLEAN, SKIPPED_UNSTAGED, FAILED}</span>
 
     /**
      * Best-effort short HEAD SHA for failure reporting; empty when
@@ -237,9 +259,9 @@ public class WsCommitPublishMojo extends AbstractWorkspaceMojo {
      */
     private static String shortHead(File dir) {
         try {
-<span class="fc" id="L240">            return VcsOperations.headSha(dir);</span>
-<span class="nc" id="L241">        } catch (MojoException e) {</span>
-<span class="nc" id="L242">            return &quot;&quot;;</span>
+<span class="fc" id="L262">            return VcsOperations.headSha(dir);</span>
+<span class="nc" id="L263">        } catch (MojoException e) {</span>
+<span class="nc" id="L264">            return &quot;&quot;;</span>
         }
     }
 
@@ -264,75 +286,127 @@ public class WsCommitPublishMojo extends AbstractWorkspaceMojo {
         int modCount;
         List&lt;String&gt; newFiles;
         try {
-<span class="fc" id="L267">            modCount = VcsOperations.modifiedTrackedCount(dir);</span>
-<span class="fc" id="L268">            newFiles = VcsOperations.untrackedFiles(dir);</span>
+<span class="fc" id="L289">            modCount = VcsOperations.modifiedTrackedCount(dir);</span>
+<span class="fc" id="L290">            newFiles = VcsOperations.untrackedFiles(dir);</span>
 
             // catch-up if there's nothing to commit yet — preserves
             // the historical behavior where commit also serves as the
             // &quot;make sure local is current&quot; step (#132).
-<span class="fc bfc" id="L273" title="All 2 branches covered.">            boolean hasWork = stagedOnly</span>
-<span class="fc" id="L274">                    ? VcsOperations.hasStagedChanges(dir)</span>
-<span class="pc bpc" id="L275" title="1 of 4 branches missed.">                    : !VcsOperations.isClean(dir) || !newFiles.isEmpty();</span>
-<span class="fc bfc" id="L276" title="All 2 branches covered.">            if (!hasWork) {</span>
-<span class="fc" id="L277">                VcsOperations.catchUp(dir, getLog());</span>
+<span class="fc bfc" id="L295" title="All 2 branches covered.">            boolean hasWork = stagedOnly</span>
+<span class="fc" id="L296">                    ? VcsOperations.hasStagedChanges(dir)</span>
+<span class="pc bpc" id="L297" title="1 of 4 branches missed.">                    : !VcsOperations.isClean(dir) || !newFiles.isEmpty();</span>
+<span class="fc bfc" id="L298" title="All 2 branches covered.">            if (!hasWork) {</span>
+<span class="fc" id="L299">                VcsOperations.catchUp(dir, getLog());</span>
             }
 
-<span class="fc bfc" id="L280" title="All 4 branches covered.">            if (!stagedOnly &amp;&amp; !VcsOperations.isClean(dir)) {</span>
+<span class="fc bfc" id="L302" title="All 4 branches covered.">            if (!stagedOnly &amp;&amp; !VcsOperations.isClean(dir)) {</span>
                 // Stage everything tracked-modified and untracked-non-ignored
                 // before committing. The earlier split-condition form skipped
                 // addAll when staged-and-unstaged were mixed, silently
                 // dropping the unstaged half from the commit (#536). Calling
                 // addAll on already-staged files is a no-op.
-<span class="fc" id="L286">                VcsOperations.addAll(dir, getLog());</span>
+<span class="fc" id="L308">                VcsOperations.addAll(dir, getLog());</span>
             }
 
-<span class="fc bfc" id="L289" title="All 2 branches covered.">            if (!VcsOperations.hasStagedChanges(dir)</span>
-<span class="pc bpc" id="L290" title="1 of 2 branches missed.">                    &amp;&amp; VcsOperations.isClean(dir)) {</span>
-<span class="fc" id="L291">                getLog().debug(label + &quot; — clean, skipping&quot;);</span>
-<span class="fc" id="L292">                return Outcome.SKIPPED_CLEAN;</span>
+<span class="fc bfc" id="L311" title="All 2 branches covered.">            if (!VcsOperations.hasStagedChanges(dir)</span>
+<span class="pc bpc" id="L312" title="1 of 2 branches missed.">                    &amp;&amp; VcsOperations.isClean(dir)) {</span>
+<span class="fc" id="L313">                getLog().debug(label + &quot; — clean, skipping&quot;);</span>
+<span class="fc" id="L314">                return Outcome.SKIPPED_CLEAN;</span>
             }
 
-<span class="pc bpc" id="L295" title="1 of 2 branches missed.">            if (!VcsOperations.hasStagedChanges(dir)) {</span>
+<span class="pc bpc" id="L317" title="1 of 2 branches missed.">            if (!VcsOperations.hasStagedChanges(dir)) {</span>
                 // stagedOnly=true and the user didn't stage anything,
                 // but there are untracked or unstaged changes — surface
                 // both kinds so the developer sees exactly what would be
                 // dropped vs. what -DstagedOnly=false would pick up. (#231)
-<span class="nc" id="L300">                String suffix = formatUncommittedSuffix(</span>
-<span class="nc" id="L301">                        VcsOperations.unstagedFiles(dir), newFiles);</span>
-<span class="nc" id="L302">                getLog().warn(Ansi.yellow(&quot;  ⚠ &quot;) + label</span>
+<span class="nc" id="L322">                String suffix = formatUncommittedSuffix(</span>
+<span class="nc" id="L323">                        VcsOperations.unstagedFiles(dir), newFiles);</span>
+<span class="nc" id="L324">                getLog().warn(Ansi.yellow(&quot;  ⚠ &quot;) + label</span>
                         + &quot; — skipped (&quot; + suffix + &quot;)&quot;);
-<span class="nc" id="L304">                getLog().warn(&quot;    Drop -DstagedOnly to stage and commit&quot;);</span>
-<span class="nc" id="L305">                return Outcome.SKIPPED_UNSTAGED;</span>
+<span class="nc" id="L326">                getLog().warn(&quot;    Drop -DstagedOnly to stage and commit&quot;);</span>
+<span class="nc" id="L327">                return Outcome.SKIPPED_UNSTAGED;</span>
             }
 
-<span class="fc" id="L308">            VcsOperations.commit(dir, getLog(), message);</span>
-<span class="fc" id="L309">            VcsOperations.writeVcsState(dir, VcsState.Action.COMMIT);</span>
-<span class="nc" id="L310">        } catch (MojoException e) {</span>
-<span class="nc" id="L311">            getLog().warn(Ansi.red(&quot;  ✗ &quot;) + label + &quot; — commit failed: &quot;</span>
-<span class="nc" id="L312">                    + e.getMessage());</span>
-<span class="nc" id="L313">            commitFailures.add(new RepoFailure(label, &quot;&quot;, e.getMessage()));</span>
-<span class="nc" id="L314">            return Outcome.FAILED;</span>
-<span class="fc" id="L315">        }</span>
+            // Stale-drift gate (IKE-Network/ike-issues#1082): a staged
+            // delta whose every path byte-matches an older committed
+            // state is time-reversed synced drift, not WIP — refuse it.
+            // Mixed deltas warn per stale path and proceed. Fails open:
+            // an analysis failure never blocks the commit.
+<span class="fc" id="L335">            StaleDrift.Analysis drift = analyzeStagedTolerant(dir, label);</span>
+<span class="fc bfc" id="L336" title="All 4 branches covered.">            if (drift.whollyStale() &amp;&amp; !allowStaleDrift) {</span>
+<span class="fc" id="L337">                StringBuilder cause = new StringBuilder(</span>
+                        &quot;every staged change matches an older committed&quot;
+                                + &quot; state (stale drift, not WIP):\n&quot;);
+<span class="fc bfc" id="L340" title="All 2 branches covered.">                for (String line : StaleDrift.describeStale(drift)) {</span>
+<span class="fc" id="L341">                    cause.append(&quot;      &quot;).append(line).append(&quot;\n&quot;);</span>
+<span class="fc" id="L342">                }</span>
+<span class="fc" id="L343">                cause.append(&quot;    A synced tree lagging its refs presents&quot;</span>
+                        + &quot; old content as pending changes. If this is a&quot;
+                        + &quot; deliberate revert, re-run with&quot;
+                        + &quot; -Dallow-stale-drift=true.&quot;);
+<span class="fc" id="L347">                getLog().warn(Ansi.red(&quot;  ✗ &quot;) + label</span>
+                        + &quot; — refused: &quot; + cause);
+<span class="fc" id="L349">                commitFailures.add(new RepoFailure(label, &quot;&quot;,</span>
+<span class="fc" id="L350">                        cause.toString()));</span>
+<span class="fc" id="L351">                return Outcome.FAILED;</span>
+            }
+<span class="fc bfc" id="L353" title="All 2 branches covered.">            if (drift.hasStale()) {</span>
+<span class="fc" id="L354">                getLog().warn(Ansi.yellow(&quot;  ⚠ &quot;) + label</span>
+                        + &quot; — stale-shaped paths in this commit&quot;
+                        + &quot; (committing anyway; novel changes present):&quot;);
+<span class="fc bfc" id="L357" title="All 2 branches covered.">                for (String line : StaleDrift.describeStale(drift)) {</span>
+<span class="fc" id="L358">                    getLog().warn(&quot;      &quot; + line);</span>
+<span class="fc" id="L359">                }</span>
+            }
 
-<span class="fc bfc" id="L317" title="All 2 branches covered.">        if (push) {</span>
+<span class="fc" id="L362">            VcsOperations.commit(dir, getLog(), message);</span>
+<span class="fc" id="L363">            VcsOperations.writeVcsState(dir, VcsState.Action.COMMIT);</span>
+<span class="nc" id="L364">        } catch (MojoException e) {</span>
+<span class="nc" id="L365">            getLog().warn(Ansi.red(&quot;  ✗ &quot;) + label + &quot; — commit failed: &quot;</span>
+<span class="nc" id="L366">                    + e.getMessage());</span>
+<span class="nc" id="L367">            commitFailures.add(new RepoFailure(label, &quot;&quot;, e.getMessage()));</span>
+<span class="nc" id="L368">            return Outcome.FAILED;</span>
+<span class="fc" id="L369">        }</span>
+
+<span class="fc bfc" id="L371" title="All 2 branches covered.">        if (push) {</span>
             try {
-<span class="fc" id="L319">                pushWithOneRetry(dir, label);</span>
-<span class="fc" id="L320">                VcsOperations.writeVcsState(dir, VcsState.Action.PUSH);</span>
-<span class="fc" id="L321">            } catch (MojoException e) {</span>
-<span class="fc" id="L322">                getLog().warn(Ansi.red(&quot;  ✗ &quot;) + label + &quot; — push failed&quot;</span>
-<span class="fc" id="L323">                        + &quot; (commit &quot; + shortHead(dir)</span>
-<span class="fc" id="L324">                        + &quot; is committed, local only): &quot; + e.getMessage());</span>
-<span class="fc" id="L325">                pushFailures.add(new RepoFailure(</span>
-<span class="fc" id="L326">                        label, shortHead(dir), e.getMessage()));</span>
+<span class="fc" id="L373">                pushWithOneRetry(dir, label);</span>
+<span class="fc" id="L374">                VcsOperations.writeVcsState(dir, VcsState.Action.PUSH);</span>
+<span class="fc" id="L375">            } catch (MojoException e) {</span>
+<span class="fc" id="L376">                getLog().warn(Ansi.red(&quot;  ✗ &quot;) + label + &quot; — push failed&quot;</span>
+<span class="fc" id="L377">                        + &quot; (commit &quot; + shortHead(dir)</span>
+<span class="fc" id="L378">                        + &quot; is committed, local only): &quot; + e.getMessage());</span>
+<span class="fc" id="L379">                pushFailures.add(new RepoFailure(</span>
+<span class="fc" id="L380">                        label, shortHead(dir), e.getMessage()));</span>
                 // The COMMIT succeeded — count it as committed; the push
                 // failure is reported separately (#841).
-<span class="fc" id="L329">                return Outcome.COMMITTED;</span>
-<span class="fc" id="L330">            }</span>
+<span class="fc" id="L383">                return Outcome.COMMITTED;</span>
+<span class="fc" id="L384">            }</span>
         }
 
-<span class="fc" id="L333">        getLog().info(Ansi.green(&quot;  ✓ &quot;) + label</span>
-<span class="fc" id="L334">                + &quot; — &quot; + previewSummary(modCount, newFiles));</span>
-<span class="fc" id="L335">        return Outcome.COMMITTED;</span>
+<span class="fc" id="L387">        getLog().info(Ansi.green(&quot;  ✓ &quot;) + label</span>
+<span class="fc" id="L388">                + &quot; — &quot; + previewSummary(modCount, newFiles));</span>
+<span class="fc" id="L389">        return Outcome.COMMITTED;</span>
+    }
+
+    /**
+     * Runs the stale-drift analysis, failing open: any analysis error
+     * is logged and an empty (no-finding) analysis returned, so the
+     * guard can never wedge a commit (IKE-Network/ike-issues#1082).
+     *
+     * @param dir   the repository root directory
+     * @param label the member label for the log line
+     * @return the analysis, or {@link StaleDrift.Analysis#EMPTY} when
+     *         analysis fails
+     */
+    private StaleDrift.Analysis analyzeStagedTolerant(File dir, String label) {
+        try {
+<span class="fc" id="L404">            return StaleDrift.analyzeStaged(dir);</span>
+<span class="nc" id="L405">        } catch (RuntimeException e) {</span>
+<span class="nc" id="L406">            getLog().warn(label + &quot; — stale-drift analysis failed (&quot;</span>
+<span class="nc" id="L407">                    + e.getMessage() + &quot;); committing without it&quot;);</span>
+<span class="nc" id="L408">            return StaleDrift.Analysis.EMPTY;</span>
+        }
     }
 
     /**
@@ -345,15 +419,15 @@ public class WsCommitPublishMojo extends AbstractWorkspaceMojo {
      * @throws MojoException when the push fails twice
      */
     private void pushWithOneRetry(File dir, String label) throws MojoException {
-<span class="fc" id="L348">        String branch = VcsOperations.currentBranch(dir);</span>
+<span class="fc" id="L422">        String branch = VcsOperations.currentBranch(dir);</span>
         try {
-<span class="fc" id="L350">            VcsOperations.push(dir, getLog(), &quot;origin&quot;, branch);</span>
-<span class="fc" id="L351">        } catch (MojoException first) {</span>
-<span class="fc" id="L352">            getLog().info(&quot;  &quot; + label + &quot; — push failed once (&quot;</span>
-<span class="fc" id="L353">                    + first.getMessage() + &quot;); retrying...&quot;);</span>
-<span class="nc" id="L354">            VcsOperations.push(dir, getLog(), &quot;origin&quot;, branch);</span>
-<span class="fc" id="L355">        }</span>
-<span class="fc" id="L356">    }</span>
+<span class="fc" id="L424">            VcsOperations.push(dir, getLog(), &quot;origin&quot;, branch);</span>
+<span class="fc" id="L425">        } catch (MojoException first) {</span>
+<span class="fc" id="L426">            getLog().info(&quot;  &quot; + label + &quot; — push failed once (&quot;</span>
+<span class="fc" id="L427">                    + first.getMessage() + &quot;); retrying...&quot;);</span>
+<span class="nc" id="L428">            VcsOperations.push(dir, getLog(), &quot;origin&quot;, branch);</span>
+<span class="fc" id="L429">        }</span>
+<span class="fc" id="L430">    }</span>
 
     /**
      * Build the parenthesized suffix for the {@code stagedOnly}
@@ -376,20 +450,20 @@ public class WsCommitPublishMojo extends AbstractWorkspaceMojo {
      * @return the suffix to interpolate inside {@code &quot;skipped (...)&quot;}
      */
     static String formatUncommittedSuffix(String unstagedFiles, List&lt;String&gt; newFiles) {
-<span class="fc" id="L379">        StringBuilder sb = new StringBuilder();</span>
-<span class="fc bfc" id="L380" title="All 4 branches covered.">        if (unstagedFiles != null &amp;&amp; !unstagedFiles.isEmpty()) {</span>
-<span class="fc" id="L381">            sb.append(&quot;unstaged: &quot;).append(unstagedFiles);</span>
+<span class="fc" id="L453">        StringBuilder sb = new StringBuilder();</span>
+<span class="fc bfc" id="L454" title="All 4 branches covered.">        if (unstagedFiles != null &amp;&amp; !unstagedFiles.isEmpty()) {</span>
+<span class="fc" id="L455">            sb.append(&quot;unstaged: &quot;).append(unstagedFiles);</span>
         }
-<span class="fc bfc" id="L383" title="All 4 branches covered.">        if (newFiles != null &amp;&amp; !newFiles.isEmpty()) {</span>
-<span class="fc bfc" id="L384" title="All 2 branches covered.">            if (sb.length() &gt; 0) sb.append(&quot;; &quot;);</span>
-<span class="fc" id="L385">            sb.append(&quot;untracked: &quot;).append(String.join(&quot;, &quot;, newFiles));</span>
+<span class="fc bfc" id="L457" title="All 4 branches covered.">        if (newFiles != null &amp;&amp; !newFiles.isEmpty()) {</span>
+<span class="fc bfc" id="L458" title="All 2 branches covered.">            if (sb.length() &gt; 0) sb.append(&quot;; &quot;);</span>
+<span class="fc" id="L459">            sb.append(&quot;untracked: &quot;).append(String.join(&quot;, &quot;, newFiles));</span>
         }
-<span class="fc bfc" id="L387" title="All 2 branches covered.">        if (sb.length() == 0) {</span>
+<span class="fc bfc" id="L461" title="All 2 branches covered.">        if (sb.length() == 0) {</span>
             // Defensive: caller indicated uncommitted work, but no files
             // were captured. Emit a placeholder rather than empty parens.
-<span class="fc" id="L390">            sb.append(&quot;uncommitted&quot;);</span>
+<span class="fc" id="L464">            sb.append(&quot;uncommitted&quot;);</span>
         }
-<span class="fc" id="L392">        return sb.toString();</span>
+<span class="fc" id="L466">        return sb.toString();</span>
     }
 
     /**
@@ -398,21 +472,21 @@ public class WsCommitPublishMojo extends AbstractWorkspaceMojo {
      * developer can see at a glance what {@code addAll} pulled in.
      */
     static String previewSummary(int modCount, List&lt;String&gt; newFiles) {
-<span class="fc" id="L401">        StringBuilder sb = new StringBuilder();</span>
-<span class="fc" id="L402">        sb.append(modCount).append(&quot; modified&quot;);</span>
-<span class="fc bfc" id="L403" title="All 2 branches covered.">        if (!newFiles.isEmpty()) {</span>
-<span class="fc" id="L404">            sb.append(&quot;, &quot;).append(newFiles.size()).append(&quot; new (&quot;);</span>
-<span class="fc" id="L405">            int max = Math.min(3, newFiles.size());</span>
-<span class="fc bfc" id="L406" title="All 2 branches covered.">            for (int i = 0; i &lt; max; i++) {</span>
-<span class="pc bpc" id="L407" title="1 of 2 branches missed.">                if (i &gt; 0) sb.append(&quot;, &quot;);</span>
-<span class="fc" id="L408">                sb.append(newFiles.get(i));</span>
+<span class="fc" id="L475">        StringBuilder sb = new StringBuilder();</span>
+<span class="fc" id="L476">        sb.append(modCount).append(&quot; modified&quot;);</span>
+<span class="fc bfc" id="L477" title="All 2 branches covered.">        if (!newFiles.isEmpty()) {</span>
+<span class="fc" id="L478">            sb.append(&quot;, &quot;).append(newFiles.size()).append(&quot; new (&quot;);</span>
+<span class="fc" id="L479">            int max = Math.min(3, newFiles.size());</span>
+<span class="fc bfc" id="L480" title="All 2 branches covered.">            for (int i = 0; i &lt; max; i++) {</span>
+<span class="pc bpc" id="L481" title="1 of 2 branches missed.">                if (i &gt; 0) sb.append(&quot;, &quot;);</span>
+<span class="fc" id="L482">                sb.append(newFiles.get(i));</span>
             }
-<span class="pc bpc" id="L410" title="1 of 2 branches missed.">            if (newFiles.size() &gt; max) {</span>
-<span class="nc" id="L411">                sb.append(&quot;, +&quot;).append(newFiles.size() - max).append(&quot; more&quot;);</span>
+<span class="pc bpc" id="L484" title="1 of 2 branches missed.">            if (newFiles.size() &gt; max) {</span>
+<span class="nc" id="L485">                sb.append(&quot;, +&quot;).append(newFiles.size() - max).append(&quot; more&quot;);</span>
             }
-<span class="fc" id="L413">            sb.append(&quot;)&quot;);</span>
+<span class="fc" id="L487">            sb.append(&quot;)&quot;);</span>
         }
-<span class="fc" id="L415">        return sb.toString();</span>
+<span class="fc" id="L489">        return sb.toString();</span>
     }
 
 

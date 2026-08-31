@@ -112,17 +112,28 @@ public class WsCommitDraftMojo extends AbstractWorkspaceMojo {
     // ── Per-repo status capture ─────────────────────────────────
 
     /**
-     * Per-repo status snapshot: the repo's label and the raw
+     * Per-repo status snapshot: the repo's label, the raw
      * {@code git status --porcelain} output lines (each carries the
-     * two-character status flag and the path).
+     * two-character status flag and the path), and any stale-drift
+     * findings for the pending changes
+     * (IKE-Network/ike-issues#1082 — the same analysis
+     * {@code ws:commit-publish} gates on, so the draft previews the
+     * refusal the publish would give).
      *
      * @param label           the human-readable repo label
      * @param porcelainLines  one porcelain line per changed file;
      *                        empty list means the repo is clean
+     * @param staleLines      one line per stale-shaped pending change
+     *                        (from {@link StaleDrift#describeStale});
+     *                        empty when the delta is novel or analysis
+     *                        was unavailable
+     * @param whollyStale     whether every pending change is
+     *                        stale-shaped — the publish-refusal shape
      */
-<span class="nc" id="L123">    private record RepoStatus(String label, List&lt;String&gt; porcelainLines) {</span>
-<span class="nc bnc" id="L124" title="All 2 branches missed.">        boolean hasWork() { return !porcelainLines.isEmpty(); }</span>
-<span class="nc" id="L125">        int fileCount() { return porcelainLines.size(); }</span>
+<span class="nc" id="L133">    private record RepoStatus(String label, List&lt;String&gt; porcelainLines,</span>
+                              List&lt;String&gt; staleLines, boolean whollyStale) {
+<span class="nc bnc" id="L135" title="All 2 branches missed.">        boolean hasWork() { return !porcelainLines.isEmpty(); }</span>
+<span class="nc" id="L136">        int fileCount() { return porcelainLines.size(); }</span>
     }
 
     /**
@@ -138,35 +149,55 @@ public class WsCommitDraftMojo extends AbstractWorkspaceMojo {
      */
     private RepoStatus statusOf(File dir, String label) {
         try {
-<span class="nc" id="L141">            String output = ReleaseSupport.execCapture(dir,</span>
+<span class="nc" id="L152">            String output = ReleaseSupport.execCapture(dir,</span>
                     &quot;git&quot;, &quot;status&quot;, &quot;--porcelain&quot;);
-<span class="nc bnc" id="L143" title="All 4 branches missed.">            if (output == null || output.isBlank()) {</span>
-<span class="nc" id="L144">                return new RepoStatus(label, List.of());</span>
+<span class="nc bnc" id="L154" title="All 4 branches missed.">            if (output == null || output.isBlank()) {</span>
+<span class="nc" id="L155">                return new RepoStatus(label, List.of(), List.of(), false);</span>
             }
-<span class="nc" id="L146">            List&lt;String&gt; lines = new ArrayList&lt;&gt;();</span>
-<span class="nc bnc" id="L147" title="All 2 branches missed.">            for (String line : output.split(&quot;\n&quot;)) {</span>
-<span class="nc bnc" id="L148" title="All 2 branches missed.">                if (!line.isBlank()) {</span>
-<span class="nc" id="L149">                    lines.add(line);</span>
+<span class="nc" id="L157">            List&lt;String&gt; lines = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L158" title="All 2 branches missed.">            for (String line : output.split(&quot;\n&quot;)) {</span>
+<span class="nc bnc" id="L159" title="All 2 branches missed.">                if (!line.isBlank()) {</span>
+<span class="nc" id="L160">                    lines.add(line);</span>
                 }
             }
-<span class="nc" id="L152">            return new RepoStatus(label, lines);</span>
-<span class="nc" id="L153">        } catch (RuntimeException e) {</span>
-<span class="nc" id="L154">            getLog().warn(label + &quot; — git status failed: &quot; + e.getMessage());</span>
-<span class="nc" id="L155">            return new RepoStatus(label, List.of());</span>
+<span class="nc" id="L163">            List&lt;String&gt; staleLines = List.of();</span>
+<span class="nc" id="L164">            boolean whollyStale = false;</span>
+            // Advisory only — the draft never fails because the drift
+            // analysis does (the publish gate fails open the same way).
+            try {
+<span class="nc" id="L168">                StaleDrift.Analysis drift = StaleDrift.analyzeWorktree(dir);</span>
+<span class="nc" id="L169">                staleLines = StaleDrift.describeStale(drift);</span>
+<span class="nc" id="L170">                whollyStale = drift.whollyStale();</span>
+<span class="nc" id="L171">            } catch (RuntimeException e) {</span>
+<span class="nc" id="L172">                getLog().debug(label + &quot; — stale-drift analysis&quot;</span>
+<span class="nc" id="L173">                        + &quot; unavailable: &quot; + e.getMessage());</span>
+<span class="nc" id="L174">            }</span>
+<span class="nc" id="L175">            return new RepoStatus(label, lines, staleLines, whollyStale);</span>
+<span class="nc" id="L176">        } catch (RuntimeException e) {</span>
+<span class="nc" id="L177">            getLog().warn(label + &quot; — git status failed: &quot; + e.getMessage());</span>
+<span class="nc" id="L178">            return new RepoStatus(label, List.of(), List.of(), false);</span>
         }
     }
 
     private void printToConsole(RepoStatus s) {
-<span class="nc bnc" id="L160" title="All 2 branches missed.">        if (!s.hasWork()) {</span>
-<span class="nc" id="L161">            getLog().info(&quot;  · &quot; + s.label + &quot; — clean&quot;);</span>
-<span class="nc" id="L162">            return;</span>
+<span class="nc bnc" id="L183" title="All 2 branches missed.">        if (!s.hasWork()) {</span>
+<span class="nc" id="L184">            getLog().info(&quot;  · &quot; + s.label + &quot; — clean&quot;);</span>
+<span class="nc" id="L185">            return;</span>
         }
-<span class="nc" id="L164">        getLog().info(Ansi.yellow(&quot;  ⟳ &quot;) + s.label + &quot; — &quot;</span>
-<span class="nc" id="L165">                + s.fileCount() + &quot; file(s):&quot;);</span>
-<span class="nc bnc" id="L166" title="All 2 branches missed.">        for (String line : s.porcelainLines) {</span>
-<span class="nc" id="L167">            getLog().info(&quot;      &quot; + line);</span>
-<span class="nc" id="L168">        }</span>
-<span class="nc" id="L169">    }</span>
+<span class="nc" id="L187">        getLog().info(Ansi.yellow(&quot;  ⟳ &quot;) + s.label + &quot; — &quot;</span>
+<span class="nc" id="L188">                + s.fileCount() + &quot; file(s):&quot;);</span>
+<span class="nc bnc" id="L189" title="All 2 branches missed.">        for (String line : s.porcelainLines) {</span>
+<span class="nc" id="L190">            getLog().info(&quot;      &quot; + line);</span>
+<span class="nc" id="L191">        }</span>
+<span class="nc bnc" id="L192" title="All 2 branches missed.">        if (s.whollyStale()) {</span>
+<span class="nc" id="L193">            getLog().warn(Ansi.yellow(&quot;      ⚠ every pending change is&quot;</span>
+                    + &quot; stale-shaped — ws:commit-publish will refuse&quot;
+                    + &quot; (stale drift, not WIP):&quot;));
+        }
+<span class="nc bnc" id="L197" title="All 2 branches missed.">        for (String line : s.staleLines()) {</span>
+<span class="nc" id="L198">            getLog().warn(&quot;      ⚠ &quot; + line);</span>
+<span class="nc" id="L199">        }</span>
+<span class="nc" id="L200">    }</span>
 
     /**
      * Build the Markdown report body: a leading summary, then a
@@ -181,23 +212,31 @@ public class WsCommitDraftMojo extends AbstractWorkspaceMojo {
      */
     private String buildReport(String rootLabel, List&lt;RepoStatus&gt; statuses,
                                 String summary, int pending) {
-<span class="nc" id="L184">        StringBuilder body = new StringBuilder();</span>
-<span class="nc" id="L185">        body.append(&quot;**Workspace:** `&quot;).append(rootLabel).append(&quot;`\n\n&quot;);</span>
-<span class="nc" id="L186">        body.append(summary).append(&quot;.\n&quot;);</span>
-<span class="nc bnc" id="L187" title="All 2 branches missed.">        if (pending &gt; 0) {</span>
-<span class="nc bnc" id="L188" title="All 2 branches missed.">            for (RepoStatus s : statuses) {</span>
-<span class="nc bnc" id="L189" title="All 2 branches missed.">                if (!s.hasWork()) continue;</span>
-<span class="nc" id="L190">                body.append(&quot;\n### &quot;).append(s.label).append(&quot; — &quot;)</span>
-<span class="nc" id="L191">                    .append(s.fileCount()).append(&quot; file(s)\n&quot;);</span>
-<span class="nc bnc" id="L192" title="All 2 branches missed.">                for (String line : s.porcelainLines) {</span>
-<span class="nc" id="L193">                    body.append(&quot;- `&quot;).append(line).append(&quot;`\n&quot;);</span>
-<span class="nc" id="L194">                }</span>
-<span class="nc" id="L195">            }</span>
-<span class="nc" id="L196">            body.append(&quot;\nRun `&quot;)</span>
-<span class="nc" id="L197">                .append(WsGoal.COMMIT_PUBLISH.qualified())</span>
-<span class="nc" id="L198">                .append(&quot; -Dmessage=\&quot;...\&quot;` to commit.\n&quot;);</span>
+<span class="nc" id="L215">        StringBuilder body = new StringBuilder();</span>
+<span class="nc" id="L216">        body.append(&quot;**Workspace:** `&quot;).append(rootLabel).append(&quot;`\n\n&quot;);</span>
+<span class="nc" id="L217">        body.append(summary).append(&quot;.\n&quot;);</span>
+<span class="nc bnc" id="L218" title="All 2 branches missed.">        if (pending &gt; 0) {</span>
+<span class="nc bnc" id="L219" title="All 2 branches missed.">            for (RepoStatus s : statuses) {</span>
+<span class="nc bnc" id="L220" title="All 2 branches missed.">                if (!s.hasWork()) continue;</span>
+<span class="nc" id="L221">                body.append(&quot;\n### &quot;).append(s.label).append(&quot; — &quot;)</span>
+<span class="nc" id="L222">                    .append(s.fileCount()).append(&quot; file(s)\n&quot;);</span>
+<span class="nc bnc" id="L223" title="All 2 branches missed.">                for (String line : s.porcelainLines) {</span>
+<span class="nc" id="L224">                    body.append(&quot;- `&quot;).append(line).append(&quot;`\n&quot;);</span>
+<span class="nc" id="L225">                }</span>
+<span class="nc bnc" id="L226" title="All 2 branches missed.">                if (s.whollyStale()) {</span>
+<span class="nc" id="L227">                    body.append(&quot;\n**⚠ Every pending change is&quot;</span>
+                            + &quot; stale-shaped — `ws:commit-publish` will&quot;
+                            + &quot; refuse (stale drift, not WIP).**\n&quot;);
+                }
+<span class="nc bnc" id="L231" title="All 2 branches missed.">                for (String line : s.staleLines()) {</span>
+<span class="nc" id="L232">                    body.append(&quot;- ⚠ &quot;).append(line).append(&quot;\n&quot;);</span>
+<span class="nc" id="L233">                }</span>
+<span class="nc" id="L234">            }</span>
+<span class="nc" id="L235">            body.append(&quot;\nRun `&quot;)</span>
+<span class="nc" id="L236">                .append(WsGoal.COMMIT_PUBLISH.qualified())</span>
+<span class="nc" id="L237">                .append(&quot; -Dmessage=\&quot;...\&quot;` to commit.\n&quot;);</span>
         }
-<span class="nc" id="L200">        return body.toString();</span>
+<span class="nc" id="L239">        return body.toString();</span>
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

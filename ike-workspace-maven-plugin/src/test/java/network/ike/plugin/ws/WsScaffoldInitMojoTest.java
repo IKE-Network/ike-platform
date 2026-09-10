@@ -128,6 +128,8 @@ class WsScaffoldInitMojoTest {
                 .contains("<version>1-test</version>") // literal, from Params
                 .contains("ike-build-report-extension")
                 .contains("<version>244-test</version>") // literal, from Params
+                .contains("ike-version-management-extension")
+                .contains("<version>11-test</version>") // literal, from Params
                 .contains(WorkspaceBootstrap.EXTENSIONS_MANAGED_BEGIN)
                 .contains(WorkspaceBootstrap.EXTENSIONS_MANAGED_END);
     }
@@ -154,16 +156,18 @@ class WsScaffoldInitMojoTest {
                 + "</extensions>\n";
         Files.writeString(xml, original);
 
-        boolean refreshed = WorkspaceBootstrap.refreshExtensionsManagedBlock(xml, "2", "244");
+        boolean refreshed = WorkspaceBootstrap.refreshExtensionsManagedBlock(xml, "2", "244", "11");
 
         assertThat(refreshed).isTrue();
         String result = Files.readString(xml);
         assertThat(result)
                 .contains("<version>2</version>")
                 .doesNotContain("1-OLD")
-                // Single-entry legacy block refreshes to the two-entry shape.
+                // Single-entry legacy block refreshes to the three-entry shape.
                 .contains("ike-build-report-extension")
                 .contains("<version>244</version>")
+                .contains("ike-version-management-extension")
+                .contains("<version>11</version>")
                 .contains("wagon-ssh-external"); // pre-block content preserved
     }
 
@@ -184,7 +188,7 @@ class WsScaffoldInitMojoTest {
                 """;
         Files.writeString(xml, legacy);
 
-        boolean refreshed = WorkspaceBootstrap.refreshExtensionsManagedBlock(xml, "1", "244");
+        boolean refreshed = WorkspaceBootstrap.refreshExtensionsManagedBlock(xml, "1", "244", "11");
 
         assertThat(refreshed).isTrue();
         String result = Files.readString(xml);
@@ -195,6 +199,8 @@ class WsScaffoldInitMojoTest {
                 .contains("<version>1</version>")
                 .contains("ike-build-report-extension")
                 .contains("<version>244</version>")
+                .contains("ike-version-management-extension")
+                .contains("<version>11</version>")
                 .contains(WorkspaceBootstrap.EXTENSIONS_MANAGED_END);
     }
 
@@ -223,7 +229,7 @@ class WsScaffoldInitMojoTest {
                 """;
         Files.writeString(xml, legacy);
 
-        boolean refreshed = WorkspaceBootstrap.refreshExtensionsManagedBlock(xml, "1", "244");
+        boolean refreshed = WorkspaceBootstrap.refreshExtensionsManagedBlock(xml, "1", "244", "11");
 
         assertThat(refreshed).isTrue();
         String result = Files.readString(xml);
@@ -233,12 +239,15 @@ class WsScaffoldInitMojoTest {
         // full artifactId tags to keep the assertions per-entry.
         int wsCount = result.split("<artifactId>ike-workspace-extension</artifactId>", -1).length - 1;
         int reportCount = result.split("<artifactId>ike-build-report-extension</artifactId>", -1).length - 1;
+        int versionsCount = result.split("<artifactId>ike-version-management-extension</artifactId>", -1).length - 1;
         assertThat(wsCount).isEqualTo(1);
         assertThat(reportCount).isEqualTo(1);
+        assertThat(versionsCount).isEqualTo(1);
         assertThat(result)
                 .contains(WorkspaceBootstrap.EXTENSIONS_MANAGED_BEGIN)
                 .contains("<version>1</version>")
                 .contains("<version>244</version>")
+                .contains("<version>11</version>")
                 .contains("wagon-ssh-external"); // unrelated entry preserved
     }
 
@@ -260,11 +269,16 @@ class WsScaffoldInitMojoTest {
                 + "        <artifactId>ike-build-report-extension</artifactId>\n"
                 + "        <version>244</version>\n"
                 + "    </extension>\n"
+                + "    <extension>\n"
+                + "        <groupId>network.ike.tooling</groupId>\n"
+                + "        <artifactId>ike-version-management-extension</artifactId>\n"
+                + "        <version>11</version>\n"
+                + "    </extension>\n"
                 + WorkspaceBootstrap.EXTENSIONS_MANAGED_END + "\n"
                 + "</extensions>\n";
         Files.writeString(xml, content);
 
-        boolean refreshed = WorkspaceBootstrap.refreshExtensionsManagedBlock(xml, "1", "244");
+        boolean refreshed = WorkspaceBootstrap.refreshExtensionsManagedBlock(xml, "1", "244", "11");
 
         assertThat(refreshed).isFalse();
         assertThat(Files.readString(xml)).isEqualTo(content);
@@ -416,7 +430,8 @@ class WsScaffoldInitMojoTest {
                 /*skipGit*/ true,
                 /*parentVersion*/ "test",
                 /*extensionVersion*/ "1-test",
-                /*buildReportExtensionVersion*/ "244-test");
+                /*buildReportExtensionVersion*/ "244-test",
+                /*versionManagementExtensionVersion*/ "11-test");
         return new WorkspaceBootstrap(params, new TestLog());
     }
 

@@ -270,7 +270,8 @@ public class WsScaffoldInitMojo implements Mojo {
                 mavenVersion, defaultBranch, skipGit,
                 loadBuildProperty("ike-platform.version"),
                 loadBuildProperty("ike-workspace-extension.version"),
-                loadBuildProperty("ike-build-report-extension.version"));
+                loadBuildProperty("ike-build-report-extension.version"),
+                loadBuildProperty("ike-version-management-extension.version"));
         WorkspaceBootstrap bootstrap = new WorkspaceBootstrap(params, log);
         bootstrap.createAt(wsDir);
 
@@ -323,19 +324,22 @@ public class WsScaffoldInitMojo implements Mojo {
 
         // Refresh the managed extension entries in .mvn/extensions.xml
         // (ike-workspace-extension #460, ike-build-report-extension
-        // #978) so the literal versions stay in lockstep with the
-        // platform properties. Best-effort — a failure here doesn't
-        // abort the init.
+        // #978, ike-version-management-extension #1094) so the literal
+        // versions stay in lockstep with the platform properties.
+        // Best-effort — a failure here doesn't abort the init.
         try {
             Path extensionsXml = root.toPath().resolve(".mvn/extensions.xml");
             if (Files.exists(extensionsXml)) {
                 String extVersion = loadBuildProperty("ike-workspace-extension.version");
                 String reportVersion = loadBuildProperty("ike-build-report-extension.version");
-                boolean refreshed = WorkspaceBootstrap
-                        .refreshExtensionsManagedBlock(extensionsXml, extVersion, reportVersion);
+                String versionsVersion =
+                        loadBuildProperty("ike-version-management-extension.version");
+                boolean refreshed = WorkspaceBootstrap.refreshExtensionsManagedBlock(
+                        extensionsXml, extVersion, reportVersion, versionsVersion);
                 if (refreshed) {
                     log.info(Ansi.green("  ✓ ") + "Refreshed .mvn/extensions.xml ("
-                            + extVersion + " + build-report " + reportVersion + ").");
+                            + extVersion + " + build-report " + reportVersion
+                            + " + version-management " + versionsVersion + ").");
                 }
             }
         } catch (IOException e) {

@@ -11,9 +11,10 @@ import java.util.Properties;
 
 /**
  * Keeps the managed extension entries in {@code .mvn/extensions.xml} —
- * {@code ike-workspace-extension} (IKE-Network/ike-issues#460) and
- * {@code ike-build-report-extension} (IKE-Network/ike-issues#978) — in
- * lockstep with the version properties declared on the platform.
+ * {@code ike-workspace-extension} (IKE-Network/ike-issues#460),
+ * {@code ike-build-report-extension} (IKE-Network/ike-issues#978) and
+ * {@code ike-version-management-extension} (IKE-Network/ike-issues#1094)
+ * — in lockstep with the version properties declared on the platform.
  *
  * <p>Maven 4 does not interpolate POM properties inside
  * {@code .mvn/extensions.xml} at extension-load time — the version
@@ -54,24 +55,23 @@ public class ExtensionsXmlReconciler implements Reconciler {
         }
         String wsTarget = resolveVersion("ike-workspace-extension.version", "1");
         String reportTarget = resolveVersion("ike-build-report-extension.version", "244");
+        String versionsTarget =
+                resolveVersion("ike-version-management-extension.version", "11");
+        String targets = describeTargets(wsTarget, reportTarget, versionsTarget);
         try {
             String existing = Files.readString(xml);
             if (matchesTargets(existing,
                     "ike-workspace-extension", wsTarget,
-                    "ike-build-report-extension", reportTarget)) {
+                    "ike-build-report-extension", reportTarget,
+                    "ike-version-management-extension", versionsTarget)) {
                 return DriftReport.noDrift(dimension());
             }
             return new DriftReport(
                     dimension(),
                     true,
-                    "managed extension entries not at ike-workspace-extension:"
-                            + wsTarget + " + ike-build-report-extension:" + reportTarget,
-                    List.of(EXTENSIONS_XML
-                            + ": rewrite managed block to ike-workspace-extension:"
-                            + wsTarget + " + ike-build-report-extension:" + reportTarget),
-                    "rewrite the managed block in " + EXTENSIONS_XML
-                            + " to ike-workspace-extension:" + wsTarget
-                            + " + ike-build-report-extension:" + reportTarget,
+                    "managed extension entries not at " + targets,
+                    List.of(EXTENSIONS_XML + ": rewrite managed block to " + targets),
+                    "rewrite the managed block in " + EXTENSIONS_XML + " to " + targets,
                     "-D" + optOutFlag() + "=false");
         } catch (IOException e) {
             return DriftReport.noDrift(dimension());
@@ -87,22 +87,32 @@ public class ExtensionsXmlReconciler implements Reconciler {
         }
         String wsTarget = resolveVersion("ike-workspace-extension.version", "1");
         String reportTarget = resolveVersion("ike-build-report-extension.version", "244");
+        String versionsTarget =
+                resolveVersion("ike-version-management-extension.version", "11");
         try {
-            boolean refreshed = WorkspaceBootstrap
-                    .refreshExtensionsManagedBlock(xml, wsTarget, reportTarget);
+            boolean refreshed = WorkspaceBootstrap.refreshExtensionsManagedBlock(
+                    xml, wsTarget, reportTarget, versionsTarget);
             if (refreshed) {
-                ctx.log().info("  ✓ " + EXTENSIONS_XML
-                        + " → ike-workspace-extension:" + wsTarget
-                        + " + ike-build-report-extension:" + reportTarget);
+                ctx.log().info("  ✓ " + EXTENSIONS_XML + " → "
+                        + describeTargets(wsTarget, reportTarget, versionsTarget));
             }
         } catch (IOException e) {
             ctx.log().warn(dimension() + ": refresh failed: " + e.getMessage());
         }
     }
 
+    /** One line naming every managed entry at its target version. */
+    private static String describeTargets(String wsTarget, String reportTarget,
+                                          String versionsTarget) {
+        return "ike-workspace-extension:" + wsTarget
+                + " + ike-build-report-extension:" + reportTarget
+                + " + ike-version-management-extension:" + versionsTarget;
+    }
+
     private static boolean matchesTargets(String content,
                                           String artifactIdA, String targetA,
-                                          String artifactIdB, String targetB) {
+                                          String artifactIdB, String targetB,
+                                          String artifactIdC, String targetC) {
         int begin = content.indexOf(WorkspaceBootstrap.EXTENSIONS_MANAGED_BEGIN);
         if (begin < 0) {
             return false;
@@ -113,7 +123,8 @@ public class ExtensionsXmlReconciler implements Reconciler {
         }
         String block = content.substring(begin, end);
         return containsEntryAt(block, artifactIdA, targetA)
-                && containsEntryAt(block, artifactIdB, targetB);
+                && containsEntryAt(block, artifactIdB, targetB)
+                && containsEntryAt(block, artifactIdC, targetC);
     }
 
     /**

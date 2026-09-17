@@ -414,6 +414,23 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
             }
         }
 
+        // YAML reconciliation runs regardless of whether anything was
+        // squashed THIS invocation — a re-run after a partial failure
+        // may have nothing to squash but still need to clear stale
+        // branch fields for the already-done subprojects. It runs BEFORE
+        // the root merge: on the feature branch the manifest's branch: and
+        // version: fields sit next to the sha: pins the target rewrites at
+        // every checkpoint, and restoring them first makes the feature
+        // side's end state on those lines equal the merge base, so the
+        // no-ff merge below cannot conflict by adjacency
+        // (IKE-Network/ike-issues#1099). And BEFORE the push phase, so the
+        // aggregator's reconciliation commit is included in the root push
+        // rather than left behind (#791).
+        if (publish && !needsYamlReconcile.isEmpty()) {
+            FeatureFinishSupport.updateWorkspaceYaml(
+                    manifestPath, needsYamlReconcile, targetBranch, feature, getLog());
+        }
+
         // Clean up sites (only for what we actually touched this run).
         // The workspace-repo merge also runs on a pure re-run (merged==0
         // but already-done members present): a prior crash may have left
@@ -422,17 +439,6 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
             FeatureFinishSupport.cleanFeatureSites(root, eligible, branchName, getLog());
             FeatureFinishSupport.mergeWorkspaceRepo(
                     manifestPath, branchName, targetBranch, getLog());
-        }
-
-        // YAML reconciliation runs regardless of whether anything was
-        // squashed THIS invocation — a re-run after a partial failure
-        // may have nothing to squash but still need to clear stale
-        // branch fields for the already-done subprojects. It runs BEFORE
-        // the push phase so the aggregator's reconciliation commit is
-        // included in the root push rather than left behind (#791).
-        if (publish && !needsYamlReconcile.isEmpty()) {
-            FeatureFinishSupport.updateWorkspaceYaml(
-                    manifestPath, needsYamlReconcile, targetBranch, feature, getLog());
         }
 
         // ── Landing phase: for a remote-origin working set, verified

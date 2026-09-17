@@ -11,6 +11,7 @@ import org.apache.maven.api.plugin.annotations.Mojo;
 import org.apache.maven.api.plugin.annotations.Parameter;
 
 import java.io.File;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -42,6 +43,15 @@ import java.util.Map;
  * conflicting files with instructions for resolving in IntelliJ.
  * Re-running the goal after resolution continues with the remaining
  * components.
+ *
+ * <p>The working-set root (the aggregator) is updated last, when it is on
+ * the feature branch. Its manifest's {@code branch:} fields — and any
+ * feature-qualified {@code version:} fields — sit next to the {@code sha:}
+ * pins the target rewrites at every checkpoint, so the merge conflicts by
+ * adjacency although the two sides own disjoint fields.
+ * {@link AggregatorFeatureUpdate} resolves that one conflict by construction
+ * and reports any other as a real conflict, leaving the root as found
+ * (IKE-Network/ike-issues#1099).
  *
  * <p><strong>Single repo (no {@code workspace.yaml})</strong>: updates the
  * current repository only — a working set of one. The repo's own current
@@ -97,8 +107,12 @@ public class UpdateFeatureDraftMojo extends AbstractWorkspaceMojo {
         WorkingSet workingSet = resolveWorkingSet();
         File root;
         List<String> sorted;
+        // Loaded while the root is still on the feature branch: this is the
+        // feature side of the manifest, which the aggregator update below
+        // needs after the target's manifest has been taken (#1099).
+        WorkspaceGraph graph = null;
         if (workingSet.isWorkspace()) {
-            WorkspaceGraph graph = loadGraph();
+            graph = loadGraph();
             root = workspaceRoot();
             // Auto-detect feature if not specified
             if (feature == null || feature.isBlank()) {
@@ -207,7 +221,13 @@ public class UpdateFeatureDraftMojo extends AbstractWorkspaceMojo {
                     + " — preview only; commit before ws:update-feature-publish.");
         }
 
-        if (eligible.isEmpty()) {
+        // The aggregator joins the update when it is on the feature branch
+        // (IKE-Network/ike-issues#1099) — handled after the subproject loop.
+        boolean rootOnFeature = workingSet.isWorkspace()
+                && new File(root, ".git").exists()
+                && branchName.equals(gitBranch(root));
+
+        if (eligible.isEmpty() && !rootOnFeature) {
             getLog().info("  No components on " + branchName + " — nothing to update.");
             return new WorkspaceReportSpec(
                     publish ? WsGoal.UPDATE_FEATURE_PUBLISH : WsGoal.UPDATE_FEATURE_DRAFT,
@@ -267,8 +287,8 @@ public class UpdateFeatureDraftMojo extends AbstractWorkspaceMojo {
                         getLog().info("  " + Ansi.green("✓ ") + name + " — "
                                 + behind.size() + " commit(s) behind "
                                 + targetBranch + ", " + ahead.size()
-                                + " ahead — clean update expected");
-                        effects.put(name, "clean update expected ("
+                                + " ahead — conflict-free update expected");
+                        effects.put(name, "conflict-free update expected ("
                                 + behind.size() + " behind, " + ahead.size()
                                 + " ahead)");
                     } else {
@@ -334,6 +354,16 @@ public class UpdateFeatureDraftMojo extends AbstractWorkspaceMojo {
             }
         }
 
+        // ── The aggregator (IKE-Network/ike-issues#1099) ─────────────────
+        // Updated after the subprojects, mirroring the finish. The root's
+        // manifest conflicts by adjacency with every checkpoint the target
+        // took since the branch point; AggregatorFeatureUpdate resolves that
+        // one conflict by construction and reports any other as real.
+        if (workingSet.isWorkspace() && new File(root, ".git").exists()) {
+            updateAggregator(root, workingSet, graph, rootOnFeature, branchName, draft,
+                    effects);
+        }
+
         getLog().info("");
         if (draft) {
             getLog().info("  Components to update: " + eligible.size()
@@ -365,13 +395,10 @@ public class UpdateFeatureDraftMojo extends AbstractWorkspaceMojo {
             String sha = gitShortSha(dir);
             String effect = effects.get(member.name());
             if (effect == null) {
-                // No effect recorded for this member. The aggregator is not on
-                // the feature branch (this goal merges only the subprojects),
-                // so it is skipped; same for any member outside the eligible
-                // loop.
-                effect = member.isAggregator()
-                        ? "skipped (aggregator)"
-                        : "skipped (not on `" + branchName + "`)";
+                // No effect recorded: the member never entered an update loop
+                // (a root that is not a git repository, or a member outside
+                // the working set's git repos).
+                effect = "skipped (not on `" + branchName + "`)";
             }
             rows.add(new WorkingSetReportTable.Row(
                     member, version, branch, sha, effect));
@@ -384,6 +411,110 @@ public class UpdateFeatureDraftMojo extends AbstractWorkspaceMojo {
         return new WorkspaceReportSpec(
                 publish ? WsGoal.UPDATE_FEATURE_PUBLISH : WsGoal.UPDATE_FEATURE_DRAFT,
                 report.build());
+    }
+
+    /**
+     * Update the working-set root (the aggregator) from the target branch, or
+     * record why it is skipped. In a draft the root is only assessed; in a
+     * publish it is merged, with a manifest-only conflict resolved by
+     * construction and any other conflict reported after the merge is
+     * aborted — see {@link AggregatorFeatureUpdate} (IKE-Network/ike-issues#1099).
+     *
+     * @param root          the working-set root directory (its own git repo)
+     * @param workingSet    the resolved working set, for the aggregator's name
+     * @param graph         the graph loaded while the root was on the feature
+     *                      branch — the feature side of the manifest
+     * @param rootOnFeature whether the root is checked out on the feature branch
+     * @param branchName    the feature branch
+     * @param draft         {@code true} to assess only
+     * @param effects       per-member effects for the working-set report
+     * @throws MojoException when the publish merge conflicts beyond the manifest
+     */
+    private void updateAggregator(File root, WorkingSet workingSet, WorkspaceGraph graph,
+                                  boolean rootOnFeature, String branchName, boolean draft,
+                                  Map<String, String> effects) throws MojoException {
+        String aggregatorName = root.getName();
+        for (WorkingSet.Member member : workingSet.members()) {
+            if (member.isAggregator()) {
+                aggregatorName = member.name();
+            }
+        }
+        String label = RefreshMainSupport.ROOT_LABEL;
+
+        if (!rootOnFeature) {
+            getLog().info("  " + Ansi.yellow("· ") + label
+                    + " — not on " + branchName + ", skipping");
+            effects.put(aggregatorName, "skipped (not on `" + branchName + "`)");
+            return;
+        }
+
+        Path manifestPath = resolveManifest();
+        String manifestName = manifestPath.getFileName().toString();
+        AggregatorFeatureUpdate.Assessment assessment;
+        if (draft) {
+            // Read-only, against the same ref the subprojects were assessed
+            // against (#857): never a possibly-stale local branch.
+            assessment = AggregatorFeatureUpdate.assess(root, manifestName, branchName,
+                    RefreshMainSupport.assessmentRef(root, targetBranch));
+        } else {
+            assessment = AggregatorFeatureUpdate.apply(root, manifestPath, graph.manifest(),
+                    branchName, targetBranch, getLog());
+        }
+        effects.put(aggregatorName,
+                AggregatorFeatureUpdate.describe(assessment, draft, targetBranch));
+
+        switch (assessment) {
+            case AggregatorFeatureUpdate.UpToDate u ->
+                    getLog().info("  " + Ansi.green("✓ ") + label
+                            + " — up to date with " + targetBranch);
+            case AggregatorFeatureUpdate.ConflictFreeMerge c -> getLog().info("  "
+                    + Ansi.green("✓ ") + label + " — " + c.behind() + " commit(s) behind "
+                    + targetBranch + ", " + c.ahead() + " ahead — "
+                    + (draft ? "conflict-free update expected" : "merged"));
+            case AggregatorFeatureUpdate.ManifestResolvable m -> getLog().info("  "
+                    + Ansi.green("✓ ") + label + " — " + m.behind() + " commit(s) behind "
+                    + targetBranch + ", " + m.ahead() + " ahead — " + m.manifestName()
+                    + " conflicts by adjacency; "
+                    + (draft ? "resolved by construction on publish"
+                             : "resolved by construction, branch fields kept"));
+            case AggregatorFeatureUpdate.Conflicting x -> {
+                if (draft) {
+                    getLog().warn("  " + Ansi.red("⚠ ") + label + " — " + x.behind()
+                            + " commit(s) behind " + targetBranch + ", " + x.ahead()
+                            + " ahead — " + x.files().size() + " conflict(s) expected:");
+                    for (String file : x.files()) {
+                        getLog().warn("      • " + file);
+                    }
+                    getLog().warn("      Resolve by hand after running "
+                            + WsGoal.UPDATE_FEATURE_PUBLISH.qualified()
+                            + " (the root's merge is not started while other"
+                            + " files conflict)");
+                    return;
+                }
+                getLog().error("");
+                getLog().error("  " + Ansi.red("✗ ") + label
+                        + " — merge not applied: files beyond " + manifestName
+                        + " conflict, and a root left mid-merge would break every"
+                        + " later goal");
+                getLog().error("  Conflicting files in " + label + ":");
+                for (String file : x.files()) {
+                    getLog().error("    • " + file);
+                }
+                getLog().error("");
+                getLog().error("  To resolve by hand:");
+                getLog().error("    1. In the working-set root: git merge " + targetBranch);
+                getLog().error("    2. Resolve each file — in " + manifestName
+                        + " keep the feature's branch: fields and take the target's"
+                        + " sha: pins — then commit the merge");
+                getLog().error("    3. Re-run: mvn "
+                        + WsGoal.UPDATE_FEATURE_PUBLISH.qualified());
+                getLog().error("");
+                throw new MojoException("merge not applied for the " + label + " ("
+                        + x.files().size() + " conflicting file"
+                        + (x.files().size() == 1 ? "" : "s")
+                        + "). See above for resolution steps.");
+            }
+        }
     }
 
     /**

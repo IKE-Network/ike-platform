@@ -218,6 +218,126 @@ class FeatureFinishIntegrationTest {
         }
     }
 
+    /**
+     * A checkpoint landed on main after the branch point (IKE-Network/
+     * ike-issues#1099): its {@code sha:} pins sit under every {@code branch:}
+     * line the feature branch rewrote, and next to the {@code version:}
+     * lines it qualified. The finish restores the manifest's branch and
+     * version fields on the feature branch BEFORE merging the root, so the
+     * feature side's end state on those lines equals the merge base and the
+     * no-ff merge cannot conflict by adjacency.
+     */
+    @Test
+    void merge_rootStraddlesCheckpoint_finishesWithoutManifestConflict()
+            throws Exception {
+        buildAggregatorStraddlingCheckpoint();
+
+        FeatureFinishMergeDraftMojo mojo =
+                TestLog.createMojo(FeatureFinishMergeDraftMojo.class);
+        mojo.manifest = helper.workspaceYaml().toFile();
+        mojo.feature = FEATURE_NAME;
+        mojo.targetBranch = "main";
+        mojo.publish = true;
+        mojo.execute();
+
+        assertRootLandedWithCheckpoint();
+    }
+
+    @Test
+    void squash_rootStraddlesCheckpoint_finishesWithoutManifestConflict()
+            throws Exception {
+        buildAggregatorStraddlingCheckpoint();
+
+        FeatureFinishSquashDraftMojo mojo =
+                TestLog.createMojo(FeatureFinishSquashDraftMojo.class);
+        mojo.manifest = helper.workspaceYaml().toFile();
+        mojo.feature = FEATURE_NAME;
+        mojo.targetBranch = "main";
+        mojo.publish = true;
+        mojo.execute();
+
+        assertRootLandedWithCheckpoint();
+    }
+
+    private static final String CHECKPOINT_SHA = "0123456789abcdef0123456789abcdef01234567";
+
+    /**
+     * The aggregator as a real working set has it when a checkpoint lands on
+     * main after the branch point: main = base manifest plus a checkpoint's
+     * {@code sha:} pin under every subproject {@code branch:} line; the
+     * feature branch = branch fields on the feature and qualified versions
+     * (what setUp already wrote to the manifest). The feature's edits and the
+     * checkpoint's insertions are adjacent — the manifest conflict of
+     * IKE-Network/ike-issues#1099.
+     */
+    private void buildAggregatorStraddlingCheckpoint() throws Exception {
+        Path wsYaml = helper.workspaceYaml();
+        String qualifiedYaml = Files.readString(wsYaml, StandardCharsets.UTF_8);
+        String baseYaml = qualifiedYaml
+                .replace("-test-finish-SNAPSHOT", "-SNAPSHOT")
+                .replace("branch: " + BRANCH_NAME, "branch: main");
+        String basePom = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <project xmlns="http://maven.apache.org/POM/4.0.0">
+                    <modelVersion>4.0.0</modelVersion>
+                    <groupId>com.test</groupId>
+                    <artifactId>aggregator-root</artifactId>
+                    <version>9.9.9-SNAPSHOT</version>
+                    <packaging>pom</packaging>
+                </project>
+                """;
+
+        Files.writeString(wsYaml, baseYaml, StandardCharsets.UTF_8);
+        Files.writeString(tempDir.resolve("pom.xml"), basePom, StandardCharsets.UTF_8);
+        Files.writeString(tempDir.resolve(".gitignore"),
+                "/lib-a/\n/lib-b/\n/app-c/\n*.md\nws\uA789*.md\n", StandardCharsets.UTF_8);
+        exec(tempDir, "git", "init", "-b", "main");
+        exec(tempDir, "git", "config", "commit.gpgsign", "false");
+        exec(tempDir, "git", "config", "user.email", "root@example.com");
+        exec(tempDir, "git", "config", "user.name", "Root");
+        exec(tempDir, "git", "add", "pom.xml", "workspace.yaml", ".gitignore");
+        exec(tempDir, "git", "commit", "-m", "base workspace root");
+
+        exec(tempDir, "git", "checkout", "-b", BRANCH_NAME);
+        Files.writeString(wsYaml, qualifiedYaml, StandardCharsets.UTF_8);
+        Files.writeString(tempDir.resolve("pom.xml"),
+                basePom.replace("9.9.9-SNAPSHOT", "9.9.9-test-finish-SNAPSHOT"),
+                StandardCharsets.UTF_8);
+        exec(tempDir, "git", "add", "pom.xml", "workspace.yaml");
+        exec(tempDir, "git", "commit", "-m", "feature: qualify aggregator");
+
+        // The checkpoint on main, after the branch point.
+        exec(tempDir, "git", "checkout", "main");
+        Files.writeString(wsYaml, baseYaml.replace("    branch: main\n",
+                "    branch: main\n    sha: \"" + CHECKPOINT_SHA + "\"\n"),
+                StandardCharsets.UTF_8);
+        exec(tempDir, "git", "add", "workspace.yaml");
+        exec(tempDir, "git", "commit", "-m", "checkpoint: main-20260916-142630");
+        exec(tempDir, "git", "checkout", BRANCH_NAME);
+    }
+
+    private void assertRootLandedWithCheckpoint() throws Exception {
+        assertThat(execCapture(tempDir, "git", "rev-parse", "--abbrev-ref", "HEAD"))
+                .as("the aggregator landed on main").isEqualTo("main");
+        assertThat(execCapture(tempDir, "git", "status", "--porcelain"))
+                .as("no uncommitted changes and no merge in progress").isEmpty();
+        assertThat(tempDir.resolve(".git").resolve("MERGE_HEAD")).doesNotExist();
+        String yaml = Files.readString(helper.workspaceYaml(), StandardCharsets.UTF_8);
+        assertThat(yaml).doesNotContain("<<<<<<<").doesNotContain(">>>>>>>");
+        // The subproject branch fields (four-space indent) are restored; the
+        // defaults block is not this finish's to touch (setUp pointed it at the
+        // feature branch, as the #535 test notes).
+        assertThat(yaml.split("    branch: main", -1))
+                .as("every subproject branch field restored to main").hasSize(4);
+        assertThat(yaml).as("no subproject left on the feature branch")
+                .doesNotContain("    branch: " + BRANCH_NAME);
+        assertThat(yaml).as("versions de-qualified").doesNotContain("-test-finish-SNAPSHOT");
+        assertThat(yaml.split("    sha: \"" + CHECKPOINT_SHA + "\"", -1))
+                .as("the checkpoint's three pins survive the landing").hasSize(4);
+        assertThat(Files.readString(tempDir.resolve("pom.xml"), StandardCharsets.UTF_8))
+                .contains("<version>9.9.9-SNAPSHOT</version>");
+    }
+
     @Test
     void merge_dequalifiesWorkspaceRootVersion_schema11Manifest()
             throws Exception {

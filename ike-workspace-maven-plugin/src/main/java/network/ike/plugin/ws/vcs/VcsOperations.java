@@ -319,12 +319,7 @@ public class VcsOperations {
             }
 
             if (exit == 1 && !stdout.isEmpty()) {
-                // Output format: tree SHA on first line, then blank line,
-                // then conflicting file names (one per line)
-                String[] sections = stdout.split("\n\n", 2);
-                if (sections.length == 2 && !sections[1].isBlank()) {
-                    return List.of(sections[1].trim().split("\n"));
-                }
+                return parseMergeTreeNameOnly(stdout);
             }
 
             // Unexpected exit or format — can't predict
@@ -333,6 +328,35 @@ public class VcsOperations {
             // git merge-tree not available or failed — can't predict
             return List.of();
         }
+    }
+
+    /**
+     * Parse the output of {@code git merge-tree --write-tree --name-only}
+     * for a conflicted merge (exit 1): the toplevel tree id on the first
+     * line, then one conflicted path per line, then — after a blank line —
+     * the informational messages ({@code Auto-merging …},
+     * {@code CONFLICT …}). The messages are never paths, so they are
+     * dropped whether or not the blank separator precedes them. An earlier
+     * reading took the text after the first blank line as the paths, which
+     * on current git returned the messages instead
+     * (IKE-Network/ike-issues#1099).
+     *
+     * @param stdout the command's standard output, trimmed
+     * @return the conflicted paths in output order; empty if none can be read
+     */
+    static List<String> parseMergeTreeNameOnly(String stdout) {
+        List<String> paths = new ArrayList<>();
+        String[] lines = stdout.split("\n");
+        for (int i = 1; i < lines.length; i++) {
+            String line = lines[i];
+            if (line.isBlank()
+                    || line.startsWith("Auto-merging ")
+                    || line.startsWith("CONFLICT ")) {
+                break;
+            }
+            paths.add(line.trim());
+        }
+        return List.copyOf(paths);
     }
 
     /**

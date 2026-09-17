@@ -319,7 +319,7 @@ class FeatureFinishPushPhaseTest {
         // not "up to date with main" measured against stale local main.
         assertThat(report)
                 .as("draft must assess lib-a against origin/main (#857)")
-                .contains("clean update expected (1 behind");
+                .contains("conflict-free update expected (1 behind");
     }
 
     // ── #947: narrowed refspec fails loudly instead of mis-assessing ──

@@ -310,6 +310,19 @@ public class FeatureFinishMergeDraftMojo extends AbstractWorkspaceMojo {
             }
         }
 
+        // Runs BEFORE the root merge: on the feature branch the manifest's
+        // branch: and version: fields sit next to the sha: pins the target
+        // rewrites at every checkpoint, and restoring them first makes the
+        // feature side's end state on those lines equal the merge base, so
+        // the no-ff merge below cannot conflict by adjacency
+        // (IKE-Network/ike-issues#1099). And BEFORE the push phase, so the
+        // aggregator's reconciliation commit is included in the root push
+        // (#791).
+        if (publish && !needsYamlReconcile.isEmpty()) {
+            FeatureFinishSupport.updateWorkspaceYaml(
+                    manifestPath, needsYamlReconcile, targetBranch, feature, getLog());
+        }
+
         // The workspace-repo merge also runs on a pure re-run (merged==0
         // but already-done members present) so a prior crash's pending
         // root merge completes (#858).
@@ -317,13 +330,6 @@ public class FeatureFinishMergeDraftMojo extends AbstractWorkspaceMojo {
             FeatureFinishSupport.cleanFeatureSites(root, eligible, branchName, getLog());
             FeatureFinishSupport.mergeWorkspaceRepo(
                     manifestPath, branchName, targetBranch, getLog());
-        }
-
-        // Runs BEFORE the push phase so the aggregator's reconciliation
-        // commit is included in the root push (#791).
-        if (publish && !needsYamlReconcile.isEmpty()) {
-            FeatureFinishSupport.updateWorkspaceYaml(
-                    manifestPath, needsYamlReconcile, targetBranch, feature, getLog());
         }
 
         // ── Landing phase: verified pushes to origin (#858/#791), or —

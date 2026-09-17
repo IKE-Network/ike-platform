@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>SubprojectResolver.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">SubprojectResolver.java</span></div><h1>SubprojectResolver.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.workspace.Manifest;
+import network.ike.workspace.PublishedArtifactSet;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Optional;
+
+/**
+ * Resolves a Maven coordinate ({@code groupId:artifactId}) to the
+ * workspace subproject that &lt;em&gt;produces&lt;/em&gt; it.
+ *
+ * &lt;p&gt;This is the single place that encodes the rule a POM coordinate
+ * maps to a workspace subproject &lt;strong&gt;only&lt;/strong&gt; on a full
+ * {@code groupId} &lt;em&gt;and&lt;/em&gt; {@code artifactId} match against that
+ * subproject's published artifact set — never by groupId alone. A
+ * coordinate that matches no subproject is &lt;em&gt;external&lt;/em&gt; and
+ * resolves to {@link Optional#empty()}; callers must leave external
+ * coordinates untouched (no manifest {@code parent:}/{@code depends-on}
+ * edge, no version rewrite).
+ *
+ * &lt;p&gt;groupId-alone matching mis-associates whenever two subprojects (or
+ * a subproject and an external artifact) share a groupId — e.g.
+ * {@code network.ike.platform} is shared by the external
+ * {@code ike-parent} and the subproject {@code ike-commonmark-attributes}
+ * (IKE-Network/ike-issues#565), and {@code dev.ikm.komet} is shared by
+ * the {@code komet} and {@code komet-bom} subprojects (#566). Routing
+ * every coordinate→subproject lookup through this resolver closes that
+ * class of defect; it mirrors the GA-matching rule the parent-version
+ * machinery already applies (#241).
+ *
+ * &lt;p&gt;Built once by scanning every cloned subproject's published
+ * artifacts (regex-based, via {@link PublishedArtifactSet}). Uncloned
+ * subprojects (no {@code pom.xml} on disk) contribute nothing — they
+ * have no scannable POM, so their coordinates resolve as external until
+ * cloned.
+ *
+ * &lt;p&gt;Thread-confined: build one per operation; the backing index is an
+ * immutable snapshot of disk state at {@link #scan} time.
+ */
+public final class SubprojectResolver {
+
+    /** {@code &quot;groupId:artifactId&quot;} → producing subproject name. */
+    private final Map&lt;String, String&gt; index;
+
+<span class="fc" id="L50">    private SubprojectResolver(Map&lt;String, String&gt; index) {</span>
+<span class="fc" id="L51">        this.index = index;</span>
+<span class="fc" id="L52">    }</span>
+
+    /**
+     * Build a resolver by scanning each manifest subproject's published
+     * artifact set.
+     *
+     * &lt;p&gt;When two subprojects pathologically publish the same
+     * coordinate, the first in manifest iteration order wins (matching
+     * the first-match behaviour of the call sites this replaces).
+     *
+     * @param wsDir    workspace root directory
+     * @param manifest parsed workspace manifest
+     * @return a resolver over the manifest's cloned subprojects
+     * @throws IOException if a subproject POM cannot be read
+     */
+    public static SubprojectResolver scan(Path wsDir, Manifest manifest)
+            throws IOException {
+<span class="fc" id="L69">        Map&lt;String, String&gt; index = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc bfc" id="L70" title="All 2 branches covered.">        for (String name : manifest.subprojects().keySet()) {</span>
+<span class="fc" id="L71">            Path subDir = wsDir.resolve(name);</span>
+<span class="pc bpc" id="L72" title="1 of 2 branches missed.">            if (!Files.exists(subDir.resolve(&quot;pom.xml&quot;))) {</span>
+<span class="nc" id="L73">                continue;</span>
+            }
+            for (PublishedArtifactSet.Artifact artifact
+<span class="fc bfc" id="L76" title="All 2 branches covered.">                    : PublishedArtifactSet.scan(subDir)) {</span>
+<span class="fc" id="L77">                index.putIfAbsent(</span>
+<span class="fc" id="L78">                        artifact.groupId() + &quot;:&quot; + artifact.artifactId(),</span>
+                        name);
+<span class="fc" id="L80">            }</span>
+<span class="fc" id="L81">        }</span>
+<span class="fc" id="L82">        return new SubprojectResolver(index);</span>
+    }
+
+    /**
+     * The workspace subproject that publishes the given coordinate, or
+     * empty when the coordinate is external (produced by no subproject,
+     * or either coordinate is null).
+     *
+     * @param groupId    Maven groupId
+     * @param artifactId Maven artifactId
+     * @return the producing subproject name, or empty when external
+     */
+    public Optional&lt;String&gt; subprojectForCoordinate(String groupId,
+                                                     String artifactId) {
+<span class="pc bpc" id="L96" title="2 of 4 branches missed.">        if (groupId == null || artifactId == null) {</span>
+<span class="nc" id="L97">            return Optional.empty();</span>
+        }
+<span class="fc" id="L99">        return Optional.ofNullable(index.get(groupId + &quot;:&quot; + artifactId));</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

@@ -1,0 +1,1273 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>FeatureFinishSupport.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">FeatureFinishSupport.java</span></div><h1>FeatureFinishSupport.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.plugin.PomRewriter;
+
+import network.ike.plugin.ReleaseSupport;
+
+import network.ike.workspace.Subproject;
+import network.ike.workspace.ManifestWriter;
+import network.ike.workspace.VersionSupport;
+import network.ike.workspace.WorkspaceGraph;
+import network.ike.plugin.ws.vcs.VcsOperations;
+import network.ike.plugin.ws.vcs.VcsState;
+import org.apache.maven.api.model.Dependency;
+import org.apache.maven.api.model.Parent;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.Log;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.TreeSet;
+import java.util.regex.Pattern;
+
+/**
+ * Shared logic for feature-finish goals (squash, merge, rebase).
+ *
+ * &lt;p&gt;Each strategy goal delegates to this class for validation,
+ * version stripping, workspace.yaml updates, branch deletion,
+ * and state file writing. The actual merge operation is performed
+ * by the strategy goal itself.
+ */
+class FeatureFinishSupport {
+
+    private FeatureFinishSupport() {}
+
+    /**
+     * Detect the feature branch name from subproject branches.
+     * If all subprojects on a feature branch agree on the name,
+     * returns it. Also checks the workspace root branch.
+     *
+     * @param root       workspace root directory
+     * @param components subproject names to scan
+     * @param mojo       the calling mojo (for gitBranch access)
+     * @param log        Maven logger
+     * @return the detected feature name (without &quot;feature/&quot; prefix)
+     * @throws MojoException if no feature branch is detected
+     */
+    static String detectFeature(File root, List&lt;String&gt; components,
+                                 AbstractWorkspaceMojo mojo, Log log)
+            throws MojoException {
+<span class="nc" id="L59">        Set&lt;String&gt; features = new TreeSet&lt;&gt;();</span>
+
+        // Check workspace root branch
+<span class="nc bnc" id="L62" title="All 2 branches missed.">        if (new File(root, &quot;.git&quot;).exists()) {</span>
+<span class="nc" id="L63">            String wsBranch = mojo.gitBranch(root);</span>
+<span class="nc bnc" id="L64" title="All 2 branches missed.">            if (wsBranch.startsWith(&quot;feature/&quot;)) {</span>
+<span class="nc" id="L65">                features.add(wsBranch.substring(&quot;feature/&quot;.length()));</span>
+            }
+        }
+
+        // Check subproject branches
+<span class="nc bnc" id="L70" title="All 2 branches missed.">        for (String name : components) {</span>
+<span class="nc" id="L71">            File dir = new File(root, name);</span>
+<span class="nc bnc" id="L72" title="All 2 branches missed.">            if (!new File(dir, &quot;.git&quot;).exists()) continue;</span>
+<span class="nc" id="L73">            String branch = mojo.gitBranch(dir);</span>
+<span class="nc bnc" id="L74" title="All 2 branches missed.">            if (branch.startsWith(&quot;feature/&quot;)) {</span>
+<span class="nc" id="L75">                features.add(branch.substring(&quot;feature/&quot;.length()));</span>
+            }
+<span class="nc" id="L77">        }</span>
+
+<span class="nc bnc" id="L79" title="All 2 branches missed.">        if (features.isEmpty()) {</span>
+<span class="nc" id="L80">            throw new MojoException(</span>
+                    &quot;No components are on a feature branch. &quot;
+                    + &quot;Specify -Dfeature=&lt;name&gt; or switch to a feature branch.&quot;);
+        }
+
+<span class="nc bnc" id="L85" title="All 2 branches missed.">        if (features.size() == 1) {</span>
+<span class="nc" id="L86">            String detected = features.iterator().next();</span>
+<span class="nc" id="L87">            log.info(&quot;  Detected feature: &quot; + detected);</span>
+<span class="nc" id="L88">            return detected;</span>
+        }
+
+        // Multiple features — list them for the user
+<span class="nc" id="L92">        throw new MojoException(</span>
+                &quot;Multiple feature branches detected: &quot; + features
+                + &quot;. Specify -Dfeature=&lt;name&gt; to disambiguate.&quot;);
+    }
+
+    /**
+     * Sentinel returned by {@link #validateComponent} when a subproject's
+     * local checkout is on the target branch but workspace.yaml still
+     * names the feature branch. Indicates the subproject was processed
+     * by a prior, partially-failed invocation (its squash/merge already
+     * landed) and the only remaining work is to bring workspace.yaml in
+     * line. Callers should auto-reconcile the yaml rather than skip.
+     * IKE-Network/ike-issues#535.
+     */
+    static final String ALREADY_DONE = &quot;ALREADY_DONE&quot;;
+
+    /**
+     * Validate that a subproject is eligible for feature-finish.
+     *
+     * &lt;p&gt;Checks three consistency requirements:
+     * &lt;ol&gt;
+     *   &lt;li&gt;The git working tree must be on the expected feature branch&lt;/li&gt;
+     *   &lt;li&gt;The workspace.yaml branch field must agree with git&lt;/li&gt;
+     *   &lt;li&gt;The working tree must have no uncommitted changes&lt;/li&gt;
+     * &lt;/ol&gt;
+     *
+     * &lt;p&gt;A mismatch between git and workspace.yaml indicates that
+     * branches were switched outside the {@code ws:} workflow, which
+     * is not supported. The build fails with a diagnostic rather than
+     * silently proceeding with inconsistent state.
+     *
+     * @param root         workspace root directory
+     * @param name         subproject name
+     * @param branchName   expected git branch (e.g., &quot;feature/my-work&quot;)
+     * @param targetBranch branch the feature merges into (e.g., &quot;main&quot;);
+     *                     used to recognize prior partially-completed runs
+     * @param subproject   the workspace.yaml subproject record
+     * @param mojo         the calling mojo (for git operations)
+     * @return null if eligible, &quot;MODIFIED&quot; for uncommitted changes,
+     *         {@link #ALREADY_DONE} for a prior partially-completed run,
+     *         or a descriptive skip/error reason string
+     */
+    static String validateComponent(File root, String name, String branchName,
+                                     String targetBranch,
+                                     Subproject subproject,
+                                     AbstractWorkspaceMojo mojo) {
+<span class="fc" id="L138">        File dir = new File(root, name);</span>
+<span class="fc" id="L139">        File gitDir = new File(dir, &quot;.git&quot;);</span>
+
+<span class="pc bpc" id="L141" title="1 of 2 branches missed.">        if (!gitDir.exists()) {</span>
+<span class="nc" id="L142">            return &quot;not cloned&quot;;</span>
+        }
+
+<span class="fc" id="L145">        String currentBranch = mojo.gitBranch(dir);</span>
+<span class="fc" id="L146">        String yamlBranch = subproject.branch();</span>
+<span class="fc bfc" id="L147" title="All 2 branches covered.">        if (!currentBranch.equals(branchName)) {</span>
+            // #535: distinguish the &quot;already done from a prior partial
+            // run&quot; state (local on target, yaml still on the feature
+            // branch) from a generic skip. A subsequent re-run treats
+            // these as needing yaml reconciliation only.
+<span class="pc bpc" id="L152" title="1 of 2 branches missed.">            if (targetBranch != null</span>
+<span class="pc bpc" id="L153" title="2 of 4 branches missed.">                    &amp;&amp; currentBranch.equals(targetBranch)</span>
+                    &amp;&amp; yamlBranch != null
+<span class="pc bpc" id="L155" title="1 of 2 branches missed.">                    &amp;&amp; yamlBranch.equals(branchName)) {</span>
+<span class="fc" id="L156">                return ALREADY_DONE;</span>
+            }
+<span class="nc" id="L158">            return &quot;on &quot; + currentBranch + &quot;, not &quot; + branchName;</span>
+        }
+
+        // Verify workspace.yaml agrees with git — a mismatch means
+        // branches were switched outside the ws: workflow.
+<span class="pc bpc" id="L163" title="1 of 4 branches missed.">        if (yamlBranch != null &amp;&amp; !yamlBranch.equals(currentBranch)) {</span>
+<span class="fc" id="L164">            return &quot;INCONSISTENT: git is on &quot; + currentBranch</span>
+                    + &quot; but workspace.yaml says &quot; + yamlBranch
+                    + &quot; — resolve with ws:feature-start or update workspace.yaml&quot;;
+        }
+
+<span class="fc" id="L169">        String status = mojo.gitStatus(dir);</span>
+<span class="pc bpc" id="L170" title="1 of 2 branches missed.">        if (!status.isEmpty()) {</span>
+<span class="nc" id="L171">            return &quot;MODIFIED&quot;;  // Caller should throw</span>
+        }
+
+<span class="fc" id="L174">        return null;</span>
+    }
+
+    /**
+     * Generate a structured commit message by aggregating per-subproject
+     * commit history from the feature branch.
+     */
+    static String generateFeatureMessage(File root, List&lt;String&gt; components,
+                                          String branchName, String targetBranch,
+                                          String userMessage, Log log) {
+<span class="fc" id="L184">        StringBuilder sb = new StringBuilder();</span>
+<span class="pc bpc" id="L185" title="1 of 4 branches missed.">        if (userMessage != null &amp;&amp; !userMessage.isBlank()) {</span>
+<span class="fc" id="L186">            sb.append(userMessage).append(&quot;\n\n&quot;);</span>
+        }
+<span class="fc" id="L188">        sb.append(branchName).append(&quot;\n&quot;);</span>
+
+<span class="fc bfc" id="L190" title="All 2 branches covered.">        for (String name : components) {</span>
+<span class="fc" id="L191">            File dir = new File(root, name);</span>
+            try {
+<span class="fc" id="L193">                List&lt;String&gt; commits = VcsOperations.commitLog(</span>
+                        dir, targetBranch, branchName);
+<span class="pc bpc" id="L195" title="1 of 2 branches missed.">                if (commits.isEmpty()) continue;</span>
+<span class="fc" id="L196">                sb.append(&quot;\n## &quot;).append(name)</span>
+<span class="fc" id="L197">                  .append(&quot; (&quot;).append(commits.size()).append(&quot; commit&quot;)</span>
+<span class="fc bfc" id="L198" title="All 2 branches covered.">                  .append(commits.size() == 1 ? &quot;&quot; : &quot;s&quot;).append(&quot;)\n&quot;);</span>
+<span class="fc bfc" id="L199" title="All 2 branches covered.">                for (String line : commits) {</span>
+<span class="pc bpc" id="L200" title="1 of 2 branches missed.">                    String msg = line.contains(&quot; &quot;)</span>
+<span class="pc" id="L201">                            ? line.substring(line.indexOf(' ') + 1) : line;</span>
+<span class="fc" id="L202">                    sb.append(&quot;- &quot;).append(msg).append(&quot;\n&quot;);</span>
+<span class="fc" id="L203">                }</span>
+<span class="nc" id="L204">            } catch (MojoException e) {</span>
+<span class="nc" id="L205">                log.debug(&quot;Could not get log for &quot; + name + &quot;: &quot; + e.getMessage());</span>
+<span class="fc" id="L206">            }</span>
+<span class="fc" id="L207">        }</span>
+
+        // Workspace repo changes
+        try {
+<span class="fc" id="L211">            List&lt;String&gt; wsCommits = VcsOperations.commitLog(</span>
+                    root, targetBranch, branchName);
+<span class="pc bpc" id="L213" title="1 of 2 branches missed.">            if (!wsCommits.isEmpty()) {</span>
+<span class="fc" id="L214">                sb.append(&quot;\n## workspace (&quot;).append(wsCommits.size())</span>
+<span class="fc bfc" id="L215" title="All 2 branches covered.">                  .append(&quot; commit&quot;).append(wsCommits.size() == 1 ? &quot;&quot; : &quot;s&quot;)</span>
+<span class="fc" id="L216">                  .append(&quot;)\n&quot;);</span>
+<span class="fc bfc" id="L217" title="All 2 branches covered.">                for (String line : wsCommits) {</span>
+<span class="pc bpc" id="L218" title="1 of 2 branches missed.">                    String msg = line.contains(&quot; &quot;)</span>
+<span class="pc" id="L219">                            ? line.substring(line.indexOf(' ') + 1) : line;</span>
+<span class="fc" id="L220">                    sb.append(&quot;- &quot;).append(msg).append(&quot;\n&quot;);</span>
+<span class="fc" id="L221">                }</span>
+            }
+<span class="fc" id="L223">        } catch (MojoException e) {</span>
+<span class="fc" id="L224">            log.debug(&quot;Could not get workspace log: &quot; + e.getMessage());</span>
+<span class="fc" id="L225">        }</span>
+
+<span class="fc" id="L227">        return sb.toString().stripTrailing();</span>
+    }
+
+    /**
+     * Build the crash-recovery guidance message thrown when a subproject's
+     * merge sequence fails partway through the merge pass (ike-issues#667).
+     *
+     * &lt;p&gt;By the time the merge pass runs, the prep pass has already
+     * stripped the branch qualifier from &lt;em&gt;every&lt;/em&gt; eligible
+     * subproject's feature-branch POM (a {@code merge-prep} commit on the
+     * feature branch), so the workspace compiles regardless of where the
+     * merge pass stopped. The message states exactly that, names which
+     * subprojects already merged, which one failed, and which remain, and
+     * emits the resume command — re-running the same publish goal skips
+     * already-merged subprojects via {@link #ALREADY_DONE} and finishes
+     * the rest.
+     *
+     * @param goal       the publish goal to resume with (e.g.
+     *                   {@code FEATURE_FINISH_MERGE_PUBLISH})
+     * @param feature    the feature name (for the {@code -Dfeature=} flag)
+     * @param mergedSoFar subprojects whose merge completed before the failure
+     * @param failed     the subproject whose merge sequence threw
+     * @param remaining  eligible subprojects not yet attempted
+     * @return the formatted guidance message
+     */
+    static String resumeGuidance(WsGoal goal, String feature,
+                                  List&lt;String&gt; mergedSoFar, String failed,
+                                  List&lt;String&gt; remaining) {
+<span class="fc" id="L255">        StringBuilder sb = new StringBuilder();</span>
+<span class="fc" id="L256">        sb.append(&quot;Feature-finish failed while merging '&quot;).append(failed)</span>
+<span class="fc" id="L257">                .append(&quot;'.\n\n&quot;);</span>
+<span class="fc" id="L258">        sb.append(&quot;The version strip is already applied to all subprojects, &quot;</span>
+                + &quot;so the workspace still compiles — no subproject is left on &quot;
+                + &quot;a branch-qualified version.\n\n&quot;);
+<span class="pc bpc" id="L261" title="1 of 2 branches missed.">        if (mergedSoFar.isEmpty()) {</span>
+<span class="nc" id="L262">            sb.append(&quot;Merged before the failure: (none)\n&quot;);</span>
+        } else {
+<span class="fc" id="L264">            sb.append(&quot;Merged before the failure: &quot;)</span>
+<span class="fc" id="L265">                    .append(String.join(&quot;, &quot;, mergedSoFar)).append(&quot;\n&quot;);</span>
+        }
+<span class="fc" id="L267">        sb.append(&quot;Failed: &quot;).append(failed).append(&quot;\n&quot;);</span>
+<span class="pc bpc" id="L268" title="1 of 2 branches missed.">        if (remaining.isEmpty()) {</span>
+<span class="nc" id="L269">            sb.append(&quot;Remaining: (none)\n&quot;);</span>
+        } else {
+<span class="fc" id="L271">            sb.append(&quot;Remaining: &quot;).append(String.join(&quot;, &quot;, remaining))</span>
+<span class="fc" id="L272">                    .append(&quot;\n&quot;);</span>
+        }
+<span class="fc" id="L274">        sb.append(&quot;\nFix the cause above, then re-run the same goal to resume &quot;</span>
+                + &quot;— already-merged subprojects are skipped automatically:\n\n&quot;);
+<span class="fc" id="L276">        sb.append(&quot;  ./mvnw &quot;).append(goal.qualified())</span>
+<span class="fc" id="L277">                .append(&quot; -Dfeature=&quot;).append(feature);</span>
+<span class="fc" id="L278">        return sb.toString();</span>
+    }
+
+    /**
+     * Strip branch-qualified version back to base SNAPSHOT.
+     * Returns the base version, or null if no stripping was needed.
+     *
+     * &lt;p&gt;Idempotent: when the POM version is already a plain
+     * {@code -SNAPSHOT} (the qualifier was stripped by an earlier run),
+     * {@code containsBranchQualifier} returns {@code false} and the method
+     * returns {@code null} without staging or committing. This makes the
+     * front-loaded prep pass safe to repeat on resume (ike-issues#667).
+     */
+    static String stripBranchVersion(File dir, Subproject subproject,
+                                      String branchName, Log log)
+            throws MojoException {
+        // Read actual version from POM on disk — workspace.yaml may be stale
+        // if the branch update commit failed (#83).
+<span class="fc" id="L296">        String currentVersion = readCurrentVersion(dir, log);</span>
+<span class="fc" id="L297">        String qualifier = qualifierFromBranch(branchName);</span>
+<span class="pc bpc" id="L298" title="1 of 2 branches missed.">        if (currentVersion == null</span>
+<span class="fc bfc" id="L299" title="All 2 branches covered.">                || !containsBranchQualifier(currentVersion, qualifier)) {</span>
+<span class="fc" id="L300">            return null;</span>
+        }
+
+<span class="fc" id="L303">        String baseVersion = stripQualifier(currentVersion, qualifier);</span>
+
+<span class="fc" id="L305">        log.info(&quot;    version: &quot; + currentVersion + &quot; → &quot; + baseVersion);</span>
+<span class="fc" id="L306">        setAllVersions(dir, currentVersion, baseVersion, log);</span>
+
+        // Also strip any other branch-qualified versions in the POM tree
+        // (BOM imports, version properties, etc. set by cascadeBomProperties
+        // and cascadeBomImports during feature-start).
+<span class="fc" id="L311">        stripAllBranchQualifiedVersions(dir, qualifier, log);</span>
+
+<span class="fc" id="L313">        ReleaseSupport.exec(dir, log, &quot;git&quot;, &quot;add&quot;, &quot;-A&quot;);</span>
+<span class="fc" id="L314">        ReleaseSupport.exec(dir, log, &quot;git&quot;, &quot;commit&quot;, &quot;-m&quot;,</span>
+                &quot;merge-prep: strip branch qualifier → &quot; + baseVersion);
+
+<span class="fc" id="L317">        return baseVersion;</span>
+    }
+
+    /**
+     * Strip branch-qualified version in bare mode.
+     */
+    static String stripBranchVersionBare(File dir, String branchName, Log log)
+            throws MojoException {
+<span class="fc" id="L325">        File pom = new File(dir, &quot;pom.xml&quot;);</span>
+<span class="pc bpc" id="L326" title="1 of 2 branches missed.">        if (!pom.exists()) return null;</span>
+
+        String currentVersion;
+        try {
+<span class="fc" id="L330">            currentVersion = ReleaseSupport.readPomVersion(pom);</span>
+<span class="nc" id="L331">        } catch (MojoException e) {</span>
+<span class="nc" id="L332">            return null;</span>
+<span class="fc" id="L333">        }</span>
+
+<span class="fc" id="L335">        String qualifier = qualifierFromBranch(branchName);</span>
+<span class="pc bpc" id="L336" title="1 of 2 branches missed.">        if (currentVersion == null</span>
+<span class="pc bpc" id="L337" title="1 of 2 branches missed.">                || !containsBranchQualifier(currentVersion, qualifier)) {</span>
+<span class="nc" id="L338">            return null;</span>
+        }
+
+<span class="fc" id="L341">        String baseVersion = stripQualifier(currentVersion, qualifier);</span>
+
+<span class="fc" id="L343">        log.info(&quot;  Version: &quot; + currentVersion + &quot; → &quot; + baseVersion);</span>
+<span class="fc" id="L344">        setAllVersions(dir, currentVersion, baseVersion, log);</span>
+<span class="fc" id="L345">        stripAllBranchQualifiedVersions(dir, qualifier, log);</span>
+<span class="fc" id="L346">        ReleaseSupport.exec(dir, log, &quot;git&quot;, &quot;add&quot;, &quot;-A&quot;);</span>
+<span class="fc" id="L347">        ReleaseSupport.exec(dir, log, &quot;git&quot;, &quot;commit&quot;, &quot;-m&quot;,</span>
+                &quot;merge-prep: strip branch qualifier → &quot; + baseVersion);
+
+<span class="fc" id="L350">        return baseVersion;</span>
+    }
+
+    /**
+     * Delete the local branch and, unless {@code keepRemoteBranch} is
+     * set, attempt to delete the matching {@code origin/&lt;branch&gt;}.
+     * Remote-deletion failures are &lt;strong&gt;soft&lt;/strong&gt; — the method
+     * logs a warning and returns the failure reason so the caller can
+     * aggregate undeleted branches into the end-of-run report rather
+     * than aborting the whole feature-finish (IKE-Network/ike-issues#532).
+     *
+     * &lt;p&gt;Local deletion still throws on failure — that's a real
+     * problem, not a typical branch-protection rule.
+     *
+     * @param dir              repository root
+     * @param log              Maven logger
+     * @param branchName       branch to delete
+     * @param keepRemoteBranch when {@code true}, skip the remote
+     *                         deletion entirely (e.g. branch protection
+     *                         is known to forbid it)
+     * @return {@code null} on success (or no remote present, or
+     *         {@code keepRemoteBranch=true}); the underlying git error
+     *         message when the remote deletion was attempted and failed
+     * @throws MojoException if the local branch deletion fails
+     */
+    static String deleteBranch(File dir, Log log, String branchName,
+                                boolean keepRemoteBranch) throws MojoException {
+<span class="fc" id="L377">        VcsOperations.deleteBranch(dir, log, branchName);</span>
+<span class="fc" id="L378">        log.info(&quot;    deleted local branch: &quot; + branchName);</span>
+
+<span class="fc bfc" id="L380" title="All 2 branches covered.">        if (keepRemoteBranch) {</span>
+<span class="fc" id="L381">            log.info(&quot;    -DkeepRemoteBranch=true — keeping origin/&quot;</span>
+                    + branchName);
+<span class="fc" id="L383">            return null;</span>
+        }
+
+<span class="fc" id="L386">        Optional&lt;String&gt; remoteSha = VcsOperations.remoteSha(dir, &quot;origin&quot;, branchName);</span>
+<span class="fc bfc" id="L387" title="All 2 branches covered.">        if (remoteSha.isEmpty()) {</span>
+<span class="fc" id="L388">            log.info(&quot;    remote branch origin/&quot; + branchName</span>
+                    + &quot; does not exist (never pushed) — skipping&quot;);
+<span class="fc" id="L390">            return null;</span>
+        }
+
+        try {
+<span class="fc" id="L394">            VcsOperations.deleteRemoteBranch(dir, log, &quot;origin&quot;, branchName);</span>
+<span class="fc" id="L395">            log.info(&quot;    deleted remote branch: origin/&quot; + branchName);</span>
+<span class="fc" id="L396">            return null;</span>
+<span class="fc" id="L397">        } catch (MojoException e) {</span>
+<span class="fc" id="L398">            String reason = e.getMessage();</span>
+<span class="fc" id="L399">            log.warn(&quot;    ⚠ could not delete remote branch origin/&quot;</span>
+                    + branchName + &quot;: &quot; + reason);
+<span class="fc" id="L401">            return reason;</span>
+        }
+    }
+
+    /**
+     * Convenience overload that calls {@link #deleteBranch(File, Log,
+     * String, boolean)} with {@code keepRemoteBranch=false} and treats
+     * a soft-fail as a no-op. Existing callers (e.g. the workspace-repo
+     * merge step) used to depend on the void-returning behaviour and
+     * just wanted a best-effort delete; preserved here so they keep
+     * working without per-call refactoring.
+     *
+     * @param dir        repository root
+     * @param log        Maven logger
+     * @param branchName branch to delete
+     * @throws MojoException if the local branch deletion fails
+     */
+    static void deleteBranch(File dir, Log log, String branchName)
+            throws MojoException {
+<span class="nc" id="L420">        deleteBranch(dir, log, branchName, false);</span>
+<span class="nc" id="L421">    }</span>
+
+    /**
+     * Clean up feature branch snapshot sites.
+     */
+    static void cleanFeatureSites(File root, List&lt;String&gt; components,
+                                    String branchName, Log log) {
+<span class="fc" id="L428">        String featurePath = ReleaseSupport.branchToSitePath(branchName);</span>
+<span class="fc bfc" id="L429" title="All 2 branches covered.">        for (String name : components) {</span>
+<span class="fc" id="L430">            String siteDisk = ReleaseSupport.siteDiskPath(</span>
+                    name, &quot;snapshot&quot;, featurePath);
+            try {
+<span class="fc" id="L433">                ReleaseSupport.cleanRemoteSiteDir(</span>
+                        new File(root, name), log, siteDisk);
+<span class="nc" id="L435">            } catch (MojoException e) {</span>
+<span class="nc" id="L436">                log.debug(&quot;No snapshot site to clean for &quot; + name</span>
+<span class="nc" id="L437">                        + &quot;: &quot; + e.getMessage());</span>
+<span class="fc" id="L438">            }</span>
+<span class="fc" id="L439">        }</span>
+<span class="fc" id="L440">    }</span>
+
+    /**
+     * Restore workspace.yaml branch AND version fields after a feature lands,
+     * and commit. Branches go back to {@code targetBranch}; every {@code
+     * version:} field carrying the feature qualifier is de-qualified to base
+     * (#768/#763) — otherwise the manifest is stranded on
+     * {@code X-&lt;feature&gt;-SNAPSHOT} while the poms it declares are already at
+     * base.
+     */
+    static void updateWorkspaceYaml(Path manifestPath, List&lt;String&gt; components,
+                                      String targetBranch, String feature,
+                                      Log log) {
+        try {
+<span class="fc" id="L454">            Map&lt;String, String&gt; updates = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc bfc" id="L455" title="All 2 branches covered.">            for (String name : components) {</span>
+<span class="fc" id="L456">                updates.put(name, targetBranch);</span>
+<span class="fc" id="L457">            }</span>
+<span class="fc" id="L458">            ManifestWriter.updateBranches(manifestPath, updates);</span>
+<span class="fc" id="L459">            log.info(&quot;  Updated workspace.yaml branches → &quot; + targetBranch);</span>
+
+            // De-qualify the version: fields too (#768/#763): the inverse of
+            // the qualification ws:feature-start applied. Without this the
+            // manifest is left inconsistent with the subprojects and the
+            // workspace root, whose poms are already de-qualified.
+<span class="fc" id="L465">            String qualifier = qualifierFromBranch(&quot;feature/&quot; + feature);</span>
+<span class="fc" id="L466">            ManifestWriter.stripVersionQualifiers(manifestPath, qualifier);</span>
+<span class="fc" id="L467">            log.info(&quot;  Restored workspace.yaml versions (stripped '&quot;</span>
+                    + qualifier + &quot;')&quot;);
+
+<span class="fc" id="L470">            File wsRoot = manifestPath.getParent().toFile();</span>
+<span class="fc" id="L471">            File wsGit = new File(wsRoot, &quot;.git&quot;);</span>
+<span class="fc bfc" id="L472" title="All 2 branches covered.">            if (wsGit.exists()) {</span>
+<span class="fc" id="L473">                ReleaseSupport.exec(wsRoot, log, &quot;git&quot;, &quot;add&quot;, &quot;workspace.yaml&quot;);</span>
+<span class="pc bpc" id="L474" title="1 of 2 branches missed.">                if (VcsOperations.hasStagedChanges(wsRoot)) {</span>
+<span class="fc" id="L475">                    ReleaseSupport.exec(wsRoot, log, &quot;git&quot;, &quot;commit&quot;, &quot;-m&quot;,</span>
+                            &quot;workspace: restore branches + versions to &quot;
+                                    + targetBranch + &quot; after feature/&quot; + feature);
+                }
+            }
+<span class="nc" id="L480">        } catch (IOException | MojoException e) {</span>
+<span class="nc" id="L481">            log.warn(&quot;  Could not update workspace.yaml: &quot; + e.getMessage());</span>
+<span class="fc" id="L482">        }</span>
+<span class="fc" id="L483">    }</span>
+
+    /**
+     * Merge the workspace aggregator repo from the feature branch to the
+     * target branch. Mirrors the per-subproject merge: checkout target,
+     * no-ff merge.
+     *
+     * &lt;p&gt;Deliberately performs &lt;em&gt;no push and no branch deletion&lt;/em&gt;:
+     * pushing belongs to the verified push phase that runs after the
+     * workspace.yaml reconciliation commit (so the reconciliation commit
+     * is never left behind, IKE-Network/ike-issues#791), and branch
+     * deletion belongs to the delete phase that runs only after every
+     * member's target push is confirmed (IKE-Network/ike-issues#858).
+     *
+     * @param manifestPath path to workspace.yaml
+     * @param branchName   the feature branch being finished
+     * @param targetBranch branch the feature merges into (e.g. &quot;main&quot;)
+     * @param log          Maven logger
+     * @throws MojoException if the merge sequence fails
+     */
+    static void mergeWorkspaceRepo(Path manifestPath, String branchName,
+                                     String targetBranch, Log log)
+            throws MojoException {
+<span class="fc" id="L506">        File wsRoot = manifestPath.getParent().toFile();</span>
+<span class="fc bfc" id="L507" title="All 2 branches covered.">        if (!new File(wsRoot, &quot;.git&quot;).exists()) return;</span>
+
+<span class="fc" id="L509">        String wsBranch = null;</span>
+        try {
+<span class="fc" id="L511">            wsBranch = VcsOperations.currentBranch(wsRoot);</span>
+<span class="nc" id="L512">        } catch (MojoException e) {</span>
+<span class="nc" id="L513">            return;</span>
+<span class="fc" id="L514">        }</span>
+
+<span class="pc bpc" id="L516" title="2 of 4 branches missed.">        if (wsBranch != null &amp;&amp; wsBranch.equals(branchName)) {</span>
+            // merge-prep: de-qualify the aggregator's own pom on the feature
+            // branch — mirroring the per-subproject strip — so the no-ff merge
+            // carries the base version onto the target instead of stranding the
+            // workspace root on X-&lt;feature&gt;-SNAPSHOT (ike-issues#768/#763).
+<span class="fc" id="L521">            stripWorkspaceRootPom(wsRoot, branchName, log);</span>
+<span class="fc" id="L522">            log.info(&quot;  Merging workspace repo: &quot; + branchName + &quot; → &quot; + targetBranch);</span>
+<span class="fc" id="L523">            VcsOperations.checkout(wsRoot, log, targetBranch);</span>
+<span class="fc" id="L524">            VcsOperations.mergeNoFf(wsRoot, log, branchName,</span>
+                    &quot;Merge &quot; + branchName + &quot; into &quot; + targetBranch);
+        }
+
+        // Write state file for ws
+<span class="fc bfc" id="L529" title="All 2 branches covered.">        if (VcsState.isIkeManaged(wsRoot.toPath())) {</span>
+<span class="fc" id="L530">            VcsOperations.writeVcsState(wsRoot, VcsState.Action.FEATURE_FINISH);</span>
+        }
+<span class="fc" id="L532">    }</span>
+
+    // ── Verified push phase + gated delete phase (#858/#791/#857) ──
+
+    /**
+     * Outcome of one member's verified target-branch push in the push
+     * phase. {@code pushed} is {@code true} only when the push command
+     * succeeded AND {@code origin/&lt;target&gt;} was confirmed (via
+     * {@code ls-remote}) to be at the local target SHA afterwards.
+     * A repo with no {@code origin} remote is vacuously satisfied
+     * ({@code pushed=true}, reason {@code &quot;no remote&quot;}) — there is no
+     * remote to strand work against.
+     *
+     * @param member the working-set member name (or
+     *               {@link RefreshMainSupport#ROOT_LABEL})
+     * @param pushed whether the push is confirmed on the remote
+     * @param detail human-readable outcome detail (SHA, or failure reason)
+     */
+<span class="fc" id="L550">    record PushResult(String member, boolean pushed, String detail) {}</span>
+
+    /**
+     * Push {@code targetBranch} for every given member directory and
+     * verify each push against the remote ({@code ls-remote}), never
+     * aborting mid-loop — every member gets its push attempt, and the
+     * caller decides how to act on failures. Phase 1 of the two-phase
+     * finish contract of IKE-Network/ike-issues#858: branch deletion is
+     * only permitted once every result reports {@code pushed}.
+     *
+     * @param memberDirs   member name → repository directory, in push order
+     * @param targetBranch the branch to push (e.g. &quot;main&quot;)
+     * @param log          Maven logger
+     * @return one result per member, in iteration order
+     */
+    static List&lt;PushResult&gt; pushTargetsVerified(Map&lt;String, File&gt; memberDirs,
+                                                String targetBranch, Log log) {
+<span class="fc" id="L567">        List&lt;PushResult&gt; results = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L568" title="All 2 branches covered.">        for (Map.Entry&lt;String, File&gt; entry : memberDirs.entrySet()) {</span>
+<span class="fc" id="L569">            String member = entry.getKey();</span>
+<span class="fc" id="L570">            File dir = entry.getValue();</span>
+<span class="pc bpc" id="L571" title="1 of 2 branches missed.">            if (!new File(dir, &quot;.git&quot;).exists()) {</span>
+<span class="nc" id="L572">                results.add(new PushResult(member, true, &quot;no git repo&quot;));</span>
+<span class="nc" id="L573">                continue;</span>
+            }
+<span class="pc bpc" id="L575" title="1 of 2 branches missed.">            if (!network.ike.plugin.ReleaseSupport.hasRemote(dir, &quot;origin&quot;)) {</span>
+<span class="nc" id="L576">                log.info(&quot;    &quot; + member + &quot; — no origin remote; local only&quot;);</span>
+<span class="nc" id="L577">                results.add(new PushResult(member, true, &quot;no remote&quot;));</span>
+<span class="nc" id="L578">                continue;</span>
+            }
+            try {
+<span class="fc" id="L581">                VcsOperations.push(dir, log, &quot;origin&quot;, targetBranch);</span>
+<span class="fc" id="L582">                String localSha = VcsOperations.branchSha(dir, targetBranch);</span>
+<span class="fc" id="L583">                Optional&lt;String&gt; remote = VcsOperations.remoteSha(</span>
+                        dir, &quot;origin&quot;, targetBranch);
+<span class="pc bpc" id="L585" title="2 of 4 branches missed.">                if (remote.isPresent() &amp;&amp; localSha.equals(remote.get())) {</span>
+<span class="fc" id="L586">                    log.info(&quot;    &quot; + Ansi.green(&quot;✓ &quot;) + member + &quot; — &quot;</span>
+                            + targetBranch + &quot; pushed (&quot; + localSha + &quot;)&quot;);
+<span class="fc" id="L588">                    results.add(new PushResult(member, true, localSha));</span>
+                } else {
+<span class="nc" id="L590">                    String seen = remote.map(s -&gt; &quot;origin/&quot; + targetBranch</span>
+<span class="nc" id="L591">                            + &quot; is at &quot; + s).orElse(&quot;origin/&quot; + targetBranch</span>
+                            + &quot; is unreadable&quot;);
+<span class="nc" id="L593">                    log.warn(&quot;    &quot; + Ansi.red(&quot;✗ &quot;) + member</span>
+                            + &quot; — push verification failed: &quot; + seen);
+<span class="nc" id="L595">                    results.add(new PushResult(member, false,</span>
+                            &quot;verification failed: &quot; + seen));
+                }
+<span class="fc" id="L598">            } catch (MojoException e) {</span>
+<span class="fc" id="L599">                log.warn(&quot;    &quot; + Ansi.red(&quot;✗ &quot;) + member + &quot; — push failed: &quot;</span>
+<span class="fc" id="L600">                        + e.getMessage());</span>
+<span class="fc" id="L601">                results.add(new PushResult(member, false, e.getMessage()));</span>
+<span class="fc" id="L602">            }</span>
+<span class="fc" id="L603">        }</span>
+<span class="fc" id="L604">        return results;</span>
+    }
+
+    /**
+     * Whether any of the given directories has an {@code origin} remote.
+     * The #858 stranding hazard only exists when a remote exists — a
+     * purely local working set can delete feature branches without a
+     * push phase (the squash already lives on local {@code target}).
+     *
+     * @param dirs directories to test
+     * @return true if at least one has an {@code origin} remote
+     */
+    static boolean anyHasOriginRemote(Iterable&lt;File&gt; dirs) {
+<span class="fc bfc" id="L617" title="All 2 branches covered.">        for (File dir : dirs) {</span>
+<span class="fc bfc" id="L618" title="All 2 branches covered.">            if (new File(dir, &quot;.git&quot;).exists()</span>
+<span class="fc bfc" id="L619" title="All 2 branches covered.">                    &amp;&amp; network.ike.plugin.ReleaseSupport.hasRemote(dir, &quot;origin&quot;)) {</span>
+<span class="fc" id="L620">                return true;</span>
+            }
+<span class="fc" id="L622">        }</span>
+<span class="fc" id="L623">        return false;</span>
+    }
+
+    /**
+     * The gated delete phase of the two-phase finish (#858): delete the
+     * feature branch (local + remote) for every member and the workspace
+     * root — but only when it is safe. Deletion is skipped entirely
+     * (returning the reason) when {@code keepBranch} is set, when any
+     * push in the push phase failed, or when {@code push=false} while at
+     * least one member has an {@code origin} remote (deleting remote
+     * feature branches with unpushed target commits is exactly how work
+     * ends up on no remote). A fully local working set — no member has
+     * an {@code origin} — deletes freely with {@code push=false}.
+     *
+     * @param root             workspace root directory
+     * @param members          member names whose branches to delete
+     * @param branchName       the feature branch to delete
+     * @param targetBranch     the merge target (for the kept-reason text)
+     * @param keepBranch       {@code -DkeepBranch=true}
+     * @param push             whether the push phase ran ({@code -Dpush})
+     * @param anyPushFailure   whether any push-phase result failed
+     * @param keepRemoteBranch {@code -DkeepRemoteBranch=true} (#532)
+     * @param undeletedRemote  out-param: member → git error for remote
+     *                         deletions that soft-failed (#532)
+     * @param log              Maven logger
+     * @return the reason branches were kept, or {@code null} when the
+     *         deletion ran
+     */
+    static String deletePhase(File root, List&lt;String&gt; members,
+                              String branchName, String targetBranch,
+                              boolean keepBranch, boolean push,
+                              boolean anyPushFailure, boolean keepRemoteBranch,
+                              Map&lt;String, String&gt; undeletedRemote, Log log) {
+<span class="fc bfc" id="L656" title="All 2 branches covered.">        if (keepBranch) {</span>
+<span class="fc" id="L657">            return &quot;-DkeepBranch=true&quot;;</span>
+        }
+<span class="fc bfc" id="L659" title="All 2 branches covered.">        if (anyPushFailure) {</span>
+<span class="fc" id="L660">            return &quot;push failures (see below)&quot;;</span>
+        }
+<span class="fc" id="L662">        List&lt;File&gt; dirs = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L663" title="All 2 branches covered.">        for (String name : members) {</span>
+<span class="fc" id="L664">            dirs.add(new File(root, name));</span>
+<span class="fc" id="L665">        }</span>
+<span class="fc" id="L666">        dirs.add(root);</span>
+<span class="fc bfc" id="L667" title="All 4 branches covered.">        if (!push &amp;&amp; anyHasOriginRemote(dirs)) {</span>
+<span class="fc" id="L668">            return &quot;-Dpush=false — branches are only deleted after a &quot;</span>
+                    + &quot;confirmed push of &quot; + targetBranch + &quot;; run &quot;
+<span class="fc" id="L670">                    + WsGoal.PUSH.qualified() + &quot;, then &quot;</span>
+<span class="fc" id="L671">                    + WsGoal.CLEANUP_PUBLISH.qualified();</span>
+        }
+<span class="fc bfc" id="L673" title="All 2 branches covered.">        for (String name : members) {</span>
+<span class="fc" id="L674">            File dir = new File(root, name);</span>
+<span class="pc bpc" id="L675" title="1 of 2 branches missed.">            if (!new File(dir, &quot;.git&quot;).exists()</span>
+<span class="fc bfc" id="L676" title="All 2 branches covered.">                    || !VcsOperations.localBranchExists(dir, branchName)) {</span>
+<span class="fc" id="L677">                continue;   // already gone (prior run / never created)</span>
+            }
+            try {
+<span class="fc" id="L680">                String remoteFailReason = deleteBranch(</span>
+                        dir, log, branchName, keepRemoteBranch);
+<span class="pc bpc" id="L682" title="1 of 2 branches missed.">                if (remoteFailReason != null) {</span>
+<span class="nc" id="L683">                    undeletedRemote.put(name, remoteFailReason);</span>
+                }
+<span class="nc" id="L685">            } catch (MojoException e) {</span>
+<span class="nc" id="L686">                log.warn(&quot;    could not delete &quot; + name + &quot;/&quot; + branchName</span>
+<span class="nc" id="L687">                        + &quot;: &quot; + e.getMessage());</span>
+<span class="fc" id="L688">            }</span>
+<span class="fc" id="L689">        }</span>
+<span class="fc bfc" id="L690" title="All 2 branches covered.">        if (new File(root, &quot;.git&quot;).exists()</span>
+<span class="pc bpc" id="L691" title="1 of 2 branches missed.">                &amp;&amp; VcsOperations.localBranchExists(root, branchName)) {</span>
+            try {
+<span class="fc" id="L693">                deleteBranch(root, log, branchName, keepRemoteBranch);</span>
+<span class="nc" id="L694">            } catch (MojoException e) {</span>
+<span class="nc" id="L695">                log.warn(&quot;  Could not delete ws branch: &quot; + e.getMessage());</span>
+<span class="fc" id="L696">            }</span>
+        }
+<span class="fc" id="L698">        return null;</span>
+    }
+
+    // ── Parent-workspace sync (#934) ──────────────────────────────
+
+    /**
+     * The sibling-clone separator (U+A789 {@code ꞉}) between a workspace
+     * name and its feature suffix: {@code &lt;workspace&gt;꞉&lt;feature&gt;}.
+     */
+    static final char SIBLING_SEPARATOR = '꞉';
+
+    /**
+     * Derive the parent workspace a sibling clone was cut from, by the
+     * naming convention {@code &lt;parent&gt;꞉&lt;feature&gt;} — siblings are created
+     * as filesystem siblings of their parent (ws:feature-start-sibling).
+     * Convention-derived on purpose (settled #934): no marker file to go
+     * stale, and it works for siblings created before this feature.
+     *
+     * @param wsRoot the (possibly sibling) workspace root directory
+     * @return the parent directory, or empty when {@code wsRoot} is not a
+     *         sibling clone or the derived parent does not exist
+     */
+    static Optional&lt;File&gt; deriveParentWorkspace(File wsRoot) {
+<span class="fc" id="L721">        String name = wsRoot.getName();</span>
+<span class="fc" id="L722">        int idx = name.indexOf(SIBLING_SEPARATOR);</span>
+<span class="fc bfc" id="L723" title="All 2 branches covered.">        if (idx &lt;= 0) {</span>
+<span class="fc" id="L724">            return Optional.empty();</span>
+        }
+<span class="fc" id="L726">        File parent = new File(wsRoot.getParentFile(), name.substring(0, idx));</span>
+<span class="pc bpc" id="L727" title="2 of 4 branches missed.">        if (!parent.isDirectory() || !new File(parent, &quot;.git&quot;).exists()) {</span>
+<span class="nc" id="L728">            return Optional.empty();</span>
+        }
+<span class="fc" id="L730">        return Optional.of(parent);</span>
+    }
+
+    /**
+     * Propagate a finished feature back to the parent workspace the
+     * sibling was cut from (IKE-Network/ike-issues#934, settled
+     * 2026-07-27): fast-forward-only refresh of {@code targetBranch}
+     * across the parent working set — root repo and every subproject.
+     *
+     * &lt;p&gt;Runs only after the verified push phase has confirmed every
+     * member's target push, so {@code origin/&lt;target&gt;} is current and the
+     * parent update is a pure FF in the common case. Semantics per
+     * member: fast-forward applied (ref-only when checked out elsewhere);
+     * local-ahead left alone; divergence warned and skipped — never a
+     * stash, never a merge, never a touched working tree. Best-effort
+     * throughout: any failure warns and returns; the finish never fails
+     * on parent propagation.
+     *
+     * @param wsRoot       the sibling workspace root the finish ran in
+     * @param targetBranch the branch that was finished into (e.g. &quot;main&quot;)
+     * @param log          Maven logger
+     */
+    static void propagateToParent(File wsRoot, String targetBranch, Log log) {
+        try {
+<span class="fc" id="L754">            Optional&lt;File&gt; derived = deriveParentWorkspace(wsRoot);</span>
+<span class="pc bpc" id="L755" title="1 of 2 branches missed.">            if (derived.isEmpty()) {</span>
+<span class="nc" id="L756">                return;   // not a sibling clone — nothing to sync</span>
+            }
+<span class="fc" id="L758">            File parent = derived.get();</span>
+<span class="fc" id="L759">            log.info(&quot;&quot;);</span>
+<span class="fc" id="L760">            log.info(&quot;  &quot; + Ansi.cyan(&quot;→ &quot;) + &quot;Syncing parent workspace '&quot;</span>
+<span class="fc" id="L761">                    + parent.getName() + &quot;' (&quot; + targetBranch</span>
+                    + &quot;, fast-forward only; -DsyncParent=false to skip)...&quot;);
+
+<span class="fc" id="L764">            Map&lt;String, File&gt; memberDirs = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc" id="L765">            Path parentManifest = parent.toPath().resolve(&quot;workspace.yaml&quot;);</span>
+<span class="pc bpc" id="L766" title="1 of 2 branches missed.">            if (Files.exists(parentManifest)) {</span>
+<span class="fc bfc" id="L767" title="All 2 branches covered.">                for (String name : network.ike.workspace.ManifestReader</span>
+<span class="fc" id="L768">                        .read(parentManifest).subprojects().keySet()) {</span>
+<span class="fc" id="L769">                    memberDirs.put(name, new File(parent, name));</span>
+<span class="fc" id="L770">                }</span>
+            }
+<span class="fc" id="L772">            memberDirs.put(RefreshMainSupport.ROOT_LABEL, parent);</span>
+
+<span class="fc bfc" id="L774" title="All 2 branches covered.">            for (Map.Entry&lt;String, File&gt; entry : memberDirs.entrySet()) {</span>
+<span class="fc" id="L775">                String label = entry.getKey();</span>
+<span class="fc" id="L776">                File dir = entry.getValue();</span>
+<span class="pc bpc" id="L777" title="1 of 2 branches missed.">                if (!new File(dir, &quot;.git&quot;).exists()) {</span>
+<span class="nc" id="L778">                    continue;</span>
+                }
+                try {
+<span class="fc" id="L781">                    RefreshMainSupport.Outcome outcome = RefreshMainSupport</span>
+<span class="fc" id="L782">                            .refresh(dir, label, targetBranch,</span>
+                                    RefreshMainSupport.DEFAULT_REMOTE, log, true);
+<span class="pc bpc" id="L784" title="5 of 7 branches missed.">                    switch (outcome) {</span>
+<span class="pc bpc" id="L785" title="1 of 2 branches missed.">                        case RefreshMainSupport.FastForwarded(String c, int n) -&gt; {</span>
+<span class="fc" id="L786">                            RefreshMainSupport.applyFastForward(</span>
+                                    dir, targetBranch, log);
+<span class="fc" id="L788">                            log.info(&quot;    &quot; + Ansi.green(&quot;✓ &quot;) + c</span>
+                                    + &quot; — fast-forwarded (&quot; + n + &quot; commit&quot;
+<span class="fc bfc" id="L790" title="All 2 branches covered.">                                    + (n == 1 ? &quot;&quot; : &quot;s&quot;) + &quot;)&quot;);</span>
+<span class="fc" id="L791">                        }</span>
+<span class="nc" id="L792">                        case RefreshMainSupport.CreatedFromRemote(String c) -&gt; {</span>
+<span class="nc" id="L793">                            RefreshMainSupport.applyFastForward(</span>
+                                    dir, targetBranch, log);
+<span class="nc" id="L795">                            log.info(&quot;    &quot; + Ansi.green(&quot;✓ &quot;) + c</span>
+                                    + &quot; — &quot; + targetBranch
+                                    + &quot; created from origin&quot;);
+<span class="nc" id="L798">                        }</span>
+<span class="nc" id="L799">                        case RefreshMainSupport.UpToDate(String c) -&gt;</span>
+<span class="nc" id="L800">                                log.info(&quot;    &quot; + c + &quot; — up to date&quot;);</span>
+<span class="nc bnc" id="L801" title="All 2 branches missed.">                        case RefreshMainSupport.AheadOnly(String c, int n) -&gt;</span>
+<span class="nc" id="L802">                                log.info(&quot;    &quot; + c + &quot; — local &quot;</span>
+                                        + targetBranch + &quot; has &quot; + n
+                                        + &quot; unpushed commit&quot;
+<span class="nc bnc" id="L805" title="All 2 branches missed.">                                        + (n == 1 ? &quot;&quot; : &quot;s&quot;) + &quot;; left alone&quot;);</span>
+<span class="pc" id="L806">                        case RefreshMainSupport.AutoResolved(</span>
+<span class="pc bpc" id="L807" title="2 of 4 branches missed.">                                String c, int l, int r) -&gt;</span>
+<span class="fc" id="L808">                                log.warn(&quot;    &quot; + Ansi.yellow(&quot;⚠ &quot;) + c</span>
+                                        + &quot; — diverged from origin/&quot;
+                                        + targetBranch + &quot;; skipped — run &quot;
+<span class="fc" id="L811">                                        + WsGoal.PULL.qualified()</span>
+                                        + &quot; in the parent to reconcile&quot;);
+<span class="nc" id="L813">                        case RefreshMainSupport.Conflicts(</span>
+<span class="nc" id="L814">                                String c, List&lt;String&gt; files) -&gt;</span>
+<span class="nc" id="L815">                                log.warn(&quot;    &quot; + Ansi.yellow(&quot;⚠ &quot;) + c</span>
+<span class="nc" id="L816">                                        + &quot; — diverged with &quot; + files.size()</span>
+                                        + &quot; conflicting file&quot;
+<span class="nc bnc" id="L818" title="All 2 branches missed.">                                        + (files.size() == 1 ? &quot;&quot; : &quot;s&quot;)</span>
+                                        + &quot;; skipped — resolve in the parent&quot;);
+<span class="nc" id="L820">                        case RefreshMainSupport.Skipped(String c, String r) -&gt;</span>
+<span class="nc" id="L821">                                log.debug(&quot;    &quot; + c + &quot; — skipped (&quot; + r + &quot;)&quot;);</span>
+                    }
+<span class="pc" id="L823">                } catch (MojoException e) {</span>
+<span class="nc" id="L824">                    log.warn(&quot;    &quot; + Ansi.yellow(&quot;⚠ &quot;) + label</span>
+<span class="nc" id="L825">                            + &quot; — parent sync skipped: &quot; + e.getMessage());</span>
+<span class="fc" id="L826">                }</span>
+<span class="fc" id="L827">            }</span>
+<span class="nc" id="L828">        } catch (Exception e) {</span>
+            // Best-effort by contract (#934): the finish never fails on
+            // parent propagation.
+<span class="nc" id="L831">            log.warn(&quot;  Parent workspace sync skipped: &quot; + e.getMessage());</span>
+<span class="fc" id="L832">        }</span>
+<span class="fc" id="L833">    }</span>
+
+    /**
+     * Build the failure message thrown when the push phase left members
+     * stranded (commit on local {@code target} only). Names each stranded
+     * member with its reason, states explicitly that &lt;em&gt;no feature
+     * branch was deleted&lt;/em&gt; (the #858 safety contract), and emits the
+     * copy-pasteable recovery: {@code ws:push} to land the stranded
+     * targets, then {@code ws:cleanup-publish} to collect the kept
+     * feature branches (workspace.yaml is already reconciled by the time
+     * the push phase runs, so a finish re-run would read the members as
+     * plain skips — cleanup is the sanctioned deletion path).
+     *
+     * @param failures     the failed push results
+     * @param targetBranch the target branch that could not be fully pushed
+     * @return the formatted failure message
+     */
+    static String pushPhaseFailureMessage(List&lt;PushResult&gt; failures,
+                                          String targetBranch) {
+<span class="fc" id="L852">        StringBuilder sb = new StringBuilder();</span>
+<span class="fc" id="L853">        sb.append(&quot;Feature-finish stopped: &quot;).append(failures.size())</span>
+<span class="fc" id="L854">                .append(&quot; member(s) failed to push &quot;).append(targetBranch)</span>
+<span class="fc" id="L855">                .append(&quot; — their merge commits exist on local &quot;)</span>
+<span class="fc" id="L856">                .append(targetBranch).append(&quot; only:\n&quot;);</span>
+<span class="fc bfc" id="L857" title="All 2 branches covered.">        for (PushResult r : failures) {</span>
+<span class="fc" id="L858">            sb.append(&quot;  &quot;).append(r.member()).append(&quot; — &quot;)</span>
+<span class="fc" id="L859">                    .append(r.detail()).append(&quot;\n&quot;);</span>
+<span class="fc" id="L860">        }</span>
+<span class="fc" id="L861">        sb.append(&quot;\nNo feature branch was deleted (branches are only &quot;</span>
+<span class="fc" id="L862">                + &quot;deleted after every &quot;).append(targetBranch)</span>
+<span class="fc" id="L863">                .append(&quot; push is confirmed).\n\n&quot;);</span>
+<span class="fc" id="L864">        sb.append(&quot;Recover with:\n&quot;);</span>
+<span class="fc" id="L865">        sb.append(&quot;  ./mvnw &quot;).append(WsGoal.PUSH.qualified())</span>
+<span class="fc" id="L866">                .append(&quot;               # lands the stranded &quot;)</span>
+<span class="fc" id="L867">                .append(targetBranch).append(&quot; commits\n&quot;);</span>
+<span class="fc" id="L868">        sb.append(&quot;  ./mvnw &quot;).append(WsGoal.CLEANUP_PUBLISH.qualified())</span>
+<span class="fc" id="L869">                .append(&quot;    # collects the kept feature branches&quot;);</span>
+<span class="fc" id="L870">        return sb.toString();</span>
+    }
+
+    /**
+     * De-qualify the aggregator's own {@code pom.xml} version on the current
+     * (feature) branch, mirroring the per-subproject {@link #stripBranchVersion}
+     * so a subsequent no-ff merge carries the base version onto the target
+     * (ike-issues#768/#763).
+     *
+     * &lt;p&gt;Unlike {@code stripBranchVersion}, this touches ONLY the workspace
+     * root {@code pom.xml} — never the subproject poms beneath it, which are
+     * separate git repositories de-qualified individually. Idempotent: a no-op
+     * when the root is already at its base {@code -SNAPSHOT}.
+     *
+     * @param wsRoot     the workspace root directory (its own git repo)
+     * @param branchName the feature branch being finished
+     * @param log        Maven logger
+     * @throws MojoException if the pom cannot be rewritten or committed
+     */
+    private static void stripWorkspaceRootPom(File wsRoot, String branchName,
+                                              Log log) throws MojoException {
+<span class="fc" id="L891">        String qualifier = qualifierFromBranch(branchName);</span>
+<span class="fc" id="L892">        String current = readCurrentVersion(wsRoot, log);</span>
+<span class="pc bpc" id="L893" title="1 of 4 branches missed.">        if (current == null || !containsBranchQualifier(current, qualifier)) {</span>
+<span class="fc" id="L894">            return;</span>
+        }
+<span class="fc" id="L896">        String base = stripQualifier(current, qualifier);</span>
+<span class="fc" id="L897">        ReleaseSupport.setPomVersion(new File(wsRoot, &quot;pom.xml&quot;), current, base);</span>
+<span class="fc" id="L898">        log.info(&quot;    workspace root version: &quot; + current + &quot; → &quot; + base);</span>
+<span class="fc" id="L899">        ReleaseSupport.exec(wsRoot, log, &quot;git&quot;, &quot;add&quot;, &quot;pom.xml&quot;);</span>
+<span class="fc" id="L900">        ReleaseSupport.exec(wsRoot, log, &quot;git&quot;, &quot;commit&quot;, &quot;-m&quot;,</span>
+                &quot;merge-prep: strip branch qualifier from aggregator → &quot; + base);
+<span class="fc" id="L902">    }</span>
+
+    /**
+     * Scan for stale feature branches across all subprojects and offer
+     * interactive cleanup after a successful feature-finish.
+     *
+     * &lt;p&gt;Stale branches are feature branches that are fully merged into
+     * the target branch and are not the branch just finished. The
+     * interactive prompt defaults to &quot;no&quot; so unattended/batch runs
+     * leave stale branches in place rather than deleting them
+     * silently.
+     *
+     * @param root           workspace root directory
+     * @param components     subproject names to scan
+     * @param finishedBranch the branch that was just finished (excluded
+     *                       from the stale list)
+     * @param targetBranch   the merge target (e.g., &quot;main&quot;)
+     * @param prompter       prompter for the cleanup confirmation
+     * @param log            Maven logger
+     */
+    static void promptStaleBranchCleanup(File root, List&lt;String&gt; components,
+                                           String finishedBranch, String targetBranch,
+                                           network.ike.plugin.support.IkePrompter prompter,
+                                           Log log) {
+        // Collect stale branches across all subprojects
+<span class="fc" id="L927">        Map&lt;String, List&lt;String&gt;&gt; staleBranches = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc bfc" id="L928" title="All 2 branches covered.">        for (String name : components) {</span>
+<span class="fc" id="L929">            File dir = new File(root, name);</span>
+<span class="pc bpc" id="L930" title="1 of 2 branches missed.">            if (!new File(dir, &quot;.git&quot;).exists()) continue;</span>
+
+<span class="fc" id="L932">            List&lt;String&gt; merged = VcsOperations.mergedBranches(</span>
+                    dir, targetBranch, &quot;feature/&quot;);
+<span class="fc" id="L934">            List&lt;String&gt; stale = merged.stream()</span>
+<span class="pc bpc" id="L935" title="1 of 2 branches missed.">                    .filter(b -&gt; !b.equals(finishedBranch))</span>
+<span class="fc" id="L936">                    .toList();</span>
+<span class="pc bpc" id="L937" title="1 of 2 branches missed.">            if (!stale.isEmpty()) {</span>
+<span class="nc" id="L938">                staleBranches.put(name, stale);</span>
+            }
+<span class="fc" id="L940">        }</span>
+
+<span class="pc bpc" id="L942" title="1 of 2 branches missed.">        if (staleBranches.isEmpty()) return;</span>
+
+        // Collect unique branch names with last-commit dates
+<span class="nc" id="L945">        Set&lt;String&gt; uniqueBranches = new TreeSet&lt;&gt;();</span>
+<span class="nc" id="L946">        staleBranches.values().forEach(uniqueBranches::addAll);</span>
+
+<span class="nc" id="L948">        log.info(&quot;&quot;);</span>
+<span class="nc" id="L949">        log.info(&quot;  Stale feature branches (merged into &quot; + targetBranch + &quot;):&quot;);</span>
+<span class="nc bnc" id="L950" title="All 2 branches missed.">        for (String branch : uniqueBranches) {</span>
+            // Get date from first subproject that has it
+<span class="nc" id="L952">            String date = &quot;unknown&quot;;</span>
+<span class="nc bnc" id="L953" title="All 2 branches missed.">            for (Map.Entry&lt;String, List&lt;String&gt;&gt; entry : staleBranches.entrySet()) {</span>
+<span class="nc bnc" id="L954" title="All 2 branches missed.">                if (entry.getValue().contains(branch)) {</span>
+<span class="nc" id="L955">                    date = VcsOperations.branchLastCommitDate(</span>
+<span class="nc" id="L956">                            new File(root, entry.getKey()), branch);</span>
+<span class="nc" id="L957">                    break;</span>
+                }
+<span class="nc" id="L959">            }</span>
+<span class="nc" id="L960">            int subprojectCount = (int) staleBranches.values().stream()</span>
+<span class="nc" id="L961">                    .filter(list -&gt; list.contains(branch))</span>
+<span class="nc" id="L962">                    .count();</span>
+<span class="nc" id="L963">            log.info(&quot;    &quot; + branch + &quot; (&quot; + subprojectCount</span>
+<span class="nc bnc" id="L964" title="All 2 branches missed.">                    + &quot; subproject&quot; + (subprojectCount == 1 ? &quot;&quot; : &quot;s&quot;)</span>
+                    + &quot;, last commit: &quot; + date + &quot;)&quot;);
+<span class="nc" id="L966">        }</span>
+
+        // Prompt for deletion. Default &quot;no&quot; so non-interactive runs
+        // (batch mode) leave the branches in place.
+<span class="nc" id="L970">        log.info(&quot;&quot;);</span>
+<span class="nc" id="L971">        String prompt = &quot;Delete &quot; + uniqueBranches.size() + &quot; stale branch&quot;</span>
+<span class="nc bnc" id="L972" title="All 2 branches missed.">                + (uniqueBranches.size() == 1 ? &quot;&quot; : &quot;es&quot;) + &quot;?&quot;;</span>
+
+<span class="nc bnc" id="L974" title="All 4 branches missed.">        boolean delete = prompter != null &amp;&amp; prompter.confirm(prompt, false);</span>
+
+<span class="nc bnc" id="L976" title="All 2 branches missed.">        if (delete) {</span>
+<span class="nc bnc" id="L977" title="All 2 branches missed.">            for (Map.Entry&lt;String, List&lt;String&gt;&gt; entry : staleBranches.entrySet()) {</span>
+<span class="nc" id="L978">                File dir = new File(root, entry.getKey());</span>
+<span class="nc bnc" id="L979" title="All 2 branches missed.">                for (String branch : entry.getValue()) {</span>
+                    try {
+<span class="nc" id="L981">                        VcsOperations.deleteBranch(dir, log, branch);</span>
+<span class="nc" id="L982">                        log.info(&quot;    deleted: &quot; + entry.getKey() + &quot;/&quot; + branch);</span>
+<span class="nc" id="L983">                    } catch (MojoException e) {</span>
+<span class="nc" id="L984">                        log.warn(&quot;    could not delete &quot; + entry.getKey()</span>
+<span class="nc" id="L985">                                + &quot;/&quot; + branch + &quot;: &quot; + e.getMessage());</span>
+<span class="nc" id="L986">                    }</span>
+<span class="nc" id="L987">                }</span>
+<span class="nc" id="L988">            }</span>
+<span class="nc" id="L989">            log.info(&quot;  Stale branches cleaned up.&quot;);</span>
+        } else {
+<span class="nc" id="L991">            log.info(&quot;  Skipping stale branch cleanup.&quot;);</span>
+        }
+<span class="nc" id="L993">    }</span>
+
+    // ── Post-merge qualifier guard ────────────────────────────────
+
+    /**
+     * Verify that no branch-qualified versions remain in the subproject's
+     * POM tree after merging to the target branch. If any are found, they
+     * are auto-stripped and committed as a fixup.
+     *
+     * &lt;p&gt;This guards against contamination when the merge-prep strip was
+     * incomplete (e.g., some POMs were missed) or when commits were
+     * cherry-picked outside the {@code ws:} workflow.
+     *
+     * @param dir        the subproject directory (now on the target branch)
+     * @param branchName the feature branch that was just merged
+     * @param log        Maven logger
+     * @throws MojoException if POM files cannot be scanned or committed
+     */
+    static void verifyAndFixQualifiers(File dir, String branchName, Log log)
+            throws MojoException {
+<span class="fc" id="L1013">        String qualifier = qualifierFromBranch(branchName);</span>
+<span class="pc bpc" id="L1014" title="1 of 2 branches missed.">        if (qualifier == null) return;</span>
+
+<span class="fc" id="L1016">        List&lt;File&gt; allPoms = ReleaseSupport.findPomFiles(dir);</span>
+<span class="fc" id="L1017">        List&lt;String&gt; contaminated = new ArrayList&lt;&gt;();</span>
+
+        // Match only Maven version coordinates that still carry the
+        // branch qualifier — i.e. &lt;digits&gt;(.&lt;digits&gt;)*-&lt;qualifier&gt;-SNAPSHOT.
+        // The previous content.contains(&quot;-&quot; + qualifier + &quot;-&quot;) check
+        // also flagged legitimate artifactIds, groupIds, and property
+        // names that happened to share the qualifier substring
+        // (ike-issues#292).
+<span class="fc" id="L1025">        Pattern qualifiedVersion = Pattern.compile(</span>
+<span class="fc" id="L1026">                &quot;\\b\\d+(?:\\.\\d+)*-&quot; + Pattern.quote(qualifier) + &quot;-SNAPSHOT\\b&quot;);</span>
+
+<span class="fc bfc" id="L1028" title="All 2 branches covered.">        for (File pom : allPoms) {</span>
+            try {
+<span class="fc" id="L1030">                String content = Files.readString(pom.toPath(), StandardCharsets.UTF_8);</span>
+<span class="fc bfc" id="L1031" title="All 2 branches covered.">                if (qualifiedVersion.matcher(content).find()) {</span>
+<span class="fc" id="L1032">                    contaminated.add(dir.toPath().relativize(pom.toPath()).toString());</span>
+                }
+<span class="nc" id="L1034">            } catch (IOException e) {</span>
+<span class="nc" id="L1035">                log.warn(&quot;    Could not read &quot; + pom + &quot;: &quot; + e.getMessage());</span>
+<span class="fc" id="L1036">            }</span>
+<span class="fc" id="L1037">        }</span>
+
+<span class="fc bfc" id="L1039" title="All 2 branches covered.">        if (contaminated.isEmpty()) return;</span>
+
+<span class="fc" id="L1041">        log.warn(&quot;    Post-merge guard: &quot; + contaminated.size()</span>
+                + &quot; POM(s) still contain branch qualifier '&quot; + qualifier + &quot;'&quot;);
+<span class="fc bfc" id="L1043" title="All 2 branches covered.">        for (String path : contaminated) {</span>
+<span class="fc" id="L1044">            log.warn(&quot;      &quot; + path);</span>
+<span class="fc" id="L1045">        }</span>
+
+        // Auto-strip and commit
+<span class="fc" id="L1048">        stripAllBranchQualifiedVersions(dir, qualifier, log);</span>
+
+        // Also strip the artifact version if still qualified
+<span class="fc" id="L1051">        String currentVersion = readCurrentVersion(dir, log);</span>
+<span class="pc bpc" id="L1052" title="1 of 2 branches missed.">        if (currentVersion != null</span>
+<span class="pc bpc" id="L1053" title="1 of 2 branches missed.">                &amp;&amp; containsBranchQualifier(currentVersion, qualifier)) {</span>
+<span class="fc" id="L1054">            String baseVersion = stripQualifier(currentVersion, qualifier);</span>
+<span class="fc" id="L1055">            setAllVersions(dir, currentVersion, baseVersion, log);</span>
+<span class="fc" id="L1056">            log.info(&quot;    Auto-fixed: &quot; + currentVersion + &quot; → &quot; + baseVersion);</span>
+        }
+
+<span class="fc" id="L1059">        ReleaseSupport.exec(dir, log, &quot;git&quot;, &quot;add&quot;, &quot;-A&quot;);</span>
+<span class="fc" id="L1060">        String status = ReleaseSupport.execCapture(dir,</span>
+                &quot;git&quot;, &quot;status&quot;, &quot;--porcelain&quot;);
+<span class="pc bpc" id="L1062" title="1 of 2 branches missed.">        if (!status.isEmpty()) {</span>
+<span class="fc" id="L1063">            ReleaseSupport.exec(dir, log, &quot;git&quot;, &quot;commit&quot;, &quot;-m&quot;,</span>
+                    &quot;fixup: strip residual branch qualifier '&quot;
+                            + qualifier + &quot;' after merge&quot;);
+<span class="fc" id="L1066">            log.info(&quot;    Auto-fixed and committed qualifier cleanup&quot;);</span>
+        }
+<span class="fc" id="L1068">    }</span>
+
+    /**
+     * Scan a subproject directory for any version strings containing a
+     * branch qualifier. Returns the list of POM-relative paths that
+     * are contaminated, or an empty list if clean.
+     *
+     * &lt;p&gt;This is a read-only check suitable for use in verification
+     * goals or draft modes.
+     *
+     * @param dir        the subproject directory
+     * @param qualifier  the branch qualifier to search for
+     * @return list of relative POM paths containing the qualifier
+     */
+    static List&lt;String&gt; findQualifierContamination(File dir, String qualifier) {
+<span class="nc" id="L1083">        List&lt;String&gt; contaminated = new ArrayList&lt;&gt;();</span>
+<span class="nc bnc" id="L1084" title="All 2 branches missed.">        if (qualifier == null) return contaminated;</span>
+
+        List&lt;File&gt; allPoms;
+        try {
+<span class="nc" id="L1088">            allPoms = ReleaseSupport.findPomFiles(dir);</span>
+<span class="nc" id="L1089">        } catch (MojoException e) {</span>
+<span class="nc" id="L1090">            return contaminated;</span>
+<span class="nc" id="L1091">        }</span>
+
+<span class="nc bnc" id="L1093" title="All 2 branches missed.">        for (File pom : allPoms) {</span>
+            try {
+<span class="nc" id="L1095">                String content = Files.readString(pom.toPath(), StandardCharsets.UTF_8);</span>
+<span class="nc bnc" id="L1096" title="All 2 branches missed.">                if (content.contains(&quot;-&quot; + qualifier + &quot;-&quot;)) {</span>
+<span class="nc" id="L1097">                    contaminated.add(dir.toPath().relativize(pom.toPath()).toString());</span>
+                }
+<span class="nc" id="L1099">            } catch (IOException ignored) {</span>
+<span class="nc" id="L1100">            }</span>
+<span class="nc" id="L1101">        }</span>
+
+<span class="nc" id="L1103">        return contaminated;</span>
+    }
+
+    // ── Internal helpers ─────────────────────────────────────────
+
+    private static String readCurrentVersion(File dir, Log log) {
+        try {
+<span class="fc" id="L1110">            return ReleaseSupport.readPomVersion(new File(dir, &quot;pom.xml&quot;));</span>
+<span class="nc" id="L1111">        } catch (MojoException e) {</span>
+<span class="nc" id="L1112">            log.warn(&quot;    Could not read version from &quot; + dir.getName()</span>
+<span class="nc" id="L1113">                    + &quot;/pom.xml: &quot; + e.getMessage());</span>
+<span class="nc" id="L1114">            return null;</span>
+        }
+    }
+
+    /**
+     * Derive the version qualifier from a feature branch name.
+     * For example, {@code &quot;feature/search-provider-diagnostics&quot;}
+     * yields {@code &quot;search-provider-diagnostics&quot;} via
+     * {@link VersionSupport#safeBranchName(String)}.
+     *
+     * &lt;p&gt;This is intentionally derived from the branch name rather
+     * than parsed from the version string, because version strings
+     * may use non-semver schemes (date-based, single-segment, etc.)
+     * where structural parsing of the numeric/qualifier boundary
+     * is ambiguous.
+     *
+     * @param branchName the full branch name (e.g., &quot;feature/my-work&quot;)
+     * @return the qualifier as it appears in version strings
+     */
+    private static String qualifierFromBranch(String branchName) {
+<span class="fc" id="L1134">        return VersionSupport.safeBranchName(branchName);</span>
+    }
+
+    /**
+     * Check whether a version string contains the given branch qualifier.
+     * Matches versions of any numeric depth (single-segment, semver,
+     * or otherwise) — never assumes a specific version scheme.
+     *
+     * @param version   version string to test
+     * @param qualifier the branch qualifier to look for
+     * @return true if the version is a SNAPSHOT containing the qualifier
+     */
+    private static boolean containsBranchQualifier(String version, String qualifier) {
+<span class="pc bpc" id="L1147" title="1 of 2 branches missed.">        return version != null</span>
+<span class="fc bfc" id="L1148" title="All 2 branches covered.">                &amp;&amp; version.endsWith(&quot;-SNAPSHOT&quot;)</span>
+<span class="fc bfc" id="L1149" title="All 2 branches covered.">                &amp;&amp; version.contains(&quot;-&quot; + qualifier + &quot;-&quot;);</span>
+    }
+
+    /**
+     * Strip the branch qualifier from a version, returning the base SNAPSHOT.
+     *
+     * @param version   branch-qualified version
+     * @param qualifier the qualifier to strip
+     * @return base SNAPSHOT version
+     */
+    private static String stripQualifier(String version, String qualifier) {
+<span class="fc" id="L1160">        return version.replace(&quot;-&quot; + qualifier + &quot;-SNAPSHOT&quot;, &quot;-SNAPSHOT&quot;);</span>
+    }
+
+    /**
+     * Scan all POM files in a subproject for version strings containing
+     * the given branch qualifier and strip them back to base SNAPSHOT.
+     * This reverses the cascade done by feature-start (BOM properties,
+     * BOM imports, version properties).
+     *
+     * &lt;p&gt;Uses {@link PomModel} (Maven 4 model API) to identify
+     * qualified versions in properties, dependencies, and parent
+     * blocks, then applies corrections via {@link PomRewriter}
+     * (OpenRewrite LST) for lossless edits. Only versions containing
+     * the specific branch qualifier are modified — other non-numeric
+     * suffixes (e.g., {@code rc1}, {@code beta}) are left untouched.
+     *
+     * &lt;p&gt;No assumption is made about the numeric version scheme:
+     * single-segment ({@code 92}), two-segment ({@code 1.0}), semver
+     * ({@code 3.0.7}), and deeper schemes all work identically.
+     *
+     * @param dir       the subproject directory containing POM files
+     * @param qualifier the branch qualifier to strip (e.g., &quot;search-provider-diagnostics&quot;)
+     * @param log       Maven logger
+     * @throws MojoException if POM files cannot be located
+     */
+    private static void stripAllBranchQualifiedVersions(File dir,
+                                                         String qualifier,
+                                                         Log log)
+            throws MojoException {
+<span class="pc bpc" id="L1189" title="1 of 2 branches missed.">        if (qualifier == null) return;</span>
+
+<span class="fc" id="L1191">        List&lt;File&gt; allPoms = ReleaseSupport.findPomFiles(dir);</span>
+
+<span class="fc bfc" id="L1193" title="All 2 branches covered.">        for (File pom : allPoms) {</span>
+            try {
+<span class="fc" id="L1195">                PomModel model = PomModel.parse(pom.toPath());</span>
+<span class="fc" id="L1196">                String content = model.content();</span>
+<span class="fc" id="L1197">                String updated = content;</span>
+
+                // Strip qualified properties
+<span class="fc bfc" id="L1200" title="All 2 branches covered.">                for (Map.Entry&lt;String, String&gt; entry : model.properties().entrySet()) {</span>
+<span class="fc" id="L1201">                    String value = entry.getValue();</span>
+<span class="fc bfc" id="L1202" title="All 2 branches covered.">                    if (containsBranchQualifier(value, qualifier)) {</span>
+<span class="fc" id="L1203">                        String base = stripQualifier(value, qualifier);</span>
+<span class="fc" id="L1204">                        updated = PomModel.updateProperty(</span>
+<span class="fc" id="L1205">                                updated, entry.getKey(), base);</span>
+<span class="fc" id="L1206">                        log.debug(&quot;    property &quot; + entry.getKey()</span>
+                                + &quot;: &quot; + value + &quot; → &quot; + base
+<span class="fc" id="L1208">                                + &quot; in &quot; + pom.getName());</span>
+                    }
+<span class="fc" id="L1210">                }</span>
+
+                // Strip qualified dependencies (including BOM imports)
+<span class="fc bfc" id="L1213" title="All 2 branches covered.">                for (Dependency dep : model.allDependencies()) {</span>
+<span class="fc" id="L1214">                    String version = dep.getVersion();</span>
+<span class="fc bfc" id="L1215" title="All 2 branches covered.">                    if (containsBranchQualifier(version, qualifier)) {</span>
+<span class="fc" id="L1216">                        String base = stripQualifier(version, qualifier);</span>
+<span class="fc" id="L1217">                        updated = PomModel.updateDependencyVersion(</span>
+<span class="fc" id="L1218">                                updated, dep.getGroupId(),</span>
+<span class="fc" id="L1219">                                dep.getArtifactId(), base);</span>
+<span class="fc" id="L1220">                        log.debug(&quot;    dependency &quot; + dep.getGroupId()</span>
+<span class="fc" id="L1221">                                + &quot;:&quot; + dep.getArtifactId()</span>
+                                + &quot;: &quot; + version + &quot; → &quot; + base
+<span class="fc" id="L1223">                                + &quot; in &quot; + pom.getName());</span>
+                    }
+<span class="fc" id="L1225">                }</span>
+
+                // Strip qualified parent version (#241: match full GA)
+<span class="fc" id="L1228">                Parent parent = model.parent();</span>
+<span class="fc bfc" id="L1229" title="All 2 branches covered.">                if (parent != null</span>
+<span class="pc bpc" id="L1230" title="1 of 2 branches missed.">                        &amp;&amp; containsBranchQualifier(parent.getVersion(), qualifier)) {</span>
+<span class="nc" id="L1231">                    String base = stripQualifier(parent.getVersion(), qualifier);</span>
+<span class="nc" id="L1232">                    updated = PomModel.updateParentVersion(</span>
+<span class="nc" id="L1233">                            updated, parent.getGroupId(),</span>
+<span class="nc" id="L1234">                            parent.getArtifactId(), base);</span>
+<span class="nc" id="L1235">                    log.debug(&quot;    parent &quot; + parent.getGroupId() + &quot;:&quot;</span>
+<span class="nc" id="L1236">                            + parent.getArtifactId()</span>
+<span class="nc" id="L1237">                            + &quot;: &quot; + parent.getVersion() + &quot; → &quot; + base</span>
+<span class="nc" id="L1238">                            + &quot; in &quot; + pom.getName());</span>
+                }
+
+<span class="fc bfc" id="L1241" title="All 2 branches covered.">                if (!updated.equals(content)) {</span>
+<span class="fc" id="L1242">                    Files.writeString(pom.toPath(), updated, StandardCharsets.UTF_8);</span>
+                }
+<span class="nc" id="L1244">            } catch (IOException e) {</span>
+<span class="nc" id="L1245">                log.warn(&quot;    Could not strip versions in &quot; + pom + &quot;: &quot;</span>
+<span class="nc" id="L1246">                        + e.getMessage());</span>
+<span class="fc" id="L1247">            }</span>
+<span class="fc" id="L1248">        }</span>
+<span class="fc" id="L1249">    }</span>
+
+    static void setAllVersions(File dir, String oldVersion, String newVersion,
+                                 Log log) throws MojoException {
+<span class="fc" id="L1253">        File pom = new File(dir, &quot;pom.xml&quot;);</span>
+<span class="fc" id="L1254">        ReleaseSupport.setPomVersion(pom, oldVersion, newVersion);</span>
+
+<span class="fc" id="L1256">        List&lt;File&gt; allPoms = ReleaseSupport.findPomFiles(dir);</span>
+<span class="fc bfc" id="L1257" title="All 2 branches covered.">        for (File subPom : allPoms) {</span>
+<span class="fc bfc" id="L1258" title="All 2 branches covered.">            if (subPom.equals(pom)) continue;</span>
+            try {
+<span class="fc" id="L1260">                String content = Files.readString(subPom.toPath(), StandardCharsets.UTF_8);</span>
+<span class="pc bpc" id="L1261" title="1 of 2 branches missed.">                if (content.contains(&quot;&lt;version&gt;&quot; + oldVersion + &quot;&lt;/version&gt;&quot;)) {</span>
+<span class="fc" id="L1262">                    String updated = content.replace(</span>
+                            &quot;&lt;version&gt;&quot; + oldVersion + &quot;&lt;/version&gt;&quot;,
+                            &quot;&lt;version&gt;&quot; + newVersion + &quot;&lt;/version&gt;&quot;);
+<span class="fc" id="L1265">                    Files.writeString(subPom.toPath(), updated, StandardCharsets.UTF_8);</span>
+                }
+<span class="nc" id="L1267">            } catch (IOException e) {</span>
+<span class="nc" id="L1268">                log.warn(&quot;    Could not update &quot; + subPom + &quot;: &quot; + e.getMessage());</span>
+<span class="fc" id="L1269">            }</span>
+<span class="fc" id="L1270">        }</span>
+<span class="fc" id="L1271">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

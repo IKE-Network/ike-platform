@@ -1,0 +1,360 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>WsRecordReleaseDraftMojo.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">WsRecordReleaseDraftMojo.java</span></div><h1>WsRecordReleaseDraftMojo.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.plugin.ReleaseSupport;
+import network.ike.plugin.ws.preflight.Preflight;
+import network.ike.plugin.ws.preflight.PreflightCondition;
+import network.ike.plugin.ws.preflight.PreflightContext;
+import network.ike.plugin.ws.preflight.PreflightResult;
+import network.ike.workspace.ManifestWriter;
+import network.ike.workspace.ReleaseRecord;
+import network.ike.workspace.ReleaseRecordFile;
+import network.ike.workspace.Subproject;
+import network.ike.workspace.WorkspaceGraph;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.regex.Pattern;
+
+/**
+ * Preview recording a member's release — the write side of the minimal
+ * tag-aligned state semantics (IKE-Network/ike-issues#973, settled
+ * 2026-08-10; the read side is state-aware alignment, #972).
+ *
+ * &lt;p&gt;After a member's {@code ike:release-publish} succeeds, this goal
+ * pair records the release in the working set, in one root-repo commit:
+ *
+ * &lt;ul&gt;
+ *   &lt;li&gt;&lt;b&gt;workspace.yaml&lt;/b&gt; — the member transitions to
+ *       {@code state: tag-aligned, kind: release, tag: vN} with its
+ *       {@code version:} field pinned at the released version, so
+ *       alignment targets the pin and the release cascade excludes the
+ *       member.&lt;/li&gt;
+ *   &lt;li&gt;&lt;b&gt;releases/release-&amp;lt;mission&amp;gt;.yaml&lt;/b&gt; — the member's row
+ *       (version, tag, sha, recorded date) appends to the mission's
+ *       record; one file per mission, finalized by the mission's
+ *       workspace-root release.&lt;/li&gt;
+ * &lt;/ul&gt;
+ *
+ * &lt;p&gt;Without {@code -Dmember}, the draft lists un-recorded candidates:
+ * checked-out members whose tip {@code v*} tag is not yet reflected by
+ * a tag-aligned pin. With {@code -Dmember}, it previews the exact
+ * transition. {@code ws:record-release-publish} requires both
+ * {@code -Dmember} and {@code -Dmission} and applies it.
+ *
+ * &lt;pre&gt;{@code
+ * mvn ws:record-release-draft                                  # list candidates
+ * mvn ws:record-release-draft -Dmember=komet-bom               # preview
+ * mvn ws:record-release-publish -Dmember=komet-bom -Dmission=komet-wsr-1
+ * }&lt;/pre&gt;
+ *
+ * @see WsRecordReleasePublishMojo
+ */
+@Mojo(name = &quot;record-release-draft&quot;, projectRequired = false, aggregator = true)
+public class WsRecordReleaseDraftMojo extends AbstractWorkspaceMojo {
+
+    /** Path-safe mission labels: no separators, no traversal. */
+<span class="fc" id="L65">    private static final Pattern MISSION_PATTERN =</span>
+<span class="fc" id="L66">            Pattern.compile(&quot;[A-Za-z0-9][A-Za-z0-9._-]*&quot;);</span>
+
+    /**
+     * The subproject whose release is being recorded. Required for
+     * publish; optional for draft (omitted, the draft lists candidates).
+     */
+    @Parameter(property = &quot;member&quot;)
+    String member;
+
+    /**
+     * The release-mission label naming the record file
+     * ({@code releases/release-&lt;mission&gt;.yaml}), e.g. {@code komet-wsr-1}.
+     * Required for publish.
+     */
+    @Parameter(property = &quot;mission&quot;)
+    String mission;
+
+    /**
+     * Deprecated spelling of {@link #mission} from before the
+     * cycle-to-mission rename (IKE-Network/ike-issues#1038). Honoured
+     * with a deprecation warning when {@code -Dmission} is absent;
+     * removed after one platform generation.
+     */
+    @Parameter(property = &quot;cycle&quot;)
+    String missionDeprecatedCycle;
+
+    /**
+     * When true, apply the transition; when false (default), preview.
+     * Package-private so {@link WsRecordReleasePublishMojo} can flip it.
+     */
+    @Parameter(property = &quot;publish&quot;, defaultValue = &quot;false&quot;)
+    boolean publish;
+
+    /** Creates this goal instance. */
+<span class="fc" id="L100">    public WsRecordReleaseDraftMojo() {}</span>
+
+    @Override
+    protected WorkspaceReportSpec runGoal() throws MojoException {
+<span class="pc bpc" id="L104" title="2 of 6 branches missed.">        if ((mission == null || mission.isBlank())</span>
+                &amp;&amp; missionDeprecatedCycle != null
+<span class="nc bnc" id="L106" title="All 2 branches missed.">                &amp;&amp; !missionDeprecatedCycle.isBlank()) {</span>
+<span class="nc" id="L107">            getLog().warn(&quot;-Dcycle is deprecated — the release iteration&quot;</span>
+                    + &quot; is a mission; use -Dmission (ike-issues#1038).&quot;);
+<span class="nc" id="L109">            mission = missionDeprecatedCycle;</span>
+        }
+<span class="fc" id="L111">        WorkspaceGraph graph = loadGraph();</span>
+<span class="fc" id="L112">        File root = workspaceRoot();</span>
+<span class="fc bfc" id="L113" title="All 2 branches covered.">        WsGoal goal = publish ? WsGoal.RECORD_RELEASE_PUBLISH</span>
+<span class="fc" id="L114">                              : WsGoal.RECORD_RELEASE_DRAFT;</span>
+
+<span class="fc" id="L116">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L117">        getLog().info(&quot;IKE Workspace Record Release — pin a released member&quot;);</span>
+<span class="fc" id="L118">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+<span class="fc bfc" id="L119" title="All 2 branches covered.">        if (!publish) {</span>
+<span class="fc" id="L120">            getLog().info(&quot;  (draft — no files will be modified)&quot;);</span>
+        }
+<span class="fc" id="L122">        getLog().info(&quot;&quot;);</span>
+
+<span class="pc bpc" id="L124" title="1 of 4 branches missed.">        if (member == null || member.isBlank()) {</span>
+<span class="fc bfc" id="L125" title="All 2 branches covered.">            if (publish) {</span>
+<span class="fc" id="L126">                throw new MojoException(</span>
+<span class="fc" id="L127">                        &quot;-Dmember is required for &quot; + goal.qualified()</span>
+                        + &quot; — name the released subproject to record.&quot;);
+            }
+<span class="fc" id="L130">            return new WorkspaceReportSpec(goal, candidateReport(graph, root));</span>
+        }
+
+<span class="fc" id="L133">        Subproject subproject = graph.manifest().subprojects().get(member);</span>
+<span class="pc bpc" id="L134" title="1 of 2 branches missed.">        if (subproject == null) {</span>
+<span class="nc" id="L135">            throw new MojoException(&quot;No subproject '&quot; + member</span>
+                    + &quot;' in workspace.yaml.&quot;);
+        }
+<span class="fc" id="L138">        File memberDir = new File(root, member);</span>
+<span class="pc bpc" id="L139" title="1 of 2 branches missed.">        if (!memberDir.isDirectory()</span>
+<span class="pc bpc" id="L140" title="1 of 2 branches missed.">                || !new File(memberDir, &quot;.git&quot;).exists()) {</span>
+<span class="nc" id="L141">            throw new MojoException(&quot;Subproject '&quot; + member</span>
+                    + &quot;' is not checked out — cannot read its release tag.&quot;);
+        }
+
+<span class="fc" id="L145">        String tag = latestReleaseTag(memberDir);</span>
+<span class="fc bfc" id="L146" title="All 2 branches covered.">        if (tag == null) {</span>
+<span class="fc" id="L147">            throw new MojoException(&quot;Subproject '&quot; + member</span>
+                    + &quot;' has no v* release tag — release it first&quot;
+                    + &quot; (ike:release-publish), then record.&quot;);
+        }
+<span class="pc bpc" id="L151" title="1 of 2 branches missed.">        String version = tag.startsWith(&quot;v&quot;) ? tag.substring(1) : tag;</span>
+<span class="pc bpc" id="L152" title="2 of 4 branches missed.">        if (version.isBlank() || version.endsWith(&quot;-SNAPSHOT&quot;)) {</span>
+<span class="nc" id="L153">            throw new MojoException(&quot;Tip release tag '&quot; + tag + &quot;' of '&quot;</span>
+                    + member + &quot;' does not name a released version.&quot;);
+        }
+<span class="fc" id="L156">        String sha = tagCommitSha(memberDir, tag);</span>
+
+<span class="fc bfc" id="L158" title="All 2 branches covered.">        boolean alreadyPinned = subproject.isTagAligned()</span>
+<span class="pc bpc" id="L159" title="1 of 2 branches missed.">                &amp;&amp; tag.equals(subproject.tag())</span>
+<span class="pc bpc" id="L160" title="1 of 2 branches missed.">                &amp;&amp; version.equals(subproject.version());</span>
+
+<span class="fc" id="L162">        StringBuilder report = new StringBuilder();</span>
+<span class="fc" id="L163">        report.append(&quot;## Record release — &quot;).append(member).append(&quot;\n\n&quot;);</span>
+<span class="fc" id="L164">        report.append(&quot;| | current | target |\n|---|---|---|\n&quot;);</span>
+<span class="fc" id="L165">        report.append(&quot;| state | &quot;)</span>
+<span class="pc bpc" id="L166" title="1 of 2 branches missed.">                .append(subproject.state() == null</span>
+<span class="pc" id="L167">                        ? Subproject.STATE_SNAPSHOT : subproject.state())</span>
+<span class="fc" id="L168">                .append(&quot; | &quot;).append(Subproject.STATE_TAG_ALIGNED)</span>
+<span class="fc" id="L169">                .append(&quot; |\n&quot;);</span>
+<span class="fc" id="L170">        report.append(&quot;| kind | &quot;).append(nullDash(subproject.kind()))</span>
+<span class="fc" id="L171">                .append(&quot; | &quot;).append(Subproject.KIND_RELEASE).append(&quot; |\n&quot;);</span>
+<span class="fc" id="L172">        report.append(&quot;| version | &quot;).append(nullDash(subproject.version()))</span>
+<span class="fc" id="L173">                .append(&quot; | &quot;).append(version).append(&quot; |\n&quot;);</span>
+<span class="fc" id="L174">        report.append(&quot;| tag | &quot;).append(nullDash(subproject.tag()))</span>
+<span class="fc" id="L175">                .append(&quot; | &quot;).append(tag).append(&quot; |\n&quot;);</span>
+<span class="fc" id="L176">        report.append(&quot;| sha | | &quot;).append(sha).append(&quot; |\n\n&quot;);</span>
+
+<span class="fc bfc" id="L178" title="All 2 branches covered.">        if (alreadyPinned) {</span>
+<span class="fc" id="L179">            getLog().info(&quot;  ✓ &quot; + member + &quot; already pinned at &quot; + tag);</span>
+        } else {
+<span class="fc" id="L181">            getLog().info(&quot;  &quot; + member + &quot;: &quot;</span>
+<span class="fc" id="L182">                    + nullDash(subproject.version()) + &quot; → &quot; + version</span>
+                    + &quot; (pinned &quot; + tag + &quot;)&quot;);
+        }
+
+<span class="fc bfc" id="L186" title="All 2 branches covered.">        if (!publish) {</span>
+<span class="pc bpc" id="L187" title="3 of 4 branches missed.">            String missionShown = (mission == null || mission.isBlank())</span>
+<span class="pc" id="L188">                    ? &quot;&lt;mission&gt;&quot; : mission;</span>
+<span class="fc" id="L189">            report.append(&quot;Apply with:\n\n```\nmvn &quot;)</span>
+<span class="fc" id="L190">                    .append(WsGoal.RECORD_RELEASE_PUBLISH.qualified())</span>
+<span class="fc" id="L191">                    .append(&quot; -Dmember=&quot;).append(member)</span>
+<span class="fc" id="L192">                    .append(&quot; -Dmission=&quot;).append(missionShown)</span>
+<span class="fc" id="L193">                    .append(&quot;\n```\n&quot;);</span>
+<span class="fc" id="L194">            return new WorkspaceReportSpec(goal, report.toString());</span>
+        }
+
+        // ── Publish ────────────────────────────────────────────────────
+<span class="pc bpc" id="L198" title="1 of 4 branches missed.">        if (mission == null || mission.isBlank()) {</span>
+<span class="fc" id="L199">            throw new MojoException(&quot;-Dmission is required for &quot;</span>
+<span class="fc" id="L200">                    + goal.qualified() + &quot; — e.g. -Dmission=komet-wsr-1.&quot;);</span>
+        }
+<span class="pc bpc" id="L202" title="1 of 2 branches missed.">        if (!MISSION_PATTERN.matcher(mission).matches()) {</span>
+<span class="nc" id="L203">            throw new MojoException(&quot;Invalid mission label '&quot; + mission</span>
+                    + &quot;' — use letters, digits, dot, dash, underscore.&quot;);
+        }
+
+<span class="fc" id="L207">        Path manifestPath = resolveManifest();</span>
+<span class="fc" id="L208">        Path recordPath = ReleaseRecordFile.pathFor(root.toPath(), mission);</span>
+<span class="fc" id="L209">        String recordRelPath = root.toPath().relativize(recordPath)</span>
+<span class="fc" id="L210">                .toString();</span>
+
+        // Root-scoped preflight (#780): this goal writes only root-repo
+        // files, so only the root tree must be unmodified. Gated the
+        // standard way: -Dallow-uncommitted relaxes, -Ddefer-commit hands
+        // the clean-state guarantee to a cascade caller.
+<span class="fc" id="L216">        PreflightResult preflight = Preflight.of(</span>
+<span class="fc" id="L217">                List.of(PreflightCondition.WORKING_TREE_CLEAN),</span>
+<span class="fc" id="L218">                PreflightContext.of(root, null, List.of()));</span>
+<span class="pc bpc" id="L219" title="2 of 4 branches missed.">        if (allowUncommitted() || deferCommit()) {</span>
+<span class="nc" id="L220">            preflight.warnIfFailed(getLog(), goal);</span>
+        } else {
+<span class="fc" id="L222">            preflight.requirePassed(goal);</span>
+        }
+
+<span class="fc" id="L225">        String today = LocalDate.now().toString();</span>
+<span class="fc" id="L226">        GoalAuthoredChanges authored = GoalAuthoredChanges.snapshot(</span>
+<span class="fc" id="L227">                root, getLog(), &quot;workspace.yaml&quot;, recordRelPath);</span>
+        try {
+<span class="fc" id="L229">            ManifestWriter.recordRelease(manifestPath, member, version, tag);</span>
+<span class="fc" id="L230">            getLog().info(&quot;  ✓ workspace.yaml — &quot; + member</span>
+                    + &quot; pinned tag-aligned at &quot; + tag);
+
+<span class="fc bfc" id="L233" title="All 2 branches covered.">            ReleaseRecord record = Files.exists(recordPath)</span>
+<span class="fc" id="L234">                    ? ReleaseRecordFile.read(recordPath)</span>
+<span class="fc" id="L235">                    : ReleaseRecord.start(mission, today);</span>
+<span class="fc" id="L236">            record = record.withMember(member,</span>
+                    new ReleaseRecord.MemberRelease(version, tag, sha, today));
+<span class="fc" id="L238">            ReleaseRecordFile.write(recordPath, record);</span>
+<span class="fc" id="L239">            getLog().info(&quot;  ✓ &quot; + recordRelPath + &quot; — row for &quot;</span>
+                    + member + &quot; &quot; + version);
+<span class="nc" id="L241">        } catch (IOException e) {</span>
+<span class="nc" id="L242">            throw new MojoException(&quot;Failed to record release: &quot;</span>
+<span class="nc" id="L243">                    + e.getMessage(), e);</span>
+<span class="fc" id="L244">        }</span>
+
+<span class="pc bpc" id="L246" title="1 of 2 branches missed.">        if (!deferCommit()) {</span>
+<span class="fc bfc" id="L247" title="All 2 branches covered.">            if (authored.commitAuthored(&quot;workspace: record release &quot;</span>
+                    + member + &quot; &quot; + version
+                    + &quot;\n\nRefs: IKE-Network/ike-issues#973&quot;)) {
+<span class="fc" id="L250">                getLog().info(&quot;  ✓ committed workspace.yaml + &quot;</span>
+                        + recordRelPath);
+            }
+        }
+
+<span class="fc" id="L255">        report.append(&quot;Recorded in mission `&quot;).append(mission).append(&quot;` (&quot;)</span>
+<span class="fc" id="L256">                .append(recordRelPath).append(&quot;).\n&quot;);</span>
+<span class="fc" id="L257">        return new WorkspaceReportSpec(goal, report.toString());</span>
+    }
+
+    /**
+     * Draft-mode candidate listing: checked-out members whose tip
+     * {@code v*} tag is not yet reflected by a tag-aligned pin. Emits
+     * the copy-pasteable publish command per candidate.
+     *
+     * @param graph the workspace graph
+     * @param root  the workspace root directory
+     * @return the report markdown
+     */
+    private String candidateReport(WorkspaceGraph graph, File root) {
+<span class="fc" id="L270">        List&lt;String&gt; lines = new ArrayList&lt;&gt;();</span>
+        for (Map.Entry&lt;String, Subproject&gt; entry
+<span class="fc bfc" id="L272" title="All 2 branches covered.">                : graph.manifest().subprojects().entrySet()) {</span>
+<span class="fc" id="L273">            String name = entry.getKey();</span>
+<span class="fc" id="L274">            Subproject subproject = entry.getValue();</span>
+<span class="fc" id="L275">            File dir = new File(root, name);</span>
+<span class="pc bpc" id="L276" title="2 of 4 branches missed.">            if (!dir.isDirectory() || !new File(dir, &quot;.git&quot;).exists()) {</span>
+<span class="nc" id="L277">                continue;</span>
+            }
+<span class="fc" id="L279">            String tag = latestReleaseTag(dir);</span>
+<span class="fc bfc" id="L280" title="All 2 branches covered.">            if (tag == null) continue;</span>
+<span class="pc bpc" id="L281" title="1 of 2 branches missed.">            boolean pinned = subproject.isTagAligned()</span>
+<span class="pc bnc" id="L282" title="All 2 branches missed.">                    &amp;&amp; tag.equals(subproject.tag());</span>
+<span class="pc bpc" id="L283" title="1 of 2 branches missed.">            if (pinned) continue;</span>
+<span class="fc" id="L284">            lines.add(name + &quot; — tip tag &quot; + tag);</span>
+<span class="fc" id="L285">        }</span>
+
+<span class="fc" id="L287">        StringBuilder report = new StringBuilder();</span>
+<span class="fc" id="L288">        report.append(&quot;## Record release — candidates\n\n&quot;);</span>
+<span class="pc bpc" id="L289" title="1 of 2 branches missed.">        if (lines.isEmpty()) {</span>
+<span class="nc" id="L290">            getLog().info(&quot;  ✓ no un-recorded releases&quot;</span>
+                    + &quot; (no member has a v* tag beyond its pin)&quot;);
+<span class="nc" id="L292">            report.append(&quot;No un-recorded releases.\n&quot;);</span>
+<span class="nc" id="L293">            return report.toString();</span>
+        }
+<span class="fc" id="L295">        report.append(&quot;Members with a v* release tag not yet recorded:\n\n&quot;);</span>
+<span class="fc bfc" id="L296" title="All 2 branches covered.">        for (String line : lines) {</span>
+<span class="fc" id="L297">            getLog().info(&quot;  ⚠ &quot; + line);</span>
+<span class="fc" id="L298">            report.append(&quot;- &quot;).append(line).append(&quot;\n&quot;);</span>
+<span class="fc" id="L299">        }</span>
+<span class="fc" id="L300">        report.append(&quot;\nRecord one with:\n\n```\nmvn &quot;)</span>
+<span class="fc" id="L301">                .append(WsGoal.RECORD_RELEASE_PUBLISH.qualified())</span>
+<span class="fc" id="L302">                .append(&quot; -Dmember=&lt;name&gt; -Dmission=&lt;mission&gt;\n```\n&quot;);</span>
+<span class="fc" id="L303">        return report.toString();</span>
+    }
+
+    /**
+     * The member's tip release tag by version sort, or null when the
+     * member has no {@code v*} tag. Mirrors the release goals' notion of
+     * &quot;latest release&quot;.
+     *
+     * @param dir the member's checkout directory
+     * @return the tip tag, e.g. {@code v3.0.7}, or null
+     */
+    private static String latestReleaseTag(File dir) {
+        try {
+<span class="fc" id="L316">            String tags = ReleaseSupport.execCapture(dir,</span>
+                    &quot;git&quot;, &quot;tag&quot;, &quot;-l&quot;, &quot;v*&quot;, &quot;--sort=-version:refname&quot;);
+<span class="pc bpc" id="L318" title="1 of 4 branches missed.">            if (tags == null || tags.isBlank()) return null;</span>
+<span class="fc" id="L319">            return tags.lines().findFirst().orElse(null);</span>
+<span class="nc" id="L320">        } catch (Exception e) {</span>
+<span class="nc" id="L321">            return null;</span>
+        }
+    }
+
+    /**
+     * The commit a tag points at (peeled), for the record row.
+     *
+     * @param dir the member's checkout directory
+     * @param tag the release tag
+     * @return the full commit sha
+     * @throws MojoException when the tag cannot be resolved
+     */
+    private static String tagCommitSha(File dir, String tag) {
+        try {
+<span class="fc" id="L335">            String sha = ReleaseSupport.execCapture(dir,</span>
+                    &quot;git&quot;, &quot;rev-list&quot;, &quot;-n&quot;, &quot;1&quot;, tag);
+<span class="pc bpc" id="L337" title="2 of 4 branches missed.">            if (sha == null || sha.isBlank()) {</span>
+<span class="nc" id="L338">                throw new MojoException(&quot;Could not resolve commit for tag '&quot;</span>
+<span class="nc" id="L339">                        + tag + &quot;' in &quot; + dir.getName());</span>
+            }
+<span class="fc" id="L341">            return sha.trim();</span>
+<span class="nc" id="L342">        } catch (MojoException e) {</span>
+<span class="nc" id="L343">            throw e;</span>
+<span class="nc" id="L344">        } catch (Exception e) {</span>
+<span class="nc" id="L345">            throw new MojoException(&quot;Could not resolve commit for tag '&quot;</span>
+<span class="nc" id="L346">                    + tag + &quot;' in &quot; + dir.getName() + &quot;: &quot; + e.getMessage(), e);</span>
+        }
+    }
+
+    /**
+     * Render a possibly-null field value for the transition table.
+     *
+     * @param value the field value
+     * @return the value, or an em-dash placeholder when null
+     */
+    private static String nullDash(String value) {
+<span class="fc bfc" id="L357" title="All 2 branches covered.">        return value == null ? &quot;—&quot; : value;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

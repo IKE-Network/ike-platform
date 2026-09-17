@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ParentLeaseHold.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">ParentLeaseHold.java</span></div><h1>ParentLeaseHold.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.Log;
+
+import java.io.File;
+import java.nio.file.Path;
+import java.util.Optional;
+
+/**
+ * The short-hold of the &lt;em&gt;parent&lt;/em&gt; working set's lease during a
+ * sibling finish — the last open thread of the local-origin model
+ * (IKE-Network/ike-issues#992, settled scope of #1002, delivered as
+ * #1005's {@code ws:} half).
+ *
+ * &lt;p&gt;A sibling finish lands in the parent: the absorb fast-forwards the
+ * parent's refs, which makes the finish a &lt;em&gt;writer of the parent&lt;/em&gt;,
+ * and single-writer is per working set. So the finish confirms the
+ * parent's lease before landing — free or expired acquires silently,
+ * already-mine simply confirms, and live on another machine refuses with
+ * the takeover left to the human, the one rule every surface shares.
+ *
+ * &lt;p&gt;&quot;Short&quot; means the hold gives back exactly what it took: a lease this
+ * machine already held stays held; one acquired fresh for the landing is
+ * released when the hold closes, success or failure, so a finished (or
+ * failed) sibling never leaves its parent pinned to this machine.
+ * Inert wherever the lease machinery is ({@link WorkingSetLease}).
+ */
+final class ParentLeaseHold implements AutoCloseable {
+
+    private final Path parent;
+    private final boolean acquiredFresh;
+    private final Log log;
+
+<span class="fc" id="L35">    private ParentLeaseHold(Path parent, boolean acquiredFresh, Log log) {</span>
+<span class="fc" id="L36">        this.parent = parent;</span>
+<span class="fc" id="L37">        this.acquiredFresh = acquiredFresh;</span>
+<span class="fc" id="L38">        this.log = log;</span>
+<span class="fc" id="L39">    }</span>
+
+    /**
+     * Confirms the parent's lease for a finish that is about to land in
+     * it.
+     *
+     * @param workingSetRoot the sibling working set the finish runs in
+     * @param log            the goal's log
+     * @return the hold; inert when the working set has no local parent or
+     *         the lease machinery is absent
+     * @throws MojoException if another machine holds the parent live —
+     *                       landing there would collide with its writer
+     */
+    static ParentLeaseHold acquire(File workingSetRoot, Log log)
+            throws MojoException {
+<span class="fc" id="L54">        Optional&lt;File&gt; parent = SiblingFinish.localParent(workingSetRoot);</span>
+<span class="pc bpc" id="L55" title="1 of 2 branches missed.">        if (parent.isEmpty()) {</span>
+<span class="nc" id="L56">            return new ParentLeaseHold(null, false, log);</span>
+        }
+<span class="fc" id="L58">        Path parentPath = parent.get().toPath();</span>
+<span class="fc" id="L59">        boolean alreadyMine = WorkingSetLease.status(parentPath)</span>
+<span class="fc" id="L60">                .map(status -&gt; status.line().contains(&quot;: MINE&quot;))</span>
+<span class="fc" id="L61">                .orElse(false);</span>
+<span class="fc" id="L62">        WorkingSetLease.Decision decision =</span>
+<span class="fc" id="L63">                WorkingSetLease.confirm(parentPath);</span>
+<span class="fc bfc" id="L64" title="All 3 branches covered.">        return switch (decision.verdict()) {</span>
+<span class="fc" id="L65">            case NOT_APPLICABLE -&gt; new ParentLeaseHold(null, false, log);</span>
+            case HELD -&gt; {
+<span class="fc" id="L67">                log.info(&quot;  Parent lease: confirmed for &quot; + decision.detail()</span>
+<span class="pc bpc" id="L68" title="1 of 2 branches missed.">                        + (alreadyMine ? &quot;&quot; : &quot; (short-hold — released after&quot;</span>
+                                + &quot; the landing)&quot;));
+<span class="pc bpc" id="L70" title="1 of 2 branches missed.">                yield new ParentLeaseHold(parentPath, !alreadyMine, log);</span>
+            }
+<span class="fc" id="L72">            case FENCED -&gt; throw new MojoException(</span>
+                    &quot;The finish lands in the parent working set, and another &quot;
+                            + &quot;machine holds it live; landing here would &quot;
+<span class="fc" id="L75">                            + &quot;collide with its writer.\n&quot; + decision.detail());</span>
+        };
+    }
+
+    /**
+     * Gives back what the hold took: releases the parent's lease when it
+     * was acquired fresh for this landing, and only then. Best-effort —
+     * a failed release is logged, never thrown; the record ages out.
+     */
+    @Override
+    public void close() {
+<span class="pc bpc" id="L86" title="1 of 4 branches missed.">        if (parent == null || !acquiredFresh) {</span>
+<span class="fc" id="L87">            return;</span>
+        }
+<span class="pc bpc" id="L89" title="1 of 2 branches missed.">        if (WorkingSetLease.release(parent)) {</span>
+<span class="fc" id="L90">            log.info(&quot;  Parent lease: short-hold released&quot;);</span>
+        } else {
+<span class="nc" id="L92">            log.warn(&quot;  Parent lease: short-hold release failed; the record &quot;</span>
+                    + &quot;will age out at its ttl&quot;);
+        }
+<span class="fc" id="L95">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

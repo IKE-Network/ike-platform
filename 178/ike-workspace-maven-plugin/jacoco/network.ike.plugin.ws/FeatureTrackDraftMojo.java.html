@@ -1,0 +1,358 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>FeatureTrackDraftMojo.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">FeatureTrackDraftMojo.java</span></div><h1>FeatureTrackDraftMojo.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.plugin.support.GoalReportBuilder;
+import network.ike.plugin.ws.preflight.Preflight;
+import network.ike.plugin.ws.preflight.PreflightCondition;
+import network.ike.plugin.ws.preflight.PreflightContext;
+import network.ike.plugin.ws.preflight.PreflightResult;
+import network.ike.plugin.ws.vcs.VcsOperations;
+import network.ike.plugin.ws.vcs.VcsState;
+import network.ike.workspace.ManifestWriter;
+import network.ike.workspace.WorkspaceGraph;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+/**
+ * Adopt an &lt;em&gt;existing&lt;/em&gt; feature branch in selected subprojects.
+ *
+ * &lt;p&gt;Where {@link FeatureStartDraftMojo} &lt;em&gt;creates&lt;/em&gt; {@code feature/&lt;name&gt;}
+ * from the current tip, this goal checks out a branch that already exists —
+ * typically pushed from another clone or by another developer — in exactly the
+ * subprojects named by {@code -Daffected}, and aligns
+ * {@code workspace.yaml}'s {@code branch:} fields with the result.
+ *
+ * &lt;p&gt;It exists because neither adjacent goal covers this case:
+ * &lt;ul&gt;
+ *   &lt;li&gt;{@code ws:switch} is workspace-wide (no {@code -Daffected}) and skips
+ *       any subproject whose target branch is not already present
+ *       &lt;em&gt;locally&lt;/em&gt; — so a branch that exists only on the remote is
+ *       silently skipped everywhere.&lt;/li&gt;
+ *   &lt;li&gt;{@code ws:feature-start} creates a new branch, failing when the name
+ *       is already taken.&lt;/li&gt;
+ * &lt;/ul&gt;
+ *
+ * &lt;p&gt;&lt;strong&gt;Per subproject, in {@code -Daffected} order:&lt;/strong&gt;
+ * &lt;ol&gt;
+ *   &lt;li&gt;Already on {@code feature/&lt;name&gt;} → confirm, refreshing a stale
+ *       {@code .ike/vcs-state} that would otherwise make the bridge switch
+ *       the member away again (#903/#904)&lt;/li&gt;
+ *   &lt;li&gt;Local branch exists → check it out&lt;/li&gt;
+ *   &lt;li&gt;No local branch, but {@code &lt;remote&gt;/feature/&lt;name&gt;} exists → fetch
+ *       and create a tracking branch from the remote tip&lt;/li&gt;
+ *   &lt;li&gt;Branch nowhere → skip with a warning, naming the subproject&lt;/li&gt;
+ * &lt;/ol&gt;
+ *
+ * &lt;p&gt;Because the branch-coherence triad is {@code workspace.yaml} /
+ * checkout / {@code .ike/vcs-state} (#904), all three are written: the
+ * checkout moves, {@code VcsOperations.recordSwitch} stamps the bridge
+ * state, and the manifest's {@code branch:} fields are updated and
+ * committed in isolation. Leaving the manifest behind is precisely what
+ * makes a later {@code ws:feature-finish-*} skip the subproject while
+ * reporting success.
+ *
+ * &lt;p&gt;Unlike {@code ws:switch} this goal does &lt;em&gt;not&lt;/em&gt; auto-stash: it
+ * requires an unmodified tree so adopting someone else's branch can never
+ * bury local work in a stash ref. Commit first, or pass
+ * {@code -Dallow-uncommitted}.
+ *
+ * &lt;pre&gt;{@code
+ * mvn ws:feature-track-draft   -Dfeature=grpc_plugin -Daffected=komet,tinkar-service
+ * mvn ws:feature-track-publish -Dfeature=grpc_plugin -Daffected=komet,tinkar-service
+ * }&lt;/pre&gt;
+ *
+ * @see FeatureStartDraftMojo for creating a new feature branch
+ * @see WsSwitchDraftMojo for switching the whole workspace
+ * @see FeaturePrDraftMojo for opening review PRs on the tracked branch
+ */
+@Mojo(name = &quot;feature-track-draft&quot;, projectRequired = false, aggregator = true)
+public class FeatureTrackDraftMojo extends AbstractWorkspaceMojo {
+
+    /** Creates this goal instance. */
+<span class="nc" id="L82">    public FeatureTrackDraftMojo() {}</span>
+
+    /**
+     * Feature name without the {@code feature/} prefix. Prompted when
+     * omitted.
+     */
+    @Parameter(property = &quot;feature&quot;)
+    String feature;
+
+    /**
+     * Comma-separated subproject names to move onto the branch. Each must
+     * match a subproject in {@code workspace.yaml}; an unknown name fails
+     * the goal early rather than being silently dropped.
+     *
+     * &lt;p&gt;Omitted, every subproject that has the branch (locally or on the
+     * remote) is adopted — which is rarely what you want when a feature
+     * spans only part of the workspace, so prefer naming them.
+     */
+    @Parameter(property = &quot;affected&quot;)
+    String affected;
+
+    /** Remote to look for the branch on, and to track. */
+    @Parameter(property = &quot;remote&quot;, defaultValue = &quot;origin&quot;)
+    String remote;
+
+    /** Execute the checkout. Default is draft (preview only). */
+    @Parameter(property = &quot;publish&quot;, defaultValue = &quot;false&quot;)
+    boolean publish;
+
+    @Override
+    protected WorkspaceReportSpec runGoal() throws MojoException {
+<span class="nc bnc" id="L113" title="All 2 branches missed.">        if (!isWorkspaceMode()) {</span>
+<span class="nc" id="L114">            throw new MojoException(</span>
+                    &quot;ws:feature-track requires a workspace (workspace.yaml). &quot;
+                    + &quot;For a single repository use &quot;
+                    + &quot;'git checkout -b &lt;branch&gt; --track &quot; + remote
+                    + &quot;/&lt;branch&gt;'.&quot;);
+        }
+
+<span class="nc bnc" id="L121" title="All 2 branches missed.">        boolean draft = !publish;</span>
+<span class="nc" id="L122">        WorkspaceGraph graph = loadGraph();</span>
+<span class="nc" id="L123">        File root = workspaceRoot();</span>
+
+<span class="nc" id="L125">        feature = requireParam(feature, &quot;feature&quot;, &quot;Feature name&quot;);</span>
+<span class="nc" id="L126">        String branch = &quot;feature/&quot; + validateFeatureName(feature).value();</span>
+
+<span class="nc" id="L128">        Set&lt;String&gt; known = graph.manifest().subprojects().keySet();</span>
+<span class="nc" id="L129">        Set&lt;String&gt; scope = FeatureScope.resolveAffected(affected, known);</span>
+<span class="nc" id="L130">        List&lt;String&gt; sorted = graph.topologicalSort(new LinkedHashSet&lt;&gt;(scope));</span>
+
+<span class="nc" id="L132">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L133">        getLog().info(header(&quot;Feature Track&quot;));</span>
+<span class="nc" id="L134">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+<span class="nc" id="L135">        getLog().info(&quot;  Feature: &quot; + feature);</span>
+<span class="nc" id="L136">        getLog().info(&quot;  Branch:  &quot; + branch);</span>
+<span class="nc bnc" id="L137" title="All 4 branches missed.">        getLog().info(&quot;  Scope:   &quot; + (affected == null || affected.isBlank()</span>
+<span class="nc" id="L138">                ? &quot;whole workspace (no -Daffected)&quot;</span>
+<span class="nc" id="L139">                : String.join(&quot;, &quot;, sorted)));</span>
+<span class="nc bnc" id="L140" title="All 2 branches missed.">        if (draft) getLog().info(&quot;  Mode:    DRAFT&quot;);</span>
+<span class="nc" id="L141">        getLog().info(&quot;&quot;);</span>
+
+        // Adopting a branch must never bury local work. ws:switch can
+        // auto-stash because the user chose that branch; here the branch
+        // content comes from elsewhere, so require a clean tree instead.
+<span class="nc" id="L146">        PreflightResult pre = Preflight.of(</span>
+<span class="nc" id="L147">                List.of(PreflightCondition.WORKING_TREE_CLEAN),</span>
+<span class="nc" id="L148">                PreflightContext.of(root, graph, sorted));</span>
+<span class="nc bnc" id="L149" title="All 2 branches missed.">        if (draft) {</span>
+<span class="nc" id="L150">            pre.warnIfFailed(getLog(), WsGoal.FEATURE_TRACK_PUBLISH);</span>
+        } else {
+<span class="nc" id="L152">            pre.requirePassed(WsGoal.FEATURE_TRACK_PUBLISH);</span>
+        }
+
+<span class="nc" id="L155">        Map&lt;String, String&gt; effects = new LinkedHashMap&lt;&gt;();</span>
+<span class="nc" id="L156">        Map&lt;String, String&gt; manifestUpdates = new LinkedHashMap&lt;&gt;();</span>
+<span class="nc" id="L157">        List&lt;String&gt; adopted = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L158">        List&lt;String&gt; confirmed = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L159">        List&lt;String&gt; absent = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L160">        int skipped = 0;</span>
+
+<span class="nc bnc" id="L162" title="All 2 branches missed.">        for (String name : sorted) {</span>
+<span class="nc" id="L163">            File dir = new File(root, name);</span>
+<span class="nc bnc" id="L164" title="All 2 branches missed.">            if (!new File(dir, &quot;.git&quot;).exists()) {</span>
+<span class="nc" id="L165">                effects.put(name, &quot;skipped (not cloned)&quot;);</span>
+<span class="nc" id="L166">                skipped++;</span>
+<span class="nc" id="L167">                continue;</span>
+            }
+
+<span class="nc" id="L170">            String current = gitBranch(dir);</span>
+
+            // ── Already there: confirm, and heal a stale bridge state ──
+<span class="nc bnc" id="L173" title="All 2 branches missed.">            if (branch.equals(current)) {</span>
+<span class="nc" id="L174">                boolean stale = VcsState.readFrom(dir.toPath())</span>
+<span class="nc bnc" id="L175" title="All 2 branches missed.">                        .map(s -&gt; !branch.equals(s.branch()))</span>
+<span class="nc" id="L176">                        .orElse(false);</span>
+<span class="nc bnc" id="L177" title="All 4 branches missed.">                if (stale &amp;&amp; !draft) {</span>
+<span class="nc" id="L178">                    VcsOperations.refreshStaleBranchState(dir, getLog());</span>
+                }
+<span class="nc" id="L180">                getLog().info(&quot;  &quot; + Ansi.green(&quot;✓ &quot;) + name</span>
+                        + &quot; — already on &quot; + branch);
+<span class="nc" id="L182">                effects.put(name, &quot;already on `&quot; + branch + &quot;`&quot;</span>
+<span class="nc bnc" id="L183" title="All 2 branches missed.">                        + (stale</span>
+<span class="nc bnc" id="L184" title="All 2 branches missed.">                                ? (draft ? &quot; — would refresh stale vcs-state&quot;</span>
+<span class="nc" id="L185">                                         : &quot; — vcs-state refreshed&quot;)</span>
+<span class="nc" id="L186">                                : &quot;&quot;));</span>
+<span class="nc" id="L187">                confirmed.add(name);</span>
+                // Still record the manifest field: &quot;already on the branch&quot;
+                // with the manifest saying otherwise is exactly the
+                // incoherence this goal exists to close.
+<span class="nc" id="L191">                manifestUpdates.put(name, branch);</span>
+<span class="nc" id="L192">                continue;</span>
+            }
+
+<span class="nc" id="L195">            boolean localExists = VcsOperations.localBranchExists(dir, branch);</span>
+
+            // ── Not local: is it on the remote? ──
+<span class="nc bnc" id="L198" title="All 2 branches missed.">            if (!localExists) {</span>
+                // Fetch in draft mode too. A fetch only updates
+                // refs/remotes — it touches no local branch, working tree,
+                // or HEAD — and without it a branch pushed since this
+                // clone's last fetch reads as absent, so the preview would
+                // report &quot;not found&quot; for a branch the publish run then
+                // adopts successfully. A draft that disagrees with the run
+                // is worse than no draft.
+<span class="nc" id="L206">                VcsOperations.fetch(dir, getLog());</span>
+<span class="nc" id="L207">                boolean remoteExists =</span>
+<span class="nc" id="L208">                        VcsOperations.remoteTrackingExists(dir, remote, branch);</span>
+<span class="nc bnc" id="L209" title="All 2 branches missed.">                if (!remoteExists) {</span>
+<span class="nc" id="L210">                    getLog().info(&quot;  &quot; + Ansi.yellow(&quot;⚠ &quot;) + name</span>
+                            + &quot; — &quot; + branch + &quot; exists neither locally nor on &quot;
+                            + remote + &quot;, skipping&quot;);
+<span class="nc" id="L213">                    effects.put(name, &quot;skipped (`&quot; + branch + &quot;` not found on &quot;</span>
+                            + remote + &quot;)&quot;);
+<span class="nc" id="L215">                    absent.add(name);</span>
+<span class="nc" id="L216">                    skipped++;</span>
+<span class="nc" id="L217">                    continue;</span>
+                }
+            }
+
+<span class="nc bnc" id="L221" title="All 2 branches missed.">            String how = localExists</span>
+<span class="nc" id="L222">                    ? &quot;checkout local&quot;</span>
+<span class="nc" id="L223">                    : &quot;create tracking branch from &quot; + remote + &quot;/&quot; + branch;</span>
+
+<span class="nc bnc" id="L225" title="All 2 branches missed.">            if (draft) {</span>
+<span class="nc" id="L226">                getLog().info(&quot;  [draft] &quot; + name + &quot; — would adopt &quot;</span>
+                        + current + &quot; → &quot; + branch + &quot; (&quot; + how + &quot;)&quot;);
+<span class="nc" id="L228">                effects.put(name, &quot;would adopt `&quot; + current + &quot;` → `&quot;</span>
+                        + branch + &quot;` (&quot; + how + &quot;)&quot;);
+<span class="nc" id="L230">                adopted.add(name);</span>
+<span class="nc" id="L231">                manifestUpdates.put(name, branch);</span>
+<span class="nc" id="L232">                continue;</span>
+            }
+
+<span class="nc" id="L235">            getLog().info(&quot;  &quot; + Ansi.cyan(&quot;→ &quot;) + name + &quot;: &quot; + current</span>
+                    + &quot; → &quot; + branch + &quot; (&quot; + how + &quot;)&quot;);
+<span class="nc bnc" id="L237" title="All 2 branches missed.">            if (localExists) {</span>
+<span class="nc" id="L238">                VcsOperations.checkout(dir, getLog(), branch);</span>
+            } else {
+<span class="nc" id="L240">                VcsOperations.checkoutTracking(dir, getLog(), remote, branch);</span>
+            }
+            // Without this the bridge sync in the next ws:* goal restores
+            // the member's previous state-file branch and undoes the
+            // adoption (#903/#904).
+<span class="nc" id="L245">            VcsOperations.recordSwitch(dir, getLog());</span>
+<span class="nc" id="L246">            adopted.add(name);</span>
+<span class="nc" id="L247">            manifestUpdates.put(name, branch);</span>
+<span class="nc" id="L248">            effects.put(name, &quot;adopted `&quot; + current + &quot;` → `&quot; + branch + &quot;`&quot;);</span>
+<span class="nc" id="L249">        }</span>
+
+        // ── Manifest: close the coherence triad ──
+<span class="nc" id="L252">        int manifestChanges = applyManifestBranches(graph, manifestUpdates,</span>
+                branch, draft);
+
+<span class="nc" id="L255">        getLog().info(&quot;&quot;);</span>
+<span class="nc bnc" id="L256" title="All 2 branches missed.">        getLog().info(&quot;  &quot; + (draft</span>
+<span class="nc" id="L257">                ? adopted.size() + &quot; to adopt, &quot; + confirmed.size()</span>
+<span class="nc" id="L258">                        + &quot; already on branch, &quot; + skipped + &quot; to skip&quot;</span>
+<span class="nc" id="L259">                : &quot;Adopted: &quot; + adopted.size() + &quot; | Already on branch: &quot;</span>
+<span class="nc" id="L260">                        + confirmed.size() + &quot; | Skipped: &quot; + skipped));</span>
+<span class="nc" id="L261">        getLog().info(&quot;&quot;);</span>
+
+        // ── Report ──
+<span class="nc" id="L264">        GoalReportBuilder report = new GoalReportBuilder();</span>
+<span class="nc" id="L265">        report.paragraph(&quot;**Feature:** `&quot; + feature + &quot;` **Branch:** `&quot; + branch</span>
+                + &quot;` **Remote:** `&quot; + remote + &quot;`&quot;
+<span class="nc bnc" id="L267" title="All 2 branches missed.">                + (draft ? &quot;  _(draft — no changes made)_&quot; : &quot;&quot;));</span>
+
+<span class="nc" id="L269">        report.section(&quot;Working set&quot;);</span>
+<span class="nc bnc" id="L270" title="All 2 branches missed.">        for (Map.Entry&lt;String, String&gt; e : effects.entrySet()) {</span>
+<span class="nc" id="L271">            report.bullet(&quot;`&quot; + e.getKey() + &quot;` — &quot; + e.getValue());</span>
+<span class="nc" id="L272">        }</span>
+
+<span class="nc bnc" id="L274" title="All 2 branches missed.">        if (!absent.isEmpty()) {</span>
+<span class="nc" id="L275">            report.section(&quot;Branch not found&quot;);</span>
+<span class="nc" id="L276">            report.paragraph(&quot;`&quot; + branch + &quot;` exists neither locally nor on `&quot;</span>
+                    + remote + &quot;` for these subprojects, so they were left &quot;
+                    + &quot;untouched. Push the branch, or drop them from &quot;
+                    + &quot;`-Daffected`:&quot;);
+<span class="nc bnc" id="L280" title="All 2 branches missed.">            for (String n : absent) report.bullet(&quot;`&quot; + n + &quot;`&quot;);</span>
+        }
+
+<span class="nc" id="L283">        report.section(&quot;Manifest&quot;);</span>
+<span class="nc bnc" id="L284" title="All 2 branches missed.">        if (manifestChanges == 0) {</span>
+<span class="nc" id="L285">            report.paragraph(&quot;`workspace.yaml` already records `&quot; + branch</span>
+                    + &quot;` for every adopted subproject — nothing to write.&quot;);
+<span class="nc bnc" id="L287" title="All 2 branches missed.">        } else if (draft) {</span>
+<span class="nc" id="L288">            report.paragraph(&quot;Would set `branch: &quot; + branch + &quot;` for **&quot;</span>
+                    + manifestChanges + &quot;** subproject(s) in `workspace.yaml` &quot;
+                    + &quot;and commit that file in isolation.&quot;);
+        } else {
+<span class="nc" id="L292">            report.paragraph(&quot;Set `branch: &quot; + branch + &quot;` for **&quot;</span>
+                    + manifestChanges + &quot;** subproject(s) in `workspace.yaml` &quot;
+                    + &quot;and committed it.&quot;);
+        }
+
+<span class="nc bnc" id="L297" title="All 2 branches missed.">        if (!adopted.isEmpty()) {</span>
+<span class="nc" id="L298">            report.section(&quot;Next&quot;);</span>
+<span class="nc" id="L299">            report.paragraph(&quot;Commit work with `ws:commit-publish`, push the &quot;</span>
+                    + &quot;branch with `ws:push -Dfeature=&quot; + feature + &quot;`, then &quot;
+                    + &quot;open review PRs with `ws:feature-pr-publish -Dfeature=&quot;
+                    + feature + &quot;`.&quot;);
+        }
+
+<span class="nc" id="L305">        return new WorkspaceReportSpec(</span>
+<span class="nc bnc" id="L306" title="All 2 branches missed.">                publish ? WsGoal.FEATURE_TRACK_PUBLISH</span>
+<span class="nc" id="L307">                        : WsGoal.FEATURE_TRACK_DRAFT,</span>
+<span class="nc" id="L308">                report.build());</span>
+    }
+
+    /**
+     * Write {@code branch:} fields for the adopted subprojects and commit
+     * {@code workspace.yaml} in isolation, returning the number of fields
+     * that actually changed.
+     *
+     * &lt;p&gt;Only genuine changes are written: a subproject the manifest already
+     * records on the branch is dropped, so a re-run is a no-op rather than an
+     * empty commit.
+     */
+    private int applyManifestBranches(WorkspaceGraph graph,
+                                      Map&lt;String, String&gt; updates,
+                                      String branch,
+                                      boolean draft) throws MojoException {
+<span class="nc" id="L324">        Map&lt;String, String&gt; changed = new LinkedHashMap&lt;&gt;();</span>
+<span class="nc bnc" id="L325" title="All 2 branches missed.">        for (Map.Entry&lt;String, String&gt; e : updates.entrySet()) {</span>
+<span class="nc" id="L326">            String declared = graph.manifest().subprojects()</span>
+<span class="nc" id="L327">                    .get(e.getKey()).branch();</span>
+<span class="nc bnc" id="L328" title="All 2 branches missed.">            if (!e.getValue().equals(declared)) {</span>
+<span class="nc" id="L329">                changed.put(e.getKey(), e.getValue());</span>
+            }
+<span class="nc" id="L331">        }</span>
+<span class="nc bnc" id="L332" title="All 4 branches missed.">        if (changed.isEmpty() || draft) {</span>
+<span class="nc" id="L333">            return changed.size();</span>
+        }
+
+<span class="nc" id="L336">        Path manifestPath = resolveManifest();</span>
+        try {
+<span class="nc" id="L338">            ManifestWriter.updateBranches(manifestPath, changed);</span>
+<span class="nc" id="L339">            getLog().info(&quot;  Manifest: set branch: &quot; + branch + &quot; for &quot;</span>
+<span class="nc" id="L340">                    + changed.size() + &quot; subproject(s)&quot;);</span>
+<span class="nc" id="L341">            File wsRoot = manifestPath.getParent().toFile();</span>
+<span class="nc bnc" id="L342" title="All 2 branches missed.">            if (new File(wsRoot, &quot;.git&quot;).exists()) {</span>
+                // Commit only the path this goal authored, never the whole
+                // index (#780).
+<span class="nc" id="L345">                VcsOperations.commitPaths(wsRoot, getLog(),</span>
+                        &quot;workspace: track &quot; + branch + &quot; in &quot;
+<span class="nc" id="L347">                        + String.join(&quot;, &quot;, changed.keySet())</span>
+                        + &quot;\n\nRefs: IKE-Network/ike-issues#904&quot;,
+                        &quot;workspace.yaml&quot;);
+            }
+<span class="nc" id="L351">        } catch (IOException e) {</span>
+<span class="nc" id="L352">            throw new MojoException(</span>
+<span class="nc" id="L353">                    &quot;Failed to update workspace.yaml: &quot; + e.getMessage(), e);</span>
+<span class="nc" id="L354">        }</span>
+<span class="nc" id="L355">        return changed.size();</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

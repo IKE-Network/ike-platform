@@ -1,0 +1,439 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>FeaturePrDraftMojo.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">FeaturePrDraftMojo.java</span></div><h1>FeaturePrDraftMojo.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.plugin.ReleaseSupport;
+import network.ike.plugin.support.GoalReportBuilder;
+import network.ike.plugin.ws.vcs.VcsOperations;
+import network.ike.workspace.WorkspaceGraph;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
+
+import java.io.File;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+
+/**
+ * Open one review pull request per subproject carrying a feature branch,
+ * cross-linked so a reviewer can see the whole change set.
+ *
+ * &lt;p&gt;A workspace feature routinely spans several repositories, and GitHub has
+ * no notion of a pull request that covers more than one. Reviewing such a
+ * change means finding the sibling PRs by hand — and a reviewer who misses one
+ * approves an incomplete picture. This goal opens the PRs as a set and writes
+ * the sibling links into each body, so any one of them leads to all the
+ * others.
+ *
+ * &lt;p&gt;It sits &lt;em&gt;beside&lt;/em&gt; {@code ws:feature-finish-squash-*} rather than
+ * replacing it: that goal still performs the local squash-merge when review is
+ * done. Nothing about the existing finish flow changes.
+ *
+ * &lt;p&gt;&lt;strong&gt;Per subproject on {@code feature/&lt;name&gt;}:&lt;/strong&gt;
+ * &lt;ol&gt;
+ *   &lt;li&gt;Skip subprojects on another branch — the feature branch defines the
+ *       set, exactly as {@code ws:feature-finish-*} determines it&lt;/li&gt;
+ *   &lt;li&gt;Push the branch when the remote has no copy yet (a PR cannot be
+ *       opened for a branch GitHub has never seen)&lt;/li&gt;
+ *   &lt;li&gt;Reuse an existing open PR for the same head branch rather than
+ *       failing or opening a duplicate — this goal is safe to re-run&lt;/li&gt;
+ *   &lt;li&gt;Otherwise {@code gh pr create}&lt;/li&gt;
+ * &lt;/ol&gt;
+ *
+ * &lt;p&gt;Then a second pass rewrites each body with the collected sibling URLs.
+ * The two passes are unavoidable: a PR's URL does not exist until it is
+ * created, so the cross-links cannot be part of the initial body.
+ *
+ * &lt;p&gt;Requires the {@code gh} CLI, authenticated — the same dependency
+ * {@code ws:release-publish} already has for GitHub Releases.
+ *
+ * &lt;pre&gt;{@code
+ * mvn ws:feature-pr-draft   -Dfeature=grpc_plugin
+ * mvn ws:feature-pr-publish -Dfeature=grpc_plugin
+ * mvn ws:feature-pr-publish -Dfeature=grpc_plugin -Dreviewer=alice,bob
+ * mvn ws:feature-pr-publish -Dfeature=grpc_plugin -Dtitle=&quot;gRPC datastore provider&quot;
+ * }&lt;/pre&gt;
+ *
+ * @see FeatureTrackDraftMojo for adopting the branch in the first place
+ * @see FeatureFinishSquashDraftMojo for the merge that follows review
+ */
+@Mojo(name = &quot;feature-pr-draft&quot;, projectRequired = false, aggregator = true)
+public class FeaturePrDraftMojo extends AbstractWorkspaceMojo {
+
+    /** Creates this goal instance. */
+<span class="nc" id="L67">    public FeaturePrDraftMojo() {}</span>
+
+    /** Feature name without the {@code feature/} prefix. */
+    @Parameter(property = &quot;feature&quot;)
+    String feature;
+
+    /**
+     * Restrict to these subprojects (comma-separated). Omitted, every
+     * subproject currently on the feature branch is included.
+     */
+    @Parameter(property = &quot;affected&quot;)
+    String affected;
+
+    /** Base branch the pull requests target. */
+    @Parameter(property = &quot;base&quot;, defaultValue = &quot;main&quot;)
+    String base;
+
+    /**
+     * Pull request title. Defaults to the feature name, which keeps the set
+     * visually identifiable in a review queue.
+     */
+    @Parameter(property = &quot;title&quot;)
+    String title;
+
+    /**
+     * Body prepended to every pull request, before the generated
+     * cross-links.
+     */
+    @Parameter(property = &quot;body&quot;)
+    String body;
+
+    /** Comma-separated GitHub logins to request review from. */
+    @Parameter(property = &quot;reviewer&quot;)
+    String reviewer;
+
+    /** Remote to push to and open pull requests against. */
+    @Parameter(property = &quot;remote&quot;, defaultValue = &quot;origin&quot;)
+    String remote;
+
+    /** Open the pull requests. Default is draft (preview only). */
+    @Parameter(property = &quot;publish&quot;, defaultValue = &quot;false&quot;)
+    boolean publish;
+
+    @Override
+    protected WorkspaceReportSpec runGoal() throws MojoException {
+<span class="nc bnc" id="L112" title="All 2 branches missed.">        if (!isWorkspaceMode()) {</span>
+<span class="nc" id="L113">            throw new MojoException(</span>
+                    &quot;ws:feature-pr requires a workspace (workspace.yaml). &quot;
+                    + &quot;For a single repository use 'gh pr create'.&quot;);
+        }
+
+<span class="nc bnc" id="L118" title="All 2 branches missed.">        boolean draft = !publish;</span>
+<span class="nc" id="L119">        WorkspaceGraph graph = loadGraph();</span>
+<span class="nc" id="L120">        File root = workspaceRoot();</span>
+
+<span class="nc" id="L122">        feature = requireParam(feature, &quot;feature&quot;, &quot;Feature name&quot;);</span>
+<span class="nc" id="L123">        String branch = FeatureScope.branchFor(</span>
+<span class="nc" id="L124">                validateFeatureName(feature).value());</span>
+<span class="nc bnc" id="L125" title="All 4 branches missed.">        String prTitle = (title == null || title.isBlank()) ? feature : title;</span>
+
+<span class="nc" id="L127">        Set&lt;String&gt; known = graph.manifest().subprojects().keySet();</span>
+<span class="nc" id="L128">        Set&lt;String&gt; scope = FeatureScope.resolveAffected(affected, known);</span>
+<span class="nc" id="L129">        List&lt;String&gt; sorted = graph.topologicalSort(new LinkedHashSet&lt;&gt;(scope));</span>
+
+<span class="nc" id="L131">        getLog().info(&quot;&quot;);</span>
+<span class="nc" id="L132">        getLog().info(header(&quot;Feature PR&quot;));</span>
+<span class="nc" id="L133">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+<span class="nc" id="L134">        getLog().info(&quot;  Feature: &quot; + feature);</span>
+<span class="nc" id="L135">        getLog().info(&quot;  Branch:  &quot; + branch + &quot; → &quot; + base);</span>
+<span class="nc" id="L136">        getLog().info(&quot;  Title:   &quot; + prTitle);</span>
+<span class="nc bnc" id="L137" title="All 2 branches missed.">        if (draft) getLog().info(&quot;  Mode:    DRAFT&quot;);</span>
+<span class="nc" id="L138">        getLog().info(&quot;&quot;);</span>
+
+<span class="nc" id="L140">        Map&lt;String, String&gt; effects = new LinkedHashMap&lt;&gt;();</span>
+        // Ordered so the cross-link list reads in dependency order.
+<span class="nc" id="L142">        Map&lt;String, String&gt; prUrls = new LinkedHashMap&lt;&gt;();</span>
+<span class="nc" id="L143">        List&lt;String&gt; members = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L144">        List&lt;String&gt; created = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L145">        List&lt;String&gt; reused = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L146">        List&lt;String&gt; needPush = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L147">        int skipped = 0;</span>
+
+<span class="nc bnc" id="L149" title="All 2 branches missed.">        for (String name : sorted) {</span>
+<span class="nc" id="L150">            File dir = new File(root, name);</span>
+<span class="nc bnc" id="L151" title="All 2 branches missed.">            if (!new File(dir, &quot;.git&quot;).exists()) {</span>
+<span class="nc" id="L152">                effects.put(name, &quot;skipped (not cloned)&quot;);</span>
+<span class="nc" id="L153">                skipped++;</span>
+<span class="nc" id="L154">                continue;</span>
+            }
+<span class="nc bnc" id="L156" title="All 2 branches missed.">            if (!branch.equals(gitBranch(dir))) {</span>
+<span class="nc" id="L157">                getLog().info(&quot;  · &quot; + name + &quot; — on &quot; + gitBranch(dir)</span>
+                        + &quot;, not &quot; + branch + &quot;, skipping&quot;);
+<span class="nc" id="L159">                effects.put(name, &quot;skipped (not on `&quot; + branch + &quot;`)&quot;);</span>
+<span class="nc" id="L160">                skipped++;</span>
+<span class="nc" id="L161">                continue;</span>
+            }
+
+<span class="nc" id="L164">            Optional&lt;String&gt; slug = FeatureScope.githubSlug(dir, remote);</span>
+<span class="nc bnc" id="L165" title="All 2 branches missed.">            if (slug.isEmpty()) {</span>
+<span class="nc" id="L166">                getLog().warn(&quot;  &quot; + Ansi.yellow(&quot;⚠ &quot;) + name</span>
+                        + &quot; — no GitHub &quot; + remote + &quot; remote, skipping&quot;);
+<span class="nc" id="L168">                effects.put(name, &quot;skipped (no GitHub `&quot; + remote</span>
+                        + &quot;` remote)&quot;);
+<span class="nc" id="L170">                skipped++;</span>
+<span class="nc" id="L171">                continue;</span>
+            }
+<span class="nc" id="L173">            members.add(name);</span>
+
+<span class="nc" id="L175">            boolean onRemote =</span>
+<span class="nc" id="L176">                    VcsOperations.remoteTrackingExists(dir, remote, branch);</span>
+<span class="nc bnc" id="L177" title="All 2 branches missed.">            if (!onRemote) needPush.add(name);</span>
+
+<span class="nc bnc" id="L179" title="All 2 branches missed.">            Optional&lt;String&gt; existing = draft</span>
+<span class="nc" id="L180">                    ? Optional.empty()</span>
+<span class="nc" id="L181">                    : findOpenPr(dir, slug.get(), branch);</span>
+<span class="nc bnc" id="L182" title="All 2 branches missed.">            if (existing.isPresent()) {</span>
+<span class="nc" id="L183">                getLog().info(&quot;  &quot; + Ansi.green(&quot;✓ &quot;) + name</span>
+<span class="nc" id="L184">                        + &quot; — PR already open: &quot; + existing.get());</span>
+<span class="nc" id="L185">                effects.put(name, &quot;reused existing PR &quot; + existing.get());</span>
+<span class="nc" id="L186">                prUrls.put(name, existing.get());</span>
+<span class="nc" id="L187">                reused.add(name);</span>
+<span class="nc" id="L188">                continue;</span>
+            }
+
+<span class="nc bnc" id="L191" title="All 2 branches missed.">            if (draft) {</span>
+<span class="nc" id="L192">                getLog().info(&quot;  [draft] &quot; + name + &quot; — would open PR on &quot;</span>
+<span class="nc" id="L193">                        + slug.get() + &quot; (&quot; + branch + &quot; → &quot; + base + &quot;)&quot;</span>
+<span class="nc bnc" id="L194" title="All 2 branches missed.">                        + (onRemote ? &quot;&quot; : &quot; after pushing the branch&quot;));</span>
+<span class="nc" id="L195">                effects.put(name, &quot;would open PR on `&quot; + slug.get() + &quot;`&quot;</span>
+<span class="nc bnc" id="L196" title="All 2 branches missed.">                        + (onRemote ? &quot;&quot; : &quot; — push required first&quot;));</span>
+<span class="nc" id="L197">                created.add(name);</span>
+<span class="nc" id="L198">                continue;</span>
+            }
+
+            // A PR cannot reference a branch the remote has never seen.
+<span class="nc bnc" id="L202" title="All 2 branches missed.">            if (!onRemote) {</span>
+<span class="nc" id="L203">                getLog().info(&quot;  &quot; + Ansi.cyan(&quot;→ &quot;) + name</span>
+                        + &quot;: pushing &quot; + branch + &quot; to &quot; + remote);
+<span class="nc" id="L205">                VcsOperations.pushWithUpstream(dir, getLog(), remote, branch);</span>
+            }
+
+<span class="nc" id="L208">            String url = createPr(dir, slug.get(), branch, prTitle,</span>
+<span class="nc" id="L209">                    baseBody(name, members.size()));</span>
+<span class="nc" id="L210">            getLog().info(&quot;  &quot; + Ansi.cyan(&quot;→ &quot;) + name + &quot;: opened &quot; + url);</span>
+<span class="nc" id="L211">            effects.put(name, &quot;opened PR &quot; + url);</span>
+<span class="nc" id="L212">            prUrls.put(name, url);</span>
+<span class="nc" id="L213">            created.add(name);</span>
+<span class="nc" id="L214">        }</span>
+
+        // ── Second pass: cross-link ──
+        // A PR's URL does not exist until it is created, so the sibling
+        // links cannot be written in the first pass.
+<span class="nc" id="L219">        int linked = 0;</span>
+<span class="nc bnc" id="L220" title="All 4 branches missed.">        if (!draft &amp;&amp; prUrls.size() &gt; 1) {</span>
+<span class="nc bnc" id="L221" title="All 2 branches missed.">            for (Map.Entry&lt;String, String&gt; e : prUrls.entrySet()) {</span>
+<span class="nc" id="L222">                File dir = new File(root, e.getKey());</span>
+<span class="nc" id="L223">                Optional&lt;String&gt; slug = FeatureScope.githubSlug(dir, remote);</span>
+<span class="nc bnc" id="L224" title="All 2 branches missed.">                if (slug.isEmpty()) continue;</span>
+                try {
+<span class="nc" id="L226">                    ReleaseSupport.exec(dir, getLog(), &quot;gh&quot;, &quot;pr&quot;, &quot;edit&quot;,</span>
+<span class="nc" id="L227">                            e.getValue(), &quot;--repo&quot;, slug.get(),</span>
+<span class="nc" id="L228">                            &quot;--body&quot;, crossLinkedBody(e.getKey(), prUrls));</span>
+<span class="nc" id="L229">                    linked++;</span>
+<span class="nc" id="L230">                } catch (MojoException ex) {</span>
+                    // A failed cross-link must not invalidate PRs that were
+                    // opened successfully — the review can proceed without
+                    // the convenience links.
+<span class="nc" id="L234">                    getLog().warn(&quot;  Could not cross-link &quot; + e.getValue()</span>
+<span class="nc" id="L235">                            + &quot;: &quot; + ex.getMessage());</span>
+<span class="nc" id="L236">                }</span>
+<span class="nc" id="L237">            }</span>
+        }
+
+<span class="nc bnc" id="L240" title="All 6 branches missed.">        if (!draft &amp;&amp; !prUrls.isEmpty() &amp;&amp; reviewer != null</span>
+<span class="nc bnc" id="L241" title="All 2 branches missed.">                &amp;&amp; !reviewer.isBlank()) {</span>
+<span class="nc" id="L242">            requestReviews(root, prUrls);</span>
+        }
+
+<span class="nc" id="L245">        getLog().info(&quot;&quot;);</span>
+<span class="nc bnc" id="L246" title="All 2 branches missed.">        getLog().info(&quot;  &quot; + (draft</span>
+<span class="nc" id="L247">                ? created.size() + &quot; PR(s) to open, &quot; + reused.size()</span>
+<span class="nc" id="L248">                        + &quot; already open, &quot; + skipped + &quot; skipped&quot;</span>
+<span class="nc" id="L249">                : &quot;Opened: &quot; + created.size() + &quot; | Reused: &quot; + reused.size()</span>
+                        + &quot; | Cross-linked: &quot; + linked + &quot; | Skipped: &quot;
+<span class="nc" id="L251">                        + skipped));</span>
+<span class="nc" id="L252">        getLog().info(&quot;&quot;);</span>
+
+        // ── Report ──
+<span class="nc" id="L255">        GoalReportBuilder report = new GoalReportBuilder();</span>
+<span class="nc" id="L256">        report.paragraph(&quot;**Feature:** `&quot; + feature + &quot;` **Branch:** `&quot; + branch</span>
+                + &quot;` → `&quot; + base + &quot;`&quot;
+<span class="nc bnc" id="L258" title="All 2 branches missed.">                + (draft ? &quot;  _(draft — no pull requests opened)_&quot; : &quot;&quot;));</span>
+
+<span class="nc" id="L260">        report.section(&quot;Working set&quot;);</span>
+<span class="nc bnc" id="L261" title="All 2 branches missed.">        for (Map.Entry&lt;String, String&gt; e : effects.entrySet()) {</span>
+<span class="nc" id="L262">            report.bullet(&quot;`&quot; + e.getKey() + &quot;` — &quot; + e.getValue());</span>
+<span class="nc" id="L263">        }</span>
+
+<span class="nc bnc" id="L265" title="All 2 branches missed.">        if (!prUrls.isEmpty()) {</span>
+<span class="nc" id="L266">            report.section(&quot;Pull requests&quot;);</span>
+<span class="nc bnc" id="L267" title="All 2 branches missed.">            for (Map.Entry&lt;String, String&gt; e : prUrls.entrySet()) {</span>
+<span class="nc" id="L268">                report.bullet(&quot;`&quot; + e.getKey() + &quot;` — &quot; + e.getValue());</span>
+<span class="nc" id="L269">            }</span>
+        }
+
+<span class="nc bnc" id="L272" title="All 4 branches missed.">        if (draft &amp;&amp; !needPush.isEmpty()) {</span>
+<span class="nc" id="L273">            report.section(&quot;Push required&quot;);</span>
+<span class="nc" id="L274">            report.paragraph(&quot;`&quot; + branch + &quot;` is not on `&quot; + remote</span>
+                    + &quot;` for these subprojects; the publish run pushes it &quot;
+                    + &quot;first (or run `ws:push -Dfeature=&quot; + feature
+                    + &quot;` yourself):&quot;);
+<span class="nc bnc" id="L278" title="All 2 branches missed.">            for (String n : needPush) report.bullet(&quot;`&quot; + n + &quot;`&quot;);</span>
+        }
+
+<span class="nc bnc" id="L281" title="All 2 branches missed.">        if (members.isEmpty()) {</span>
+<span class="nc" id="L282">            report.section(&quot;Nothing to do&quot;);</span>
+<span class="nc" id="L283">            report.paragraph(&quot;No subproject is on `&quot; + branch + &quot;`. Adopt the &quot;</span>
+                    + &quot;branch with `ws:feature-track-publish -Dfeature=&quot;
+                    + feature + &quot; -Daffected=...` first.&quot;);
+        } else {
+<span class="nc" id="L287">            report.section(&quot;Next&quot;);</span>
+<span class="nc" id="L288">            report.paragraph(&quot;After review approves and the pull requests &quot;</span>
+                    + &quot;merge, bring `&quot; + base + &quot;` down with `ws:refresh-main`. &quot;
+                    + &quot;`ws:feature-finish-squash-*` is unchanged and still &quot;
+                    + &quot;available for a local squash-merge instead.&quot;);
+        }
+
+<span class="nc" id="L294">        return new WorkspaceReportSpec(</span>
+<span class="nc bnc" id="L295" title="All 2 branches missed.">                publish ? WsGoal.FEATURE_PR_PUBLISH : WsGoal.FEATURE_PR_DRAFT,</span>
+<span class="nc" id="L296">                report.build());</span>
+    }
+
+    /**
+     * The body a pull request gets on creation, before cross-links exist.
+     *
+     * @param name    the subproject
+     * @param ordinal its 1-based position in the set
+     * @return the initial body
+     */
+    private String baseBody(String name, int ordinal) {
+<span class="nc" id="L307">        StringBuilder b = new StringBuilder();</span>
+<span class="nc bnc" id="L308" title="All 4 branches missed.">        if (body != null &amp;&amp; !body.isBlank()) {</span>
+<span class="nc" id="L309">            b.append(body).append(&quot;\n\n&quot;);</span>
+        }
+<span class="nc" id="L311">        b.append(&quot;Part of the `&quot;).append(feature)</span>
+<span class="nc" id="L312">                .append(&quot;` workspace feature (`&quot;).append(name)</span>
+<span class="nc" id="L313">                .append(&quot;`, component &quot;).append(ordinal).append(&quot;).\n\n&quot;)</span>
+<span class="nc" id="L314">                .append(&quot;Opened by `ws:feature-pr-publish`. Sibling pull &quot;</span>
+                        + &quot;requests are linked in a follow-up edit once every &quot;
+                        + &quot;component's pull request exists.\n&quot;);
+<span class="nc" id="L317">        return b.toString();</span>
+    }
+
+    /**
+     * The final body: the base body plus a link to every sibling pull
+     * request, with the current one marked so a reviewer can see where they
+     * are in the set.
+     *
+     * @param self   the subproject this body belongs to
+     * @param prUrls every pull request in the set, in dependency order
+     * @return the rewritten body
+     */
+    private String crossLinkedBody(String self, Map&lt;String, String&gt; prUrls) {
+<span class="nc" id="L330">        StringBuilder b = new StringBuilder();</span>
+<span class="nc bnc" id="L331" title="All 4 branches missed.">        if (body != null &amp;&amp; !body.isBlank()) {</span>
+<span class="nc" id="L332">            b.append(body).append(&quot;\n\n&quot;);</span>
+        }
+<span class="nc" id="L334">        b.append(&quot;Part of the `&quot;).append(feature)</span>
+<span class="nc" id="L335">                .append(&quot;` workspace feature, spanning &quot;)</span>
+<span class="nc" id="L336">                .append(prUrls.size()).append(&quot; repositories. &quot;)</span>
+<span class="nc" id="L337">                .append(&quot;All of them must merge for the feature to be &quot;</span>
+                        + &quot;complete.\n\n&quot;)
+<span class="nc" id="L339">                .append(&quot;| Component | Pull request |\n&quot;)</span>
+<span class="nc" id="L340">                .append(&quot;|---|---|\n&quot;);</span>
+<span class="nc bnc" id="L341" title="All 2 branches missed.">        for (Map.Entry&lt;String, String&gt; e : prUrls.entrySet()) {</span>
+<span class="nc" id="L342">            boolean isSelf = e.getKey().equals(self);</span>
+<span class="nc" id="L343">            b.append(&quot;| `&quot;).append(e.getKey()).append('`')</span>
+<span class="nc bnc" id="L344" title="All 2 branches missed.">                    .append(isSelf ? &quot; ← this PR&quot; : &quot;&quot;)</span>
+<span class="nc" id="L345">                    .append(&quot; | &quot;).append(e.getValue()).append(&quot; |\n&quot;);</span>
+<span class="nc" id="L346">        }</span>
+<span class="nc" id="L347">        b.append(&quot;\nOpened by `ws:feature-pr-publish`.\n&quot;);</span>
+<span class="nc" id="L348">        return b.toString();</span>
+    }
+
+    /**
+     * The URL of an already-open pull request for {@code branch}, if any.
+     *
+     * &lt;p&gt;Makes the goal re-runnable: without this check a second run would
+     * either fail or open duplicate pull requests for the same head.
+     *
+     * @param dir    the subproject directory
+     * @param slug   the {@code owner/repo}
+     * @param branch the head branch
+     * @return the URL, or empty when no open pull request exists
+     */
+    private Optional&lt;String&gt; findOpenPr(File dir, String slug, String branch) {
+        try {
+<span class="nc" id="L364">            String out = ReleaseSupport.execCapture(dir,</span>
+                    &quot;gh&quot;, &quot;pr&quot;, &quot;list&quot;, &quot;--repo&quot;, slug, &quot;--head&quot;, branch,
+                    &quot;--state&quot;, &quot;open&quot;, &quot;--json&quot;, &quot;url&quot;,
+                    &quot;--jq&quot;, &quot;.[0].url // empty&quot;);
+<span class="nc bnc" id="L368" title="All 2 branches missed.">            String url = out == null ? &quot;&quot; : out.trim();</span>
+<span class="nc bnc" id="L369" title="All 2 branches missed.">            return url.isEmpty() ? Optional.empty() : Optional.of(url);</span>
+<span class="nc" id="L370">        } catch (MojoException e) {</span>
+            // Treat a failed lookup as &quot;no existing PR&quot; rather than
+            // aborting: gh may be unauthenticated for this repo, and the
+            // create call below will surface a clearer error.
+<span class="nc" id="L374">            getLog().debug(&quot;  gh pr list failed for &quot; + slug + &quot;: &quot;</span>
+<span class="nc" id="L375">                    + e.getMessage());</span>
+<span class="nc" id="L376">            return Optional.empty();</span>
+        }
+    }
+
+    /**
+     * Open a pull request and return its URL.
+     *
+     * @param dir      the subproject directory
+     * @param slug     the {@code owner/repo}
+     * @param branch   the head branch
+     * @param prTitle  the title
+     * @param prBody   the initial body
+     * @return the new pull request's URL
+     * @throws MojoException when {@code gh pr create} fails
+     */
+    private String createPr(File dir, String slug, String branch,
+                            String prTitle, String prBody)
+            throws MojoException {
+<span class="nc" id="L394">        String out = ReleaseSupport.execCapture(dir,</span>
+                &quot;gh&quot;, &quot;pr&quot;, &quot;create&quot;,
+                &quot;--repo&quot;, slug,
+                &quot;--head&quot;, branch,
+                &quot;--base&quot;, base,
+                &quot;--title&quot;, prTitle,
+                &quot;--body&quot;, prBody);
+        // gh prints the PR URL on stdout; keep the last URL-looking line so
+        // a leading informational line can't be mistaken for the URL.
+<span class="nc" id="L403">        String url = &quot;&quot;;</span>
+<span class="nc bnc" id="L404" title="All 4 branches missed.">        for (String line : (out == null ? &quot;&quot; : out).split(&quot;\\R&quot;)) {</span>
+<span class="nc" id="L405">            String t = line.trim();</span>
+<span class="nc bnc" id="L406" title="All 2 branches missed.">            if (t.startsWith(&quot;http&quot;)) url = t;</span>
+        }
+<span class="nc bnc" id="L408" title="All 2 branches missed.">        if (url.isEmpty()) {</span>
+<span class="nc" id="L409">            throw new MojoException(</span>
+                    &quot;gh pr create succeeded for &quot; + slug + &quot; but printed no &quot;
+                    + &quot;pull request URL; output was: &quot; + out);
+        }
+<span class="nc" id="L413">        return url;</span>
+    }
+
+    /**
+     * Request review on every opened pull request, best-effort.
+     *
+     * &lt;p&gt;A reviewer who has no access to one repository in the set must not
+     * fail the whole goal — the pull requests are already open and are the
+     * deliverable.
+     */
+    private void requestReviews(File root, Map&lt;String, String&gt; prUrls) {
+<span class="nc bnc" id="L424" title="All 2 branches missed.">        for (Map.Entry&lt;String, String&gt; e : prUrls.entrySet()) {</span>
+<span class="nc" id="L425">            File dir = new File(root, e.getKey());</span>
+<span class="nc" id="L426">            Optional&lt;String&gt; slug = FeatureScope.githubSlug(dir, remote);</span>
+<span class="nc bnc" id="L427" title="All 2 branches missed.">            if (slug.isEmpty()) continue;</span>
+            try {
+<span class="nc" id="L429">                ReleaseSupport.exec(dir, getLog(), &quot;gh&quot;, &quot;pr&quot;, &quot;edit&quot;,</span>
+<span class="nc" id="L430">                        e.getValue(), &quot;--repo&quot;, slug.get(),</span>
+                        &quot;--add-reviewer&quot;, reviewer);
+<span class="nc" id="L432">            } catch (MojoException ex) {</span>
+<span class="nc" id="L433">                getLog().warn(&quot;  Could not add reviewer(s) '&quot; + reviewer</span>
+<span class="nc" id="L434">                        + &quot;' to &quot; + e.getValue() + &quot;: &quot; + ex.getMessage());</span>
+<span class="nc" id="L435">            }</span>
+<span class="nc" id="L436">        }</span>
+<span class="nc" id="L437">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

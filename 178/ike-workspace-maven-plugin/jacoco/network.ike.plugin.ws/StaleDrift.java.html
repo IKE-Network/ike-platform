@@ -1,0 +1,439 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>StaleDrift.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">StaleDrift.java</span></div><h1>StaleDrift.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import org.apache.maven.api.plugin.MojoException;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Optional;
+import java.util.Set;
+
+/**
+ * Detects &lt;em&gt;time-reversed synced drift&lt;/em&gt; in a repository's pending
+ * changes (IKE-Network/ike-issues#1082).
+ *
+ * &lt;p&gt;In a Syncthing-synchronized working set, ref alignment moves a
+ * repository's refs without touching the synced tree — by design, the
+ * tree is the medium of exchange. When the tree lags the refs, the
+ * resulting status delta is time-reversed: &lt;em&gt;old&lt;/em&gt; content presents
+ * as pending changes. Such a delta reads exactly like WIP to every
+ * commit surface, and committing it re-commits history backwards — the
+ * 2026-08-31 incident deleted a teammate's day-old work from origin.
+ *
+ * &lt;p&gt;The discriminator is mechanical: a pending change whose content
+ * byte-matches an older committed state of the same path carries no
+ * authored content. Per change kind:
+ *
+ * &lt;ul&gt;
+ *   &lt;li&gt;&lt;b&gt;Modified&lt;/b&gt; — the pending blob equals the path's blob at
+ *       some earlier commit that touched the path (a revert to old
+ *       content);&lt;/li&gt;
+ *   &lt;li&gt;&lt;b&gt;Deleted&lt;/b&gt; — the path's most recent add is itself a recent
+ *       commit (the deletion undoes a recent add);&lt;/li&gt;
+ *   &lt;li&gt;&lt;b&gt;Added&lt;/b&gt; — the pending blob equals a historical blob of the
+ *       same, currently absent, path (an old file re-appearing).&lt;/li&gt;
+ * &lt;/ul&gt;
+ *
+ * &lt;p&gt;A delta whose &lt;em&gt;every&lt;/em&gt; path is stale-shaped is drift, not
+ * WIP: {@code ws:commit-publish} refuses it (escapable with
+ * {@code -Dallow-stale-drift=true} for a deliberate hand-authored
+ * revert). A mixed delta is warned about per path and committed —
+ * deliberate reverts alongside novel work are legitimate.
+ *
+ * &lt;p&gt;All probes are failure-tolerant: a path whose history cannot be
+ * read classifies as novel, and callers treat an analysis failure as
+ * &quot;no finding&quot; — the guard fails open, like the lease fence, rather
+ * than wedging commits.
+ */
+final class StaleDrift {
+
+    /**
+     * How many recent commits of the repository bound the &quot;recent add&quot;
+     * test for deletions. Calibrated against the motivating incident,
+     * where the drift spanned 16 and 28 commits in the two affected
+     * repositories; 200 leaves generous headroom without scanning whole
+     * histories.
+     */
+    static final int REPO_WINDOW = 200;
+
+    /**
+     * How many path-touching commits are probed when matching a
+     * modified or added path's pending blob against history. A path's
+     * blob only changes at commits that touch it, so this bounds the
+     * per-path probe count, not a time window; the incident file had 15
+     * touching commits in its whole history.
+     */
+    static final int PATH_HISTORY_LIMIT = 32;
+
+    private StaleDrift() {
+    }
+
+    /** How a pending change alters its path. */
+<span class="fc" id="L75">    enum ChangeKind {</span>
+        /** Content change to a tracked path. */
+<span class="fc" id="L77">        MODIFIED,</span>
+        /** Path absent at HEAD, present in the pending change. */
+<span class="fc" id="L79">        ADDED,</span>
+        /** Path present at HEAD, removed by the pending change. */
+<span class="fc" id="L81">        DELETED</span>
+    }
+
+    /**
+     * One pending change, normalized from either the index or the
+     * working tree.
+     *
+     * @param kind how the change alters the path
+     * @param path the repo-relative path
+     * @param blob the pending content's blob SHA, or {@code null} for
+     *             {@link ChangeKind#DELETED}
+     */
+<span class="fc" id="L93">    record Change(ChangeKind kind, String path, String blob) {}</span>
+
+    /**
+     * A stale-shaped change and the historical state it matches.
+     *
+     * @param change         the pending change
+     * @param matchedCommit  the commit whose state the change restores
+     *                       (for deletions: the recent add the deletion
+     *                       undoes)
+     * @param matchedSubject that commit's subject line, best-effort
+     *                       ({@code &quot;&quot;} when unreadable)
+     */
+<span class="fc" id="L105">    record Finding(Change change, String matchedCommit, String matchedSubject) {}</span>
+
+    /**
+     * The classification of a repository's pending changes.
+     *
+     * @param stale changes that byte-match an older committed state
+     * @param novel changes carrying content history has never held
+     */
+<span class="fc" id="L113">    record Analysis(List&lt;Finding&gt; stale, List&lt;Change&gt; novel) {</span>
+
+        /** An analysis with no pending changes at all. */
+<span class="fc" id="L116">        static final Analysis EMPTY = new Analysis(List.of(), List.of());</span>
+
+        /**
+         * Whether every pending change is stale-shaped — the refusal
+         * condition: such a delta holds no authored content.
+         *
+         * @return {@code true} when there is at least one stale change
+         *         and no novel one
+         */
+        boolean whollyStale() {
+<span class="fc bfc" id="L126" title="All 4 branches covered.">            return !stale.isEmpty() &amp;&amp; novel.isEmpty();</span>
+        }
+
+        /**
+         * Whether any pending change is stale-shaped — the warning
+         * condition for mixed deltas.
+         *
+         * @return {@code true} when at least one change is stale
+         */
+        boolean hasStale() {
+<span class="fc bfc" id="L136" title="All 2 branches covered.">            return !stale.isEmpty();</span>
+        }
+    }
+
+    /**
+     * Classifies a repository's &lt;em&gt;staged&lt;/em&gt; changes — what
+     * {@code git commit} would record right now.
+     *
+     * @param dir the repository root directory
+     * @return the classification; {@link Analysis#EMPTY} when nothing
+     *         is staged
+     * @throws MojoException when the staged state itself cannot be read
+     *         (per-path history probe failures classify as novel
+     *         instead)
+     */
+    static Analysis analyzeStaged(File dir) throws MojoException {
+<span class="fc" id="L152">        List&lt;Change&gt; changes = new ArrayList&lt;&gt;();</span>
+        // --no-abbrev: --raw output abbreviates blob ids by default, and
+        // the classification compares them for equality with rev-parse
+        // output, which is always full-length.
+<span class="fc" id="L156">        String raw = capture(dir, &quot;git&quot;, &quot;diff&quot;, &quot;--cached&quot;, &quot;--raw&quot;,</span>
+                &quot;--no-abbrev&quot;, &quot;--no-renames&quot;)
+<span class="pc" id="L158">                .orElseThrow(() -&gt; new MojoException(</span>
+                        &quot;git diff --cached --raw failed in &quot; + dir));
+<span class="fc bfc" id="L160" title="All 2 branches covered.">        for (String line : raw.split(&quot;\n&quot;)) {</span>
+<span class="fc bfc" id="L161" title="All 2 branches covered.">            if (line.isBlank()) {</span>
+<span class="fc" id="L162">                continue;</span>
+            }
+            // :oldmode newmode oldsha newsha S\tpath
+<span class="fc" id="L165">            int tab = line.indexOf('\t');</span>
+<span class="pc bpc" id="L166" title="1 of 2 branches missed.">            if (tab &lt; 0) {</span>
+<span class="nc" id="L167">                continue;</span>
+            }
+<span class="fc" id="L169">            String path = line.substring(tab + 1);</span>
+<span class="fc" id="L170">            String[] meta = line.substring(0, tab).trim().split(&quot;\\s+&quot;);</span>
+<span class="pc bpc" id="L171" title="1 of 2 branches missed.">            if (meta.length &lt; 5) {</span>
+<span class="nc" id="L172">                continue;</span>
+            }
+<span class="fc" id="L174">            String newSha = meta[3];</span>
+<span class="fc" id="L175">            char status = meta[4].charAt(0);</span>
+<span class="fc bfc" id="L176" title="All 3 branches covered.">            switch (status) {</span>
+<span class="fc" id="L177">                case 'D' -&gt; changes.add(</span>
+                        new Change(ChangeKind.DELETED, path, null));
+<span class="fc" id="L179">                case 'A' -&gt; changes.add(</span>
+                        new Change(ChangeKind.ADDED, path, newSha));
+                // M (content) and T (typechange) both carry new content.
+<span class="fc" id="L182">                default -&gt; changes.add(</span>
+                        new Change(ChangeKind.MODIFIED, path, newSha));
+            }
+        }
+<span class="fc" id="L186">        return analyze(dir, changes);</span>
+    }
+
+    /**
+     * Classifies a repository's &lt;em&gt;working-tree&lt;/em&gt; changes — what
+     * {@code ws:commit-publish}'s default sweep would stage — for the
+     * read-only draft preview. Untracked files classify as added,
+     * deletions on either side of the index as deleted, everything
+     * else as modified; pending content is hashed from the working
+     * tree.
+     *
+     * @param dir the repository root directory
+     * @return the classification; {@link Analysis#EMPTY} when the tree
+     *         is clean
+     * @throws MojoException when the working-tree status itself cannot
+     *         be read
+     */
+    static Analysis analyzeWorktree(File dir) throws MojoException {
+        // Untrimmed: porcelain's two status columns are positional, and
+        // the first line's leading space (e.g. &quot; M path&quot;) is data.
+<span class="fc" id="L206">        String porcelain = captureRaw(dir, &quot;git&quot;, &quot;status&quot;, &quot;--porcelain&quot;)</span>
+<span class="pc" id="L207">                .orElseThrow(() -&gt; new MojoException(</span>
+                        &quot;git status --porcelain failed in &quot; + dir));
+<span class="fc" id="L209">        List&lt;Change&gt; changes = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L210" title="All 2 branches covered.">        for (String line : porcelain.split(&quot;\n&quot;)) {</span>
+<span class="pc bpc" id="L211" title="1 of 2 branches missed.">            if (line.length() &lt; 4) {</span>
+<span class="nc" id="L212">                continue;</span>
+            }
+<span class="fc" id="L214">            char index = line.charAt(0);</span>
+<span class="fc" id="L215">            char worktree = line.charAt(1);</span>
+<span class="fc" id="L216">            String rawPath = line.substring(3);</span>
+<span class="fc" id="L217">            int arrow = rawPath.indexOf(&quot; -&gt; &quot;);</span>
+<span class="pc bpc" id="L218" title="1 of 2 branches missed.">            String path = arrow &gt;= 0 ? rawPath.substring(arrow + 4) : rawPath;</span>
+<span class="pc bpc" id="L219" title="2 of 4 branches missed.">            if (index == 'D' || worktree == 'D') {</span>
+<span class="nc" id="L220">                changes.add(new Change(ChangeKind.DELETED, path, null));</span>
+<span class="pc bpc" id="L221" title="1 of 4 branches missed.">            } else if (index == '?' || index == 'A') {</span>
+<span class="fc" id="L222">                hashOf(dir, path).ifPresent(blob -&gt; changes.add(</span>
+                        new Change(ChangeKind.ADDED, path, blob)));
+            } else {
+<span class="fc" id="L225">                hashOf(dir, path).ifPresent(blob -&gt; changes.add(</span>
+                        new Change(ChangeKind.MODIFIED, path, blob)));
+            }
+        }
+<span class="fc" id="L229">        return analyze(dir, changes);</span>
+    }
+
+    /**
+     * Hashes a working-tree file as git would, tolerantly: a path that
+     * cannot be hashed (vanished mid-scan, permission) is simply left
+     * out of the analysis.
+     *
+     * @param dir  the repository root directory
+     * @param path the repo-relative path
+     * @return the blob SHA, or empty when unhashable
+     */
+    private static Optional&lt;String&gt; hashOf(File dir, String path) {
+<span class="fc" id="L242">        return capture(dir, &quot;git&quot;, &quot;hash-object&quot;, &quot;--&quot;, path)</span>
+<span class="pc bpc" id="L243" title="1 of 2 branches missed.">                .filter(sha -&gt; !sha.isBlank());</span>
+    }
+
+    /**
+     * Classifies pending changes against the repository's history.
+     *
+     * @param dir     the repository root directory
+     * @param changes the pending changes to classify
+     * @return the classification; {@link Analysis#EMPTY} when
+     *         {@code changes} is empty
+     */
+    static Analysis analyze(File dir, List&lt;Change&gt; changes) {
+<span class="fc bfc" id="L255" title="All 2 branches covered.">        if (changes.isEmpty()) {</span>
+<span class="fc" id="L256">            return Analysis.EMPTY;</span>
+        }
+        // The recent-commit window for the deletion test. HEAD itself is
+        // included deliberately: deleting a path HEAD just added undoes
+        // HEAD, the most sharply time-reversed shape there is.
+<span class="fc" id="L261">        Set&lt;String&gt; recentCommits = new HashSet&lt;&gt;(</span>
+<span class="fc" id="L262">                captureLines(dir, &quot;git&quot;, &quot;rev-list&quot;,</span>
+<span class="fc" id="L263">                        &quot;-n&quot;, String.valueOf(REPO_WINDOW), &quot;HEAD&quot;));</span>
+
+<span class="fc" id="L265">        List&lt;Finding&gt; stale = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L266">        List&lt;Change&gt; novel = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L267" title="All 2 branches covered.">        for (Change change : changes) {</span>
+<span class="fc bfc" id="L268" title="All 2 branches covered.">            Optional&lt;String&gt; matched = switch (change.kind()) {</span>
+<span class="fc" id="L269">                case MODIFIED, ADDED -&gt; matchHistoricalBlob(dir, change);</span>
+<span class="fc" id="L270">                case DELETED -&gt; matchRecentAdd(dir, change, recentCommits);</span>
+            };
+<span class="fc bfc" id="L272" title="All 2 branches covered.">            if (matched.isPresent()) {</span>
+<span class="fc" id="L273">                stale.add(new Finding(change, matched.get(),</span>
+<span class="fc" id="L274">                        subjectOf(dir, matched.get())));</span>
+            } else {
+<span class="fc" id="L276">                novel.add(change);</span>
+            }
+<span class="fc" id="L278">        }</span>
+<span class="fc" id="L279">        return new Analysis(List.copyOf(stale), List.copyOf(novel));</span>
+    }
+
+    /**
+     * Finds a historical commit at which the path held exactly the
+     * pending blob. Only commits that touched the path can change its
+     * blob, so the probe walks the path's own history; the commit at
+     * the head of that walk is skipped for modifications (its blob is
+     * the current content the pending change differs from).
+     *
+     * @param dir    the repository root directory
+     * @param change the modified or added change
+     * @return the matching commit SHA, or empty when the content is
+     *         novel (or history is unreadable)
+     */
+    private static Optional&lt;String&gt; matchHistoricalBlob(File dir, Change change) {
+<span class="fc" id="L295">        List&lt;String&gt; touching = captureLines(dir, &quot;git&quot;, &quot;log&quot;,</span>
+<span class="fc" id="L296">                &quot;-n&quot;, String.valueOf(PATH_HISTORY_LIMIT),</span>
+<span class="fc" id="L297">                &quot;--format=%H&quot;, &quot;HEAD&quot;, &quot;--&quot;, change.path());</span>
+<span class="fc bfc" id="L298" title="All 2 branches covered.">        boolean skipFirst = change.kind() == ChangeKind.MODIFIED;</span>
+<span class="fc bfc" id="L299" title="All 2 branches covered.">        for (String commit : touching) {</span>
+<span class="fc bfc" id="L300" title="All 2 branches covered.">            if (skipFirst) {</span>
+<span class="fc" id="L301">                skipFirst = false;</span>
+<span class="fc" id="L302">                continue;</span>
+            }
+<span class="fc" id="L304">            Optional&lt;String&gt; blobAt = capture(dir, &quot;git&quot;, &quot;rev-parse&quot;,</span>
+<span class="fc" id="L305">                    commit + &quot;:&quot; + change.path());</span>
+<span class="fc bfc" id="L306" title="All 4 branches covered.">            if (blobAt.isPresent() &amp;&amp; blobAt.get().equals(change.blob())) {</span>
+<span class="fc" id="L307">                return Optional.of(commit);</span>
+            }
+<span class="fc" id="L309">        }</span>
+<span class="fc" id="L310">        return Optional.empty();</span>
+    }
+
+    /**
+     * Tests whether a deletion undoes a recent add: the path's most
+     * recent add commit lies inside the repository's recent-commit
+     * window. A deletion of a long-established path is an ordinary
+     * deletion, not drift.
+     *
+     * @param dir           the repository root directory
+     * @param change        the deleted change
+     * @param recentCommits the repository's last {@link #REPO_WINDOW}
+     *                      commit SHAs
+     * @return the add commit the deletion undoes, or empty
+     */
+    private static Optional&lt;String&gt; matchRecentAdd(File dir, Change change,
+                                                   Set&lt;String&gt; recentCommits) {
+<span class="fc" id="L327">        List&lt;String&gt; added = captureLines(dir, &quot;git&quot;, &quot;log&quot;, &quot;-n&quot;, &quot;1&quot;,</span>
+<span class="fc" id="L328">                &quot;--diff-filter=A&quot;, &quot;--format=%H&quot;, &quot;HEAD&quot;, &quot;--&quot;, change.path());</span>
+<span class="pc bpc" id="L329" title="1 of 4 branches missed.">        if (added.isEmpty() || !recentCommits.contains(added.get(0))) {</span>
+<span class="fc" id="L330">            return Optional.empty();</span>
+        }
+<span class="fc" id="L332">        return Optional.of(added.get(0));</span>
+    }
+
+    /**
+     * Best-effort subject line of a commit, for the finding report.
+     *
+     * @param dir    the repository root directory
+     * @param commit the commit SHA
+     * @return the subject, or {@code &quot;&quot;} when unreadable
+     */
+    private static String subjectOf(File dir, String commit) {
+<span class="fc" id="L343">        return capture(dir, &quot;git&quot;, &quot;show&quot;, &quot;-s&quot;, &quot;--format=%s&quot;, commit)</span>
+<span class="fc" id="L344">                .orElse(&quot;&quot;);</span>
+    }
+
+    /**
+     * Formats an analysis's stale findings as report lines, one per
+     * finding, naming the historical state each change restores.
+     *
+     * @param analysis the analysis to format
+     * @return one line per stale finding
+     */
+    static List&lt;String&gt; describeStale(Analysis analysis) {
+<span class="fc" id="L355">        List&lt;String&gt; lines = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L356" title="All 2 branches covered.">        for (Finding finding : analysis.stale()) {</span>
+<span class="pc bpc" id="L357" title="1 of 2 branches missed.">            String shortSha = finding.matchedCommit().length() &gt;= 8</span>
+<span class="fc" id="L358">                    ? finding.matchedCommit().substring(0, 8)</span>
+<span class="pc" id="L359">                    : finding.matchedCommit();</span>
+<span class="pc bpc" id="L360" title="2 of 3 branches missed.">            String verb = switch (finding.change().kind()) {</span>
+<span class="fc" id="L361">                case MODIFIED -&gt; &quot;reverts to its state at&quot;;</span>
+<span class="nc" id="L362">                case ADDED -&gt; &quot;re-adds its content from&quot;;</span>
+<span class="nc" id="L363">                case DELETED -&gt; &quot;undoes its addition in&quot;;</span>
+            };
+<span class="fc" id="L365">            lines.add(finding.change().path() + &quot; — &quot; + verb + &quot; &quot;</span>
+                    + shortSha
+<span class="pc bpc" id="L367" title="1 of 2 branches missed.">                    + (finding.matchedSubject().isEmpty()</span>
+<span class="pc" id="L368">                            ? &quot;&quot; : &quot; (&quot; + finding.matchedSubject() + &quot;)&quot;));</span>
+<span class="fc" id="L369">        }</span>
+<span class="fc" id="L370">        return lines;</span>
+    }
+
+    /**
+     * Runs a command and captures trimmed stdout, empty on any failure
+     * — every history probe is tolerant by construction.
+     *
+     * @param dir     the working directory
+     * @param command the command and arguments
+     * @return trimmed stdout, or empty on non-zero exit or I/O failure
+     */
+    private static Optional&lt;String&gt; capture(File dir, String... command) {
+<span class="fc" id="L382">        return captureRaw(dir, command).map(String::trim);</span>
+    }
+
+    /**
+     * Runs a command and captures stdout verbatim — for output whose
+     * leading whitespace is data, like {@code git status --porcelain}
+     * status columns. Empty on any failure.
+     *
+     * @param dir     the working directory
+     * @param command the command and arguments
+     * @return stdout untrimmed, or empty on non-zero exit or I/O failure
+     */
+    private static Optional&lt;String&gt; captureRaw(File dir, String... command) {
+        try {
+<span class="fc" id="L396">            Process process = new ProcessBuilder(command)</span>
+<span class="fc" id="L397">                    .directory(dir)</span>
+<span class="fc" id="L398">                    .redirectErrorStream(false)</span>
+<span class="fc" id="L399">                    .start();</span>
+<span class="fc" id="L400">            String stdout = new String(</span>
+<span class="fc" id="L401">                    process.getInputStream().readAllBytes(),</span>
+                    StandardCharsets.UTF_8);
+            // Drain stderr so the subprocess can never block on a full pipe.
+<span class="fc" id="L404">            process.getErrorStream().readAllBytes();</span>
+<span class="fc bfc" id="L405" title="All 2 branches covered.">            if (process.waitFor() != 0) {</span>
+<span class="fc" id="L406">                return Optional.empty();</span>
+            }
+<span class="fc" id="L408">            return Optional.of(stdout);</span>
+<span class="nc" id="L409">        } catch (IOException e) {</span>
+<span class="nc" id="L410">            return Optional.empty();</span>
+<span class="nc" id="L411">        } catch (InterruptedException e) {</span>
+<span class="nc" id="L412">            Thread.currentThread().interrupt();</span>
+<span class="nc" id="L413">            return Optional.empty();</span>
+        }
+    }
+
+    /**
+     * Runs a command and captures stdout as lines, empty list on any
+     * failure.
+     *
+     * @param dir     the working directory
+     * @param command the command and arguments
+     * @return the non-blank stdout lines, or an empty list on failure
+     */
+    private static List&lt;String&gt; captureLines(File dir, String... command) {
+<span class="fc" id="L426">        Optional&lt;String&gt; out = capture(dir, command);</span>
+<span class="pc bpc" id="L427" title="1 of 4 branches missed.">        if (out.isEmpty() || out.get().isBlank()) {</span>
+<span class="fc" id="L428">            return List.of();</span>
+        }
+<span class="fc" id="L430">        List&lt;String&gt; lines = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L431" title="All 2 branches covered.">        for (String line : out.get().split(&quot;\n&quot;)) {</span>
+<span class="pc bpc" id="L432" title="1 of 2 branches missed.">            if (!line.isBlank()) {</span>
+<span class="fc" id="L433">                lines.add(line.trim());</span>
+            }
+        }
+<span class="fc" id="L436">        return lines;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

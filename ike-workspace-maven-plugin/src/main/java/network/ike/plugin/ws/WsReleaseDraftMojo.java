@@ -1507,7 +1507,7 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
      */
     private void syncWorkspaceVersions(File root,
                                         Map<String, String> versionUpdates) {
-        Path manifestPath = root.toPath().resolve("workspace.yaml");
+        Path manifestPath = Manifests.path(root);
         if (!Files.isRegularFile(manifestPath)) {
             getLog().debug("  No workspace.yaml at " + manifestPath
                     + " — skipping manifest sync (#371)");
@@ -1556,7 +1556,7 @@ public class WsReleaseDraftMojo extends AbstractWorkspaceMojo {
         }
         try {
             ReleaseSupport.exec(root, getLog(),
-                    "git", "add", "workspace.yaml");
+                    "git", "add", Manifests.name(root));
             ReleaseSupport.exec(root, getLog(),
                     "git", "commit", "-m",
                     "post-release: sync workspace.yaml versions (#371)");

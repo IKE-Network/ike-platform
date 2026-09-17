@@ -88,7 +88,7 @@ final class YamlDepsSync {
      *         processed
      */
     static SyncResult run(File workspaceRoot, Log log) {
-        Path manifestPath = workspaceRoot.toPath().resolve("workspace.yaml");
+        Path manifestPath = Manifests.path(workspaceRoot);
         if (!Files.isRegularFile(manifestPath)) {
             log.debug("yaml-deps-sync: no workspace.yaml — skipping");
             return SyncResult.UNCHANGED;

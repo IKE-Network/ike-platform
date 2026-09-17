@@ -172,7 +172,7 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
 
         // Resolve workspace root
         Path wsDir = findWorkspaceRoot();
-        Path manifestPath = wsDir.resolve("workspace.yaml");
+        Path manifestPath = Manifests.path(wsDir);
         Path pomPath = wsDir.resolve("pom.xml");
 
         if (!Files.exists(manifestPath)) {
@@ -358,7 +358,7 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
                     "Cannot read workspace files: " + e.getMessage(), e);
         }
         GoalAuthoredChanges authored = GoalAuthoredChanges.snapshot(
-                wsDir.toFile(), getLog(), "workspace.yaml", "pom.xml");
+                wsDir.toFile(), getLog(), Manifests.name(wsDir), "pom.xml");
         try {
             if (alreadyRegistered) {
                 // Update existing entry's depends-on in workspace.yaml
@@ -1982,7 +1982,7 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
     private Path findWorkspaceRoot() throws MojoException {
         Path dir = Path.of(System.getProperty("user.dir"));
         while (dir != null) {
-            if (Files.exists(dir.resolve("workspace.yaml"))) {
+            if (Manifests.exists(dir)) {
                 return dir;
             }
             dir = dir.getParent();

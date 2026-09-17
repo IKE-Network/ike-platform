@@ -287,7 +287,7 @@ public class WsCheckpointDraftMojo extends AbstractWorkspaceMojo {
             // ── Tag and push workspace aggregator repo ──────────────────
             if (workspaceHasGit) {
                 ReleaseSupport.exec(root, getLog(),
-                        "git", "add", "workspace.yaml",
+                        "git", "add", Manifests.name(root),
                         "checkpoints/" + checkpointFileName(name));
                 ReleaseSupport.exec(root, getLog(),
                         "git", "commit", "-m",

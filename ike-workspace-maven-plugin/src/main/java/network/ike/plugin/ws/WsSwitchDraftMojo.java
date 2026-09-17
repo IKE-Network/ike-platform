@@ -840,9 +840,9 @@ public class WsSwitchDraftMojo extends AbstractWorkspaceMojo {
                 }
             }
 
-            // Stage and commit workspace.yaml if changed
+            // Stage and commit the manifest if changed
             network.ike.plugin.ReleaseSupport.exec(
-                    wsRoot, getLog(), "git", "add", "workspace.yaml");
+                    wsRoot, getLog(), "git", "add", Manifests.name(wsRoot));
             if (VcsOperations.hasStagedChanges(wsRoot)) {
                 VcsOperations.commit(wsRoot, getLog(),
                         "workspace: switch branches to " + targetBranch);

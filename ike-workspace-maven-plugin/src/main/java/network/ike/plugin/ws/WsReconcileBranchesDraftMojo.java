@@ -326,7 +326,7 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
                     VcsOperations.commitPaths(wsRoot, getLog(),
                             "workspace: align branch fields from repos"
                             + "\n\nRefs: IKE-Network/ike-issues#780",
-                            "workspace.yaml");
+                            Manifests.name(wsRoot));
                 }
             } catch (IOException e) {
                 throw new MojoException(
@@ -498,7 +498,7 @@ public class WsReconcileBranchesDraftMojo extends AbstractWorkspaceMojo {
                 VcsOperations.commitPaths(wsRoot, getLog(),
                         "workspace: align branch fields to " + wsBranch
                         + "\n\nRefs: IKE-Network/ike-issues#780",
-                        "workspace.yaml");
+                        Manifests.name(wsRoot));
             } catch (IOException e) {
                 throw new MojoException(
                         "Failed to update workspace.yaml: " + e.getMessage(), e);

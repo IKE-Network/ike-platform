@@ -91,7 +91,12 @@ public final class WorkspaceBootstrap {
             Files.createDirectories(wsDir.resolve(".mvn"));
 
             writeFile(wsDir.resolve("pom.xml"), generatePom());
-            writeFile(wsDir.resolve("workspace.yaml"), generateManifest());
+            // Still the former name: nothing writes working-set.yaml
+            // until every reader ships (ike-issues#1054 step 1), after
+            // which this and the scaffold upgrade flip together.
+            writeFile(wsDir.resolve(
+                    network.ike.workspace.WorkingSetResolver
+                            .LEGACY_MANIFEST_FILE), generateManifest());
             writeFile(wsDir.resolve(".gitignore"), generateGitignore());
             writeFile(wsDir.resolve(".mvn/maven.config"), "-T 1C\n");
             writeFile(wsDir.resolve(".mvn/extensions.xml"), generateExtensionsXml());
@@ -107,7 +112,9 @@ public final class WorkspaceBootstrap {
             MavenWrapper.writeMissingFiles(wsDir, params.mavenVersion());
 
             log.info(Ansi.green("  ✓ ") + "pom.xml");
-            log.info(Ansi.green("  ✓ ") + "workspace.yaml");
+            log.info(Ansi.green("  ✓ ")
+                    + network.ike.workspace.WorkingSetResolver
+                            .LEGACY_MANIFEST_FILE);
             log.info(Ansi.green("  ✓ ") + ".gitignore");
             log.info(Ansi.green("  ✓ ") + ".mvn/maven.config");
             log.info(Ansi.green("  ✓ ") + ".mvn/extensions.xml");

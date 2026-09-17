@@ -608,8 +608,7 @@ final class WorkspaceReleaseMission {
             }
         }
         try {
-            ManifestWriter.updateShas(root.toPath().resolve("workspace.yaml"),
-                    pins);
+            ManifestWriter.updateShas(Manifests.path(root), pins);
         } catch (Exception e) {
             throw new MojoException("Cannot pin the working set state: "
                     + e.getMessage(), e);

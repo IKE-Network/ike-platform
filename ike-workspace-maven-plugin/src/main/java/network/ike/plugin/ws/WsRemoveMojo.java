@@ -147,7 +147,7 @@ public class WsRemoveMojo extends AbstractWorkspaceMojo {
         // Snapshot the root files BEFORE editing them, so the commit below is
         // scoped to exactly what this goal authored (#780).
         GoalAuthoredChanges authored = GoalAuthoredChanges.snapshot(
-                wsDir.toFile(), getLog(), "workspace.yaml", "pom.xml");
+                wsDir.toFile(), getLog(), Manifests.name(wsDir), "pom.xml");
         try {
             // Remove from workspace.yaml
             removeSubprojectFromManifest(manifestPath);

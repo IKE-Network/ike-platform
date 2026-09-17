@@ -59,8 +59,9 @@ public final class PostMutationSync {
 
     private PostMutationSync() {}
 
-    /** Path of the machine-maintained manifest, relative to the root. */
-    private static final String MANIFEST = "workspace.yaml";
+    // The machine-maintained manifest is named per root: a working set
+    // the scaffold has not upgraded still carries the former name
+    // (ike-issues#1054).
 
     /**
      * Run all post-mutation derivations against the workspace at
@@ -82,7 +83,8 @@ public final class PostMutationSync {
         // not-yet-bootstrapped sibling) it is excluded from the snapshot, so
         // the combined change is left for the caller / bootstrapper (#774).
         GoalAuthoredChanges authored =
-                GoalAuthoredChanges.snapshot(workspaceRoot, log, MANIFEST);
+                GoalAuthoredChanges.snapshot(workspaceRoot, log,
+                        Manifests.name(workspaceRoot));
 
         YamlDepsSync.SyncResult result = YamlDepsSync.run(workspaceRoot, log);
         if (!result.changed()) {

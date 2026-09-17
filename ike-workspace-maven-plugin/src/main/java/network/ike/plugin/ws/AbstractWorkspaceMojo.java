@@ -206,8 +206,8 @@ abstract class AbstractWorkspaceMojo implements Mojo {
         // Search upward from current directory
         Path dir = Path.of(System.getProperty("user.dir"));
         while (dir != null) {
-            Path candidate = dir.resolve("workspace.yaml");
-            if (candidate.toFile().exists()) {
+            Path candidate = Manifests.findUpward(dir);
+            if (candidate != null) {
                 return candidate;
             }
             dir = dir.getParent();

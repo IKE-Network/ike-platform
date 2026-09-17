@@ -224,7 +224,7 @@ public class WsRecordReleaseDraftMojo extends AbstractWorkspaceMojo {
 
         String today = LocalDate.now().toString();
         GoalAuthoredChanges authored = GoalAuthoredChanges.snapshot(
-                root, getLog(), "workspace.yaml", recordRelPath);
+                root, getLog(), Manifests.name(root), recordRelPath);
         try {
             ManifestWriter.recordRelease(manifestPath, member, version, tag);
             getLog().info("  ✓ workspace.yaml — " + member

@@ -470,7 +470,7 @@ class FeatureFinishSupport {
             File wsRoot = manifestPath.getParent().toFile();
             File wsGit = new File(wsRoot, ".git");
             if (wsGit.exists()) {
-                ReleaseSupport.exec(wsRoot, log, "git", "add", "workspace.yaml");
+                ReleaseSupport.exec(wsRoot, log, "git", "add", Manifests.name(wsRoot));
                 if (VcsOperations.hasStagedChanges(wsRoot)) {
                     ReleaseSupport.exec(wsRoot, log, "git", "commit", "-m",
                             "workspace: restore branches + versions to "
@@ -762,7 +762,7 @@ class FeatureFinishSupport {
                     + ", fast-forward only; -DsyncParent=false to skip)...");
 
             Map<String, File> memberDirs = new LinkedHashMap<>();
-            Path parentManifest = parent.toPath().resolve("workspace.yaml");
+            Path parentManifest = Manifests.path(parent);
             if (Files.exists(parentManifest)) {
                 for (String name : network.ike.workspace.ManifestReader
                         .read(parentManifest).subprojects().keySet()) {

@@ -376,7 +376,7 @@ public class FeatureStartSiblingPublishMojo extends AbstractWorkspaceMojo {
         }
 
         // 4. Rewrite the sibling's workspace.yaml branch fields and commit.
-        Path siblingManifest = new File(siblingRoot, "workspace.yaml").toPath();
+        Path siblingManifest = Manifests.path(siblingRoot);
         if (Files.exists(siblingManifest) && !branched.isEmpty()) {
             try {
                 Map<String, String> branchUpdates = new LinkedHashMap<>();
@@ -385,7 +385,7 @@ public class FeatureStartSiblingPublishMojo extends AbstractWorkspaceMojo {
                 }
                 ManifestWriter.updateBranches(siblingManifest, branchUpdates);
                 ReleaseSupport.exec(siblingRoot, getLog(),
-                        "git", "add", "workspace.yaml");
+                        "git", "add", Manifests.name(siblingRoot));
                 support.commitIfStaged(siblingRoot,
                         "workspace: update branches for " + branchName);
                 getLog().info("  Updated workspace.yaml branches for "

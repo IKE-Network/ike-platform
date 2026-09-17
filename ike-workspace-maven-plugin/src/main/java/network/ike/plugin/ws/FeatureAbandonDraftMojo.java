@@ -522,7 +522,7 @@ public class FeatureAbandonDraftMojo extends AbstractWorkspaceMojo {
 
             String wsBranch = gitBranch(wsRoot);
             if (wsBranch.equals(branchName)) {
-                ReleaseSupport.exec(wsRoot, getLog(), "git", "add", "workspace.yaml");
+                ReleaseSupport.exec(wsRoot, getLog(), "git", "add", Manifests.name(wsRoot));
                 if (VcsOperations.hasStagedChanges(wsRoot)) {
                     VcsOperations.commit(wsRoot, getLog(),
                             "workspace: revert branches for abandon " + branchName);
@@ -535,7 +535,7 @@ public class FeatureAbandonDraftMojo extends AbstractWorkspaceMojo {
                             "git", "cherry-pick", branchName);
                 } catch (MojoException e) {
                     ManifestWriter.updateBranches(manifestPath, updates);
-                    ReleaseSupport.exec(wsRoot, getLog(), "git", "add", "workspace.yaml");
+                    ReleaseSupport.exec(wsRoot, getLog(), "git", "add", Manifests.name(wsRoot));
                     if (VcsOperations.hasStagedChanges(wsRoot)) {
                         VcsOperations.commit(wsRoot, getLog(),
                                 "workspace: revert branches after abandon " + branchName);
@@ -553,7 +553,7 @@ public class FeatureAbandonDraftMojo extends AbstractWorkspaceMojo {
                     }
                 }
             } else {
-                ReleaseSupport.exec(wsRoot, getLog(), "git", "add", "workspace.yaml");
+                ReleaseSupport.exec(wsRoot, getLog(), "git", "add", Manifests.name(wsRoot));
                 if (VcsOperations.hasStagedChanges(wsRoot)) {
                     VcsOperations.commit(wsRoot, getLog(),
                             "workspace: revert branches after abandon " + branchName);

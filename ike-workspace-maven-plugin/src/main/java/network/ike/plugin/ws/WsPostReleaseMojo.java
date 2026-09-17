@@ -244,7 +244,7 @@ public class WsPostReleaseMojo extends AbstractWorkspaceMojo {
                 if (rootBumped) {
                     ReleaseSupport.exec(wsRoot, getLog(), "git", "add", "pom.xml");
                 }
-                ReleaseSupport.exec(wsRoot, getLog(), "git", "add", "workspace.yaml");
+                ReleaseSupport.exec(wsRoot, getLog(), "git", "add", Manifests.name(wsRoot));
                 VcsOperations.commitStaged(wsRoot, getLog(),
                         "post-release: bump aggregator + workspace versions to "
                                 + nextVersion);

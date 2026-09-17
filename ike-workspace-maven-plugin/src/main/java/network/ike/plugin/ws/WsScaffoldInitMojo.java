@@ -188,7 +188,7 @@ public class WsScaffoldInitMojo implements Mojo {
         Path here = Path.of(System.getProperty("user.dir"));
         Path manifestPath = (manifest != null && manifest.exists())
                 ? manifest.toPath()
-                : here.resolve("workspace.yaml");
+                : Manifests.path(here);
 
         if (!Files.exists(manifestPath)) {
             // No workspace.yaml here — bootstrap a new workspace.
@@ -247,7 +247,7 @@ public class WsScaffoldInitMojo implements Mojo {
 
         // Fail if workspace files already exist (prevent silent overwrite)
         if (Files.exists(wsDir.resolve("pom.xml"))
-                || Files.exists(wsDir.resolve("workspace.yaml"))) {
+                || Manifests.exists(wsDir)) {
             throw new MojoException(
                     "Workspace already exists at " + wsDir
                     + " (pom.xml or workspace.yaml found). "

@@ -665,7 +665,7 @@ public class FeatureStartDraftMojo extends AbstractWorkspaceMojo {
             getLog().info("  Updated workspace.yaml branches for "
                     + components.size() + " components");
 
-            ReleaseSupport.exec(wsRoot, getLog(), "git", "add", "workspace.yaml");
+            ReleaseSupport.exec(wsRoot, getLog(), "git", "add", Manifests.name(wsRoot));
             if (VcsOperations.hasStagedChanges(wsRoot)) {
                 VcsOperations.commit(wsRoot, getLog(), wsPomQualified
                         ? "feature: qualify workspace root + branches for " + branchName

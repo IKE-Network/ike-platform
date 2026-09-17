@@ -346,7 +346,7 @@ public class FeatureTrackDraftMojo extends AbstractWorkspaceMojo {
                         "workspace: track " + branch + " in "
                         + String.join(", ", changed.keySet())
                         + "\n\nRefs: IKE-Network/ike-issues#904",
-                        "workspace.yaml");
+                        Manifests.name(wsRoot));
             }
         } catch (IOException e) {
             throw new MojoException(

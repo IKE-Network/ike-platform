@@ -1,0 +1,142 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>SiblingRemovePublishMojo.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">SiblingRemovePublishMojo.java</span></div><h1>SiblingRemovePublishMojo.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.plugin.support.GoalReportBuilder;
+import network.ike.workspace.WorkingSet;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
+
+import java.io.File;
+import java.nio.file.Path;
+import java.util.List;
+
+/**
+ * Remove a sibling working set, safely (IKE-Network/ike-issues#600).
+ *
+ * &lt;p&gt;Three gates, in order:
+ * &lt;ol&gt;
+ *   &lt;li&gt;&lt;b&gt;The sibling's lease.&lt;/b&gt; Removal is the last write a working
+ *       set ever sees, so this machine confirms it holds the sibling's
+ *       lease first ({@link WorkingSetLease}): free or expired acquires
+ *       silently, live on another machine refuses — and {@code -Dforce}
+ *       does &lt;em&gt;not&lt;/em&gt; override that, because displacing a live holder
+ *       is a human decision on every surface. Inert on machines without
+ *       the lease protocol.&lt;/li&gt;
+ *   &lt;li&gt;&lt;b&gt;The content preflight.&lt;/b&gt; Uncommitted changes, stashes,
+ *       unlanded branches (squash-aware), bare member trees — anything
+ *       that dies with the tree refuses unless {@code -Dforce=true}
+ *       discards it deliberately, with the findings persisted in the
+ *       report either way.&lt;/li&gt;
+ *   &lt;li&gt;&lt;b&gt;The deletion.&lt;/b&gt; The whole sibling directory — whole-working-set
+ *       removal is the supported operation; the sync layer propagates it
+ *       and staggered file versioning is the net — followed by the lease
+ *       record it leaves behind ({@code leases/&lt;name&gt;.lease}), the
+ *       reconciliation daemon's GC action done eagerly
+ *       (IKE-Network/ike-issues#1006).&lt;/li&gt;
+ * &lt;/ol&gt;
+ *
+ * &lt;pre&gt;{@code
+ * mvn ws:sibling-remove-draft   -Dfeature=jira-456
+ * mvn ws:sibling-remove-publish -Dfeature=jira-456
+ * mvn ws:sibling-remove-publish -Dfeature=jira-456 -Dforce=true
+ * }&lt;/pre&gt;
+ *
+ * @see SiblingRemoveDraftMojo for the read-only preview
+ */
+@Mojo(name = &quot;sibling-remove-publish&quot;, projectRequired = false, aggregator = true)
+public class SiblingRemovePublishMojo extends AbstractWorkspaceMojo {
+
+    /** Feature whose sibling ({@code &lt;primary&gt;꞉&lt;feature&gt;}) to remove. */
+    @Parameter(property = &quot;feature&quot;)
+    String feature;
+
+    /** Explicit sibling directory name; alternative to {@code -Dfeature}. */
+    @Parameter(property = &quot;name&quot;)
+    String name;
+
+    /**
+     * Discard uncommitted work, stashes, unlanded branches and bare trees
+     * deliberately. Never overrides a lease held live on another machine.
+     */
+    @Parameter(property = &quot;force&quot;, defaultValue = &quot;false&quot;)
+    boolean force;
+
+    /** Creates this goal instance. */
+<span class="fc" id="L65">    public SiblingRemovePublishMojo() {}</span>
+
+    @Override
+    protected WorkspaceReportSpec runGoal() throws MojoException {
+<span class="fc" id="L69">        WorkingSet workingSet = resolveWorkingSet();</span>
+<span class="pc bpc" id="L70" title="1 of 2 branches missed.">        File primaryRoot = isWorkspaceMode()</span>
+<span class="fc" id="L71">                ? workspaceRoot()</span>
+<span class="pc" id="L72">                : workingSet.members().getFirst().directory().toFile();</span>
+<span class="fc" id="L73">        SiblingRemoval.Target target = SiblingRemoval.resolve(</span>
+<span class="fc" id="L74">                primaryRoot, workingSet.baseName(), feature, name);</span>
+
+<span class="fc" id="L76">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L77">        getLog().info(header(&quot;Sibling Remove&quot;));</span>
+<span class="fc" id="L78">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+<span class="fc" id="L79">        getLog().info(&quot;  Sibling: &quot; + target.sibling().root().getAbsolutePath());</span>
+<span class="fc" id="L80">        getLog().info(&quot;&quot;);</span>
+
+        // Gate 1 — the sibling's lease. Removal is a write; force never
+        // reaches past a live holder on another machine.
+<span class="fc" id="L84">        WorkingSetLease.Decision decision = WorkingSetLease.confirm(</span>
+<span class="fc" id="L85">                target.sibling().root().toPath());</span>
+<span class="pc bpc" id="L86" title="3 of 4 branches missed.">        switch (decision.verdict()) {</span>
+<span class="fc" id="L87">            case NOT_APPLICABLE -&gt; { }</span>
+<span class="nc" id="L88">            case HELD -&gt; getLog().info(&quot;  Working-set lease: confirmed for &quot;</span>
+<span class="nc" id="L89">                    + decision.detail());</span>
+<span class="nc" id="L90">            case FENCED -&gt; throw new MojoException(&quot;Another machine holds '&quot;</span>
+<span class="nc" id="L91">                    + target.sibling().name() + &quot;' live; removing it from &quot;</span>
+                    + &quot;here would delete a working set someone is in. Have &quot;
+                    + &quot;that machine release it (close the project / &quot;
+<span class="nc" id="L94">                    + &quot;lease.sh release), then re-run.\n&quot; + decision.detail());</span>
+        }
+
+        // Gate 2 — the content preflight, persisted whichever way it goes.
+<span class="fc" id="L98">        List&lt;String[]&gt; preflightRows = SiblingRemoval.preflightRows(target);</span>
+<span class="fc" id="L99">        boolean clean = SiblingRemoval.clean(target);</span>
+<span class="fc" id="L100">        GoalReportBuilder report = new GoalReportBuilder();</span>
+<span class="fc" id="L101">        SiblingRemoval.describeTarget(report, target);</span>
+<span class="fc" id="L102">        report.section(&quot;Preflight&quot;)</span>
+<span class="fc" id="L103">                .table(List.of(&quot;&quot;, &quot;Member&quot;, &quot;Finding&quot;), preflightRows);</span>
+<span class="fc bfc" id="L104" title="All 4 branches covered.">        if (!clean &amp;&amp; !force) {</span>
+<span class="fc" id="L105">            report.paragraph(&quot;**Refused.** The ✗ rows above would be lost. &quot;</span>
+                    + &quot;Finish or commit them, or pass `-Dforce=true` to &quot;
+                    + &quot;discard them deliberately.&quot;);
+<span class="fc" id="L108">            throw new WorkspaceReportException(&quot;Sibling '&quot;</span>
+<span class="fc" id="L109">                    + target.sibling().name() + &quot;' holds work that dies &quot;</span>
+                    + &quot;with the tree (see the &quot;
+<span class="fc" id="L111">                    + WsGoal.SIBLING_REMOVE_PUBLISH.qualified()</span>
+                    + &quot; report). Finish it, or -Dforce=true.&quot;,
+                    new WorkspaceReportSpec(WsGoal.SIBLING_REMOVE_PUBLISH,
+<span class="fc" id="L114">                            report.build()));</span>
+        }
+<span class="fc bfc" id="L116" title="All 2 branches covered.">        if (!clean) {</span>
+<span class="fc" id="L117">            getLog().warn(&quot;  -Dforce=true: discarding the ✗ findings above.&quot;);</span>
+        }
+
+        // Gate 3 — delete, then GC the lease record.
+<span class="fc" id="L121">        Path gcRecord = SiblingRemoval.delete(target);</span>
+<span class="fc" id="L122">        getLog().info(&quot;  Removed &quot; + target.sibling().root().getAbsolutePath());</span>
+<span class="pc bpc" id="L123" title="1 of 2 branches missed.">        if (gcRecord != null) {</span>
+<span class="nc" id="L124">            getLog().info(&quot;  Lease record GC'd: &quot; + gcRecord.getFileName());</span>
+        }
+
+<span class="fc" id="L127">        report.section(&quot;Removed&quot;)</span>
+<span class="fc" id="L128">                .paragraph(&quot;`&quot; + target.sibling().root().getAbsolutePath()</span>
+<span class="fc" id="L129">                        + &quot;` (&quot; + target.states().size() + &quot; member &quot;</span>
+<span class="pc bpc" id="L130" title="1 of 2 branches missed.">                        + &quot;director&quot; + (target.states().size() == 1 ? &quot;y&quot; : &quot;ies&quot;)</span>
+<span class="fc bfc" id="L131" title="All 2 branches covered.">                        + (clean ? &quot;&quot; : &quot;, force-discarded findings above&quot;)</span>
+                        + &quot;). The sync layer propagates the deletion to &quot;
+                        + &quot;every machine; staggered file versioning is the &quot;
+                        + &quot;recovery net.&quot;
+<span class="pc bpc" id="L135" title="1 of 2 branches missed.">                        + (gcRecord == null ? &quot;&quot;</span>
+<span class="pc" id="L136">                                : &quot; Lease record `&quot; + gcRecord.getFileName()</span>
+<span class="nc" id="L137">                                        + &quot;` garbage-collected.&quot;));</span>
+<span class="fc" id="L138">        return new WorkspaceReportSpec(WsGoal.SIBLING_REMOVE_PUBLISH,</span>
+<span class="fc" id="L139">                report.build());</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

@@ -1,0 +1,330 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>SiblingInventory.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">SiblingInventory.java</span></div><h1>SiblingInventory.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.plugin.ReleaseSupport;
+import network.ike.workspace.FeatureName;
+
+import java.io.File;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Optional;
+
+/**
+ * Discovery and state assessment for a primary's sibling working sets —
+ * the shared substrate of {@code ws:sibling-list} (IKE-Network/ike-issues#599)
+ * and {@code ws:sibling-remove} (IKE-Network/ike-issues#600).
+ *
+ * &lt;p&gt;A sibling is named {@code &lt;primary&gt;꞉&lt;feature&gt;} and lives beside its
+ * primary (IKE-Network/ike-issues#992). Discovery scans the primary's
+ * parent directory for that pattern and classifies each candidate:
+ * &lt;em&gt;conformant&lt;/em&gt; when {@link SiblingFinish#localParent} confirms the
+ * chain back to this primary (recorded parent, or derivation confirmed
+ * against a local origin), &lt;em&gt;legacy&lt;/em&gt; otherwise — the shape a sibling
+ * created before the local-origin model still has until repaired
+ * (IKE-Network/ike-issues#1057).
+ *
+ * &lt;p&gt;Assessment reports, per member repository, exactly the things that
+ * die with a deleted tree: uncommitted changes, &lt;b&gt;stashes&lt;/b&gt; (the one
+ * thing no upstream comparison ever reveals), and unlanded branches. A
+ * branch counts as landed when its commits are contained in origin's refs
+ * &lt;em&gt;or its tree equals an origin tip's tree&lt;/em&gt; — the squash finish
+ * never preserves SHAs, and the tree is the medium of exchange.
+ */
+final class SiblingInventory {
+
+    /** Directories never descended into while discovering member repos. */
+<span class="fc" id="L36">    private static final List&lt;String&gt; SKIPPED_DIRECTORIES =</span>
+<span class="fc" id="L37">            List.of(&quot;.git&quot;, &quot;.ike&quot;, &quot;.idea&quot;, &quot;.stversions&quot;, &quot;target&quot;,</span>
+                    &quot;checkpoints&quot;);
+
+    /** How deep member discovery looks below the sibling root. */
+    private static final int MEMBER_DISCOVERY_DEPTH = 3;
+
+    private SiblingInventory() {}
+
+    /**
+     * One discovered sibling.
+     *
+     * @param name       the sibling directory name ({@code &lt;primary&gt;꞉&lt;feature&gt;})
+     * @param root       the sibling's directory
+     * @param feature    the feature half of the name
+     * @param conformant {@code true} when the local-origin chain back to
+     *                   the primary is confirmed
+     */
+<span class="fc" id="L54">    record Sibling(String name, File root, String feature,</span>
+                   boolean conformant) {}
+
+    /**
+     * One member repository's removable-state assessment.
+     *
+     * @param path        the member path relative to the sibling root, or
+     *                    {@code &quot;(root)&quot;} for the sibling root itself
+     * @param bare        tree present but no git state — unverifiable
+     * @param branch      the current branch, or {@code &quot;—&quot;} when bare
+     * @param uncommitted count of uncommitted paths ({@code status --porcelain})
+     * @param stashes     count of stash entries
+     * @param unlanded    names of local branches whose work is neither
+     *                    contained in origin's refs nor tree-equal to an
+     *                    origin tip; {@code null} when it could not be
+     *                    determined (no origin, or the fetch failed)
+     * @param originLocal {@code true} when origin is a local path — the
+     *                    #992 invariant; {@code false} for a legacy remote
+     *                    remote or a missing origin
+     */
+<span class="fc" id="L74">    record MemberState(String path, boolean bare, String branch,</span>
+                       int uncommitted, int stashes, List&lt;String&gt; unlanded,
+                       boolean originLocal) {
+
+        /** @return {@code true} when nothing in this member blocks removal */
+        boolean removable() {
+<span class="pc bpc" id="L80" title="2 of 8 branches missed.">            return !bare &amp;&amp; uncommitted == 0 &amp;&amp; stashes == 0</span>
+<span class="fc bfc" id="L81" title="All 2 branches covered.">                    &amp;&amp; unlanded != null &amp;&amp; unlanded.isEmpty();</span>
+        }
+    }
+
+    /**
+     * Discovers the primary's siblings: entries beside the primary named
+     * {@code &lt;primary&gt;꞉*}, classified by local-origin conformance.
+     *
+     * @param primaryRoot the primary working set's root directory
+     * @param baseName    the primary's directory name
+     * @return the siblings, name-ordered; empty when the primary has none
+     */
+    static List&lt;Sibling&gt; discover(File primaryRoot, String baseName) {
+<span class="fc" id="L94">        File parent = primaryRoot.getParentFile();</span>
+<span class="pc bpc" id="L95" title="1 of 2 branches missed.">        if (parent == null) {</span>
+<span class="nc" id="L96">            return List.of();</span>
+        }
+<span class="fc" id="L98">        String prefix = baseName + FeatureName.SIBLING_SEPARATOR;</span>
+<span class="fc" id="L99">        File[] entries = parent.listFiles(File::isDirectory);</span>
+<span class="pc bpc" id="L100" title="1 of 2 branches missed.">        if (entries == null) {</span>
+<span class="nc" id="L101">            return List.of();</span>
+        }
+<span class="fc" id="L103">        List&lt;Sibling&gt; siblings = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L104" title="All 2 branches covered.">        for (File entry : entries) {</span>
+<span class="fc" id="L105">            String name = entry.getName();</span>
+<span class="fc bfc" id="L106" title="All 2 branches covered.">            if (!name.startsWith(prefix)</span>
+<span class="pc bpc" id="L107" title="1 of 2 branches missed.">                    || name.length() == prefix.length()) {</span>
+<span class="nc" id="L108">                continue;</span>
+            }
+<span class="fc" id="L110">            boolean conformant = SiblingFinish.localParent(entry)</span>
+<span class="fc" id="L111">                    .map(found -&gt; sameDirectory(found, primaryRoot))</span>
+<span class="fc" id="L112">                    .orElse(false);</span>
+<span class="fc" id="L113">            siblings.add(new Sibling(name, entry,</span>
+<span class="fc" id="L114">                    name.substring(prefix.length()), conformant));</span>
+        }
+<span class="fc" id="L116">        siblings.sort(Comparator.comparing(Sibling::name));</span>
+<span class="fc" id="L117">        return siblings;</span>
+    }
+
+    /**
+     * Assesses every member repository of a sibling.
+     *
+     * @param siblingRoot    the sibling's directory
+     * @param fetchLocalOnly when {@code true}, origins that are remote URLs
+     *                       are not fetched (a listing must not touch the
+     *                       network); when {@code false} every origin is
+     *                       fetched first, so the landed test is current
+     * @return one state per member, the root first
+     */
+    static List&lt;MemberState&gt; assess(File siblingRoot, boolean fetchLocalOnly) {
+<span class="fc" id="L131">        List&lt;MemberState&gt; states = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L132" title="All 2 branches covered.">        for (File member : memberDirectories(siblingRoot)) {</span>
+<span class="fc bfc" id="L133" title="All 2 branches covered.">            String label = member.equals(siblingRoot) ? &quot;(root)&quot;</span>
+<span class="fc" id="L134">                    : siblingRoot.toPath().relativize(member.toPath())</span>
+<span class="fc" id="L135">                            .toString();</span>
+<span class="pc bpc" id="L136" title="1 of 2 branches missed.">            if (!hasRealGit(member)) {</span>
+<span class="nc" id="L137">                states.add(new MemberState(label, true, &quot;—&quot;, 0, 0, null,</span>
+                        false));
+<span class="nc" id="L139">                continue;</span>
+            }
+<span class="fc" id="L141">            states.add(assessRepo(label, member, fetchLocalOnly));</span>
+<span class="fc" id="L142">        }</span>
+<span class="fc" id="L143">        return states;</span>
+    }
+
+    private static MemberState assessRepo(String label, File repo,
+                                          boolean fetchLocalOnly) {
+<span class="fc" id="L148">        String branch = capture(repo, &quot;rev-parse&quot;, &quot;--abbrev-ref&quot;, &quot;HEAD&quot;)</span>
+<span class="fc" id="L149">                .orElse(&quot;—&quot;);</span>
+<span class="fc" id="L150">        int uncommitted = lineCount(capture(repo, &quot;status&quot;, &quot;--porcelain&quot;));</span>
+<span class="fc" id="L151">        int stashes = lineCount(capture(repo, &quot;stash&quot;, &quot;list&quot;));</span>
+<span class="fc" id="L152">        Optional&lt;String&gt; origin = capture(repo, &quot;remote&quot;, &quot;get-url&quot;, &quot;origin&quot;);</span>
+<span class="fc" id="L153">        boolean originLocal = origin.map(SiblingInventory::isLocalPath)</span>
+<span class="fc" id="L154">                .orElse(false);</span>
+<span class="pc bpc" id="L155" title="1 of 2 branches missed.">        List&lt;String&gt; unlanded = origin.isEmpty() ? null</span>
+<span class="pc bpc" id="L156" title="3 of 4 branches missed.">                : unlandedBranches(repo, originLocal || !fetchLocalOnly);</span>
+<span class="fc" id="L157">        return new MemberState(label, false, branch, uncommitted, stashes,</span>
+                unlanded, originLocal);
+    }
+
+    /**
+     * Counts local branches whose work has not landed at origin. Fetches
+     * first when allowed, so the answer is current; a branch is landed
+     * when its commits are contained in origin's refs, or when its tree
+     * equals some origin tip's tree — the shape a squash finish leaves.
+     */
+    private static List&lt;String&gt; unlandedBranches(File repo, boolean fetch) {
+<span class="pc bpc" id="L168" title="2 of 4 branches missed.">        if (fetch &amp;&amp; !run(repo, &quot;fetch&quot;, &quot;--quiet&quot;, &quot;origin&quot;)) {</span>
+<span class="nc" id="L169">            return null;</span>
+        }
+<span class="fc" id="L171">        Optional&lt;String&gt; branches = capture(repo, &quot;for-each-ref&quot;,</span>
+                &quot;refs/heads&quot;, &quot;--format=%(refname:short)&quot;);
+<span class="pc bpc" id="L173" title="1 of 2 branches missed.">        if (branches.isEmpty()) {</span>
+<span class="nc" id="L174">            return List.of();       // no local branches: nothing to lose</span>
+        }
+<span class="fc" id="L176">        List&lt;String&gt; originTrees = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L177">        capture(repo, &quot;for-each-ref&quot;, &quot;refs/remotes/origin&quot;,</span>
+<span class="fc" id="L178">                &quot;--format=%(refname)&quot;).orElse(&quot;&quot;).lines()</span>
+<span class="pc bpc" id="L179" title="1 of 2 branches missed.">                .filter(ref -&gt; !ref.isBlank())</span>
+<span class="fc" id="L180">                .forEach(ref -&gt; capture(repo, &quot;rev-parse&quot;, ref + &quot;^{tree}&quot;)</span>
+<span class="fc" id="L181">                        .ifPresent(originTrees::add));</span>
+<span class="fc" id="L182">        List&lt;String&gt; unlanded = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L183" title="All 2 branches covered.">        for (String branch : branches.get().lines()</span>
+<span class="pc bpc" id="L184" title="1 of 2 branches missed.">                .filter(line -&gt; !line.isBlank()).toList()) {</span>
+<span class="fc" id="L185">            String contained = capture(repo, &quot;rev-list&quot;, &quot;--count&quot;, branch,</span>
+<span class="fc" id="L186">                    &quot;--not&quot;, &quot;--remotes=origin&quot;).orElse(&quot;?&quot;);</span>
+<span class="fc bfc" id="L187" title="All 2 branches covered.">            if (&quot;0&quot;.equals(contained)) {</span>
+<span class="fc" id="L188">                continue;</span>
+            }
+<span class="fc" id="L190">            String tree = capture(repo, &quot;rev-parse&quot;, branch + &quot;^{tree}&quot;)</span>
+<span class="fc" id="L191">                    .orElse(&quot;?&quot;);</span>
+<span class="pc bpc" id="L192" title="1 of 2 branches missed.">            if (originTrees.contains(tree)) {</span>
+<span class="nc" id="L193">                continue;</span>
+            }
+<span class="fc bfc" id="L195" title="All 2 branches covered.">            if (onlyGoalAuthoredCommits(repo, branch)) {</span>
+<span class="fc" id="L196">                continue;</span>
+            }
+<span class="fc" id="L198">            unlanded.add(branch);</span>
+<span class="fc" id="L199">        }</span>
+<span class="fc" id="L200">        return unlanded;</span>
+    }
+
+    /**
+     * Reports whether every commit the branch holds beyond origin is
+     * goal-authored bookkeeping. The {@code ws:} machinery commits its own
+     * manifest and version bookkeeping under the {@code &quot;ws: &quot;} subject
+     * namespace ({@code GoalAuthoredChanges.commitAuthored}, #780) — the
+     * finish deliberately leaves such commits sibling-local (a sibling's
+     * derived depends-on edges are its own), and they must not force a
+     * {@code -Dforce} on every finished workspace sibling. A hand-written
+     * commit inside that namespace would ride along; the namespace is the
+     * machinery's, and the draft report names the branch either way.
+     */
+    private static boolean onlyGoalAuthoredCommits(File repo, String branch) {
+<span class="fc" id="L215">        Optional&lt;String&gt; subjects = capture(repo, &quot;log&quot;, &quot;--format=%s&quot;,</span>
+                branch, &quot;--not&quot;, &quot;--remotes=origin&quot;);
+<span class="pc bpc" id="L217" title="1 of 2 branches missed.">        return subjects.isPresent()</span>
+<span class="fc" id="L218">                &amp;&amp; subjects.get().lines()</span>
+<span class="pc bpc" id="L219" title="1 of 2 branches missed.">                        .filter(line -&gt; !line.isBlank())</span>
+<span class="fc bfc" id="L220" title="All 2 branches covered.">                        .allMatch(subject -&gt; subject.startsWith(&quot;ws: &quot;));</span>
+    }
+
+    /**
+     * Classifies a git origin as a local filesystem path or a remote URL —
+     * the same predicate the materializer core applies
+     * (IKE-Network/ike-issues#1057).
+     *
+     * @param origin the configured origin
+     * @return {@code true} for filesystem paths ({@code file://} included)
+     */
+    static boolean isLocalPath(String origin) {
+<span class="pc bpc" id="L232" title="1 of 2 branches missed.">        if (origin.startsWith(&quot;file://&quot;)) {</span>
+<span class="nc" id="L233">            return true;</span>
+        }
+<span class="pc bpc" id="L235" title="1 of 2 branches missed.">        if (origin.contains(&quot;://&quot;)) {</span>
+<span class="nc" id="L236">            return false;</span>
+        }
+<span class="pc bpc" id="L238" title="1 of 2 branches missed.">        return !origin.matches(&quot;^[^/@]+@[^/:]+:.*&quot;);</span>
+    }
+
+    /**
+     * The sibling root plus every git repository below it, without
+     * descending into repositories, hidden directories, or build output.
+     */
+    private static List&lt;File&gt; memberDirectories(File siblingRoot) {
+<span class="fc" id="L246">        List&lt;File&gt; members = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L247">        members.add(siblingRoot);</span>
+<span class="fc" id="L248">        collectMembers(siblingRoot, 0, members);</span>
+<span class="fc" id="L249">        return members;</span>
+    }
+
+    private static void collectMembers(File directory, int depth,
+                                       List&lt;File&gt; members) {
+<span class="pc bpc" id="L254" title="1 of 2 branches missed.">        if (depth &gt;= MEMBER_DISCOVERY_DEPTH) {</span>
+<span class="nc" id="L255">            return;</span>
+        }
+<span class="fc" id="L257">        File[] children = directory.listFiles(File::isDirectory);</span>
+<span class="pc bpc" id="L258" title="1 of 2 branches missed.">        if (children == null) {</span>
+<span class="nc" id="L259">            return;</span>
+        }
+<span class="fc" id="L261">        List&lt;File&gt; sorted = new ArrayList&lt;&gt;(List.of(children));</span>
+<span class="fc" id="L262">        sorted.sort(Comparator.comparing(File::getName));</span>
+<span class="fc bfc" id="L263" title="All 2 branches covered.">        for (File child : sorted) {</span>
+<span class="fc" id="L264">            String name = child.getName();</span>
+<span class="pc bpc" id="L265" title="1 of 4 branches missed.">            if (name.startsWith(&quot;.&quot;) || SKIPPED_DIRECTORIES.contains(name)) {</span>
+<span class="nc" id="L266">                continue;</span>
+            }
+<span class="pc bpc" id="L268" title="1 of 2 branches missed.">            if (hasRealGit(child)) {</span>
+<span class="fc" id="L269">                members.add(child);</span>
+            } else {
+<span class="nc" id="L271">                collectMembers(child, depth + 1, members);</span>
+            }
+<span class="fc" id="L273">        }</span>
+<span class="fc" id="L274">    }</span>
+
+    /**
+     * Real git state, as opposed to a sync-layer husk. The synced folder's
+     * {@code (?d).git/} ignore carries the {@code .git} directory entry but
+     * none of its contents, so peer machines hold empty {@code .git} husks
+     * (measured fleet-wide 2026-08-22); a gitfile, or a directory with a
+     * {@code HEAD}, is the honest test.
+     *
+     * @param directory the candidate repository directory
+     * @return {@code true} when git state is actually present
+     */
+    private static boolean hasRealGit(File directory) {
+<span class="fc" id="L287">        File git = new File(directory, &quot;.git&quot;);</span>
+<span class="pc bpc" id="L288" title="2 of 4 branches missed.">        return git.isFile() || new File(git, &quot;HEAD&quot;).exists();</span>
+    }
+
+    private static boolean sameDirectory(File a, File b) {
+        try {
+<span class="fc" id="L293">            return a.getCanonicalFile().equals(b.getCanonicalFile());</span>
+<span class="nc" id="L294">        } catch (java.io.IOException e) {</span>
+<span class="nc" id="L295">            return a.getAbsoluteFile().equals(b.getAbsoluteFile());</span>
+        }
+    }
+
+    private static Optional&lt;String&gt; capture(File repo, String... args) {
+        try {
+<span class="fc" id="L301">            String[] command = new String[args.length + 1];</span>
+<span class="fc" id="L302">            command[0] = &quot;git&quot;;</span>
+<span class="fc" id="L303">            System.arraycopy(args, 0, command, 1, args.length);</span>
+<span class="fc" id="L304">            String out = ReleaseSupport.execCapture(repo, command);</span>
+<span class="fc" id="L305">            return Optional.ofNullable(out).map(String::trim);</span>
+<span class="nc" id="L306">        } catch (Exception e) {</span>
+<span class="nc" id="L307">            return Optional.empty();</span>
+        }
+    }
+
+    private static boolean run(File repo, String... args) {
+        try {
+<span class="fc" id="L313">            String[] command = new String[args.length + 1];</span>
+<span class="fc" id="L314">            command[0] = &quot;git&quot;;</span>
+<span class="fc" id="L315">            System.arraycopy(args, 0, command, 1, args.length);</span>
+<span class="fc" id="L316">            ReleaseSupport.execCapture(repo, command);</span>
+<span class="fc" id="L317">            return true;</span>
+<span class="nc" id="L318">        } catch (Exception e) {</span>
+<span class="nc" id="L319">            return false;</span>
+        }
+    }
+
+    private static int lineCount(Optional&lt;String&gt; output) {
+<span class="fc" id="L324">        return (int) output.stream()</span>
+<span class="fc" id="L325">                .flatMap(String::lines)</span>
+<span class="pc bpc" id="L326" title="1 of 2 branches missed.">                .filter(line -&gt; !line.isBlank())</span>
+<span class="fc" id="L327">                .count();</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

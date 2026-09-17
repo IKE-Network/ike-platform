@@ -1,0 +1,234 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>QualificationCascade.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">QualificationCascade.java</span></div><h1>QualificationCascade.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.plugin.ReleaseSupport;
+import org.apache.maven.api.model.Parent;
+import org.apache.maven.api.plugin.Log;
+import org.apache.maven.api.plugin.MojoException;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
+
+/**
+ * Branch-qualification cascade across a subproject's whole module tree
+ * (IKE-Network/ike-issues#1051).
+ *
+ * &lt;p&gt;The two #574 qualification arms — {@code ws:add}'s add-time
+ * qualification and the scaffold-publish self-heal — rewrote only the
+ * subproject &lt;em&gt;root&lt;/em&gt; POM's own {@code &lt;version&gt;}. A multi-module
+ * subproject was left internally split: every child's
+ * {@code &lt;parent&gt;&lt;version&gt;} still named the unqualified version, so the
+ * children either built against a stale external parent resolved from a
+ * repository (inheriting the unqualified version) or failed parent
+ * resolution outright. Observed 2026-08-18 adding ikm-reasoner
+ * (21 child modules, two aggregator levels) to the incremental-reasoner
+ * sibling.
+ *
+ * &lt;p&gt;This cascade applies one version move {@code old → new} to the whole
+ * tree, precisely:
+ * &lt;ul&gt;
+ *   &lt;li&gt;every tree POM whose own literal {@code &lt;version&gt;} is {@code old}
+ *       (the root's own version; a child that redundantly declares its
+ *       own version) is rewritten to {@code new};&lt;/li&gt;
+ *   &lt;li&gt;every tree POM whose {@code &lt;parent&gt;} names an &lt;em&gt;in-tree&lt;/em&gt;
+ *       POM by full groupId:artifactId and whose parent version is
+ *       {@code old} is rewritten to {@code new} via the OpenRewrite-LST
+ *       editor ({@link PomModel#updateParentVersion}) — never string
+ *       replacement.&lt;/li&gt;
+ * &lt;/ul&gt;
+ *
+ * &lt;p&gt;What it never touches: an external {@code &lt;parent&gt;} (GA not produced
+ * by the tree — e.g. ikm-reasoner's {@code java-parent}), and dependency
+ * versions that merely coincide with {@code old} literally. GA matching,
+ * not literal string matching, is the precision guarantee (#241 set the
+ * precedent for full-GA matching).
+ *
+ * &lt;p&gt;De-qualification already cascades on the finish side
+ * ({@code FeatureFinishSupport.setAllVersions} +
+ * {@code stripAllBranchQualifiedVersions}), so the round trip is
+ * symmetric once both #574 arms route through here.
+ */
+public final class QualificationCascade {
+
+    private QualificationCascade() {}
+
+    /**
+     * Apply the version move {@code oldVersion → newVersion} across the
+     * member's whole module tree, as described in the class javadoc.
+     *
+     * &lt;p&gt;Failures on individual POMs (unreadable, unparseable) are logged
+     * and skipped rather than failing the move — matching the non-fatal
+     * posture of both #574 arms, whose callers treat qualification as
+     * self-healable on the next scaffold-publish.
+     *
+     * @param memberDir  the subproject root directory
+     * @param oldVersion the version currently in the tree
+     * @param newVersion the version the tree should carry
+     * @param log        Maven logger for per-file debug and warnings
+     * @return the number of POM files rewritten
+     * @throws IOException if the root POM cannot be rewritten
+     */
+    public static int apply(Path memberDir, String oldVersion,
+                            String newVersion, Log log) throws IOException {
+<span class="pc bpc" id="L79" title="2 of 4 branches missed.">        if (oldVersion == null || newVersion == null</span>
+<span class="pc bpc" id="L80" title="1 of 2 branches missed.">                || oldVersion.equals(newVersion)) {</span>
+<span class="nc" id="L81">            return 0;</span>
+        }
+<span class="fc" id="L83">        List&lt;PomEntry&gt; tree = readTree(memberDir, log);</span>
+<span class="fc" id="L84">        Set&lt;String&gt; treeGAs = treeCoordinates(tree);</span>
+
+<span class="fc" id="L86">        int changed = 0;</span>
+<span class="fc bfc" id="L87" title="All 2 branches covered.">        for (PomEntry entry : tree) {</span>
+<span class="fc" id="L88">            String content = entry.model().content();</span>
+<span class="fc" id="L89">            String updated = content;</span>
+
+<span class="fc" id="L91">            Parent parent = entry.model().parent();</span>
+<span class="fc bfc" id="L92" title="All 4 branches covered.">            if (parent != null &amp;&amp; oldVersion.equals(parent.getVersion())</span>
+<span class="pc bpc" id="L93" title="1 of 2 branches missed.">                    &amp;&amp; treeGAs.contains(</span>
+<span class="fc" id="L94">                            ga(parent.getGroupId(), parent.getArtifactId()))) {</span>
+<span class="fc" id="L95">                updated = PomModel.updateParentVersion(updated,</span>
+<span class="fc" id="L96">                        parent.getGroupId(), parent.getArtifactId(),</span>
+                        newVersion);
+            }
+<span class="fc bfc" id="L99" title="All 2 branches covered.">            if (oldVersion.equals(entry.model().model().getVersion())) {</span>
+<span class="fc" id="L100">                updated = spliceOwnVersion(updated, oldVersion, newVersion);</span>
+            }
+<span class="fc bfc" id="L102" title="All 2 branches covered.">            if (!updated.equals(content)) {</span>
+<span class="fc" id="L103">                Files.writeString(entry.file().toPath(), updated,</span>
+                        StandardCharsets.UTF_8);
+<span class="fc" id="L105">                changed++;</span>
+<span class="fc" id="L106">                log.debug(&quot;    qualification cascade: &quot;</span>
+<span class="fc" id="L107">                        + memberDir.relativize(entry.file().toPath())</span>
+                        + &quot; &quot; + oldVersion + &quot; → &quot; + newVersion);
+            }
+<span class="fc" id="L110">        }</span>
+<span class="fc" id="L111">        return changed;</span>
+    }
+
+    /**
+     * Whether the member's tree still references {@code baseVersion} —
+     * an in-tree {@code &lt;parent&gt;} at that version, or a POM's own literal
+     * {@code &lt;version&gt;} at it. This is the reconciler's detection arm for
+     * trees whose root is already qualified but whose children were left
+     * behind by a pre-#1051 qualification (the state the reconciler's
+     * root-only read could not see).
+     *
+     * @param memberDir   the subproject root directory
+     * @param baseVersion the unqualified version to look for
+     * @param log         Maven logger for warnings on unreadable POMs
+     * @return {@code true} when at least one tree POM still carries
+     *         {@code baseVersion} as described
+     */
+    public static boolean hasStaleTree(Path memberDir, String baseVersion,
+                                       Log log) {
+<span class="pc bpc" id="L130" title="1 of 2 branches missed.">        if (baseVersion == null) {</span>
+<span class="nc" id="L131">            return false;</span>
+        }
+<span class="fc" id="L133">        List&lt;PomEntry&gt; tree = readTree(memberDir, log);</span>
+<span class="fc" id="L134">        Set&lt;String&gt; treeGAs = treeCoordinates(tree);</span>
+<span class="fc bfc" id="L135" title="All 2 branches covered.">        for (PomEntry entry : tree) {</span>
+<span class="fc" id="L136">            Parent parent = entry.model().parent();</span>
+<span class="fc bfc" id="L137" title="All 4 branches covered.">            if (parent != null &amp;&amp; baseVersion.equals(parent.getVersion())</span>
+<span class="pc bpc" id="L138" title="1 of 2 branches missed.">                    &amp;&amp; treeGAs.contains(</span>
+<span class="fc" id="L139">                            ga(parent.getGroupId(), parent.getArtifactId()))) {</span>
+<span class="fc" id="L140">                return true;</span>
+            }
+<span class="pc bpc" id="L142" title="1 of 2 branches missed.">            if (baseVersion.equals(entry.model().model().getVersion())) {</span>
+<span class="nc" id="L143">                return true;</span>
+            }
+<span class="fc" id="L145">        }</span>
+<span class="fc" id="L146">        return false;</span>
+    }
+
+    /**
+     * Rewrite a POM's own {@code &lt;version&gt;} in {@code content}, searching
+     * past the {@code &lt;/parent&gt;} block so a parent version that
+     * coincidentally equals {@code oldVersion} is never mistaken for the
+     * project's own (the project {@code &lt;version&gt;} precedes
+     * {@code &lt;dependencies&gt;}, so the first match after {@code &lt;/parent&gt;}
+     * is the project's own). The single own-version splice of the
+     * cascade — successor of the retired root-only
+     * {@code FeatureVersionReconciler.rewriteOwnVersion} (#1051).
+     *
+     * @param content    the POM text
+     * @param oldVersion the current project version
+     * @param newVersion the replacement version
+     * @return the updated text, or {@code content} unchanged when the old
+     *         version is absent outside the parent block
+     */
+    public static String spliceOwnVersion(String content, String oldVersion,
+                                          String newVersion) {
+<span class="fc" id="L167">        int searchFrom = 0;</span>
+<span class="fc" id="L168">        int parentEnd = content.indexOf(&quot;&lt;/parent&gt;&quot;);</span>
+<span class="pc bpc" id="L169" title="1 of 2 branches missed.">        if (parentEnd &gt;= 0) {</span>
+<span class="fc" id="L170">            searchFrom = parentEnd + &quot;&lt;/parent&gt;&quot;.length();</span>
+        }
+<span class="fc" id="L172">        String needle = &quot;&lt;version&gt;&quot; + oldVersion + &quot;&lt;/version&gt;&quot;;</span>
+<span class="fc" id="L173">        int idx = content.indexOf(needle, searchFrom);</span>
+<span class="pc bpc" id="L174" title="1 of 2 branches missed.">        if (idx &lt; 0) {</span>
+<span class="nc" id="L175">            return content;</span>
+        }
+<span class="fc" id="L177">        return content.substring(0, idx)</span>
+                + &quot;&lt;version&gt;&quot; + newVersion + &quot;&lt;/version&gt;&quot;
+<span class="fc" id="L179">                + content.substring(idx + needle.length());</span>
+    }
+
+    // ── Tree reading ─────────────────────────────────────────────
+
+    /** One tree POM: its file and parsed model. */
+<span class="fc" id="L185">    private record PomEntry(File file, PomModel model) {}</span>
+
+    /**
+     * Parse every project POM under {@code memberDir}. Unreadable or
+     * unparseable POMs are logged and skipped — they can neither be
+     * matched nor rewritten.
+     */
+    private static List&lt;PomEntry&gt; readTree(Path memberDir, Log log) {
+        List&lt;File&gt; poms;
+        try {
+<span class="fc" id="L195">            poms = ReleaseSupport.findPomFiles(memberDir.toFile());</span>
+<span class="nc" id="L196">        } catch (MojoException e) {</span>
+<span class="nc" id="L197">            log.warn(&quot;    qualification cascade: cannot scan &quot;</span>
+<span class="nc" id="L198">                    + memberDir + &quot; — &quot; + e.getMessage());</span>
+<span class="nc" id="L199">            return List.of();</span>
+<span class="fc" id="L200">        }</span>
+<span class="fc" id="L201">        List&lt;PomEntry&gt; tree = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L202" title="All 2 branches covered.">        for (File pom : poms) {</span>
+            try {
+<span class="fc" id="L204">                tree.add(new PomEntry(pom, PomModel.parse(pom.toPath())));</span>
+<span class="nc" id="L205">            } catch (IOException e) {</span>
+<span class="nc" id="L206">                log.warn(&quot;    qualification cascade: skipping &quot; + pom</span>
+<span class="nc" id="L207">                        + &quot; — &quot; + e.getMessage());</span>
+<span class="fc" id="L208">            }</span>
+<span class="fc" id="L209">        }</span>
+<span class="fc" id="L210">        return tree;</span>
+    }
+
+    /**
+     * The full groupId:artifactId set produced by the tree, groupId
+     * falling back to the declared parent's when inherited — the set an
+     * in-tree {@code &lt;parent&gt;} reference is matched against.
+     */
+    private static Set&lt;String&gt; treeCoordinates(List&lt;PomEntry&gt; tree) {
+<span class="fc" id="L219">        Set&lt;String&gt; gas = new LinkedHashSet&lt;&gt;();</span>
+<span class="fc bfc" id="L220" title="All 2 branches covered.">        for (PomEntry entry : tree) {</span>
+<span class="fc" id="L221">            String groupId = entry.model().groupId();</span>
+<span class="fc" id="L222">            String artifactId = entry.model().model().getArtifactId();</span>
+<span class="pc bpc" id="L223" title="2 of 4 branches missed.">            if (groupId != null &amp;&amp; artifactId != null) {</span>
+<span class="fc" id="L224">                gas.add(ga(groupId, artifactId));</span>
+            }
+<span class="fc" id="L226">        }</span>
+<span class="fc" id="L227">        return gas;</span>
+    }
+
+    private static String ga(String groupId, String artifactId) {
+<span class="fc" id="L231">        return groupId + &quot;:&quot; + artifactId;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

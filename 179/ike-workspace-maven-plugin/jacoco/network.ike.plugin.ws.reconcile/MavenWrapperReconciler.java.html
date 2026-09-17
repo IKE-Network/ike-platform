@@ -1,0 +1,171 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>MavenWrapperReconciler.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws.reconcile</a> &gt; <span class="el_source">MavenWrapperReconciler.java</span></div><h1>MavenWrapperReconciler.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws.reconcile;
+
+import network.ike.plugin.ws.MavenWrapper;
+import network.ike.plugin.ws.WsGoal;
+import network.ike.workspace.Defaults;
+import network.ike.workspace.Subproject;
+import org.apache.maven.api.plugin.MojoException;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Reconciler that keeps each subproject's Maven wrapper pinned to the
+ * workspace's declared Maven version (IKE-Network/ike-issues#701).
+ *
+ * &lt;p&gt;{@code workspace.yaml} declares {@code defaults.maven-version}
+ * (e.g. {@code 4.0.0-rc-5}); a subproject may override it with its own
+ * {@code maven-version}. Nothing previously enforced that a subproject's
+ * {@code .mvn/wrapper/maven-wrapper.properties} actually matches. A
+ * subproject onboarded with an older wrapper (e.g. {@code tinkar-schema}
+ * carrying Maven 3.9.11) silently stayed pinned to the wrong version,
+ * and {@code ws:scaffold-draft}/{@code -publish} then failed because the
+ * workspace enforcer requires Maven 4+.
+ *
+ * &lt;p&gt;This reconciler closes that gap: it reads the pinned version from
+ * each subproject's wrapper, compares it against the expected version
+ * (subproject override, else {@code defaults.maven-version}), reports
+ * drift in draft mode, and rewrites the {@code distributionUrl} (and the
+ * legacy {@code maven.version} key, when present) in publish mode.
+ *
+ * &lt;p&gt;Scope is the &lt;em&gt;version&lt;/em&gt; only — {@link ScaffoldConventionReconciler}
+ * owns wrapper &lt;em&gt;presence&lt;/em&gt; (regenerating missing files and replacing
+ * the legacy custom launcher), but only for the workspace root and only
+ * when files are absent or legacy; it never re-pins the version of a
+ * well-formed subproject wrapper. The two reconcilers are complementary.
+ *
+ * &lt;p&gt;Subprojects without a wrapper file are skipped (no presence
+ * enforcement here). Idempotent: a second run is a no-op. Opt out with
+ * {@code -DupdateWrapper=false}.
+ *
+ * @see MavenWrapper#rewritePinnedVersion
+ * @see ScaffoldConventionReconciler
+ */
+public class MavenWrapperReconciler implements Reconciler {
+
+    /** Creates the reconciler. */
+<span class="fc" id="L52">    public MavenWrapperReconciler() {}</span>
+
+    @Override
+    public String dimension() {
+<span class="fc" id="L56">        return &quot;Maven wrapper version&quot;;</span>
+    }
+
+    @Override
+    public String optOutFlag() {
+<span class="fc" id="L61">        return &quot;updateWrapper&quot;;</span>
+    }
+
+    @Override
+    public DriftReport detect(WorkspaceContext ctx) {
+<span class="fc" id="L66">        List&lt;Change&gt; changes = computeChanges(ctx);</span>
+<span class="fc bfc" id="L67" title="All 2 branches covered.">        if (changes.isEmpty()) {</span>
+<span class="fc" id="L68">            return DriftReport.noDrift(dimension());</span>
+        }
+<span class="fc" id="L70">        List&lt;String&gt; detail = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L71" title="All 2 branches covered.">        for (Change c : changes) {</span>
+<span class="fc" id="L72">            detail.add(c.name() + &quot;: &quot; + c.actual() + &quot; → &quot; + c.expected());</span>
+<span class="fc" id="L73">        }</span>
+<span class="fc" id="L74">        String summary = changes.size()</span>
+                + &quot; wrapper(s) pinned to the wrong Maven version&quot;;
+<span class="fc" id="L76">        String action = &quot;rewrite each subproject's maven-wrapper.properties &quot;</span>
+                + &quot;to the workspace Maven version on scaffold-publish&quot;;
+<span class="fc" id="L78">        String optOut = &quot;mvn &quot; + WsGoal.SCAFFOLD_PUBLISH.qualified()</span>
+<span class="fc" id="L79">                + &quot; -D&quot; + optOutFlag() + &quot;=false&quot;;</span>
+<span class="fc" id="L80">        return new DriftReport(dimension(), true, summary, detail,</span>
+                action, optOut);
+    }
+
+    @Override
+    public void apply(WorkspaceContext ctx) {
+<span class="fc bfc" id="L86" title="All 2 branches covered.">        if (ctx.options().isOptedOut(optOutFlag())) {</span>
+<span class="fc" id="L87">            ctx.log().info(&quot;  &quot; + dimension() + &quot;: skipped (opted out via -D&quot;</span>
+<span class="fc" id="L88">                    + optOutFlag() + &quot;=false)&quot;);</span>
+<span class="fc" id="L89">            return;</span>
+        }
+<span class="fc" id="L91">        List&lt;Change&gt; changes = computeChanges(ctx);</span>
+<span class="fc bfc" id="L92" title="All 2 branches covered.">        if (changes.isEmpty()) {</span>
+<span class="fc" id="L93">            return;</span>
+        }
+<span class="fc" id="L95">        int rewritten = 0;</span>
+<span class="fc bfc" id="L96" title="All 2 branches covered.">        for (Change c : changes) {</span>
+<span class="fc" id="L97">            Path dir = new File(ctx.workspaceRoot(), c.name()).toPath();</span>
+            try {
+<span class="pc bpc" id="L99" title="1 of 2 branches missed.">                if (MavenWrapper.rewritePinnedVersion(dir, c.expected())) {</span>
+<span class="fc" id="L100">                    rewritten++;</span>
+                }
+<span class="nc" id="L102">            } catch (IOException e) {</span>
+<span class="nc" id="L103">                throw new MojoException(&quot;Maven wrapper reconciliation failed &quot;</span>
+<span class="nc" id="L104">                        + &quot;for &quot; + c.name() + &quot;: &quot; + e.getMessage(), e);</span>
+<span class="fc" id="L105">            }</span>
+<span class="fc" id="L106">        }</span>
+<span class="fc" id="L107">        ctx.log().info(&quot;  &quot; + dimension() + &quot;: pinned &quot; + rewritten</span>
+                + &quot; wrapper(s) to the workspace Maven version&quot;);
+<span class="fc" id="L109">    }</span>
+
+    // ── Change computation (shared by detect and apply) ─────────────
+
+    /**
+     * One subproject's wrapper-version drift.
+     *
+     * @param name     the subproject name
+     * @param actual   the version its wrapper currently pins
+     * @param expected the version it should pin (override or default)
+     */
+<span class="fc" id="L120">    private record Change(String name, String actual, String expected) {}</span>
+
+    /**
+     * Compute the wrapper-version drift across all subprojects. The
+     * expected version is the subproject's own {@code maven-version}
+     * override when set, otherwise {@code defaults.maven-version}.
+     * Subprojects with no expected version, no wrapper file, or an
+     * unreadable wrapper are skipped.
+     *
+     * @param ctx the workspace context
+     * @return the list of drifted subprojects (empty when converged)
+     */
+    private List&lt;Change&gt; computeChanges(WorkspaceContext ctx) {
+<span class="fc" id="L133">        Defaults defaults = ctx.graph().manifest().defaults();</span>
+        String defaultVersion =
+<span class="pc bpc" id="L135" title="1 of 2 branches missed.">                defaults != null ? defaults.mavenVersion() : null;</span>
+
+<span class="fc" id="L137">        List&lt;Change&gt; changes = new ArrayList&lt;&gt;();</span>
+        for (Map.Entry&lt;String, Subproject&gt; entry
+<span class="fc bfc" id="L139" title="All 2 branches covered.">                : ctx.graph().manifest().subprojects().entrySet()) {</span>
+<span class="fc" id="L140">            String name = entry.getKey();</span>
+<span class="fc" id="L141">            String override = entry.getValue().mavenVersion();</span>
+<span class="pc bpc" id="L142" title="1 of 4 branches missed.">            String expected = (override != null &amp;&amp; !override.isBlank())</span>
+<span class="fc" id="L143">                    ? override : defaultVersion;</span>
+<span class="pc bpc" id="L144" title="2 of 4 branches missed.">            if (expected == null || expected.isBlank()) {</span>
+<span class="nc" id="L145">                continue;</span>
+            }
+<span class="fc" id="L147">            Path dir = new File(ctx.workspaceRoot(), name).toPath();</span>
+<span class="fc" id="L148">            Path props = dir.resolve(&quot;.mvn&quot;).resolve(&quot;wrapper&quot;)</span>
+<span class="fc" id="L149">                    .resolve(&quot;maven-wrapper.properties&quot;);</span>
+<span class="fc bfc" id="L150" title="All 2 branches covered.">            if (!Files.exists(props)) {</span>
+<span class="fc" id="L151">                continue;</span>
+            }
+            String actual;
+            try {
+<span class="fc" id="L155">                actual = MavenWrapper.readPinnedVersion(dir);</span>
+<span class="nc" id="L156">            } catch (IOException e) {</span>
+<span class="nc" id="L157">                ctx.log().warn(&quot;  &quot; + name + &quot;: cannot read wrapper version — &quot;</span>
+<span class="nc" id="L158">                        + e.getMessage());</span>
+<span class="nc" id="L159">                continue;</span>
+<span class="fc" id="L160">            }</span>
+<span class="pc bpc" id="L161" title="2 of 4 branches missed.">            if (actual == null || actual.isBlank()) {</span>
+<span class="nc" id="L162">                continue;</span>
+            }
+<span class="fc bfc" id="L164" title="All 2 branches covered.">            if (!expected.equals(actual)) {</span>
+<span class="fc" id="L165">                changes.add(new Change(name, actual, expected));</span>
+            }
+<span class="fc" id="L167">        }</span>
+<span class="fc" id="L168">        return changes;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

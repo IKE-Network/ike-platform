@@ -1,5 +1,8 @@
 package network.ike.plugin.ws.reconcile;
 
+import java.io.File;
+import network.ike.plugin.ws.vcs.VcsOperations;
+import org.apache.maven.api.plugin.MojoException;
 import network.ike.plugin.ws.MavenWrapper;
 import network.ike.plugin.ws.WsGoal;
 import network.ike.workspace.IdeSettings;
@@ -39,8 +42,10 @@ import java.util.regex.Pattern;
  * <ol>
  *   <li><b>global-gitignore</b> — ensure {@code .ike/vcs-state} and
  *       {@code _git-init*} are in the user's global gitignore.</li>
- *   <li><b>workspace-gitignore</b> — sectioned whitelist enforcement
- *       for the workspace {@code .gitignore}.</li>
+ *   <li><b>workspace-gitignore</b> — sectioned allowlist enforcement
+ *       for the workspace {@code .gitignore}; retires the IDE-derived
+ *       {@code .idea} files from the curated slice and untracks them
+ *       (IKE-Network/ike-issues#1102).</li>
  *   <li><b>stignore-shared</b> — {@code (?d)} prefix on directory
  *       ignore patterns in Syncthing's {@code stignore-shared}.</li>
  *   <li><b>pom-root</b> — Maven 4.1.0 {@code root="true"} on the
@@ -204,15 +209,43 @@ public class ScaffoldConventionReconciler implements Reconciler {
             new GitignoreSection(
                     "# ── IntelliJ project config (curated slice) ──────────────────────\n"
                             + "# Small, stable project-wide settings shared across collaborators.\n"
-                            + "# compiler.xml and vcs.xml are excluded — they regenerate per\n"
-                            + "# Maven reload or per workspace membership. misc.xml is excluded\n"
-                            + "# by default (per-machine Maven profile selection); opt in with\n"
-                            + "# `ide.track-misc-xml: true` in workspace.yaml (ike-issues#571).",
-                    "!.idea/", "!.idea/.gitignore",
-                    "!.idea/kotlinc.xml", "!.idea/encodings.xml",
-                    "!.idea/jarRepositories.xml"
+                            + "# compiler.xml, vcs.xml, encodings.xml and jarRepositories.xml are\n"
+                            + "# excluded — they regenerate per Maven reload or per workspace\n"
+                            + "# membership, and the sync layer already leaves them per-machine\n"
+                            + "# (ike-issues#1102). misc.xml is excluded by default (per-machine\n"
+                            + "# Maven profile selection); opt in with `ide.track-misc-xml: true`\n"
+                            + "# in workspace.yaml (ike-issues#571).",
+                    "!.idea/", "!.idea/.gitignore", "!.idea/kotlinc.xml"
             )
     );
+
+    /**
+     * IDE-derived files retired from the curated {@code .idea/} slice
+     * (IKE-Network/ike-issues#1102). Both regenerate from the POMs on every
+     * Maven re-import — {@code encodings.xml} lists every source root,
+     * {@code jarRepositories.xml} mirrors the Maven settings — and the sync
+     * layer already excludes them, so tracking them made every re-import a
+     * pending change on the root and every shared working set a conflict.
+     */
+    static final List<String> RETIRED_IDEA_FILES = List.of(
+            ".idea/encodings.xml", ".idea/jarRepositories.xml");
+
+    /**
+     * Outcome of {@link #retireIdeaDerivedFiles}.
+     *
+     * @param content      the {@code .gitignore} content with the retired
+     *                     allowlist lines removed
+     * @param retiredLines the allowlist lines that were removed
+     * @param untracked    the retired files the root tracked — untracked when
+     *                     publishing, merely reported when previewing
+     */
+    record IdeaRetirement(String content, List<String> retiredLines, List<String> untracked) {
+
+        /** Whether the retirement changes anything: a line, a tracked file, or both. */
+        boolean changed() {
+            return !retiredLines.isEmpty() || !untracked.isEmpty();
+        }
+    }
 
     /**
      * A named group of {@code .gitignore} entries sharing a section
@@ -287,25 +320,40 @@ public class ScaffoldConventionReconciler implements Reconciler {
             // `!.idea/misc.xml` whitelist line in sync with the setting,
             // self-healing a rogue line left by older plugin versions.
             boolean track = tracksMiscXml(ctx, log);
-            String updated = reconcileMiscXmlWhitelist(withBase, track);
+            String withMisc = reconcileMiscXmlWhitelist(withBase, track);
 
-            if (updated.equals(content)) {
+            // The IDE-derived files leave the curated slice (ike-issues#1102):
+            // their allowlist lines go, and a root that still tracks them
+            // untracks them on publish, keeping the working copies the IDE
+            // rewrites on every re-import.
+            IdeaRetirement retirement = retireIdeaDerivedFiles(root, withMisc, publish, log);
+            String updated = retirement.content();
+
+            if (updated.equals(content) && retirement.untracked().isEmpty()) {
                 return;
             }
 
             if (!additions.isEmpty()) {
                 run.drift.add("workspace-gitignore: add missing whitelist entries");
             }
-            if (!updated.equals(withBase)) {
+            if (!withMisc.equals(withBase)) {
                 run.drift.add(track
                         ? "workspace-gitignore: whitelist .idea/misc.xml"
                                 + " (ide.track-misc-xml)"
                         : "workspace-gitignore: stop tracking .idea/misc.xml"
                                 + " (per-machine; opt in via ide.track-misc-xml)");
             }
+            if (retirement.changed()) {
+                run.drift.add("workspace-gitignore: stop tracking "
+                        + String.join(", ", RETIRED_IDEA_FILES)
+                        + " (regenerated from the POM on import; excluded from sync;"
+                        + " ike-issues#1102)");
+            }
 
             if (publish) {
-                Files.writeString(gitignore, updated, StandardCharsets.UTF_8);
+                if (!updated.equals(content)) {
+                    Files.writeString(gitignore, updated, StandardCharsets.UTF_8);
+                }
                 run.applied++;
             }
         } catch (IOException e) {
@@ -373,6 +421,63 @@ public class ScaffoldConventionReconciler implements Reconciler {
             }
         }
         return String.join("\n", kept);
+    }
+
+    /**
+     * Retire the IDE-derived files from the curated {@code .idea/} slice
+     * (IKE-Network/ike-issues#1102): drop their allowlist lines from
+     * {@code content} and, when {@code publish} is {@code true}, untrack the
+     * ones the root still tracks — the working copies stay, and with the
+     * allowlist lines gone the catch-all ignore covers them from then on. A
+     * preview reports the tracked files without touching the index.
+     * Package-private for tests.
+     *
+     * @param root    the workspace root directory
+     * @param content the current {@code .gitignore} content
+     * @param publish whether to untrack, or only to report
+     * @param log     Maven logger
+     * @return the reconciled content and what was, or would be, untracked
+     */
+    static IdeaRetirement retireIdeaDerivedFiles(Path root, String content,
+                                                 boolean publish, Log log) {
+        List<String> retiredLines = new ArrayList<>();
+        List<String> kept = new ArrayList<>();
+        for (String line : content.split("\n", -1)) {
+            String trimmed = line.trim();
+            boolean retired = false;
+            for (String file : RETIRED_IDEA_FILES) {
+                if (trimmed.equals("!" + file)) {
+                    retired = true;
+                    break;
+                }
+            }
+            if (retired) {
+                retiredLines.add(trimmed);
+            } else {
+                kept.add(line);
+            }
+        }
+        String updated = retiredLines.isEmpty() ? content : String.join("\n", kept);
+
+        List<String> untracked = new ArrayList<>();
+        if (Files.exists(root.resolve(".git"))) {
+            File rootDir = root.toFile();
+            for (String file : RETIRED_IDEA_FILES) {
+                if (!VcsOperations.isTracked(rootDir, file)) {
+                    continue;
+                }
+                if (publish) {
+                    try {
+                        VcsOperations.untrack(rootDir, log, file);
+                    } catch (MojoException e) {
+                        log.warn("  Could not untrack " + file + ": " + e.getMessage());
+                        continue;
+                    }
+                }
+                untracked.add(file);
+            }
+        }
+        return new IdeaRetirement(updated, List.copyOf(retiredLines), List.copyOf(untracked));
     }
 
     // ── 3. stignore-shared (?d) flags ──────────────────────────────

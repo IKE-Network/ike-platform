@@ -570,11 +570,13 @@ public final class WorkspaceBootstrap {
      *
      * <p>The generated file includes a curated {@code .idea/} slice so
      * that fresh checkouts land at the correct IntelliJ project
-     * settings (JDK, language level including preview mode, encoding,
-     * Maven repositories) without per-collaborator manual setup.
-     * {@code compiler.xml} and {@code vcs.xml} are intentionally not
-     * allowlisted — they regenerate on every Maven reload or per
-     * workspace membership and would cause constant diff churn.
+     * settings (JDK, language level including preview mode) without
+     * per-collaborator manual setup. {@code compiler.xml},
+     * {@code vcs.xml}, {@code encodings.xml} and
+     * {@code jarRepositories.xml} are intentionally not allowlisted —
+     * they regenerate on every Maven reload or per workspace membership
+     * and would cause constant diff churn; the sync layer already leaves
+     * the last two per-machine (IKE-Network/ike-issues#1102).
      * {@code misc.xml} is also excluded by default — it co-mingles
      * per-machine Maven profile selection; opt in to tracking it with
      * {@code ide.track-misc-xml: true} in {@code workspace.yaml}
@@ -617,15 +619,15 @@ public final class WorkspaceBootstrap {
         gi.append("!.run/**\n\n");
         gi.append("# ── IntelliJ project config (curated slice) ──────────────────────\n");
         gi.append("# Small, stable project-wide settings shared across collaborators.\n");
-        gi.append("# compiler.xml and vcs.xml are excluded — they regenerate per\n");
-        gi.append("# Maven reload or per workspace membership. misc.xml is excluded\n");
-        gi.append("# by default (per-machine Maven profile selection); opt in with\n");
-        gi.append("# `ide.track-misc-xml: true` in workspace.yaml (ike-issues#571).\n");
+        gi.append("# compiler.xml, vcs.xml, encodings.xml and jarRepositories.xml are\n");
+        gi.append("# excluded — they regenerate per Maven reload or per workspace\n");
+        gi.append("# membership, and the sync layer already leaves them per-machine\n");
+        gi.append("# (ike-issues#1102). misc.xml is excluded by default (per-machine\n");
+        gi.append("# Maven profile selection); opt in with `ide.track-misc-xml: true`\n");
+        gi.append("# in workspace.yaml (ike-issues#571).\n");
         gi.append("!.idea/\n");
         gi.append("!.idea/.gitignore\n");
         gi.append("!.idea/kotlinc.xml\n");
-        gi.append("!.idea/encodings.xml\n");
-        gi.append("!.idea/jarRepositories.xml\n");
         return gi.toString();
     }
 

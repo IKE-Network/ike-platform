@@ -229,6 +229,36 @@ public class VcsOperations {
     }
 
     /**
+     * Whether {@code path} is tracked — listed by {@code git ls-files}. A
+     * file that is merely present, or ignored, is not tracked.
+     *
+     * @param dir  the repository root directory
+     * @param path the path to test, relative to {@code dir}
+     * @return {@code true} if the index lists the path; {@code false} if it
+     *         does not, or if git cannot answer
+     */
+    public static boolean isTracked(File dir, String path) {
+        try {
+            return !capture(dir, "git", "ls-files", "--", path).isEmpty();
+        } catch (MojoException e) {
+            return false;
+        }
+    }
+
+    /**
+     * Stop tracking {@code path} while keeping its working copy
+     * ({@code git rm --cached}). The removal is staged; the caller commits.
+     *
+     * @param dir  the repository root directory
+     * @param log  Maven logger
+     * @param path the path to untrack, relative to {@code dir}
+     * @throws MojoException if the git command fails
+     */
+    public static void untrack(File dir, Log log, String path) throws MojoException {
+        run(dir, log, null, "git", "rm", "--cached", "--quiet", "--", path);
+    }
+
+    /**
      * List untracked, non-ignored files in the working tree.
      *
      * @param dir the repository root directory

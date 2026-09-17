@@ -134,6 +134,31 @@ class WsScaffoldInitMojoTest {
                 .contains(WorkspaceBootstrap.EXTENSIONS_MANAGED_END);
     }
 
+    /**
+     * The curated {@code .idea/} slice no longer tracks the IDE-derived
+     * files: {@code encodings.xml} and {@code jarRepositories.xml}
+     * regenerate from the POMs on every re-import and the sync layer already
+     * leaves them per-machine (IKE-Network/ike-issues#1102).
+     */
+    @Test
+    void generated_gitignore_leaves_ide_derived_files_out_of_the_curated_slice()
+            throws Exception {
+        WorkspaceBootstrap bootstrap = bootstrap("my-ws", "org.example",
+                "1-SNAPSHOT", null);
+
+        Method m = WorkspaceBootstrap.class.getDeclaredMethod("generateGitignore");
+        m.setAccessible(true);
+        String gitignore = (String) m.invoke(bootstrap);
+
+        assertThat(gitignore)
+                .contains("!.idea/\n")
+                .contains("!.idea/.gitignore\n")
+                .contains("!.idea/kotlinc.xml\n")
+                .doesNotContain("!.idea/encodings.xml")
+                .doesNotContain("!.idea/jarRepositories.xml")
+                .doesNotContain("!.idea/misc.xml");
+    }
+
     @Test
     void refresh_extensions_block_updates_version_in_place() throws Exception {
         Path xml = tempDir.resolve("extensions.xml");

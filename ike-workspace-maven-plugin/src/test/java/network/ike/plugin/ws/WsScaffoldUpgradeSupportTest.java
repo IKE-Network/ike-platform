@@ -32,8 +32,11 @@ class WsScaffoldUpgradeSupportTest {
                 .contains("!pom.xml\n")
                 .contains("!.mvn/\n")
                 .contains("!.idea/\n")
-                .contains("!.idea/jarRepositories.xml\n")
-                .doesNotContain("!.idea/misc.xml");
+                .contains("!.idea/kotlinc.xml\n")
+                .doesNotContain("!.idea/misc.xml")
+                // IDE-derived files left the curated slice (ike-issues#1102).
+                .doesNotContain("!.idea/encodings.xml")
+                .doesNotContain("!.idea/jarRepositories.xml");
     }
 
     @Test
@@ -78,7 +81,9 @@ class WsScaffoldUpgradeSupportTest {
         assertThat(additions)
                 .contains("# ── IntelliJ project config (curated slice)")
                 .contains("!.idea/\n")
-                .contains("!.idea/jarRepositories.xml\n")
+                .contains("!.idea/kotlinc.xml\n")
+                .doesNotContain("!.idea/encodings.xml")
+                .doesNotContain("!.idea/jarRepositories.xml")
                 .doesNotContain("!.idea/misc.xml")
                 .doesNotContain("# ── Whitelist workspace-level files")
                 .doesNotContain("# ── Whitelist workspace-owned directories");

@@ -1,0 +1,307 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ReactorPom.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">ReactorPom.java</span></div><h1>ReactorPom.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import org.openrewrite.xml.XmlParser;
+import org.openrewrite.xml.XmlVisitor;
+import org.openrewrite.xml.tree.Content;
+import org.openrewrite.xml.tree.Xml;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
+
+/**
+ * AST-aware editor for a workspace &lt;em&gt;reactor&lt;/em&gt; POM's subproject
+ * membership, using OpenRewrite's XML LST so formatting, comments, and
+ * whitespace survive each edit (no regex on POMs).
+ *
+ * &lt;p&gt;Where {@link network.ike.plugin.PomRewriter} owns release-path POM
+ * edits (dependency/parent/plugin/property versions), this class owns
+ * the workspace-reactor concern: the top-level {@code &lt;subprojects&gt;}
+ * block and the legacy {@code with-&lt;name&gt;} file-activated profiles that
+ * preceded it.
+ *
+ * &lt;h2&gt;Two membership encodings&lt;/h2&gt;
+ * &lt;ul&gt;
+ *   &lt;li&gt;&lt;b&gt;Modern&lt;/b&gt; — unconditional top-level
+ *       {@code &lt;subprojects&gt;&lt;subproject&gt;name&lt;/subproject&gt;&lt;/subprojects&gt;}.
+ *       {@code ike-workspace-extension}'s {@code SubprojectPruneTransformer}
+ *       (IKE-Network/ike-issues#460) prunes entries whose directory is
+ *       absent at model-read time, so the declaration is safe even when
+ *       a subproject has not been cloned yet.&lt;/li&gt;
+ *   &lt;li&gt;&lt;b&gt;Legacy&lt;/b&gt; — one {@code &lt;profile&gt;} per subproject, id
+ *       {@code with-&lt;name&gt;}, {@code &lt;file&gt;&lt;exists&gt;}-activated, declaring
+ *       the member inside the profile's own {@code &lt;subprojects&gt;}. This
+ *       is what {@code ws:add} historically generated; this class
+ *       migrates it away.&lt;/li&gt;
+ * &lt;/ul&gt;
+ *
+ * &lt;p&gt;All methods are pure: they take POM text and return POM text,
+ * leaving the input unchanged when there is nothing to do.
+ *
+ * @see network.ike.plugin.ws.reconcile.ReactorSubprojectsReconciler
+ * @see network.ike.plugin.PomRewriter
+ */
+public final class ReactorPom {
+
+    private ReactorPom() {}
+
+<span class="fc" id="L48">    private static final XmlParser PARSER = new XmlParser();</span>
+
+    /**
+     * One legacy subproject-membership profile: its {@code &lt;id&gt;} and the
+     * subproject name(s) declared inside its {@code &lt;subprojects&gt;} block.
+     *
+     * @param id          the profile id (e.g. {@code with-komet})
+     * @param subprojects the member name(s) the profile activates
+     */
+<span class="fc" id="L57">    public record ProfileEntry(String id, List&lt;String&gt; subprojects) {}</span>
+
+    // ── Reads ────────────────────────────────────────────────────
+
+    /**
+     * List the reactor POM's top-level {@code &lt;subprojects&gt;} entries in
+     * declaration order.
+     *
+     * @param pomContent the raw POM text
+     * @return the subproject names; empty when there is no top-level
+     *         {@code &lt;subprojects&gt;} block
+     */
+    public static List&lt;String&gt; listSubprojects(String pomContent) {
+<span class="fc" id="L70">        Xml.Document doc = parse(pomContent);</span>
+<span class="pc bpc" id="L71" title="1 of 2 branches missed.">        if (doc == null) {</span>
+<span class="nc" id="L72">            return List.of();</span>
+        }
+<span class="fc" id="L74">        Optional&lt;Xml.Tag&gt; subprojects = doc.getRoot().getChild(&quot;subprojects&quot;);</span>
+<span class="fc bfc" id="L75" title="All 2 branches covered.">        if (subprojects.isEmpty()) {</span>
+<span class="fc" id="L76">            return List.of();</span>
+        }
+<span class="fc" id="L78">        List&lt;String&gt; names = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L79" title="All 2 branches covered.">        for (Xml.Tag sub : subprojects.get().getChildren(&quot;subproject&quot;)) {</span>
+<span class="fc" id="L80">            sub.getValue().map(String::trim)</span>
+<span class="pc bpc" id="L81" title="1 of 2 branches missed.">                    .filter(v -&gt; !v.isEmpty())</span>
+<span class="fc" id="L82">                    .ifPresent(names::add);</span>
+<span class="fc" id="L83">        }</span>
+<span class="fc" id="L84">        return names;</span>
+    }
+
+    /**
+     * List the reactor POM's legacy subproject-membership profiles — the
+     * {@code &lt;profile&gt;}s that declare one or more members inside their own
+     * {@code &lt;subprojects&gt;} block (the {@code with-&lt;name&gt;} pattern that
+     * {@code ws:add} generated before the #460 migration).
+     *
+     * &lt;p&gt;A profile qualifies when it carries a non-empty
+     * {@code &lt;subprojects&gt;}; the {@code with-} id and {@code &lt;file&gt;&lt;exists&gt;}
+     * activation are the convention but are not required for the match, so
+     * a hand-edited profile is recognized too.
+     *
+     * @param pomContent the raw POM text
+     * @return the qualifying profiles in declaration order; empty when none
+     */
+    public static List&lt;ProfileEntry&gt; listSubprojectProfiles(String pomContent) {
+<span class="fc" id="L102">        Xml.Document doc = parse(pomContent);</span>
+<span class="pc bpc" id="L103" title="1 of 2 branches missed.">        if (doc == null) {</span>
+<span class="nc" id="L104">            return List.of();</span>
+        }
+<span class="fc" id="L106">        Optional&lt;Xml.Tag&gt; profiles = doc.getRoot().getChild(&quot;profiles&quot;);</span>
+<span class="fc bfc" id="L107" title="All 2 branches covered.">        if (profiles.isEmpty()) {</span>
+<span class="fc" id="L108">            return List.of();</span>
+        }
+<span class="fc" id="L110">        List&lt;ProfileEntry&gt; result = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L111" title="All 2 branches covered.">        for (Xml.Tag profile : profiles.get().getChildren(&quot;profile&quot;)) {</span>
+<span class="fc" id="L112">            Optional&lt;Xml.Tag&gt; sp = profile.getChild(&quot;subprojects&quot;);</span>
+<span class="pc bpc" id="L113" title="1 of 2 branches missed.">            if (sp.isEmpty()) {</span>
+<span class="nc" id="L114">                continue;</span>
+            }
+<span class="fc" id="L116">            List&lt;String&gt; members = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L117" title="All 2 branches covered.">            for (Xml.Tag sub : sp.get().getChildren(&quot;subproject&quot;)) {</span>
+<span class="fc" id="L118">                sub.getValue().map(String::trim)</span>
+<span class="pc bpc" id="L119" title="1 of 2 branches missed.">                        .filter(v -&gt; !v.isEmpty())</span>
+<span class="fc" id="L120">                        .ifPresent(members::add);</span>
+<span class="fc" id="L121">            }</span>
+<span class="pc bpc" id="L122" title="1 of 2 branches missed.">            if (members.isEmpty()) {</span>
+<span class="nc" id="L123">                continue;</span>
+            }
+<span class="fc" id="L125">            String id = profile.getChildValue(&quot;id&quot;).map(String::trim).orElse(null);</span>
+<span class="fc" id="L126">            result.add(new ProfileEntry(id, members));</span>
+<span class="fc" id="L127">        }</span>
+<span class="fc" id="L128">        return result;</span>
+    }
+
+    // ── Writes ───────────────────────────────────────────────────
+
+    /**
+     * Set the reactor POM's top-level {@code &lt;subprojects&gt;} block to
+     * exactly {@code names}, in the given order. Replaces an existing
+     * block in place (preserving its surrounding whitespace) or inserts a
+     * new one — before {@code &lt;profiles&gt;} when present, otherwise at the
+     * end of {@code &lt;project&gt;}.
+     *
+     * &lt;p&gt;This single operation covers add ({@code ws:add}), remove
+     * ({@code ws:remove}), and full reconciliation against
+     * {@code workspace.yaml}: callers compute the target list and let this
+     * method materialize it idempotently.
+     *
+     * @param pomContent the raw POM text
+     * @param names      the exact subproject membership to declare
+     * @return updated POM text; unchanged when the block already matches
+     */
+    public static String setSubprojects(String pomContent, List&lt;String&gt; names) {
+<span class="fc bfc" id="L150" title="All 2 branches covered.">        if (listSubprojects(pomContent).equals(names)) {</span>
+<span class="fc" id="L151">            return pomContent;</span>
+        }
+<span class="fc" id="L153">        Xml.Document doc = parse(pomContent);</span>
+<span class="pc bpc" id="L154" title="1 of 2 branches missed.">        if (doc == null) {</span>
+<span class="nc" id="L155">            return pomContent;</span>
+        }
+<span class="fc" id="L157">        String blockXml = renderSubprojectsBlock(names);</span>
+
+<span class="fc" id="L159">        Xml.Document updated = (Xml.Document) new XmlVisitor&lt;Integer&gt;() {</span>
+            @Override
+            public Xml visitTag(Xml.Tag tag, Integer ctx) {
+<span class="fc" id="L162">                Xml.Tag t = (Xml.Tag) super.visitTag(tag, ctx);</span>
+<span class="fc bfc" id="L163" title="All 2 branches covered.">                if (!&quot;project&quot;.equals(t.getName())) {</span>
+<span class="fc" id="L164">                    return t;</span>
+                }
+<span class="fc" id="L166">                Optional&lt;Xml.Tag&gt; existing = t.getChild(&quot;subprojects&quot;);</span>
+<span class="fc bfc" id="L167" title="All 2 branches covered.">                if (existing.isPresent()) {</span>
+<span class="fc" id="L168">                    Xml.Tag block = Xml.Tag.build(blockXml)</span>
+<span class="fc" id="L169">                            .withPrefix(existing.get().getPrefix());</span>
+<span class="fc" id="L170">                    return replaceChild(t, existing.get(), block);</span>
+                }
+<span class="fc" id="L172">                Xml.Tag block = Xml.Tag.build(blockXml).withPrefix(&quot;\n\n    &quot;);</span>
+<span class="fc" id="L173">                List&lt;Content&gt; content = new ArrayList&lt;&gt;(t.getContent());</span>
+<span class="fc" id="L174">                content.add(insertionIndex(content), block);</span>
+<span class="fc" id="L175">                return t.withContent(content);</span>
+            }
+<span class="fc" id="L177">        }.visitNonNull(doc, 0);</span>
+
+<span class="fc" id="L179">        return print(updated);</span>
+    }
+
+    /**
+     * Remove a single {@code &lt;profile&gt;} (matched by {@code &lt;id&gt;}) from the
+     * reactor POM, and drop the {@code &lt;profiles&gt;} block entirely if it
+     * becomes empty.
+     *
+     * @param pomContent the raw POM text
+     * @param profileId  the profile id to remove (e.g. {@code with-komet})
+     * @return updated POM text; unchanged when no such profile exists
+     */
+    public static String removeProfile(String pomContent, String profileId) {
+<span class="fc" id="L192">        Xml.Document doc = parse(pomContent);</span>
+<span class="pc bpc" id="L193" title="1 of 2 branches missed.">        if (doc == null) {</span>
+<span class="nc" id="L194">            return pomContent;</span>
+        }
+
+<span class="fc" id="L197">        Xml.Document updated = (Xml.Document) new XmlVisitor&lt;Integer&gt;() {</span>
+            @Override
+            public Xml visitTag(Xml.Tag tag, Integer ctx) {
+<span class="fc" id="L200">                Xml.Tag t = (Xml.Tag) super.visitTag(tag, ctx);</span>
+<span class="fc bfc" id="L201" title="All 2 branches covered.">                if (!&quot;project&quot;.equals(t.getName())) {</span>
+<span class="fc" id="L202">                    return t;</span>
+                }
+<span class="fc" id="L204">                Optional&lt;Xml.Tag&gt; profilesOpt = t.getChild(&quot;profiles&quot;);</span>
+<span class="fc bfc" id="L205" title="All 2 branches covered.">                if (profilesOpt.isEmpty()) {</span>
+<span class="fc" id="L206">                    return t;</span>
+                }
+<span class="fc" id="L208">                Xml.Tag profiles = profilesOpt.get();</span>
+<span class="fc" id="L209">                boolean present = profiles.getChildren(&quot;profile&quot;).stream()</span>
+<span class="fc" id="L210">                        .anyMatch(p -&gt; profileId.equals(</span>
+<span class="fc" id="L211">                                p.getChildValue(&quot;id&quot;).map(String::trim).orElse(null)));</span>
+<span class="pc bpc" id="L212" title="1 of 2 branches missed.">                if (!present) {</span>
+<span class="nc" id="L213">                    return t;</span>
+                }
+<span class="fc" id="L215">                List&lt;Content&gt; keptProfileContent = profiles.getContent().stream()</span>
+<span class="fc" id="L216">                        .filter(c -&gt; !(c instanceof Xml.Tag p</span>
+<span class="pc bpc" id="L217" title="1 of 2 branches missed.">                                &amp;&amp; &quot;profile&quot;.equals(p.getName())</span>
+<span class="pc bpc" id="L218" title="1 of 6 branches missed.">                                &amp;&amp; profileId.equals(p.getChildValue(&quot;id&quot;)</span>
+<span class="fc" id="L219">                                        .map(String::trim).orElse(null))))</span>
+<span class="fc" id="L220">                        .map(c -&gt; (Content) c)</span>
+<span class="fc" id="L221">                        .toList();</span>
+<span class="fc" id="L222">                boolean anyProfilesLeft = keptProfileContent.stream()</span>
+<span class="fc" id="L223">                        .anyMatch(c -&gt; c instanceof Xml.Tag p</span>
+<span class="pc bpc" id="L224" title="2 of 4 branches missed.">                                &amp;&amp; &quot;profile&quot;.equals(p.getName()));</span>
+<span class="fc bfc" id="L225" title="All 2 branches covered.">                if (!anyProfilesLeft) {</span>
+                    // Drop the whole &lt;profiles&gt; element (and the whitespace
+                    // node immediately preceding it) so no empty husk lingers.
+<span class="fc" id="L228">                    List&lt;Content&gt; projectContent =</span>
+<span class="fc" id="L229">                            new ArrayList&lt;&gt;(t.getContent());</span>
+<span class="fc" id="L230">                    int idx = projectContent.indexOf(profiles);</span>
+<span class="fc" id="L231">                    projectContent.remove(idx);</span>
+<span class="pc bpc" id="L232" title="1 of 2 branches missed.">                    if (idx &gt; 0</span>
+<span class="pc bpc" id="L233" title="1 of 2 branches missed.">                            &amp;&amp; projectContent.get(idx - 1) instanceof Xml.CharData) {</span>
+<span class="nc" id="L234">                        projectContent.remove(idx - 1);</span>
+                    }
+<span class="fc" id="L236">                    return t.withContent(projectContent);</span>
+                }
+<span class="fc" id="L238">                return replaceChild(t, profiles,</span>
+<span class="fc" id="L239">                        profiles.withContent(keptProfileContent));</span>
+            }
+<span class="fc" id="L241">        }.visitNonNull(doc, 0);</span>
+
+<span class="fc" id="L243">        return print(updated);</span>
+    }
+
+    // ── Rendering / tree helpers ─────────────────────────────────
+
+    /**
+     * Render the {@code &lt;subprojects&gt;} block body for {@code names},
+     * indented two levels (4-space block, 8-space entries) to match the
+     * workspace POM template emitted by {@code WorkspaceBootstrap}.
+     */
+    private static String renderSubprojectsBlock(List&lt;String&gt; names) {
+<span class="fc bfc" id="L254" title="All 2 branches covered.">        if (names.isEmpty()) {</span>
+<span class="fc" id="L255">            return &quot;&lt;subprojects&gt;\n    &lt;/subprojects&gt;&quot;;</span>
+        }
+<span class="fc" id="L257">        StringBuilder sb = new StringBuilder(&quot;&lt;subprojects&gt;\n&quot;);</span>
+<span class="fc bfc" id="L258" title="All 2 branches covered.">        for (String name : names) {</span>
+<span class="fc" id="L259">            sb.append(&quot;        &lt;subproject&gt;&quot;).append(name)</span>
+<span class="fc" id="L260">                    .append(&quot;&lt;/subproject&gt;\n&quot;);</span>
+<span class="fc" id="L261">        }</span>
+<span class="fc" id="L262">        sb.append(&quot;    &lt;/subprojects&gt;&quot;);</span>
+<span class="fc" id="L263">        return sb.toString();</span>
+    }
+
+    /**
+     * Choose where to insert a freshly created {@code &lt;subprojects&gt;} block
+     * in {@code &lt;project&gt;} content: just before the {@code &lt;profiles&gt;}
+     * element (and its leading whitespace) when present, otherwise before
+     * the trailing whitespace that precedes {@code &lt;/project&gt;}.
+     */
+    private static int insertionIndex(List&lt;Content&gt; content) {
+<span class="pc bpc" id="L273" title="1 of 2 branches missed.">        for (int i = 0; i &lt; content.size(); i++) {</span>
+<span class="pc bpc" id="L274" title="1 of 2 branches missed.">            if (content.get(i) instanceof Xml.Tag t</span>
+<span class="fc bfc" id="L275" title="All 2 branches covered.">                    &amp;&amp; &quot;profiles&quot;.equals(t.getName())) {</span>
+<span class="pc bpc" id="L276" title="2 of 4 branches missed.">                return (i &gt; 0 &amp;&amp; content.get(i - 1) instanceof Xml.CharData)</span>
+<span class="pc" id="L277">                        ? i - 1 : i;</span>
+            }
+        }
+<span class="nc" id="L280">        int last = content.size();</span>
+<span class="nc bnc" id="L281" title="All 4 branches missed.">        if (last &gt; 0 &amp;&amp; content.get(last - 1) instanceof Xml.CharData) {</span>
+<span class="nc" id="L282">            return last - 1;</span>
+        }
+<span class="nc" id="L284">        return last;</span>
+    }
+
+    private static Xml.Tag replaceChild(Xml.Tag parent, Xml.Tag oldChild,
+                                        Xml.Tag newChild) {
+<span class="fc" id="L289">        List&lt;Content&gt; newContent = new ArrayList&lt;&gt;(parent.getContent().size());</span>
+<span class="fc bfc" id="L290" title="All 2 branches covered.">        for (Content c : parent.getContent()) {</span>
+<span class="fc bfc" id="L291" title="All 2 branches covered.">            newContent.add(c == oldChild ? newChild : c);</span>
+<span class="fc" id="L292">        }</span>
+<span class="fc" id="L293">        return parent.withContent(newContent);</span>
+    }
+
+    private static Xml.Document parse(String pomContent) {
+<span class="fc" id="L297">        return PARSER.parse(pomContent)</span>
+<span class="fc" id="L298">                .findFirst()</span>
+<span class="fc" id="L299">                .map(t -&gt; (Xml.Document) t)</span>
+<span class="fc" id="L300">                .orElse(null);</span>
+    }
+
+    private static String print(Xml.Document doc) {
+<span class="fc" id="L304">        return doc.printAll();</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

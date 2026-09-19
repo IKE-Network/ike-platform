@@ -1,6 +1,6 @@
 ---
-date_published: 2026-09-16
-date_modified: 2026-09-16
+date_published: 2026-09-18
+date_modified: 2026-09-18
 canonical_url: https://ike.network/ike-platform/workspace-getting-started.html
 ---
 

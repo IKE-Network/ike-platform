@@ -1,0 +1,292 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>WsReleaseStatusMojo.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">WsReleaseStatusMojo.java</span></div><h1>WsReleaseStatusMojo.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.plugin.ReleaseSupport;
+import network.ike.plugin.support.GoalReportBuilder;
+import network.ike.plugin.ws.vcs.VcsOperations;
+import network.ike.workspace.WorkingSet;
+
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+
+import java.io.File;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+
+/**
+ * Read-only diagnostic for any in-flight or partial workspace release.
+ *
+ * &lt;p&gt;This goal performs no mutations. It walks every checked-out
+ * subproject in {@code workspace.yaml}, collects git artifacts that
+ * indicate an interrupted release ({@code release/*} branches and
+ * unpushed {@code v*} tags), and prints a punch list with one line
+ * per subproject. The footer recommends a next action — typically
+ * pointing at {@code IKE-RELEASE-RECOVERY.md} for the matching state.
+ *
+ * &lt;p&gt;Inference rules live in {@link ReleaseStatusInspector}; this
+ * mojo is a thin shell that supplies the git observations and
+ * formats the output. The split keeps the rules unit-testable
+ * without spinning up a real git repository for each scenario.
+ *
+ * &lt;p&gt;&lt;strong&gt;Cycle 1 of #187&lt;/strong&gt;. The git-only inference here
+ * is deliberately conservative — it cannot tell &lt;em&gt;why&lt;/em&gt; a
+ * release was interrupted, only that artifacts remain. Cycle 2 will
+ * add a {@code .ike/release-state.json} written by
+ * {@link WsReleaseDraftMojo} at phase boundaries; this goal will
+ * then merge git evidence with the state file for richer findings.
+ *
+ * &lt;pre&gt;{@code
+ * mvn ws:release-status     # punch list of every subproject's release state
+ * }&lt;/pre&gt;
+ *
+ * @see ReleaseStatusInspector
+ * @see WsReleaseDraftMojo
+ */
+@Mojo(name = &quot;release-status&quot;, projectRequired = false, aggregator = true)
+public class WsReleaseStatusMojo extends AbstractWorkspaceMojo {
+
+    /** Creates this goal instance. */
+<span class="fc" id="L56">    public WsReleaseStatusMojo() {}</span>
+
+    @Override
+    protected WorkspaceReportSpec runGoal() throws MojoException {
+<span class="fc" id="L60">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L61">        getLog().info(header(&quot;Release status&quot;));</span>
+<span class="fc" id="L62">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+<span class="fc" id="L63">        getLog().info(&quot;&quot;);</span>
+
+        // Iterate the resolved working set — subprojects THEN the
+        // aggregator (workspace root). The aggregator is observed the
+        // same way as a subproject, so its release state and (the #763
+        // fix) its POM version land in the report instead of being
+        // hidden by the old subprojects-only topological walk.
+<span class="fc" id="L70">        List&lt;MemberFinding&gt; results = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L71">        List&lt;ReleaseStatusInspector.Finding&gt; findings = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L72" title="All 2 branches covered.">        for (WorkingSet.Member member : resolveWorkingSet().members()) {</span>
+<span class="fc" id="L73">            File dir = member.directory().toFile();</span>
+<span class="fc" id="L74">            ReleaseStatusInspector.Observation obs = observe(member.name(), dir);</span>
+<span class="fc" id="L75">            ReleaseStatusInspector.Finding finding =</span>
+<span class="fc" id="L76">                    ReleaseStatusInspector.classify(obs);</span>
+<span class="fc" id="L77">            findings.add(finding);</span>
+<span class="fc" id="L78">            results.add(new MemberFinding(member, finding,</span>
+<span class="fc bfc" id="L79" title="All 2 branches covered.">                    obs.checkedOut() ? gitShortSha(dir) : null));</span>
+<span class="fc" id="L80">            renderFinding(finding);</span>
+<span class="fc" id="L81">        }</span>
+
+<span class="fc" id="L83">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L84">        renderFooter(findings);</span>
+<span class="fc" id="L85">        return new WorkspaceReportSpec(WsGoal.RELEASE_STATUS,</span>
+<span class="fc" id="L86">                buildMarkdownReport(results));</span>
+    }
+
+    /**
+     * Pairs a working-set member with its release-state finding and the
+     * short SHA observed for its checkout, so the report table can render
+     * one row per member (the aggregator included).
+     *
+     * @param member  the working-set member
+     * @param finding the release-state verdict for that member
+     * @param sha     the member checkout's short HEAD SHA, or {@code null}
+     *                when the member is not checked out
+     */
+<span class="fc" id="L99">    private record MemberFinding(WorkingSet.Member member,</span>
+                                 ReleaseStatusInspector.Finding finding,
+                                 String sha) {}
+
+    // ── Observation: real git interaction ────────────────────────────
+
+    /**
+     * Collect a {@link ReleaseStatusInspector.Observation} for one
+     * subproject by running git subprocesses. Marked package-private
+     * so tests can call it directly against a fixture repo.
+     *
+     * @param name   the subproject name from {@code workspace.yaml}
+     * @param subDir the on-disk subproject directory
+     * @return the populated observation snapshot
+     */
+    static ReleaseStatusInspector.Observation observe(String name, File subDir) {
+<span class="fc bfc" id="L115" title="All 2 branches covered.">        boolean checkedOut = subDir.isDirectory()</span>
+<span class="fc bfc" id="L116" title="All 2 branches covered.">                &amp;&amp; new File(subDir, &quot;.git&quot;).exists();</span>
+<span class="fc bfc" id="L117" title="All 2 branches covered.">        if (!checkedOut) {</span>
+<span class="fc" id="L118">            return new ReleaseStatusInspector.Observation(</span>
+                    name, false, &quot;unknown&quot;, &quot;unknown&quot;,
+<span class="fc" id="L120">                    List.of(), Set.of(), Set.of(), false);</span>
+        }
+
+<span class="fc" id="L123">        String version = readPomVersion(subDir);</span>
+<span class="fc" id="L124">        String branch = safeCurrentBranch(subDir);</span>
+<span class="fc" id="L125">        List&lt;String&gt; releaseBranches = VcsOperations.localBranches(subDir, &quot;release/&quot;);</span>
+<span class="fc" id="L126">        Set&lt;String&gt; localTags = listLocalTags(subDir);</span>
+        Set&lt;String&gt; remoteTags;
+        boolean remoteReachable;
+<span class="fc" id="L129">        Optional&lt;Set&lt;String&gt;&gt; remote = listRemoteTags(subDir);</span>
+<span class="pc bpc" id="L130" title="1 of 2 branches missed.">        if (remote.isPresent()) {</span>
+<span class="nc" id="L131">            remoteTags = remote.get();</span>
+<span class="nc" id="L132">            remoteReachable = true;</span>
+        } else {
+<span class="fc" id="L134">            remoteTags = Set.of();</span>
+<span class="fc" id="L135">            remoteReachable = false;</span>
+        }
+
+<span class="fc" id="L138">        return new ReleaseStatusInspector.Observation(</span>
+                name, true, version, branch,
+                releaseBranches, localTags, remoteTags, remoteReachable);
+    }
+
+    private static String readPomVersion(File subDir) {
+<span class="fc" id="L144">        File pom = new File(subDir, &quot;pom.xml&quot;);</span>
+<span class="pc bpc" id="L145" title="1 of 2 branches missed.">        if (!pom.exists()) {</span>
+<span class="nc" id="L146">            return &quot;unknown&quot;;</span>
+        }
+        try {
+<span class="fc" id="L149">            String content = Files.readString(pom.toPath(), StandardCharsets.UTF_8);</span>
+<span class="fc" id="L150">            return WsReleaseDraftMojo.extractVersionFromPom(content);</span>
+<span class="nc" id="L151">        } catch (Exception e) {</span>
+<span class="nc" id="L152">            return &quot;unknown&quot;;</span>
+        }
+    }
+
+    private static String safeCurrentBranch(File subDir) {
+        try {
+<span class="fc" id="L158">            return VcsOperations.currentBranch(subDir);</span>
+<span class="nc" id="L159">        } catch (MojoException e) {</span>
+<span class="nc" id="L160">            return &quot;unknown&quot;;</span>
+        }
+    }
+
+    /**
+     * List local tags matching {@code v*}. Returns an empty set on
+     * failure rather than throwing — the diagnostic is best-effort.
+     */
+    private static Set&lt;String&gt; listLocalTags(File subDir) {
+        try {
+<span class="fc" id="L170">            String output = ReleaseSupport.execCapture(subDir,</span>
+                    &quot;git&quot;, &quot;tag&quot;, &quot;-l&quot;, &quot;v*&quot;);
+<span class="pc bpc" id="L172" title="2 of 4 branches missed.">            if (output == null || output.isBlank()) return Set.of();</span>
+<span class="nc" id="L173">            return new LinkedHashSet&lt;&gt;(List.of(output.split(&quot;\n&quot;)));</span>
+<span class="nc" id="L174">        } catch (Exception e) {</span>
+<span class="nc" id="L175">            return Set.of();</span>
+        }
+    }
+
+    /**
+     * List remote tags matching {@code v*} on {@code origin}. Returns
+     * empty when {@code origin} is unreachable so the inspector can
+     * suppress false-positive local-only-tag warnings.
+     */
+    private static Optional&lt;Set&lt;String&gt;&gt; listRemoteTags(File subDir) {
+        try {
+<span class="nc" id="L186">            String output = ReleaseSupport.execCapture(subDir,</span>
+                    &quot;git&quot;, &quot;ls-remote&quot;, &quot;--tags&quot;, &quot;origin&quot;, &quot;v*&quot;);
+<span class="nc bnc" id="L188" title="All 4 branches missed.">            if (output == null || output.isBlank()) {</span>
+<span class="nc" id="L189">                return Optional.of(Set.of());</span>
+            }
+<span class="nc" id="L191">            Set&lt;String&gt; tags = new LinkedHashSet&lt;&gt;();</span>
+<span class="nc bnc" id="L192" title="All 2 branches missed.">            for (String line : output.split(&quot;\n&quot;)) {</span>
+                // ls-remote --tags output: &lt;sha&gt;\trefs/tags/&lt;name&gt;[^{}]
+<span class="nc" id="L194">                int slash = line.lastIndexOf('/');</span>
+<span class="nc bnc" id="L195" title="All 2 branches missed.">                if (slash &lt; 0) continue;</span>
+<span class="nc" id="L196">                String tag = line.substring(slash + 1);</span>
+<span class="nc bnc" id="L197" title="All 2 branches missed.">                if (tag.endsWith(&quot;^{}&quot;)) {</span>
+<span class="nc" id="L198">                    tag = tag.substring(0, tag.length() - 3);</span>
+                }
+<span class="nc" id="L200">                tags.add(tag);</span>
+            }
+<span class="nc" id="L202">            return Optional.of(tags);</span>
+<span class="fc" id="L203">        } catch (Exception e) {</span>
+<span class="fc" id="L204">            return Optional.empty();</span>
+        }
+    }
+
+    // ── Output formatting ────────────────────────────────────────────
+
+    private void renderFinding(ReleaseStatusInspector.Finding f) {
+<span class="fc" id="L211">        String header = String.format(&quot;  %s  %-28s  %-12s  %s&quot;,</span>
+<span class="fc" id="L212">                f.status().badge(),</span>
+<span class="fc" id="L213">                f.subprojectName(),</span>
+<span class="fc" id="L214">                f.status().label(),</span>
+<span class="fc" id="L215">                &quot;v=&quot; + f.currentVersion()</span>
+<span class="pc bpc" id="L216" title="1 of 2 branches missed.">                        + (f.currentBranch() == null</span>
+<span class="pc" id="L217">                            ? &quot;&quot; : &quot; · branch=&quot; + f.currentBranch()));</span>
+<span class="pc bpc" id="L218" title="2 of 5 branches missed.">        switch (f.status()) {</span>
+<span class="fc" id="L219">            case CLEAN -&gt; getLog().info(Ansi.green(header));</span>
+<span class="fc" id="L220">            case IN_FLIGHT -&gt; getLog().warn(Ansi.yellow(header));</span>
+<span class="nc" id="L221">            case DIVERGED -&gt; getLog().error(Ansi.red(header));</span>
+<span class="fc" id="L222">            case ABSENT -&gt; getLog().info(header);</span>
+        }
+<span class="fc bfc" id="L224" title="All 2 branches covered.">        for (String detail : f.details()) {</span>
+<span class="fc" id="L225">            getLog().info(&quot;      &quot; + detail);</span>
+<span class="fc" id="L226">        }</span>
+<span class="fc" id="L227">    }</span>
+
+    private void renderFooter(List&lt;ReleaseStatusInspector.Finding&gt; findings) {
+<span class="fc" id="L230">        Map&lt;ReleaseStatusInspector.Status, Integer&gt; counts =</span>
+                new LinkedHashMap&lt;&gt;();
+<span class="fc bfc" id="L232" title="All 2 branches covered.">        for (ReleaseStatusInspector.Status s : ReleaseStatusInspector.Status.values()) counts.put(s, 0);</span>
+<span class="fc bfc" id="L233" title="All 2 branches covered.">        for (ReleaseStatusInspector.Finding f : findings) counts.merge(f.status(), 1, Integer::sum);</span>
+
+<span class="fc" id="L235">        int inFlight = counts.get(ReleaseStatusInspector.Status.IN_FLIGHT);</span>
+<span class="fc" id="L236">        int diverged = counts.get(ReleaseStatusInspector.Status.DIVERGED);</span>
+<span class="fc" id="L237">        int clean = counts.get(ReleaseStatusInspector.Status.CLEAN);</span>
+<span class="fc" id="L238">        int absent = counts.get(ReleaseStatusInspector.Status.ABSENT);</span>
+
+<span class="fc" id="L240">        getLog().info(&quot;Summary: &quot;</span>
+                + clean + &quot; clean, &quot;
+                + inFlight + &quot; in-flight, &quot;
+                + diverged + &quot; diverged, &quot;
+                + absent + &quot; not checked out&quot;);
+<span class="fc" id="L245">        getLog().info(&quot;&quot;);</span>
+
+<span class="pc bpc" id="L247" title="1 of 4 branches missed.">        if (diverged == 0 &amp;&amp; inFlight == 0) {</span>
+<span class="fc" id="L248">            getLog().info(Ansi.green(</span>
+                    &quot;  ✓ No interrupted releases detected.&quot;));
+<span class="fc" id="L250">            return;</span>
+        }
+
+<span class="fc" id="L253">        getLog().info(&quot;Next action:&quot;);</span>
+<span class="pc bpc" id="L254" title="1 of 2 branches missed.">        if (diverged &gt; 0) {</span>
+<span class="nc" id="L255">            getLog().warn(&quot;  • Diverged subprojects need manual cleanup — the&quot;);</span>
+<span class="nc" id="L256">            getLog().warn(&quot;    release completed elsewhere. See &quot;</span>
+                    + &quot;IKE-RELEASE-RECOVERY.md → 'Diverged'.&quot;);
+        }
+<span class="pc bpc" id="L259" title="1 of 2 branches missed.">        if (inFlight &gt; 0) {</span>
+<span class="fc" id="L260">            getLog().warn(&quot;  • In-flight subprojects have unfinished release&quot;</span>
+                    + &quot; artifacts. See IKE-RELEASE-RECOVERY.md →&quot;
+                    + &quot; 'In-flight: forward-fix vs rollback'.&quot;);
+        }
+<span class="fc" id="L264">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L265">        getLog().info(&quot;  ws:release-resume / ws:release-rollback are not yet&quot;</span>
+                + &quot; implemented (Cycle 2+ of #187). Recover with the manual&quot;
+                + &quot; git steps in IKE-RELEASE-RECOVERY.md until they ship.&quot;);
+<span class="fc" id="L268">    }</span>
+
+    private String buildMarkdownReport(List&lt;MemberFinding&gt; results) {
+<span class="fc" id="L271">        List&lt;WorkingSetReportTable.Row&gt; rows = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L272" title="All 2 branches covered.">        for (MemberFinding mf : results) {</span>
+<span class="fc" id="L273">            ReleaseStatusInspector.Finding f = mf.finding();</span>
+            // Read-only goal: the final &quot;Status&quot; column folds the verdict
+            // and any per-member notes (interrupted-release detail).
+<span class="fc" id="L276">            String status = f.status().badge() + &quot; &quot; + f.status().label();</span>
+<span class="pc bpc" id="L277" title="1 of 2 branches missed.">            if (!f.details().isEmpty()) {</span>
+<span class="fc" id="L278">                status += &quot; — &quot; + String.join(&quot;; &quot;, f.details());</span>
+            }
+<span class="fc" id="L280">            rows.add(new WorkingSetReportTable.Row(</span>
+<span class="fc" id="L281">                    mf.member(),</span>
+<span class="fc" id="L282">                    f.currentVersion(),</span>
+<span class="fc" id="L283">                    f.currentBranch(),</span>
+<span class="fc" id="L284">                    mf.sha(),</span>
+                    status));
+<span class="fc" id="L286">        }</span>
+<span class="fc" id="L287">        GoalReportBuilder report = new GoalReportBuilder();</span>
+<span class="fc" id="L288">        WorkingSetReportTable.render(report, &quot;Release status&quot;, &quot;Status&quot;, rows);</span>
+<span class="fc" id="L289">        return report.build();</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

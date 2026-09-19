@@ -1,0 +1,231 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>DependsOnCycleGate.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">DependsOnCycleGate.java</span></div><h1>DependsOnCycleGate.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.workspace.Dependency;
+import network.ike.workspace.Manifest;
+import network.ike.workspace.Subproject;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Deque;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+/**
+ * Acyclicity gate for the repo-level {@code depends-on} graph that
+ * {@code workspace.yaml} derivation is about to write
+ * (IKE-Network/ike-issues#962).
+ *
+ * &lt;p&gt;Contracting the module graph to repo granularity can manufacture
+ * a cycle that no module edge actually forms — a reactor leaf bundling
+ * a sibling repo's artifact while that repo builds against other
+ * modules of the same reactor (the {@code komet ⇄ komet-claude-plugin}
+ * shape). A manifest carrying such a cycle is rejected by every
+ * graph-consuming {@code ws:} goal, blocking the whole workspace, so
+ * derivation must detect the cycle &lt;em&gt;before&lt;/em&gt; writing and report
+ * the contributing module-level edges instead.
+ *
+ * &lt;p&gt;Only build-ordering edges participate: {@code relationship:
+ * bundle} entries (package-time bundling of a repository-resolved
+ * artifact, IKE-Network/ike-issues#963) order nothing and are skipped.
+ *
+ * &lt;p&gt;Used by {@link YamlDepsSync} (re-derivation post-step, which
+ * warns and leaves the manifest untouched) and {@code ws:add}
+ * (which restores the pre-add files and fails the goal).
+ */
+final class DependsOnCycleGate {
+
+    private DependsOnCycleGate() {}
+
+    /**
+     * Build the repo-level build-ordering graph of a manifest: every
+     * subproject mapped to its {@code depends-on} targets, minus
+     * {@code bundle} edges and targets not present in the manifest.
+     *
+     * @param manifest the parsed workspace manifest
+     * @return name → ordering-edge targets, in manifest order
+     */
+    static Map&lt;String, Set&lt;String&gt;&gt; orderingGraph(Manifest manifest) {
+<span class="fc" id="L56">        Map&lt;String, Set&lt;String&gt;&gt; graph = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc" id="L57">        Set&lt;String&gt; known = manifest.subprojects().keySet();</span>
+        for (Map.Entry&lt;String, Subproject&gt; entry
+<span class="fc bfc" id="L59" title="All 2 branches covered.">                : manifest.subprojects().entrySet()) {</span>
+<span class="fc" id="L60">            graph.put(entry.getKey(),</span>
+<span class="fc" id="L61">                    orderingTargets(entry.getValue(), known));</span>
+<span class="fc" id="L62">        }</span>
+<span class="fc" id="L63">        return graph;</span>
+    }
+
+    /**
+     * The subproject's build-ordering edge targets: every
+     * {@code depends-on} entry except {@code relationship: bundle},
+     * restricted to targets that exist in the manifest.
+     *
+     * @param sub   the subproject whose edges to collect
+     * @param known all manifest subproject names
+     * @return ordering-edge targets in declaration order
+     */
+    static Set&lt;String&gt; orderingTargets(Subproject sub, Set&lt;String&gt; known) {
+<span class="fc" id="L76">        Set&lt;String&gt; targets = new LinkedHashSet&lt;&gt;();</span>
+<span class="pc bpc" id="L77" title="1 of 2 branches missed.">        if (sub.dependsOn() == null) return targets;</span>
+<span class="fc bfc" id="L78" title="All 2 branches covered.">        for (Dependency dep : sub.dependsOn()) {</span>
+<span class="fc bfc" id="L79" title="All 2 branches covered.">            if (&quot;bundle&quot;.equalsIgnoreCase(dep.relationship())) continue;</span>
+<span class="pc bpc" id="L80" title="1 of 2 branches missed.">            if (known.contains(dep.subproject())) {</span>
+<span class="fc" id="L81">                targets.add(dep.subproject());</span>
+            }
+<span class="fc" id="L83">        }</span>
+<span class="fc" id="L84">        return targets;</span>
+    }
+
+    /**
+     * Find a cycle in a repo-level graph. Iterative DFS with
+     * three-color marking, mirroring {@code WorkspaceGraph.detectCycle}.
+     *
+     * @param edges name → edge targets
+     * @return the cycle as a closed path (first element repeated last),
+     *         or an empty list when the graph is acyclic
+     */
+    static List&lt;String&gt; findCycle(Map&lt;String, Set&lt;String&gt;&gt; edges) {
+<span class="fc" id="L96">        Set&lt;String&gt; white = new LinkedHashSet&lt;&gt;(edges.keySet());</span>
+<span class="fc" id="L97">        Set&lt;String&gt; gray = new LinkedHashSet&lt;&gt;();</span>
+<span class="fc" id="L98">        Map&lt;String, String&gt; parent = new LinkedHashMap&lt;&gt;();</span>
+
+<span class="fc bfc" id="L100" title="All 2 branches covered.">        for (String start : edges.keySet()) {</span>
+<span class="fc bfc" id="L101" title="All 2 branches covered.">            if (!white.contains(start)) continue;</span>
+
+<span class="fc" id="L103">            Deque&lt;String&gt; stack = new ArrayDeque&lt;&gt;();</span>
+<span class="fc" id="L104">            stack.push(start);</span>
+
+<span class="fc bfc" id="L106" title="All 2 branches covered.">            while (!stack.isEmpty()) {</span>
+<span class="fc" id="L107">                String current = stack.peek();</span>
+
+<span class="fc bfc" id="L109" title="All 2 branches covered.">                if (white.remove(current)) {</span>
+<span class="fc" id="L110">                    gray.add(current);</span>
+<span class="fc bfc" id="L111" title="All 2 branches covered.">                    for (String dep : edges.getOrDefault(current, Set.of())) {</span>
+<span class="fc bfc" id="L112" title="All 2 branches covered.">                        if (gray.contains(dep)) {</span>
+<span class="fc" id="L113">                            return reconstructCycle(parent, current, dep);</span>
+                        }
+<span class="fc bfc" id="L115" title="All 2 branches covered.">                        if (white.contains(dep)) {</span>
+<span class="fc" id="L116">                            parent.put(dep, current);</span>
+<span class="fc" id="L117">                            stack.push(dep);</span>
+                        }
+<span class="fc" id="L119">                    }</span>
+                } else {
+<span class="fc" id="L121">                    stack.pop();</span>
+<span class="fc" id="L122">                    gray.remove(current);</span>
+                }
+<span class="fc" id="L124">            }</span>
+<span class="fc" id="L125">        }</span>
+<span class="fc" id="L126">        return List.of();</span>
+    }
+
+    private static List&lt;String&gt; reconstructCycle(Map&lt;String, String&gt; parent,
+                                                 String from, String to) {
+<span class="fc" id="L131">        List&lt;String&gt; cycle = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L132">        cycle.add(to);</span>
+<span class="fc" id="L133">        String current = from;</span>
+<span class="fc bfc" id="L134" title="All 2 branches covered.">        while (!current.equals(to)) {</span>
+<span class="fc" id="L135">            cycle.add(current);</span>
+<span class="fc" id="L136">            current = parent.getOrDefault(current, to);</span>
+        }
+<span class="fc" id="L138">        cycle.add(to);</span>
+<span class="fc" id="L139">        Collections.reverse(cycle);</span>
+<span class="fc" id="L140">        return cycle;</span>
+    }
+
+    /**
+     * Render the abort diagnostic: the repo-level cycle plus, for each
+     * edge with source attribution, the module POM references that
+     * create it — file:line and coordinate.
+     *
+     * @param workspaceRoot workspace root, for relative display paths
+     * @param cycle         closed cycle path from {@link #findCycle}
+     * @param edgeSources   from-subproject → (to-subproject → refs);
+     *                      edges without attribution are reported as
+     *                      declared in workspace.yaml
+     * @return the multi-line diagnostic
+     */
+    static String diagnostic(
+            Path workspaceRoot,
+            List&lt;String&gt; cycle,
+            Map&lt;String, Map&lt;String, List&lt;WsAddMojo.PomRef&gt;&gt;&gt; edgeSources) {
+<span class="fc" id="L159">        StringBuilder d = new StringBuilder();</span>
+<span class="fc" id="L160">        d.append(&quot;depends-on derivation would write a repo-level &quot;)</span>
+<span class="fc" id="L161">                .append(&quot;dependency cycle: &quot;)</span>
+<span class="fc" id="L162">                .append(String.join(&quot; -&gt; &quot;, cycle))</span>
+<span class="fc" id="L163">                .append('\n');</span>
+<span class="fc bfc" id="L164" title="All 2 branches covered.">        for (int i = 0; i &lt; cycle.size() - 1; i++) {</span>
+<span class="fc" id="L165">            String from = cycle.get(i);</span>
+<span class="fc" id="L166">            String to = cycle.get(i + 1);</span>
+<span class="fc" id="L167">            d.append(&quot;  &quot;).append(from).append(&quot; -&gt; &quot;).append(to).append('\n');</span>
+<span class="fc" id="L168">            List&lt;WsAddMojo.PomRef&gt; refs = edgeSources</span>
+<span class="fc" id="L169">                    .getOrDefault(from, Map.of()).get(to);</span>
+<span class="pc bpc" id="L170" title="1 of 4 branches missed.">            if (refs == null || refs.isEmpty()) {</span>
+<span class="fc" id="L171">                d.append(&quot;      declared in workspace.yaml &quot;)</span>
+<span class="fc" id="L172">                        .append(&quot;(not re-derived in this run)\n&quot;);</span>
+<span class="fc" id="L173">                continue;</span>
+            }
+<span class="fc" id="L175">            int shown = 0;</span>
+<span class="fc bfc" id="L176" title="All 2 branches covered.">            for (WsAddMojo.PomRef ref : refs) {</span>
+<span class="pc bpc" id="L177" title="1 of 2 branches missed.">                if (shown == 3) {</span>
+<span class="nc" id="L178">                    d.append(&quot;      ... and &quot;).append(refs.size() - 3)</span>
+<span class="nc" id="L179">                            .append(&quot; more\n&quot;);</span>
+<span class="nc" id="L180">                    break;</span>
+                }
+<span class="fc" id="L182">                d.append(&quot;      from &quot;)</span>
+<span class="fc" id="L183">                        .append(location(workspaceRoot, ref))</span>
+<span class="fc" id="L184">                        .append(&quot; (&quot;).append(ref.coordinate()).append(&quot;)\n&quot;);</span>
+<span class="fc" id="L185">                shown++;</span>
+<span class="fc" id="L186">            }</span>
+        }
+<span class="fc" id="L188">        d.append(&quot;workspace.yaml left unchanged — a manifest with this cycle &quot;)</span>
+<span class="fc" id="L189">                .append(&quot;would block every ws: goal. If an edge bundles a &quot;)</span>
+<span class="fc" id="L190">                .append(&quot;repository-resolved artifact rather than ordering &quot;)</span>
+<span class="fc" id="L191">                .append(&quot;the build, declare it 'relationship: bundle' &quot;)</span>
+<span class="fc" id="L192">                .append(&quot;(IKE-Network/ike-issues#963); &quot;)</span>
+<span class="fc" id="L193">                .append(&quot;see IKE-Network/ike-issues#962.&quot;);</span>
+<span class="fc" id="L194">        return d.toString();</span>
+    }
+
+    /**
+     * Workspace-relative {@code path:line} for a POM reference, the
+     * line being the first occurrence of the referenced artifactId in
+     * the file (best effort — omitted when not found).
+     */
+    private static String location(Path workspaceRoot, WsAddMojo.PomRef ref) {
+<span class="fc" id="L203">        Path file = ref.pomFile();</span>
+        String display;
+        try {
+<span class="fc" id="L206">            display = workspaceRoot.relativize(file).toString();</span>
+<span class="nc" id="L207">        } catch (IllegalArgumentException e) {</span>
+<span class="nc" id="L208">            display = file.toString();</span>
+<span class="fc" id="L209">        }</span>
+<span class="fc" id="L210">        int colon = ref.coordinate().indexOf(':');</span>
+<span class="pc bpc" id="L211" title="1 of 2 branches missed.">        String artifactId = colon &lt; 0</span>
+<span class="nc" id="L212">                ? ref.coordinate()</span>
+<span class="fc" id="L213">                : ref.coordinate().substring(colon + 1);</span>
+<span class="fc" id="L214">        int line = lineOf(file, &quot;&lt;artifactId&gt;&quot; + artifactId + &quot;&lt;/artifactId&gt;&quot;);</span>
+<span class="pc bpc" id="L215" title="1 of 2 branches missed.">        return line &gt; 0 ? display + &quot;:&quot; + line : display;</span>
+    }
+
+    /** 1-based line of the first occurrence of {@code needle}, or 0. */
+    private static int lineOf(Path file, String needle) {
+        try {
+<span class="fc" id="L221">            List&lt;String&gt; lines = Files.readAllLines(file, StandardCharsets.UTF_8);</span>
+<span class="pc bpc" id="L222" title="1 of 2 branches missed.">            for (int i = 0; i &lt; lines.size(); i++) {</span>
+<span class="fc bfc" id="L223" title="All 2 branches covered.">                if (lines.get(i).contains(needle)) return i + 1;</span>
+            }
+<span class="nc" id="L225">        } catch (IOException e) {</span>
+            // best effort — fall through
+<span class="nc" id="L227">        }</span>
+<span class="nc" id="L228">        return 0;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

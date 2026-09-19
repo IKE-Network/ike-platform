@@ -1,0 +1,250 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>WsCheckpointPublishMojo.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">WsCheckpointPublishMojo.java</span></div><h1>WsCheckpointPublishMojo.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.plugin.ReleaseSupport;
+import network.ike.plugin.ws.preflight.Preflight;
+import network.ike.plugin.ws.preflight.PreflightCondition;
+import network.ike.plugin.ws.preflight.PreflightContext;
+import network.ike.plugin.ws.vcs.VcsOperations;
+import network.ike.workspace.WorkspaceGraph;
+
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
+
+import java.io.File;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Execute a workspace checkpoint with auto-alignment.
+ *
+ * &lt;p&gt;This is the {@code -publish} counterpart of {@code ws:checkpoint}
+ * (which defaults to a draft preview). The goal's flow is:
+ * &lt;ol&gt;
+ *   &lt;li&gt;Verify the working trees are clean (user has nothing uncommitted).&lt;/li&gt;
+ *   &lt;li&gt;Run {@code ws:align-publish} to apply inter-subproject version
+ *       alignment.&lt;/li&gt;
+ *   &lt;li&gt;Commit any tracked changes the alignment step produced under a
+ *       goal-owned message so that the subsequent preflight inside the
+ *       superclass sees a clean tree (IKE-Network/ike-issues#537 — the
+ *       preflight must not fail on changes the goal itself produced).&lt;/li&gt;
+ *   &lt;li&gt;Verify the reactor still builds in its aligned-and-committed state
+ *       and refuse to tag on failure (IKE-Network/ike-issues#689 — a
+ *       checkpoint whose pinned subprojects no longer compile together
+ *       must not be cut, otherwise the skew is only discovered across CI
+ *       cycles).&lt;/li&gt;
+ *   &lt;li&gt;Delegate to {@link WsCheckpointDraftMojo} with {@code publish = true}
+ *       to do the actual tagging and manifest write.&lt;/li&gt;
+ * &lt;/ol&gt;
+ *
+ * &lt;p&gt;Usage: {@code mvn ws:checkpoint-publish}
+ *
+ * @see WsCheckpointDraftMojo
+ */
+@Mojo(name = &quot;checkpoint-publish&quot;, projectRequired = false, aggregator = true)
+public class WsCheckpointPublishMojo extends WsCheckpointDraftMojo {
+
+    /** Commit message used for the auto-aligned state, per #537. */
+    static final String ALIGNMENT_COMMIT_MESSAGE =
+            &quot;workspace: pre-checkpoint alignment&quot;;
+
+    /**
+     * Skip the pre-checkpoint reactor build (#689). Off by default — the
+     * gate is the whole point. Set {@code -Dws.checkpoint.skipVerify=true}
+     * to cut a checkpoint without first proving the reactor compiles
+     * (e.g. when the failure is known and being tracked separately).
+     */
+    @Parameter(property = &quot;ws.checkpoint.skipVerify&quot;, defaultValue = &quot;false&quot;)
+    boolean skipVerify;
+
+    /**
+     * Maven goals run against the workspace root to verify the reactor
+     * builds before tagging (#689). Defaults to {@code clean verify
+     * -DskipTests -T 1C} — beyond a bare compile it runs the {@code verify}
+     * phase (packaging, enforcer/convergence checks), so it catches the
+     * dependency-pin half of the skew that motivated the gate (e.g. a
+     * lagging {@code komet-bom} elk pin, #687), not just source compile
+     * errors. Pass a lighter goal set for speed when a compile is enough,
+     * e.g. {@code -Dws.checkpoint.verifyGoals=&quot;clean test-compile -T 1C&quot;}.
+     */
+    @Parameter(property = &quot;ws.checkpoint.verifyGoals&quot;,
+            defaultValue = &quot;clean verify -DskipTests -T 1C&quot;)
+    String verifyGoals;
+
+    /** Creates this goal instance. */
+<span class="fc" id="L75">    public WsCheckpointPublishMojo() {}</span>
+
+    @Override
+    protected WorkspaceReportSpec runGoal() throws MojoException {
+<span class="fc" id="L79">        publish = true;</span>
+
+        // Preflight up front so we know any subsequent dirtiness came
+        // from our own auto-alignment step, not from work the user
+        // forgot to commit. This is the first half of the #537 fix —
+        // it lets us safely auto-commit alignment output without risk
+        // of sweeping user-staged work into a goal-owned commit.
+<span class="fc" id="L86">        requireCleanUserState();</span>
+
+<span class="fc" id="L88">        autoAlign();</span>
+
+        // Second half of #537: alignment can leave the workspace dirty
+        // (modified POMs for actual alignment changes, or a self-healed
+        // .gitignore from WorkspaceReport.write). Without this commit,
+        // the preflight inside super.runGoal() trips on changes we just
+        // produced and the goal fails itself. Commit them under a
+        // goal-owned message so the checkpoint records the aligned state.
+<span class="fc" id="L96">        commitAlignmentSideEffects();</span>
+
+        // #689: prove the reactor still builds in its aligned-and-committed
+        // state before any tag is cut. Runs after the alignment commit so
+        // the build sees exactly the state the checkpoint will record, and
+        // before super.runGoal() so a failure prevents every subproject and
+        // workspace tag — a broken checkpoint never gets created.
+<span class="fc" id="L103">        verifyReactor();</span>
+
+<span class="fc" id="L105">        return super.runGoal();</span>
+    }
+
+    /**
+     * Run {@code ws:align-publish} as a subprocess against the
+     * workspace root. Overridable from tests so the regression
+     * coverage for #537 can simulate alignment side effects without
+     * invoking a nested Maven build.
+     *
+     * @throws MojoException if the subprocess setup fails (subprocess
+     *                       failures are caught and logged as warnings —
+     *                       the checkpoint proceeds regardless)
+     */
+    protected void autoAlign() throws MojoException {
+<span class="nc" id="L119">        File root = workspaceRoot();</span>
+<span class="nc" id="L120">        String mvn = WsReleaseDraftMojo.resolveMvnCommand(root);</span>
+<span class="nc" id="L121">        getLog().info(&quot;Auto-aligning workspace versions...&quot;);</span>
+        try {
+            // #780: hand the commit to checkpoint — align writes the aligned
+            // POMs but commitAlignmentSideEffects() below owns committing them
+            // (and requireCleanUserState() owns the preflight). -Ddefer-commit
+            // collapses align to DEFER_TO_CALLER so it does not double-commit.
+<span class="nc" id="L127">            ReleaseSupport.exec(root, getLog(), mvn,</span>
+<span class="nc" id="L128">                    WsGoal.ALIGN_PUBLISH.qualified(), &quot;-Ddefer-commit&quot;, &quot;-B&quot;);</span>
+<span class="nc" id="L129">        } catch (MojoException e) {</span>
+<span class="nc" id="L130">            getLog().warn(&quot;Auto-alignment completed with warnings: &quot;</span>
+<span class="nc" id="L131">                    + e.getMessage());</span>
+<span class="nc" id="L132">        }</span>
+<span class="nc" id="L133">    }</span>
+
+    /**
+     * Build the reactor against the workspace root and refuse to cut the
+     * checkpoint if it fails (IKE-Network/ike-issues#689). Runs {@link
+     * #verifyGoals} (default {@code clean verify -DskipTests -T 1C}) as a
+     * subprocess against the aligned-and-committed workspace; a non-zero
+     * build aborts the goal so no tag is ever created for a checkpoint
+     * whose pinned subprojects don't compile together.
+     *
+     * &lt;p&gt;Unlike {@link #autoAlign()} this is deliberately &lt;em&gt;fail-loud&lt;/em&gt;:
+     * a build failure is the exact condition the gate exists to catch, so
+     * it is rethrown rather than logged as a warning. Honors {@link
+     * #skipVerify} as an explicit escape hatch.
+     *
+     * &lt;p&gt;Overridable from tests so the #689 gate coverage can drive the
+     * pass/fail outcome without invoking a nested Maven build.
+     *
+     * @throws MojoException if the reactor build fails (and {@link
+     *                       #skipVerify} is not set), or if the subprocess
+     *                       setup itself fails
+     */
+    protected void verifyReactor() throws MojoException {
+<span class="pc bpc" id="L156" title="1 of 2 branches missed.">        if (skipVerify) {</span>
+<span class="fc" id="L157">            getLog().info(&quot;Pre-checkpoint reactor verify skipped &quot;</span>
+                    + &quot;(ws.checkpoint.skipVerify=true).&quot;);
+<span class="fc" id="L159">            return;</span>
+        }
+<span class="nc" id="L161">        File root = workspaceRoot();</span>
+<span class="nc" id="L162">        String mvn = WsReleaseDraftMojo.resolveMvnCommand(root);</span>
+<span class="nc" id="L163">        getLog().info(&quot;Verifying the reactor builds before tagging (&quot;</span>
+                + verifyGoals + &quot;) ...&quot;);
+
+<span class="nc" id="L166">        List&lt;String&gt; cmd = new ArrayList&lt;&gt;();</span>
+<span class="nc" id="L167">        cmd.add(mvn);</span>
+<span class="nc bnc" id="L168" title="All 2 branches missed.">        for (String token : verifyGoals.split(&quot;\\s+&quot;)) {</span>
+<span class="nc bnc" id="L169" title="All 2 branches missed.">            if (!token.isBlank()) {</span>
+<span class="nc" id="L170">                cmd.add(token);</span>
+            }
+        }
+<span class="nc" id="L173">        cmd.add(&quot;-B&quot;);</span>
+
+        try {
+<span class="nc" id="L176">            ReleaseSupport.exec(root, getLog(), cmd.toArray(new String[0]));</span>
+<span class="nc" id="L177">        } catch (MojoException e) {</span>
+<span class="nc" id="L178">            throw new MojoException(</span>
+                    &quot;Pre-checkpoint reactor build failed — refusing to cut &quot;
+                    + &quot;the checkpoint. Fix the build, or re-run with &quot;
+                    + &quot;-Dws.checkpoint.skipVerify=true. Cause: &quot;
+<span class="nc" id="L182">                    + e.getMessage(), e);</span>
+<span class="nc" id="L183">        }</span>
+<span class="nc" id="L184">    }</span>
+
+    /**
+     * Run the working-tree-clean preflight against user state before
+     * we touch the workspace. Same condition the superclass enforces
+     * inside its own {@code runGoal}; running it here ensures that any
+     * dirtiness observed after {@link #autoAlign()} originated from the
+     * goal's own work rather than from work the user forgot to commit.
+     *
+     * @throws MojoException if any working tree has uncommitted changes
+     */
+    private void requireCleanUserState() throws MojoException {
+<span class="fc" id="L196">        WorkspaceGraph graph = loadGraph();</span>
+<span class="fc" id="L197">        File root = workspaceRoot();</span>
+<span class="fc" id="L198">        Preflight.of(</span>
+<span class="fc" id="L199">                List.of(PreflightCondition.WORKING_TREE_CLEAN),</span>
+<span class="fc" id="L200">                PreflightContext.of(root, graph, graph.topologicalSort()))</span>
+<span class="fc" id="L201">                .requirePassed(WsGoal.CHECKPOINT_PUBLISH);</span>
+<span class="fc" id="L202">    }</span>
+
+    /**
+     * Commit any tracked-but-uncommitted changes left behind by
+     * {@link #autoAlign()} under {@link #ALIGNMENT_COMMIT_MESSAGE}.
+     * Iterates the workspace root and each subproject, no-op when the
+     * tree is clean. Per-subproject failures are reported as warnings
+     * so that one bad subproject doesn't abort the checkpoint (the
+     * subsequent preflight will still fail loudly if anything remains
+     * dirty).
+     */
+    private void commitAlignmentSideEffects() {
+<span class="fc" id="L214">        File root = workspaceRoot();</span>
+        WorkspaceGraph graph;
+        try {
+<span class="fc" id="L217">            graph = loadGraph();</span>
+<span class="nc" id="L218">        } catch (MojoException e) {</span>
+<span class="nc" id="L219">            getLog().warn(&quot;Could not load graph for pre-checkpoint commit: &quot;</span>
+<span class="nc" id="L220">                    + e.getMessage());</span>
+<span class="nc" id="L221">            return;</span>
+<span class="fc" id="L222">        }</span>
+
+<span class="fc bfc" id="L224" title="All 2 branches covered.">        if (new File(root, &quot;.git&quot;).exists()) {</span>
+<span class="fc" id="L225">            commitIfDirty(root, &quot;workspace root&quot;);</span>
+        }
+<span class="fc bfc" id="L227" title="All 2 branches covered.">        for (String name : graph.topologicalSort()) {</span>
+<span class="fc" id="L228">            File dir = new File(root, name);</span>
+<span class="pc bpc" id="L229" title="1 of 2 branches missed.">            if (new File(dir, &quot;.git&quot;).exists()) {</span>
+<span class="fc" id="L230">                commitIfDirty(dir, name);</span>
+            }
+<span class="fc" id="L232">        }</span>
+<span class="fc" id="L233">    }</span>
+
+    private void commitIfDirty(File dir, String label) {
+<span class="fc bfc" id="L236" title="All 2 branches covered.">        if (VcsOperations.isClean(dir)) {</span>
+<span class="fc" id="L237">            return;</span>
+        }
+        try {
+<span class="fc" id="L240">            VcsOperations.addAll(dir, getLog());</span>
+<span class="fc" id="L241">            VcsOperations.commit(dir, getLog(), ALIGNMENT_COMMIT_MESSAGE);</span>
+<span class="fc" id="L242">            getLog().info(&quot;  Auto-committed pre-checkpoint alignment in &quot;</span>
+                    + label);
+<span class="nc" id="L244">        } catch (MojoException e) {</span>
+<span class="nc" id="L245">            getLog().warn(&quot;Could not auto-commit pre-checkpoint alignment in &quot;</span>
+<span class="nc" id="L246">                    + label + &quot;: &quot; + e.getMessage());</span>
+<span class="fc" id="L247">        }</span>
+<span class="fc" id="L248">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

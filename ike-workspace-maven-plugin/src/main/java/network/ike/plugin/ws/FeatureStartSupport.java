@@ -50,6 +50,83 @@ final class FeatureStartSupport {
         this.log = log;
     }
 
+    // ── Base-version resolution ──────────────────────────────────
+
+    /**
+     * Resolve a subproject's base version — the version feature-start
+     * branch-qualifies.
+     *
+     * <p>The subproject's own POM {@code <version>} is authoritative. The
+     * {@code workspace.yaml} {@code version:} is a checkpoint snapshot that
+     * lags every post-release bump (a subproject released at {@code 6}
+     * records {@code "6"} while its POM has moved to {@code 7-SNAPSHOT}),
+     * so it is only the fallback for a subproject with no readable POM
+     * (ike-issues#1135).
+     *
+     * @param sub the subproject definition
+     * @param dir the subproject's directory
+     * @return the base version, or {@code null} if neither the POM nor
+     *         {@code workspace.yaml} yields one
+     */
+    String effectiveVersion(Subproject sub, File dir) {
+        File pom = new File(dir, "pom.xml");
+        if (pom.exists()) {
+            try {
+                String pomVersion = ReleaseSupport.readPomVersion(pom);
+                if (pomVersion != null && !pomVersion.isEmpty()) {
+                    return pomVersion;
+                }
+            } catch (MojoException e) {
+                log.debug("Could not read POM version for " + sub.name()
+                        + ": " + e.getMessage());
+            }
+        }
+        String recorded = sub.version();
+        return (recorded == null || recorded.isEmpty()) ? null : recorded;
+    }
+
+    /**
+     * Resolve the base version of each named subproject via
+     * {@link #effectiveVersion}. Callers resolve once, before any POM is
+     * qualified, and hand the result to the qualification loop and to all
+     * three cascades, so no cascade re-reads an already-qualified POM.
+     *
+     * @param graph the workspace dependency graph
+     * @param root  the working-set root holding the subproject directories
+     * @param names the subprojects to resolve
+     * @return subproject name → base version, in {@code names} order;
+     *         subprojects with no resolvable version are absent
+     */
+    Map<String, String> effectiveVersions(WorkspaceGraph graph, File root,
+                                          List<String> names) {
+        Map<String, String> versions = new LinkedHashMap<>();
+        for (String name : names) {
+            Subproject sub = graph.manifest().subprojects().get(name);
+            String version = effectiveVersion(sub, new File(root, name));
+            if (version != null) {
+                versions.put(name, version);
+            }
+        }
+        return versions;
+    }
+
+    /**
+     * Branch-qualify every base version.
+     *
+     * @param baseVersions subproject name → base version
+     * @param branchName   the feature branch name
+     * @return subproject name → branch-qualified version
+     */
+    private static Map<String, String> qualifiedVersions(
+            Map<String, String> baseVersions, String branchName) {
+        Map<String, String> qualified = new LinkedHashMap<>();
+        for (Map.Entry<String, String> entry : baseVersions.entrySet()) {
+            qualified.put(entry.getKey(), VersionSupport.branchQualifiedVersion(
+                    entry.getValue(), branchName));
+        }
+        return qualified;
+    }
+
     // ── Version setting ──────────────────────────────────────────
 
     /**
@@ -152,23 +229,19 @@ final class FeatureStartSupport {
      *
      * @param graph      the workspace dependency graph
      * @param root       workspace root directory
-     * @param sorted     subprojects in topological order
-     * @param branchName the feature branch name (e.g., {@code feature/foo})
+     * @param sorted       subprojects in topological order
+     * @param baseVersions subproject name → base version, resolved by
+     *                     {@link #effectiveVersions} before qualification
+     * @param branchName   the feature branch name (e.g., {@code feature/foo})
      * @throws MojoException if a per-subproject git operation fails
      */
     void cascadeVersionProperties(WorkspaceGraph graph, File root,
-                                  List<String> sorted, String branchName)
+                                  List<String> sorted,
+                                  Map<String, String> baseVersions,
+                                  String branchName)
             throws MojoException {
 
-        // Build map of upstream subproject → new branch-qualified version
-        Map<String, String> newVersions = new LinkedHashMap<>();
-        for (String name : sorted) {
-            Subproject sub = graph.manifest().subprojects().get(name);
-            if (sub.version() != null && !sub.version().isEmpty()) {
-                newVersions.put(name, VersionSupport.branchQualifiedVersion(
-                        sub.version(), branchName));
-            }
-        }
+        Map<String, String> newVersions = qualifiedVersions(baseVersions, branchName);
 
         // For each subproject in topological order, update version-properties
         // that reference upstream subprojects
@@ -232,32 +305,19 @@ final class FeatureStartSupport {
      *
      * @param graph      the workspace dependency graph
      * @param root       workspace root directory
-     * @param sorted     subprojects in topological order
-     * @param branchName the feature branch name
+     * @param sorted       subprojects in topological order
+     * @param baseVersions subproject name → base version, resolved by
+     *                     {@link #effectiveVersions} before qualification
+     * @param branchName   the feature branch name
      * @throws MojoException if a per-subproject git operation fails
      */
     void cascadeBomProperties(WorkspaceGraph graph, File root,
-                              List<String> sorted, String branchName)
+                              List<String> sorted,
+                              Map<String, String> baseVersions,
+                              String branchName)
             throws MojoException {
 
-        // Build map of subproject name → new branch-qualified version
-        Map<String, String> newVersions = new LinkedHashMap<>();
-        for (String name : sorted) {
-            Subproject sub = graph.manifest().subprojects().get(name);
-            String effectiveVersion = sub.version();
-            if (effectiveVersion == null || effectiveVersion.isEmpty()) {
-                File pom = new File(new File(root, name), "pom.xml");
-                if (pom.exists()) {
-                    try {
-                        effectiveVersion = ReleaseSupport.readPomVersion(pom);
-                    } catch (MojoException e) { /* skip */ }
-                }
-            }
-            if (effectiveVersion != null && !effectiveVersion.isEmpty()) {
-                newVersions.put(name, VersionSupport.branchQualifiedVersion(
-                        effectiveVersion, branchName));
-            }
-        }
+        Map<String, String> newVersions = qualifiedVersions(baseVersions, branchName);
 
         // For each subproject, check its POM properties for references
         // to other workspace subprojects (e.g., <tinkar-core.version>)
@@ -315,20 +375,23 @@ final class FeatureStartSupport {
      *
      * @param graph      the workspace dependency graph
      * @param root       workspace root directory
-     * @param sorted     subprojects in topological order
-     * @param branchName the feature branch name
+     * @param sorted       subprojects in topological order
+     * @param baseVersions subproject name → base version, resolved by
+     *                     {@link #effectiveVersions} before qualification
+     * @param branchName   the feature branch name
      * @throws MojoException if a per-subproject git operation fails
      */
     void cascadeBomImports(WorkspaceGraph graph, File root,
-                           List<String> sorted, String branchName)
+                           List<String> sorted,
+                           Map<String, String> baseVersions,
+                           String branchName)
             throws MojoException {
-        // Build published artifact sets and new version map
+        // Build published artifact sets
         Map<String, Set<PublishedArtifactSet.Artifact>> workspaceArtifacts =
                 new LinkedHashMap<>();
-        Map<String, String> newVersions = new LinkedHashMap<>();
+        Map<String, String> newVersions = qualifiedVersions(baseVersions, branchName);
 
         for (String name : sorted) {
-            Subproject sub = graph.manifest().subprojects().get(name);
             Path subDir = root.toPath().resolve(name);
 
             if (Files.exists(subDir.resolve("pom.xml"))) {
@@ -338,21 +401,6 @@ final class FeatureStartSupport {
                 } catch (IOException e) {
                     // Skip
                 }
-            }
-
-            // Resolve effective version (same logic as the branching loop)
-            String effectiveVersion = sub.version();
-            if (effectiveVersion == null || effectiveVersion.isEmpty()) {
-                File pom = new File(new File(root, name), "pom.xml");
-                if (pom.exists()) {
-                    try {
-                        effectiveVersion = ReleaseSupport.readPomVersion(pom);
-                    } catch (MojoException e) { /* skip */ }
-                }
-            }
-            if (effectiveVersion != null && !effectiveVersion.isEmpty()) {
-                newVersions.put(name, VersionSupport.branchQualifiedVersion(
-                        effectiveVersion, branchName));
             }
         }
 

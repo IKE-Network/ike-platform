@@ -255,6 +255,48 @@ class FeatureStartSiblingPublishIntegrationTest {
         assertThat(report).as("base branch in report").contains("main");
     }
 
+    /**
+     * The {@code workspace.yaml} {@code version:} is a checkpoint snapshot
+     * that lags a post-release bump. Qualification starts from the member's
+     * POM, never from the stale recorded version — which the POM no longer
+     * contains, so trusting it aborted the goal half-way (ike-issues#1135).
+     */
+    @Test
+    void siblingCreate_qualifiesFromPomVersion_whenRecordedVersionIsStale()
+            throws Exception {
+        Path yamlPath = primary.resolve("workspace.yaml");
+        String yaml = Files.readString(yamlPath, StandardCharsets.UTF_8);
+        String stale = yaml.replace("version: \"1.0.0-SNAPSHOT\"", "version: \"0.9\"");
+        assertThat(stale).as("fixture records lib-a's version").isNotEqualTo(yaml);
+        Files.writeString(yamlPath, stale, StandardCharsets.UTF_8);
+        execCapture(primary, "git", "commit", "-am", "checkpoint: lib-a at 0.9");
+
+        FeatureStartSiblingPublishMojo mojo =
+                TestLog.createMojo(FeatureStartSiblingPublishMojo.class);
+        mojo.manifest = yamlPath.toFile();
+        mojo.feature = "jira-456";
+
+        mojo.execute();
+
+        Path sibling = tempDir.resolve("primary꞉jira-456");
+        String libAPom = Files.readString(
+                sibling.resolve("lib-a").resolve("pom.xml"), StandardCharsets.UTF_8);
+        assertThat(libAPom)
+                .as("qualified from the POM's 1.0.0-SNAPSHOT, not the recorded 0.9")
+                .contains("<version>1.0.0-jira-456-SNAPSHOT</version>")
+                .doesNotContain("0.9");
+        // The goal ran to completion: members after lib-a are qualified too.
+        for (String name : List.of("lib-b", "app-c")) {
+            assertThat(Files.readString(sibling.resolve(name).resolve("pom.xml"),
+                    StandardCharsets.UTF_8))
+                    .as(name + " qualified")
+                    .contains("jira-456-SNAPSHOT");
+        }
+        assertThat(Files.readString(sibling.resolve("pom.xml"), StandardCharsets.UTF_8))
+                .as("aggregator root pom qualified")
+                .contains("1-jira-456-SNAPSHOT");
+    }
+
     @Test
     void siblingCreate_skipVersion_branchesWithoutQualifyingVersions()
             throws Exception {

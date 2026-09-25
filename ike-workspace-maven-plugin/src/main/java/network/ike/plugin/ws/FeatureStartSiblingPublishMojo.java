@@ -317,11 +317,14 @@ public class FeatureStartSiblingPublishMojo extends AbstractWorkspaceMojo {
         Map<String, String> versionByName = new LinkedHashMap<>();
         String rootQualified = null;
         if (!skipVersion) {
+            // Resolve every member's base version once, from the fresh
+            // clones, before any POM is qualified (ike-issues#1135).
+            Map<String, String> baseVersions =
+                    support.effectiveVersions(graph, siblingRoot, sorted);
             for (String name : branched) {
-                Subproject sub = graph.manifest().subprojects().get(name);
                 File dir = new File(siblingRoot, name);
-                String effectiveVersion = effectiveVersion(sub, dir);
-                if (effectiveVersion == null || effectiveVersion.isEmpty()) {
+                String effectiveVersion = baseVersions.get(name);
+                if (effectiveVersion == null) {
                     continue;
                 }
                 String newVersion = VersionSupport.branchQualifiedVersion(
@@ -335,9 +338,12 @@ public class FeatureStartSiblingPublishMojo extends AbstractWorkspaceMojo {
                         name, effectiveVersion, newVersion));
             }
             support.removeIntraReactorPins(siblingRoot, branched, true);
-            support.cascadeVersionProperties(graph, siblingRoot, sorted, branchName);
-            support.cascadeBomProperties(graph, siblingRoot, sorted, branchName);
-            support.cascadeBomImports(graph, siblingRoot, sorted, branchName);
+            support.cascadeVersionProperties(graph, siblingRoot, sorted,
+                    baseVersions, branchName);
+            support.cascadeBomProperties(graph, siblingRoot, sorted,
+                    baseVersions, branchName);
+            support.cascadeBomImports(graph, siblingRoot, sorted,
+                    baseVersions, branchName);
 
             // Qualify the aggregator's OWN POM version too — feature-start
             // branches the workspace root, so its version takes the same
@@ -668,31 +674,6 @@ public class FeatureStartSiblingPublishMojo extends AbstractWorkspaceMojo {
                     "Could not record the sibling's parent workspace: "
                     + e.getMessage(), e);
         }
-    }
-
-    /**
-     * Resolve a subproject's effective version: the {@code workspace.yaml}
-     * value first, falling back to the cloned POM's {@code <version>}.
-     *
-     * @param sub the subproject definition
-     * @param dir the subproject's directory in the sibling
-     * @return the effective version, or {@code null} if none can be resolved
-     */
-    private String effectiveVersion(Subproject sub, File dir) {
-        String version = sub.version();
-        if (version != null && !version.isEmpty()) {
-            return version;
-        }
-        File pom = new File(dir, "pom.xml");
-        if (pom.exists()) {
-            try {
-                return ReleaseSupport.readPomVersion(pom);
-            } catch (MojoException e) {
-                getLog().debug("Could not read POM version for " + sub.name()
-                        + ": " + e.getMessage());
-            }
-        }
-        return null;
     }
 
     /**

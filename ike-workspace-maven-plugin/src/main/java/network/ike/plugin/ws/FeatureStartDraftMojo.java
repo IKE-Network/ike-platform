@@ -188,6 +188,9 @@ public class FeatureStartDraftMojo extends AbstractWorkspaceMojo {
         List<String> skippedNotCloned = new ArrayList<>();
         List<String> skippedAlreadyOnBranch = new ArrayList<>();
         List<BranchRow> branchRows = new ArrayList<>();
+        // Base version of each subproject, captured before its POM is
+        // qualified, for the cascades below (ike-issues#1135).
+        Map<String, String> baseVersions = new LinkedHashMap<>();
 
         for (String name : sorted) {
             Subproject subproject = graph.manifest().subprojects().get(name);
@@ -224,6 +227,9 @@ public class FeatureStartDraftMojo extends AbstractWorkspaceMojo {
                         && !alreadyPomVersion.isEmpty())
                         ? VersionSupport.branchQualifiedVersion(alreadyPomVersion, branchName)
                         : null;
+                if (alreadyQualified != null) {
+                    baseVersions.put(name, alreadyPomVersion);
+                }
                 if (alreadyQualified != null
                         && !alreadyQualified.equals(alreadyPomVersion)) {
                     if (draft) {
@@ -272,18 +278,10 @@ public class FeatureStartDraftMojo extends AbstractWorkspaceMojo {
                 }
             }
 
-            // Resolve effective version: workspace.yaml first, POM fallback
-            String effectiveVersion = subproject.version();
-            if (effectiveVersion == null || effectiveVersion.isEmpty()) {
-                File pom = new File(dir, "pom.xml");
-                if (pom.exists()) {
-                    try {
-                        effectiveVersion = ReleaseSupport.readPomVersion(pom);
-                    } catch (MojoException e) {
-                        getLog().debug("Could not read POM version for "
-                                + name + ": " + e.getMessage());
-                    }
-                }
+            // Resolve effective version: the POM, workspace.yaml as fallback
+            String effectiveVersion = support.effectiveVersion(subproject, dir);
+            if (effectiveVersion != null) {
+                baseVersions.put(name, effectiveVersion);
             }
 
             String newVersion = (!skipVersion && effectiveVersion != null)
@@ -341,9 +339,18 @@ public class FeatureStartDraftMojo extends AbstractWorkspaceMojo {
 
         // Cascade version-property updates to downstream components
         if (!versioned.isEmpty() && publish && !skipVersion) {
-            support.cascadeVersionProperties(graph, root, sorted, branchName);
-            support.cascadeBomProperties(graph, root, sorted, branchName);
-            support.cascadeBomImports(graph, root, sorted, branchName);
+            // Subprojects the loop did not resolve (not cloned) fall back
+            // to the shared resolution.
+            for (Map.Entry<String, String> entry : support.effectiveVersions(
+                    graph, root, sorted).entrySet()) {
+                baseVersions.putIfAbsent(entry.getKey(), entry.getValue());
+            }
+            support.cascadeVersionProperties(graph, root, sorted,
+                    baseVersions, branchName);
+            support.cascadeBomProperties(graph, root, sorted,
+                    baseVersions, branchName);
+            support.cascadeBomImports(graph, root, sorted,
+                    baseVersions, branchName);
         }
 
         // Write VCS state for each branched subproject (no push — branches stay local)

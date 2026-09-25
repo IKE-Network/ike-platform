@@ -1,0 +1,456 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>PushMojo.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">PushMojo.java</span></div><h1>PushMojo.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.plugin.support.GoalReportBuilder;
+import network.ike.plugin.ws.vcs.VcsOperations;
+import network.ike.plugin.ws.vcs.VcsState;
+import network.ike.workspace.WorkingSet;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
+
+import java.io.File;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
+
+/**
+ * Push with a VCS bridge catch-up preamble.
+ *
+ * &lt;p&gt;When run from a workspace root (where {@code workspace.yaml} exists),
+ * iterates the workspace's subprojects and root and pushes each. When run
+ * from a single repository, operates on that repository only. The scope is
+ * resolved via {@link #resolveWorkingSet()} (ike-issues#611).
+ *
+ * &lt;p&gt;Usage:
+ * &lt;pre&gt;{@code
+ * mvn ws:push
+ * }&lt;/pre&gt;
+ */
+@Mojo(name = &quot;push&quot;, projectRequired = false, aggregator = true)
+public class PushMojo extends AbstractWorkspaceMojo {
+
+    /** Creates this goal instance. */
+<span class="fc" id="L33">    public PushMojo() {}</span>
+
+    /**
+     * Remote name to push to.
+     */
+    @Parameter(property = &quot;remote&quot;, defaultValue = &quot;origin&quot;)
+    String remote;
+
+    /**
+     * When {@code true}, the first push failure (e.g. non-fast-forward,
+     * authentication error) halts the goal with a {@link MojoException}
+     * instead of warning and continuing. Default {@code false} preserves
+     * the per-subproject best-effort behavior; {@link WsSyncMojo} sets
+     * this to {@code true} so a non-fast-forward leaves the workspace
+     * in a known state for the user to resolve, rather than appearing
+     * to succeed for some subprojects and silently failing for others.
+     */
+    @Parameter(property = &quot;failFast&quot;, defaultValue = &quot;false&quot;)
+    boolean failFast;
+
+    /**
+     * Restrict the push to members currently on {@code feature/&lt;name&gt;}.
+     *
+     * &lt;p&gt;Without it every member of the working set is pushed, including the
+     * workspace root — which fails outright for a contributor with read-only
+     * access to the aggregator repository, taking the whole goal down with
+     * it. Scoping to a feature branch pushes only the repositories that
+     * actually carry the work.
+     *
+     * &lt;p&gt;Members on any other branch are reported as out-of-scope rather
+     * than silently omitted, so the summary still accounts for every member.
+     */
+    @Parameter(property = &quot;feature&quot;)
+    String feature;
+
+    @Override
+    protected WorkspaceReportSpec runGoal() throws MojoException {
+<span class="fc" id="L70">        WorkingSet workingSet = resolveWorkingSet();</span>
+
+<span class="pc bpc" id="L72" title="3 of 4 branches missed.">        String featureBranch = (feature == null || feature.isBlank())</span>
+<span class="fc" id="L73">                ? null</span>
+<span class="pc" id="L74">                : FeatureScope.branchFor(validateFeatureName(feature).value());</span>
+
+<span class="fc" id="L76">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L77">        getLog().info(header(&quot;Push&quot;));</span>
+<span class="fc" id="L78">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+<span class="pc bpc" id="L79" title="1 of 2 branches missed.">        if (featureBranch != null) {</span>
+<span class="nc" id="L80">            getLog().info(&quot;  Scope: members on &quot; + featureBranch);</span>
+        }
+<span class="fc" id="L82">        getLog().info(&quot;&quot;);</span>
+
+<span class="fc" id="L84">        List&lt;PushRow&gt; rows = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L85" title="All 2 branches covered.">        for (WorkingSet.Member member : workingSet.members()) {</span>
+<span class="fc" id="L86">            File dir = member.directory().toFile();</span>
+<span class="fc bfc" id="L87" title="All 2 branches covered.">            if (!new File(dir, &quot;.git&quot;).exists()) {</span>
+<span class="fc" id="L88">                getLog().debug(member.name() + &quot; — not cloned, skipping&quot;);</span>
+<span class="fc" id="L89">                rows.add(PushRow.notCloned(member.name()));</span>
+<span class="fc" id="L90">                continue;</span>
+            }
+<span class="fc bfc" id="L92" title="All 2 branches covered.">            String label = workingSet.isWorkspace()</span>
+<span class="pc bpc" id="L93" title="1 of 2 branches missed.">                    &amp;&amp; member.directory().equals(workingSet.root())</span>
+<span class="pc" id="L94">                    ? &quot;workspace root&quot; : member.name();</span>
+<span class="pc bpc" id="L95" title="1 of 2 branches missed.">            if (featureBranch != null) {</span>
+<span class="nc" id="L96">                String current = VcsOperations.currentBranch(dir);</span>
+<span class="nc bnc" id="L97" title="All 2 branches missed.">                if (!featureBranch.equals(current)) {</span>
+<span class="nc" id="L98">                    getLog().info(&quot;  · &quot; + label + &quot; — on &quot; + current</span>
+                            + &quot;, not &quot; + featureBranch + &quot;, skipping&quot;);
+<span class="nc" id="L100">                    rows.add(PushRow.outOfScope(label, current));</span>
+<span class="nc" id="L101">                    continue;</span>
+                }
+            }
+<span class="fc" id="L104">            rows.add(pushOne(dir, label));</span>
+<span class="fc" id="L105">        }</span>
+
+<span class="fc bfc" id="L107" title="All 2 branches covered.">        int pushed = (int) rows.stream().filter(r -&gt; r.outcome == Outcome.PUSHED).count();</span>
+<span class="fc bfc" id="L108" title="All 2 branches covered.">        int upToDate = (int) rows.stream().filter(r -&gt; r.outcome == Outcome.UP_TO_DATE).count();</span>
+<span class="fc bfc" id="L109" title="All 2 branches covered.">        int skipped = (int) rows.stream().filter(r -&gt; r.outcome == Outcome.NOT_CLONED).count();</span>
+<span class="fc" id="L110">        int outOfScope = (int) rows.stream()</span>
+<span class="pc bpc" id="L111" title="1 of 2 branches missed.">                .filter(r -&gt; r.outcome == Outcome.OUT_OF_SCOPE).count();</span>
+<span class="fc bfc" id="L112" title="All 2 branches covered.">        int failed = (int) rows.stream().filter(r -&gt; r.outcome == Outcome.FAILED).count();</span>
+<span class="fc" id="L113">        int uncommitted = (int) rows.stream().filter(r -&gt; r.uncommittedWorkLeft).count();</span>
+
+<span class="fc" id="L115">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L116">        StringBuilder summary = new StringBuilder();</span>
+<span class="fc" id="L117">        summary.append(pushed).append(&quot; pushed&quot;);</span>
+<span class="fc bfc" id="L118" title="All 2 branches covered.">        if (upToDate &gt; 0) summary.append(&quot;, &quot;).append(upToDate).append(&quot; up-to-date&quot;);</span>
+<span class="fc bfc" id="L119" title="All 2 branches covered.">        if (skipped &gt; 0) summary.append(&quot;, &quot;).append(skipped).append(&quot; skipped&quot;);</span>
+<span class="pc bpc" id="L120" title="1 of 2 branches missed.">        if (outOfScope &gt; 0) {</span>
+<span class="nc" id="L121">            summary.append(&quot;, &quot;).append(outOfScope)</span>
+<span class="nc" id="L122">                    .append(&quot; not on feature branch&quot;);</span>
+        }
+<span class="pc bpc" id="L124" title="1 of 2 branches missed.">        if (uncommitted &gt; 0) {</span>
+<span class="nc" id="L125">            summary.append(&quot;, &quot;).append(uncommitted)</span>
+<span class="nc" id="L126">                    .append(&quot; with uncommitted changes&quot;);</span>
+        }
+<span class="fc bfc" id="L128" title="All 2 branches covered.">        if (failed &gt; 0) summary.append(&quot;, &quot;).append(failed).append(&quot; failed&quot;);</span>
+<span class="fc" id="L129">        getLog().info(&quot;  Done: &quot; + summary);</span>
+<span class="fc" id="L130">        getLog().info(&quot;&quot;);</span>
+
+<span class="fc bfc" id="L132" title="All 2 branches covered.">        if (failed &gt; 0) {</span>
+<span class="fc" id="L133">            getLog().warn(&quot;  Some pushes failed — check output above for details.&quot;);</span>
+<span class="pc bpc" id="L134" title="1 of 2 branches missed.">            if (failFast) {</span>
+                // failFast hard-fails inside pushOne already; defensive guard.
+<span class="nc" id="L136">                throw new MojoException(failed + &quot; push(es) failed.&quot;);</span>
+            }
+        }
+
+<span class="fc" id="L140">        return new WorkspaceReportSpec(WsGoal.PUSH,</span>
+<span class="fc" id="L141">                buildPushReport(rows, summary.toString()));</span>
+    }
+
+    /**
+     * Push a single git directory and capture enough state to render
+     * an audit-quality row in the markdown report (#540): old/new SHA
+     * range, commit count + subjects, remote URL, and any failure
+     * message and retry command. Per-subproject failures are
+     * captured into the row rather than thrown, unless
+     * {@code failFast=true}.
+     *
+     * @param dir   git directory to push
+     * @param label name to use in the report (&quot;workspace root&quot; or
+     *              subproject name)
+     * @return populated {@link PushRow}
+     */
+    private PushRow pushOne(File dir, String label) {
+        String branch;
+        try {
+<span class="fc" id="L160">            branch = VcsOperations.currentBranch(dir);</span>
+<span class="nc" id="L161">        } catch (MojoException e) {</span>
+<span class="nc" id="L162">            getLog().warn(Ansi.red(&quot;  ✗ &quot;) + label + &quot; — &quot;</span>
+<span class="nc" id="L163">                    + e.getMessage());</span>
+<span class="nc" id="L164">            return PushRow.failure(label, &quot;?&quot;, null, e.getMessage(),</span>
+                    &quot;git push &quot; + remote, null);
+<span class="fc" id="L166">        }</span>
+
+<span class="fc" id="L168">        String bridgeNote = null;</span>
+        try {
+<span class="fc" id="L170">            bridgeNote = VcsOperations.catchUp(dir, getLog()).note();</span>
+
+            // Capture the pre-push state so we can express the SHA delta
+            // even after the push has moved origin/&lt;branch&gt; forward.
+<span class="fc" id="L174">            String preHead = VcsOperations.headSha(dir);</span>
+<span class="fc" id="L175">            Optional&lt;String&gt; preRemote = VcsOperations.remoteSha(dir, remote, branch);</span>
+
+            // No-op detection — if the remote already points at our HEAD,
+            // there is genuinely nothing to push. The original code
+            // ran the push regardless, which works (git says &quot;Everything
+            // up-to-date&quot;) but loses the signal in the report.
+<span class="pc bpc" id="L181" title="1 of 4 branches missed.">            if (preRemote.isPresent() &amp;&amp; preRemote.get().equals(preHead)) {</span>
+<span class="fc" id="L182">                String url = VcsOperations.remoteUrl(dir, remote).orElse(remote);</span>
+<span class="fc" id="L183">                getLog().info(Ansi.green(&quot;  = &quot;) + label + &quot; → &quot;</span>
+                        + remote + &quot;/&quot; + branch
+                        + &quot; (already up-to-date)&quot;);
+<span class="fc" id="L186">                return PushRow.upToDate(label, branch, preHead, url,</span>
+<span class="pc bpc" id="L187" title="1 of 2 branches missed.">                        !VcsOperations.isClean(dir), bridgeNote);</span>
+            }
+
+            // Snapshot commits about to land BEFORE pushing so we can
+            // include subject lines in the report. After push, @{u}
+            // converges with HEAD and the range disappears.
+            List&lt;String&gt; subjectsToPush;
+            int commitCount;
+<span class="pc bpc" id="L195" title="1 of 2 branches missed.">            if (preRemote.isPresent()) {</span>
+<span class="fc" id="L196">                List&lt;String&gt; commits = safeCommitLog(dir, preRemote.get(), preHead);</span>
+<span class="fc" id="L197">                commitCount = commits.size();</span>
+<span class="fc" id="L198">                subjectsToPush = capCommitSubjects(commits);</span>
+<span class="fc" id="L199">            } else {</span>
+                // New ref — count everything reachable from HEAD that
+                // isn't already on the remote's default. Cap subjects
+                // either way.
+<span class="nc" id="L203">                List&lt;String&gt; commits = safeCommitLog(dir, &quot;HEAD~10&quot;, preHead);</span>
+<span class="nc" id="L204">                commitCount = commits.size();</span>
+<span class="nc" id="L205">                subjectsToPush = capCommitSubjects(commits);</span>
+            }
+
+            try {
+<span class="fc" id="L209">                VcsOperations.push(dir, getLog(), remote, branch);</span>
+<span class="fc" id="L210">            } catch (MojoException e) {</span>
+<span class="pc bpc" id="L211" title="1 of 2 branches missed.">                if (e.getMessage() != null</span>
+<span class="pc bpc" id="L212" title="1 of 2 branches missed.">                        &amp;&amp; e.getMessage().contains(&quot;has no upstream&quot;)) {</span>
+<span class="nc" id="L213">                    getLog().info(&quot;  &quot; + label</span>
+                            + &quot; — setting upstream and pushing...&quot;);
+<span class="nc" id="L215">                    VcsOperations.pushWithUpstream(</span>
+<span class="nc" id="L216">                            dir, getLog(), remote, branch);</span>
+                } else {
+<span class="fc" id="L218">                    throw e;</span>
+                }
+<span class="fc" id="L220">            }</span>
+<span class="fc" id="L221">            VcsOperations.writeVcsState(dir, VcsState.Action.PUSH);</span>
+
+<span class="fc" id="L223">            String url = VcsOperations.remoteUrl(dir, remote).orElse(remote);</span>
+<span class="fc" id="L224">            getLog().info(Ansi.green(&quot;  ✓ &quot;) + label + &quot; → &quot;</span>
+                    + remote + &quot;/&quot; + branch
+<span class="pc bpc" id="L226" title="1 of 2 branches missed.">                    + (preRemote.isPresent()</span>
+<span class="fc" id="L227">                        ? &quot; (&quot; + shorten(preRemote.get())</span>
+<span class="fc" id="L228">                            + &quot;..&quot; + shorten(preHead) + &quot;, &quot;</span>
+                            + commitCount + &quot; commit&quot;
+<span class="pc bpc" id="L230" title="1 of 2 branches missed.">                            + (commitCount == 1 ? &quot;&quot; : &quot;s&quot;) + &quot;)&quot;</span>
+<span class="pc" id="L231">                        : &quot; (new ref)&quot;));</span>
+
+<span class="pc bpc" id="L233" title="1 of 2 branches missed.">            boolean uncommitted = !VcsOperations.isClean(dir);</span>
+<span class="pc bpc" id="L234" title="1 of 2 branches missed.">            if (uncommitted) {</span>
+<span class="nc" id="L235">                getLog().warn(Ansi.yellow(&quot;  ⚠ &quot;) + label</span>
+                        + &quot; — has uncommitted changes (not pushed)&quot;);
+            }
+
+<span class="fc" id="L239">            return PushRow.pushed(label, branch, preRemote.orElse(null),</span>
+                    preHead, commitCount, subjectsToPush, url, uncommitted, bridgeNote);
+<span class="fc" id="L241">        } catch (MojoException e) {</span>
+<span class="fc" id="L242">            String retry = buildRetryCommand(label, branch);</span>
+<span class="pc bpc" id="L243" title="1 of 2 branches missed.">            if (failFast) {</span>
+<span class="nc" id="L244">                throw new MojoException(&quot;push failed at &quot; + label + &quot;: &quot;</span>
+<span class="nc" id="L245">                        + e.getMessage(), e);</span>
+            }
+<span class="fc" id="L247">            getLog().warn(Ansi.red(&quot;  ✗ &quot;) + label + &quot; — &quot; + e.getMessage());</span>
+<span class="fc" id="L248">            return PushRow.failure(label, branch, null, e.getMessage(), retry, bridgeNote);</span>
+        }
+    }
+
+    /**
+     * Compose a copy-pasteable retry command for the per-subproject
+     * failure section. {@code workspace root} resolves to the root
+     * directory; subprojects get a {@code cd} prefix so the user can
+     * paste from anywhere under the workspace.
+     */
+    private String buildRetryCommand(String label, String branch) {
+<span class="pc bpc" id="L259" title="1 of 2 branches missed.">        if (&quot;workspace root&quot;.equals(label)) {</span>
+<span class="nc" id="L260">            return &quot;git push &quot; + remote + &quot; &quot; + branch;</span>
+        }
+<span class="fc" id="L262">        return &quot;(cd &quot; + label + &quot; &amp;&amp; git push &quot; + remote + &quot; &quot; + branch + &quot;)&quot;;</span>
+    }
+
+    /**
+     * {@code git rev-list a..b} returns commits *reachable from b but
+     * not from a*. We swallow MojoException here because the SHA
+     * range is a best-effort enrichment for the report — a failure
+     * to compute it must not mask the push outcome.
+     */
+    private List&lt;String&gt; safeCommitLog(File dir, String base, String head) {
+        try {
+<span class="fc" id="L273">            return VcsOperations.commitLog(dir, base, head);</span>
+<span class="fc" id="L274">        } catch (MojoException e) {</span>
+<span class="fc" id="L275">            getLog().debug(&quot;Could not compute commit log &quot; + base</span>
+<span class="fc" id="L276">                    + &quot;..&quot; + head + &quot;: &quot; + e.getMessage());</span>
+<span class="fc" id="L277">            return List.of();</span>
+        }
+    }
+
+    private static String shorten(String sha) {
+<span class="pc bpc" id="L282" title="2 of 4 branches missed.">        if (sha == null || sha.length() &lt;= 7) return sha;</span>
+<span class="fc" id="L283">        return sha.substring(0, 7);</span>
+    }
+
+    private static List&lt;String&gt; capCommitSubjects(List&lt;String&gt; commits) {
+<span class="fc bfc" id="L287" title="All 2 branches covered.">        if (commits.isEmpty()) return List.of();</span>
+<span class="fc" id="L288">        int max = Math.min(5, commits.size());</span>
+<span class="fc" id="L289">        List&lt;String&gt; capped = new ArrayList&lt;&gt;(max);</span>
+<span class="fc bfc" id="L290" title="All 2 branches covered.">        for (int i = 0; i &lt; max; i++) {</span>
+<span class="fc" id="L291">            String line = commits.get(i);</span>
+<span class="fc" id="L292">            int sp = line.indexOf(' ');</span>
+<span class="pc bpc" id="L293" title="1 of 2 branches missed.">            capped.add(sp &gt;= 0 ? line.substring(sp + 1) : line);</span>
+        }
+<span class="fc" id="L295">        return capped;</span>
+    }
+
+    /**
+     * Render the push markdown report — per-subproject SHA delta + commit
+     * subjects table, plus a Failures section with copy-pasteable retry
+     * commands when anything failed (#540 + drafts-actionable-remediation).
+     */
+    private String buildPushReport(List&lt;PushRow&gt; rows, String summary) {
+<span class="fc" id="L304">        GoalReportBuilder report = new GoalReportBuilder();</span>
+<span class="fc" id="L305">        report.paragraph(&quot;**Result:** &quot; + summary + &quot;.&quot;);</span>
+
+<span class="fc" id="L307">        List&lt;String[]&gt; tableRows = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L308" title="All 2 branches covered.">        for (PushRow r : rows) {</span>
+            String shaDelta;
+            String commits;
+<span class="fc bfc" id="L311" title="All 3 branches covered.">            switch (r.outcome) {</span>
+                case PUSHED -&gt; {
+<span class="pc bpc" id="L313" title="1 of 2 branches missed.">                    shaDelta = (r.oldSha == null)</span>
+<span class="nc" id="L314">                            ? &quot;(new ref) → `&quot; + shorten(r.newSha) + &quot;`&quot;</span>
+<span class="fc" id="L315">                            : &quot;`&quot; + shorten(r.oldSha) + &quot;`..`&quot; + shorten(r.newSha) + &quot;`&quot;;</span>
+<span class="fc" id="L316">                    commits = String.valueOf(r.commitCount);</span>
+<span class="fc" id="L317">                }</span>
+                case UP_TO_DATE -&gt; {
+<span class="fc" id="L319">                    shaDelta = &quot;`&quot; + shorten(r.newSha) + &quot;`&quot;;</span>
+<span class="fc" id="L320">                    commits = &quot;0&quot;;</span>
+<span class="fc" id="L321">                }</span>
+                default -&gt; {
+<span class="fc" id="L323">                    shaDelta = &quot;—&quot;;</span>
+<span class="fc" id="L324">                    commits = &quot;—&quot;;</span>
+                }
+            }
+<span class="pc bpc" id="L327" title="1 of 5 branches missed.">            String status = switch (r.outcome) {</span>
+<span class="fc" id="L328">                case PUSHED -&gt; &quot;✓ pushed&quot;;</span>
+<span class="fc" id="L329">                case UP_TO_DATE -&gt; &quot;= up-to-date&quot;;</span>
+<span class="fc" id="L330">                case NOT_CLONED -&gt; &quot;not cloned&quot;;</span>
+<span class="nc" id="L331">                case OUT_OF_SCOPE -&gt; &quot;· not on feature branch&quot;;</span>
+<span class="fc" id="L332">                case FAILED -&gt; &quot;✗ failed&quot;;</span>
+            };
+<span class="pc bpc" id="L334" title="1 of 2 branches missed.">            if (r.uncommittedWorkLeft) {</span>
+<span class="nc" id="L335">                status += &quot; (uncommitted changes left behind)&quot;;</span>
+            }
+<span class="fc" id="L337">            tableRows.add(new String[]{r.label, r.branch, shaDelta, commits, status});</span>
+<span class="fc" id="L338">        }</span>
+<span class="fc" id="L339">        report.section(&quot;Subprojects&quot;)</span>
+<span class="fc" id="L340">                .table(List.of(&quot;Subproject&quot;, &quot;Branch&quot;, &quot;SHA delta&quot;,</span>
+                        &quot;Commits&quot;, &quot;Status&quot;), tableRows);
+
+        // Detail: per-subproject commit subjects for the actually-pushed ones.
+<span class="fc" id="L344">        List&lt;PushRow&gt; withSubjects = rows.stream()</span>
+<span class="fc bfc" id="L345" title="All 2 branches covered.">                .filter(r -&gt; r.outcome == Outcome.PUSHED</span>
+<span class="pc bpc" id="L346" title="1 of 2 branches missed.">                        &amp;&amp; !r.subjects.isEmpty())</span>
+<span class="fc" id="L347">                .toList();</span>
+<span class="fc bfc" id="L348" title="All 2 branches covered.">        if (!withSubjects.isEmpty()) {</span>
+<span class="fc" id="L349">            report.section(&quot;Pushed commits&quot;);</span>
+<span class="fc bfc" id="L350" title="All 2 branches covered.">            for (PushRow r : withSubjects) {</span>
+<span class="fc" id="L351">                report.bullet(&quot;**&quot; + r.label + &quot;** → `&quot; + r.remoteUrl + &quot;`&quot;);</span>
+<span class="fc bfc" id="L352" title="All 2 branches covered.">                for (String s : r.subjects) {</span>
+<span class="fc" id="L353">                    report.bullet(&quot;    • &quot; + s);</span>
+<span class="fc" id="L354">                }</span>
+<span class="pc bpc" id="L355" title="1 of 2 branches missed.">                if (r.commitCount &gt; r.subjects.size()) {</span>
+<span class="nc" id="L356">                    report.bullet(&quot;    • +&quot; + (r.commitCount - r.subjects.size())</span>
+                            + &quot; more&quot;);
+                }
+<span class="fc" id="L359">            }</span>
+        }
+
+        // Bridge-state notes (ike-issues#819) — e.g. a stale .ike/vcs-state
+        // checkpoint that was self-healed because origin-parity was already
+        // confirmed. Informational, not actionable, so it sits ahead of
+        // Failures rather than reading as alarming.
+<span class="fc" id="L366">        List&lt;PushRow&gt; withNotes = rows.stream()</span>
+<span class="pc bpc" id="L367" title="1 of 4 branches missed.">                .filter(r -&gt; r.bridgeNote != null &amp;&amp; !r.bridgeNote.isBlank())</span>
+<span class="fc" id="L368">                .toList();</span>
+<span class="fc bfc" id="L369" title="All 2 branches covered.">        if (!withNotes.isEmpty()) {</span>
+<span class="fc" id="L370">            report.section(&quot;Notes&quot;);</span>
+<span class="fc bfc" id="L371" title="All 2 branches covered.">            for (PushRow r : withNotes) {</span>
+<span class="fc" id="L372">                report.bullet(&quot;**&quot; + r.label + &quot;** — &quot; + r.bridgeNote);</span>
+<span class="fc" id="L373">            }</span>
+        }
+
+        // Failures section — surface git stderr AND a copy-pasteable
+        // retry block. The user shouldn't have to re-derive the
+        // command from the failing subproject's name + branch.
+<span class="fc" id="L379">        List&lt;PushRow&gt; failures = rows.stream()</span>
+<span class="fc bfc" id="L380" title="All 2 branches covered.">                .filter(r -&gt; r.outcome == Outcome.FAILED).toList();</span>
+<span class="fc bfc" id="L381" title="All 2 branches covered.">        if (!failures.isEmpty()) {</span>
+<span class="fc" id="L382">            report.section(&quot;Failures&quot;);</span>
+<span class="fc bfc" id="L383" title="All 2 branches covered.">            for (PushRow r : failures) {</span>
+<span class="fc" id="L384">                report.bullet(&quot;**&quot; + r.label + &quot;** — `&quot; + r.failureMessage + &quot;`&quot;);</span>
+<span class="fc" id="L385">            }</span>
+<span class="fc" id="L386">            StringBuilder retry = new StringBuilder();</span>
+<span class="fc bfc" id="L387" title="All 2 branches covered.">            for (PushRow r : failures) {</span>
+<span class="fc" id="L388">                retry.append(r.retryCommand).append(&quot;\n&quot;);</span>
+<span class="fc" id="L389">            }</span>
+<span class="fc" id="L390">            report.paragraph(&quot;Retry the failed pushes individually:&quot;);</span>
+<span class="fc" id="L391">            report.codeBlock(&quot;bash&quot;, retry.toString().stripTrailing());</span>
+        }
+
+<span class="fc" id="L394">        return report.build();</span>
+    }
+
+    /** Outcome state for a single subproject's push attempt. */
+<span class="fc" id="L398">    enum Outcome {PUSHED, UP_TO_DATE, NOT_CLONED, OUT_OF_SCOPE, FAILED}</span>
+
+    /**
+     * One row of per-subproject push detail. Capture-once, render-many:
+     * the CLI log emits a one-line summary as work progresses; the
+     * markdown report consumes the full record at the end of the goal.
+     */
+<span class="fc" id="L405">    record PushRow(</span>
+            String label,
+            String branch,
+            Outcome outcome,
+            String oldSha,
+            String newSha,
+            int commitCount,
+            List&lt;String&gt; subjects,
+            String remoteUrl,
+            boolean uncommittedWorkLeft,
+            String failureMessage,
+            String retryCommand,
+            String bridgeNote) {
+
+        static PushRow pushed(String label, String branch, String oldSha,
+                              String newSha, int commits,
+                              List&lt;String&gt; subjects, String remoteUrl,
+                              boolean uncommitted, String bridgeNote) {
+<span class="fc" id="L423">            return new PushRow(label, branch, Outcome.PUSHED, oldSha, newSha,</span>
+                    commits, subjects, remoteUrl, uncommitted, null, null, bridgeNote);
+        }
+
+        static PushRow upToDate(String label, String branch, String headSha,
+                                 String remoteUrl, boolean uncommitted, String bridgeNote) {
+<span class="fc" id="L429">            return new PushRow(label, branch, Outcome.UP_TO_DATE, headSha,</span>
+<span class="fc" id="L430">                    headSha, 0, List.of(), remoteUrl, uncommitted, null, null, bridgeNote);</span>
+        }
+
+        static PushRow notCloned(String name) {
+<span class="fc" id="L434">            return new PushRow(name, &quot;—&quot;, Outcome.NOT_CLONED, null, null, 0,</span>
+<span class="fc" id="L435">                    List.of(), &quot;—&quot;, false, null, null, null);</span>
+        }
+
+        /**
+         * A member excluded by {@code -Dfeature} because it sits on another
+         * branch. Its actual branch is retained so the report shows why it
+         * was left out rather than just that it was.
+         */
+        static PushRow outOfScope(String label, String branch) {
+<span class="nc" id="L444">            return new PushRow(label, branch, Outcome.OUT_OF_SCOPE, null, null,</span>
+<span class="nc" id="L445">                    0, List.of(), &quot;—&quot;, false, null, null, null);</span>
+        }
+
+        static PushRow failure(String label, String branch, String oldSha,
+                                String message, String retry, String bridgeNote) {
+<span class="fc" id="L450">            return new PushRow(label, branch, Outcome.FAILED, oldSha, null, 0,</span>
+<span class="fc" id="L451">                    List.of(), &quot;—&quot;, false, message, retry, bridgeNote);</span>
+        }
+    }
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

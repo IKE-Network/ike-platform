@@ -1,0 +1,315 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>CheckBranchMojo.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">CheckBranchMojo.java</span></div><h1>CheckBranchMojo.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.plugin.ReleaseSupport;
+import network.ike.plugin.support.GoalReportBuilder;
+import network.ike.plugin.ws.vcs.VcsState;
+import network.ike.workspace.Subproject;
+import network.ike.workspace.WorkspaceGraph;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
+
+import java.io.File;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Defensive git hook — warns when a branch is created or switched
+ * outside the workspace tooling.
+ *
+ * &lt;p&gt;Intended to be called from a {@code post-checkout} git hook:
+ * &lt;pre&gt;{@code
+ * #!/bin/sh
+ * mvn -q ws:check-branch -- &quot;$@&quot;
+ * }&lt;/pre&gt;
+ *
+ * &lt;p&gt;In workspace mode, compares the current branch to the expected
+ * branch in workspace.yaml and warns on mismatch. Provides
+ * copy-pasteable undo commands.
+ *
+ * &lt;p&gt;In bare mode (no workspace.yaml), silently exits — nothing to check.
+ *
+ * &lt;p&gt;Never blocks — warnings only. Always exits 0.
+ */
+@Mojo(name = &quot;check-branch&quot;, projectRequired = false, aggregator = true)
+public class CheckBranchMojo extends AbstractWorkspaceMojo {
+
+    /**
+     * Scope of the check.
+     *
+     * &lt;ul&gt;
+     *   &lt;li&gt;{@code subproject} (default) — check the single subproject the
+     *       CWD is inside, against its declared branch in
+     *       {@code workspace.yaml}. Intended as a {@code post-checkout}
+     *       git-hook gate.&lt;/li&gt;
+     *   &lt;li&gt;{@code workspace} — survey every subproject's on-disk branch
+     *       and YAML {@code branch:} field against the workspace repo's
+     *       HEAD (authoritative). Reports drift, suggests
+     *       {@code ws:reconcile-branches-publish -Dfrom=workspace-head}.
+     *       Read-only; never blocks (ike-issues#287).&lt;/li&gt;
+     * &lt;/ul&gt;
+     */
+    @Parameter(property = &quot;scope&quot;, defaultValue = &quot;subproject&quot;)
+    String scope;
+
+    /** Creates this goal instance. */
+<span class="fc" id="L58">    public CheckBranchMojo() {}</span>
+
+    @Override
+    protected WorkspaceReportSpec runGoal() throws MojoException {
+<span class="pc bpc" id="L62" title="1 of 2 branches missed.">        if (!isWorkspaceMode()) {</span>
+<span class="nc" id="L63">            return new WorkspaceReportSpec(WsGoal.CHECK_BRANCH,</span>
+                    &quot;_Bare mode — not inside a workspace._\n&quot;);
+        }
+
+<span class="pc bpc" id="L67" title="1 of 2 branches missed.">        if (&quot;workspace&quot;.equals(scope)) {</span>
+<span class="fc" id="L68">            return executeWorkspaceScope();</span>
+        }
+<span class="nc bnc" id="L70" title="All 2 branches missed.">        if (!&quot;subproject&quot;.equals(scope)) {</span>
+<span class="nc" id="L71">            throw new MojoException(</span>
+                    &quot;Invalid scope '&quot; + scope + &quot;' — expected subproject|workspace&quot;);
+        }
+
+<span class="nc" id="L75">        WorkspaceGraph graph = loadGraph();</span>
+<span class="nc" id="L76">        File wsRoot = workspaceRoot();</span>
+<span class="nc" id="L77">        File cwd = new File(System.getProperty(&quot;user.dir&quot;));</span>
+
+        // Determine which subproject we're in by matching CWD to workspace root + subproject name
+<span class="nc" id="L80">        String subprojectName = findSubprojectName(wsRoot, cwd, graph);</span>
+<span class="nc bnc" id="L81" title="All 2 branches missed.">        if (subprojectName == null) {</span>
+<span class="nc" id="L82">            return new WorkspaceReportSpec(WsGoal.CHECK_BRANCH,</span>
+                    &quot;_CWD is not inside a known subproject directory._\n&quot;);
+        }
+
+<span class="nc" id="L86">        Subproject subproject = graph.manifest().subprojects().get(subprojectName);</span>
+<span class="nc bnc" id="L87" title="All 4 branches missed.">        if (subproject == null || subproject.branch() == null) {</span>
+<span class="nc" id="L88">            return new WorkspaceReportSpec(WsGoal.CHECK_BRANCH,</span>
+                    &quot;**Subproject:** `&quot; + subprojectName + &quot;`\n\n&quot;
+                            + &quot;_No expected branch declared in workspace.yaml._\n&quot;);
+        }
+
+<span class="nc" id="L93">        String expectedBranch = subproject.branch();</span>
+<span class="nc" id="L94">        String actualBranch = gitBranch(cwd);</span>
+
+<span class="nc bnc" id="L96" title="All 2 branches missed.">        if (actualBranch.equals(expectedBranch)) {</span>
+<span class="nc" id="L97">            return new WorkspaceReportSpec(WsGoal.CHECK_BRANCH,</span>
+                    &quot;**Subproject:** `&quot; + subprojectName + &quot;`\n&quot;
+                            + &quot;**Branch:** `&quot; + actualBranch
+                            + &quot;` (matches expected)  ✓\n&quot;);
+        }
+
+        // Determine if this was a branch creation (new branch that doesn't match expected)
+<span class="nc bnc" id="L104" title="All 2 branches missed.">        boolean isNewBranch = !branchExistsRemotely(cwd, actualBranch);</span>
+        String scenario;
+
+<span class="nc bnc" id="L107" title="All 4 branches missed.">        if (isNewBranch &amp;&amp; actualBranch.startsWith(&quot;feature/&quot;)) {</span>
+            // Created a feature branch directly — suggest ike:feature-start
+<span class="nc" id="L109">            String featureName = actualBranch.substring(&quot;feature/&quot;.length());</span>
+<span class="nc" id="L110">            getLog().warn(&quot;&quot;);</span>
+<span class="nc" id="L111">            getLog().warn(&quot;\u26A0 You created branch '&quot; + actualBranch + &quot;' directly in &quot; + subprojectName + &quot;.&quot;);</span>
+<span class="nc" id="L112">            getLog().warn(&quot;&quot;);</span>
+<span class="nc" id="L113">            getLog().warn(&quot;  To fix:&quot;);</span>
+<span class="nc" id="L114">            getLog().warn(&quot;    git checkout &quot; + expectedBranch);</span>
+<span class="nc" id="L115">            getLog().warn(&quot;    git branch -D &quot; + actualBranch);</span>
+<span class="nc" id="L116">            getLog().warn(&quot;    mvn &quot; + WsGoal.FEATURE_START_PUBLISH.qualified()</span>
+                    + &quot; -Dfeature=&quot; + featureName);
+<span class="nc" id="L118">            getLog().warn(&quot;&quot;);</span>
+<span class="nc" id="L119">            getLog().warn(&quot;  &quot; + WsGoal.FEATURE_START_PUBLISH.qualified()</span>
+                    + &quot; creates aligned branches across all workspace&quot;);
+<span class="nc" id="L121">            getLog().warn(&quot;  subprojects and sets version-qualified SNAPSHOTs.&quot;);</span>
+<span class="nc" id="L122">            getLog().warn(&quot;&quot;);</span>
+<span class="nc" id="L123">            scenario = &quot;new feature branch created directly (should use &quot;</span>
+<span class="nc" id="L124">                    + WsGoal.FEATURE_START_PUBLISH.qualified() + &quot;)&quot;;</span>
+<span class="nc bnc" id="L125" title="All 2 branches missed.">        } else if (isNewBranch) {</span>
+            // Created a non-feature branch directly
+<span class="nc" id="L127">            getLog().warn(&quot;&quot;);</span>
+<span class="nc" id="L128">            getLog().warn(&quot;\u26A0 You created branch '&quot; + actualBranch + &quot;' directly in &quot; + subprojectName + &quot;.&quot;);</span>
+<span class="nc" id="L129">            getLog().warn(&quot;&quot;);</span>
+<span class="nc" id="L130">            getLog().warn(&quot;  The workspace expects branch '&quot; + expectedBranch + &quot;' for this subproject.&quot;);</span>
+<span class="nc" id="L131">            getLog().warn(&quot;&quot;);</span>
+<span class="nc" id="L132">            getLog().warn(&quot;  To undo:&quot;);</span>
+<span class="nc" id="L133">            getLog().warn(&quot;    git checkout &quot; + expectedBranch);</span>
+<span class="nc" id="L134">            getLog().warn(&quot;    git branch -D &quot; + actualBranch);</span>
+<span class="nc" id="L135">            getLog().warn(&quot;&quot;);</span>
+<span class="nc" id="L136">            scenario = &quot;new non-feature branch created directly&quot;;</span>
+        } else {
+            // Switched to an existing branch that doesn't match workspace.yaml
+<span class="nc" id="L139">            getLog().warn(&quot;&quot;);</span>
+<span class="nc" id="L140">            getLog().warn(&quot;\u26A0 You switched to branch '&quot; + actualBranch + &quot;' in &quot; + subprojectName + &quot;.&quot;);</span>
+<span class="nc" id="L141">            getLog().warn(&quot;&quot;);</span>
+<span class="nc" id="L142">            getLog().warn(&quot;  The workspace expects branch '&quot; + expectedBranch + &quot;' for this subproject.&quot;);</span>
+<span class="nc" id="L143">            getLog().warn(&quot;  If this is intentional, update the workspace:&quot;);</span>
+<span class="nc" id="L144">            getLog().warn(&quot;    mvn &quot; + WsGoal.SYNC.qualified());</span>
+<span class="nc" id="L145">            getLog().warn(&quot;&quot;);</span>
+<span class="nc" id="L146">            getLog().warn(&quot;  If not:&quot;);</span>
+<span class="nc" id="L147">            getLog().warn(&quot;    git checkout &quot; + expectedBranch);</span>
+<span class="nc" id="L148">            getLog().warn(&quot;&quot;);</span>
+<span class="nc" id="L149">            scenario = &quot;switched to an existing branch&quot;;</span>
+        }
+
+<span class="nc" id="L152">        return new WorkspaceReportSpec(WsGoal.CHECK_BRANCH,</span>
+                &quot;**Subproject:** `&quot; + subprojectName + &quot;`\n&quot;
+                        + &quot;**Expected:** `&quot; + expectedBranch + &quot;`\n&quot;
+                        + &quot;**Actual:** `&quot; + actualBranch + &quot;`\n&quot;
+                        + &quot;**Scenario:** &quot; + scenario + &quot;\n&quot;);
+    }
+
+    /**
+     * Workspace-wide branch coherence check. Reads the workspace repo's
+     * current branch as the authoritative target, then surveys each
+     * subproject — both its on-disk git branch and its
+     * {@code workspace.yaml} {@code branch:} field — flagging any that
+     * disagree.
+     *
+     * &lt;p&gt;Read-only. Never modifies state. Intended as a quick \&quot;is my
+     * workspace coherent?\&quot; check before running
+     * {@code ws:checkpoint} or {@code ws:feature-finish-*}, or to
+     * confirm whether {@code ws:reconcile-branches-publish -Dfrom=workspace-head}
+     * is needed (ike-issues#287).
+     */
+    private WorkspaceReportSpec executeWorkspaceScope() throws MojoException {
+<span class="fc" id="L173">        WorkspaceGraph graph = loadGraph();</span>
+<span class="fc" id="L174">        File wsRoot = workspaceRoot();</span>
+
+<span class="pc bpc" id="L176" title="1 of 2 branches missed.">        if (!new File(wsRoot, &quot;.git&quot;).exists()) {</span>
+<span class="nc" id="L177">            return new WorkspaceReportSpec(WsGoal.CHECK_BRANCH,</span>
+                    &quot;_Workspace directory has no `.git` — cannot determine &quot;
+                            + &quot;the authoritative workspace branch._\n&quot;);
+        }
+<span class="fc" id="L181">        String wsBranch = gitBranch(wsRoot);</span>
+<span class="pc bpc" id="L182" title="2 of 4 branches missed.">        if (wsBranch == null || &quot;unknown&quot;.equals(wsBranch)) {</span>
+<span class="nc" id="L183">            return new WorkspaceReportSpec(WsGoal.CHECK_BRANCH,</span>
+                    &quot;_Workspace HEAD is not on a named branch (detached HEAD?)._\n&quot;);
+        }
+
+<span class="fc" id="L187">        List&lt;DriftRow&gt; rows = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L188">        int driftCount = 0;</span>
+<span class="fc bfc" id="L189" title="All 2 branches covered.">        for (Map.Entry&lt;String, Subproject&gt; entry : graph.manifest().subprojects().entrySet()) {</span>
+<span class="fc" id="L190">            String name = entry.getKey();</span>
+<span class="fc" id="L191">            Subproject subproject = entry.getValue();</span>
+<span class="fc" id="L192">            File dir = new File(wsRoot, name);</span>
+
+<span class="fc" id="L194">            String declared = subproject.branch();</span>
+<span class="fc" id="L195">            boolean cloned = new File(dir, &quot;.git&quot;).exists();</span>
+<span class="pc bpc" id="L196" title="1 of 2 branches missed.">            String actual = cloned ? gitBranch(dir) : null;</span>
+            // Third axis (#904): the VCS-bridge state file. The bridge
+            // enforces it OVER the manifest, so a recorded branch that
+            // disagrees is active drift, not bookkeeping trivia.
+<span class="pc bpc" id="L200" title="1 of 2 branches missed.">            String recorded = cloned</span>
+<span class="fc" id="L201">                    ? VcsState.readFrom(dir.toPath())</span>
+<span class="fc" id="L202">                            .map(VcsState::branch).orElse(null)</span>
+<span class="pc" id="L203">                    : null;</span>
+
+<span class="pc bpc" id="L205" title="2 of 4 branches missed.">            boolean yamlDrift = declared == null || !declared.equals(wsBranch);</span>
+<span class="pc bpc" id="L206" title="2 of 4 branches missed.">            boolean repoDrift = actual != null &amp;&amp; !actual.equals(wsBranch);</span>
+<span class="pc bpc" id="L207" title="1 of 4 branches missed.">            boolean stateDrift = recorded != null &amp;&amp; !recorded.equals(wsBranch);</span>
+<span class="pc bpc" id="L208" title="2 of 6 branches missed.">            if (yamlDrift || repoDrift || stateDrift) driftCount++;</span>
+
+<span class="fc" id="L210">            rows.add(new DriftRow(name,</span>
+<span class="pc bpc" id="L211" title="1 of 2 branches missed.">                    declared == null ? &quot;(unset)&quot; : declared,</span>
+<span class="pc bpc" id="L212" title="1 of 2 branches missed.">                    actual == null ? &quot;(not cloned)&quot; : actual,</span>
+<span class="fc bfc" id="L213" title="All 2 branches covered.">                    recorded == null ? &quot;(none)&quot; : recorded,</span>
+                    yamlDrift, repoDrift, stateDrift));
+<span class="fc" id="L215">        }</span>
+
+<span class="fc" id="L217">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L218">        getLog().info(&quot;IKE Workspace — Branch Coherence Check&quot;);</span>
+<span class="fc" id="L219">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+<span class="fc" id="L220">        getLog().info(&quot;  Workspace HEAD: &quot; + wsBranch);</span>
+<span class="fc" id="L221">        getLog().info(&quot;&quot;);</span>
+
+<span class="pc bpc" id="L223" title="1 of 2 branches missed.">        if (driftCount == 0) {</span>
+<span class="nc" id="L224">            getLog().info(&quot;  All subprojects agree with workspace HEAD  ✓&quot;);</span>
+        } else {
+<span class="fc bfc" id="L226" title="All 2 branches covered.">            for (DriftRow r : rows) {</span>
+<span class="pc bpc" id="L227" title="2 of 6 branches missed.">                if (!r.yamlDrift &amp;&amp; !r.repoDrift &amp;&amp; !r.stateDrift) continue;</span>
+<span class="fc" id="L228">                getLog().warn(&quot;  ⚠ &quot; + r.name</span>
+                        + &quot; — yaml=&quot; + r.declared + &quot; repo=&quot; + r.actual
+                        + &quot; vcs-state=&quot; + r.recorded);
+<span class="fc" id="L231">            }</span>
+<span class="fc" id="L232">            getLog().warn(&quot;&quot;);</span>
+<span class="fc" id="L233">            getLog().warn(&quot;  Repair with:&quot;);</span>
+<span class="fc" id="L234">            getLog().warn(&quot;    mvn &quot;</span>
+<span class="fc" id="L235">                    + WsGoal.RECONCILE_BRANCHES_PUBLISH.qualified()</span>
+                    + &quot; -Dfrom=workspace-head&quot;);
+<span class="fc" id="L237">            getLog().warn(&quot;&quot;);</span>
+        }
+
+<span class="fc" id="L240">        GoalReportBuilder report = new GoalReportBuilder();</span>
+<span class="fc" id="L241">        report.paragraph(&quot;**Workspace HEAD:** `&quot; + wsBranch + &quot;`&quot;);</span>
+<span class="pc bpc" id="L242" title="1 of 2 branches missed.">        report.paragraph(driftCount == 0</span>
+<span class="nc" id="L243">                ? &quot;All subprojects agree with workspace HEAD.&quot;</span>
+<span class="fc" id="L244">                : driftCount + &quot; subproject(s) drift from workspace HEAD.&quot;);</span>
+
+<span class="fc" id="L246">        List&lt;String[]&gt; driftTableRows = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L247" title="All 2 branches covered.">        for (DriftRow r : rows) {</span>
+<span class="fc" id="L248">            List&lt;String&gt; drifts = new ArrayList&lt;&gt;();</span>
+<span class="pc bpc" id="L249" title="1 of 2 branches missed.">            if (r.yamlDrift) drifts.add(&quot;yaml&quot;);</span>
+<span class="pc bpc" id="L250" title="1 of 2 branches missed.">            if (r.repoDrift) drifts.add(&quot;repo&quot;);</span>
+<span class="fc bfc" id="L251" title="All 2 branches covered.">            if (r.stateDrift) drifts.add(&quot;vcs-state&quot;);</span>
+<span class="fc bfc" id="L252" title="All 2 branches covered.">            String status = drifts.isEmpty()</span>
+<span class="fc" id="L253">                    ? &quot;✓ aligned&quot;</span>
+<span class="fc" id="L254">                    : &quot;✗ &quot; + String.join(&quot; + &quot;, drifts) + &quot; drift&quot;;</span>
+<span class="fc" id="L255">            driftTableRows.add(new String[]{r.name,</span>
+                    &quot;`&quot; + r.declared + &quot;`&quot;, &quot;`&quot; + r.actual + &quot;`&quot;,
+                    &quot;`&quot; + r.recorded + &quot;`&quot;, status});
+<span class="fc" id="L258">        }</span>
+<span class="fc" id="L259">        report.table(List.of(&quot;Subproject&quot;, &quot;YAML branch&quot;, &quot;Repo branch&quot;,</span>
+                        &quot;vcs-state branch&quot;, &quot;Status&quot;),
+                driftTableRows);
+<span class="pc bpc" id="L262" title="1 of 2 branches missed.">        if (driftCount &gt; 0) {</span>
+<span class="fc" id="L263">            report.paragraph(&quot;_Repair: `mvn &quot;</span>
+<span class="fc" id="L264">                    + WsGoal.RECONCILE_BRANCHES_PUBLISH.qualified()</span>
+                    + &quot; -Dfrom=workspace-head`_&quot;);
+        }
+<span class="fc" id="L267">        return new WorkspaceReportSpec(WsGoal.CHECK_BRANCH, report.build());</span>
+    }
+
+    /** One row of the workspace-scope drift table (#904: three axes). */
+<span class="fc" id="L271">    private record DriftRow(String name, String declared, String actual,</span>
+                            String recorded, boolean yamlDrift,
+                            boolean repoDrift, boolean stateDrift) {}
+
+    /**
+     * Find which workspace subproject the CWD belongs to.
+     * Handles being in a subdirectory of a multi-module reactor.
+     *
+     * @param wsRoot workspace root directory
+     * @param cwd    current working directory
+     * @param graph  workspace dependency graph
+     * @return the subproject name, or null if CWD is not inside a known subproject
+     */
+    static String findSubprojectName(File wsRoot, File cwd, WorkspaceGraph graph) {
+        // Walk up from CWD toward wsRoot, checking each directory name
+<span class="nc" id="L286">        Path wsPath = wsRoot.toPath().toAbsolutePath().normalize();</span>
+<span class="nc" id="L287">        Path cwdPath = cwd.toPath().toAbsolutePath().normalize();</span>
+
+<span class="nc bnc" id="L289" title="All 6 branches missed.">        while (cwdPath != null &amp;&amp; cwdPath.startsWith(wsPath) &amp;&amp; !cwdPath.equals(wsPath)) {</span>
+            // The directory immediately under wsRoot is the subproject name
+<span class="nc" id="L291">            Path relative = wsPath.relativize(cwdPath);</span>
+<span class="nc" id="L292">            String topDir = relative.getName(0).toString();</span>
+<span class="nc bnc" id="L293" title="All 2 branches missed.">            if (graph.manifest().subprojects().containsKey(topDir)) {</span>
+<span class="nc" id="L294">                return topDir;</span>
+            }
+<span class="nc" id="L296">            cwdPath = cwdPath.getParent();</span>
+<span class="nc" id="L297">        }</span>
+<span class="nc" id="L298">        return null;</span>
+    }
+
+    /**
+     * Check if a branch exists on the remote (origin).
+     * Returns false if the check fails (no remote, offline, etc.).
+     */
+    private boolean branchExistsRemotely(File dir, String branch) {
+        try {
+<span class="nc" id="L307">            String result = ReleaseSupport.execCapture(dir,</span>
+                    &quot;git&quot;, &quot;ls-remote&quot;, &quot;--heads&quot;, &quot;origin&quot;, branch);
+<span class="nc bnc" id="L309" title="All 4 branches missed.">            return result != null &amp;&amp; !result.isEmpty();</span>
+<span class="nc" id="L310">        } catch (Exception e) {</span>
+<span class="nc" id="L311">            return false; // Assume new if we can't check</span>
+        }
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

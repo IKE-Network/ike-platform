@@ -1,6 +1,6 @@
 ---
-date_published: 2026-09-18
-date_modified: 2026-09-18
+date_published: 2026-09-24
+date_modified: 2026-09-24
 canonical_url: https://ike.network/ike-platform/release-notes.html
 ---
 
@@ -148,9 +148,3 @@ canonical_url: https://ike.network/ike-platform/release-notes.html
 ### [Internal](#internal_14)
 
 - Async Maven Central deploy with sentinel-file status tracking ([#484](https://github.com/IKE-Network/ike-issues/issues/484)[36])
-
-## [ike-tooling v196](#ike-tooling-v196)
-
-### [Internal](#internal_15)
-
-- Nexus-first two-phase deploy with retries in ike:release-publish ([#482](https://github.com/IKE-Network/ike-issues/issues/482)[37])

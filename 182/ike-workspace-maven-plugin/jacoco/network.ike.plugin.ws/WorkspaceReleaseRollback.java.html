@@ -1,0 +1,198 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>WorkspaceReleaseRollback.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">WorkspaceReleaseRollback.java</span></div><h1>WorkspaceReleaseRollback.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.plugin.ws.vcs.VcsOperations;
+import org.apache.maven.api.plugin.Log;
+import org.apache.maven.api.plugin.MojoException;
+
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Rolls a working set back from a failed release mission
+ * (IKE-Network/ike-issues#1010) — the mechanized form of the hand
+ * resets that a mid-mission failure previously demanded across every
+ * repository.
+ *
+ * &lt;p&gt;A mission's local footprint is exactly its release-cadence commits
+ * ({@code release: set version to …}, {@code post-release: bump to …},
+ * the alignment and manifest-sync subjects) plus any tags pointing at
+ * them. Rollback walks each repository's &lt;em&gt;unpushed&lt;/em&gt; range from
+ * {@code HEAD} downward, discarding consecutive cadence commits and
+ * the local tags on them, and resets to the first non-cadence commit.
+ * Pushed history is never touched: a cadence commit already on origin
+ * belongs to a completed mission, and a failed mission that got as far as
+ * pushing is a publication event a human must judge.
+ *
+ * &lt;p&gt;Refusals (per repository, and the publish is all-or-nothing over
+ * the set): a working tree with uncommitted changes, no upstream to
+ * define the unpushed range, or mission commits buried beneath later
+ * non-cadence work — each names the repository and the remediation.
+ */
+final class WorkspaceReleaseRollback {
+
+    /** Subjects the release mission authors; anything else is work. */
+<span class="fc" id="L39">    private static final List&lt;String&gt; CADENCE_PREFIXES = List.of(</span>
+            &quot;release: set version to &quot;,
+            &quot;post-release: bump to &quot;,
+            &quot;post-release: sync workspace.yaml&quot;,
+            &quot;workspace: align inter-subproject versions&quot;,
+            &quot;workspace: pin working-set state&quot;);
+
+    private WorkspaceReleaseRollback() {}
+
+    /**
+     * One repository's rollback plan.
+     *
+     * @param name      the working-set member name (or the root's label)
+     * @param dir       the repository directory
+     * @param targetSha the commit to reset to; {@code null} when there
+     *                  is nothing to discard
+     * @param discards  {@code &lt;sha&gt; &lt;subject&gt;} lines to discard,
+     *                  newest first
+     * @param tags      local tags on the discarded commits
+     * @param refusal   why this repository blocks the rollback, or
+     *                  {@code null} when it does not
+     */
+<span class="fc" id="L61">    record RepoPlan(String name, File dir, String targetSha,</span>
+                    List&lt;String&gt; discards, List&lt;String&gt; tags,
+                    String refusal) {
+
+        /** @return whether this repository has anything to discard */
+        boolean hasWork() {
+<span class="pc bpc" id="L67" title="3 of 4 branches missed.">            return targetSha != null &amp;&amp; !discards.isEmpty();</span>
+        }
+    }
+
+    /**
+     * Inspect one repository and plan its rollback without mutating
+     * anything.
+     *
+     * @param name the member name used in reports
+     * @param dir  the repository directory
+     * @return the plan, carrying a refusal instead of work when the
+     *         repository cannot be rolled back safely
+     * @throws MojoException when git itself fails
+     */
+    static RepoPlan plan(String name, File dir) throws MojoException {
+<span class="fc bfc" id="L82" title="All 2 branches covered.">        if (!VcsOperations.isClean(dir)) {</span>
+<span class="fc" id="L83">            return new RepoPlan(name, dir, null, List.of(), List.of(),</span>
+                    &quot;uncommitted changes — commit or stash by hand first&quot;);
+        }
+<span class="fc" id="L86">        String branch = VcsOperations.currentBranch(dir);</span>
+<span class="fc" id="L87">        String remote = VcsOperations</span>
+<span class="fc" id="L88">                .remoteSha(dir, &quot;origin&quot;, branch).orElse(null);</span>
+<span class="pc bpc" id="L89" title="1 of 2 branches missed.">        if (remote == null) {</span>
+<span class="nc" id="L90">            return new RepoPlan(name, dir, null, List.of(), List.of(),</span>
+                    &quot;no origin/&quot; + branch
+                            + &quot; — cannot define the unpushed range&quot;);
+        }
+
+<span class="fc" id="L95">        List&lt;String&gt; unpushed = logOneline(dir, remote + &quot;..HEAD&quot;);</span>
+<span class="fc" id="L96">        List&lt;String&gt; discards = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L97">        int walked = 0;</span>
+<span class="fc bfc" id="L98" title="All 2 branches covered.">        for (String line : unpushed) {</span>
+<span class="fc bfc" id="L99" title="All 2 branches covered.">            if (!isCadence(subjectOf(line))) break;</span>
+<span class="fc" id="L100">            discards.add(line);</span>
+<span class="fc" id="L101">            walked++;</span>
+<span class="fc" id="L102">        }</span>
+<span class="fc bfc" id="L103" title="All 2 branches covered.">        for (int i = walked; i &lt; unpushed.size(); i++) {</span>
+<span class="fc bfc" id="L104" title="All 2 branches covered.">            if (isCadence(subjectOf(unpushed.get(i)))) {</span>
+<span class="fc" id="L105">                return new RepoPlan(name, dir, null, List.of(), List.of(),</span>
+                        &quot;mission commits buried beneath later work (&quot;
+<span class="fc" id="L107">                                + subjectOf(unpushed.get(walked))</span>
+                                + &quot; sits above them) — resolve by hand&quot;);
+            }
+        }
+<span class="fc bfc" id="L111" title="All 2 branches covered.">        if (discards.isEmpty()) {</span>
+<span class="fc" id="L112">            return new RepoPlan(name, dir, null, List.of(), List.of(),</span>
+                    null);
+        }
+
+<span class="fc" id="L116">        String lastDiscarded = shaOf(discards.get(discards.size() - 1));</span>
+<span class="fc" id="L117">        String target = capture(dir,</span>
+<span class="fc" id="L118">                &quot;git&quot;, &quot;rev-parse&quot;, lastDiscarded + &quot;^&quot;).strip();</span>
+<span class="fc" id="L119">        List&lt;String&gt; tags = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L120" title="All 2 branches covered.">        for (String line : discards) {</span>
+<span class="fc bfc" id="L121" title="All 2 branches covered.">            for (String tag : capture(dir, &quot;git&quot;, &quot;tag&quot;, &quot;--points-at&quot;,</span>
+<span class="fc" id="L122">                    shaOf(line)).split(&quot;\n&quot;)) {</span>
+<span class="fc bfc" id="L123" title="All 2 branches covered.">                if (!tag.isBlank()) tags.add(tag.strip());</span>
+            }
+<span class="fc" id="L125">        }</span>
+<span class="fc" id="L126">        return new RepoPlan(name, dir, target, List.copyOf(discards),</span>
+<span class="fc" id="L127">                List.copyOf(tags), null);</span>
+    }
+
+    /**
+     * Apply a plan: delete its local tags, then hard-reset to the
+     * target. Call only on plans where {@link RepoPlan#hasWork()} is
+     * true and {@link RepoPlan#refusal()} is null.
+     *
+     * @param plan the repository plan to apply
+     * @param log  Maven logger for the reset trace
+     * @throws MojoException when git fails mid-apply
+     */
+    static void apply(RepoPlan plan, Log log) throws MojoException {
+<span class="fc bfc" id="L140" title="All 2 branches covered.">        for (String tag : plan.tags()) {</span>
+<span class="fc" id="L141">            capture(plan.dir(), &quot;git&quot;, &quot;tag&quot;, &quot;-d&quot;, tag);</span>
+<span class="fc" id="L142">            log.info(&quot;    tag deleted: &quot; + tag);</span>
+<span class="fc" id="L143">        }</span>
+<span class="fc" id="L144">        VcsOperations.resetHard(plan.dir(), log, plan.targetSha());</span>
+<span class="fc" id="L145">    }</span>
+
+    private static boolean isCadence(String subject) {
+<span class="fc bfc" id="L148" title="All 2 branches covered.">        for (String prefix : CADENCE_PREFIXES) {</span>
+<span class="fc bfc" id="L149" title="All 2 branches covered.">            if (subject.startsWith(prefix)) return true;</span>
+<span class="fc" id="L150">        }</span>
+<span class="fc" id="L151">        return false;</span>
+    }
+
+    private static String subjectOf(String onelineEntry) {
+<span class="fc" id="L155">        int space = onelineEntry.indexOf(' ');</span>
+<span class="pc bpc" id="L156" title="1 of 2 branches missed.">        return space &lt; 0 ? &quot;&quot; : onelineEntry.substring(space + 1);</span>
+    }
+
+    private static String shaOf(String onelineEntry) {
+<span class="fc" id="L160">        int space = onelineEntry.indexOf(' ');</span>
+<span class="pc bpc" id="L161" title="1 of 2 branches missed.">        return space &lt; 0 ? onelineEntry : onelineEntry.substring(0, space);</span>
+    }
+
+    private static List&lt;String&gt; logOneline(File dir, String range)
+            throws MojoException {
+<span class="fc" id="L166">        String out = capture(dir, &quot;git&quot;, &quot;log&quot;, range,</span>
+                &quot;--oneline&quot;, &quot;--no-decorate&quot;);
+<span class="fc bfc" id="L168" title="All 2 branches covered.">        return out.isBlank() ? List.of() : List.of(out.split(&quot;\n&quot;));</span>
+    }
+
+    // Local capture: VcsOperations has no tag or rev-parse helpers, and
+    // this class's needs are read-mostly one-liners.
+    private static String capture(File dir, String... command)
+            throws MojoException {
+        try {
+<span class="fc" id="L176">            Process process = new ProcessBuilder(command)</span>
+<span class="fc" id="L177">                    .directory(dir).redirectErrorStream(true).start();</span>
+<span class="fc" id="L178">            ByteArrayOutputStream buffer = new ByteArrayOutputStream();</span>
+<span class="fc" id="L179">            try (InputStream in = process.getInputStream()) {</span>
+<span class="fc" id="L180">                in.transferTo(buffer);</span>
+            }
+<span class="fc" id="L182">            int exit = process.waitFor();</span>
+<span class="fc" id="L183">            String output = buffer.toString(StandardCharsets.UTF_8);</span>
+<span class="pc bpc" id="L184" title="1 of 2 branches missed.">            if (exit != 0) {</span>
+<span class="nc" id="L185">                throw new MojoException(String.join(&quot; &quot;, command)</span>
+<span class="nc" id="L186">                        + &quot; failed in &quot; + dir + &quot;: &quot; + output.strip());</span>
+            }
+<span class="fc" id="L188">            return output;</span>
+<span class="nc" id="L189">        } catch (IOException e) {</span>
+<span class="nc" id="L190">            throw new MojoException(&quot;Could not run git in &quot; + dir</span>
+<span class="nc" id="L191">                    + &quot;: &quot; + e.getMessage(), e);</span>
+<span class="nc" id="L192">        } catch (InterruptedException e) {</span>
+<span class="nc" id="L193">            Thread.currentThread().interrupt();</span>
+<span class="nc" id="L194">            throw new MojoException(&quot;Interrupted running git in &quot; + dir, e);</span>
+        }
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

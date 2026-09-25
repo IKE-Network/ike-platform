@@ -1,0 +1,191 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>WorkingSetLease.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">WorkingSetLease.java</span></div><h1>WorkingSetLease.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.lease.core.LeaseProtocol;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Optional;
+
+/**
+ * The {@code ws:} goals' bridge to the working-set lease protocol —
+ * in-process on {@code ike-lease-core} since the protocol port
+ * (IKE-Network/ike-issues#1067), which is what retired this class's
+ * original shape: a Maven-published plugin shelling out to a
+ * {@code $HOME} script. The single-implementation rule survives intact —
+ * the very same {@code LeaseProtocol} the {@code lease.sh} wrapper execs
+ * and the IDE plugin embeds runs here, so the fencing system's halves
+ * cannot drift.
+ *
+ * &lt;p&gt;A working set — any project root under {@code ~/ike-dev} — has one
+ * writer at a time across the machines that share that folder. A
+ * {@code ws:} goal that rewrites branches, versions and history is
+ * emphatically a writer, so it confirms it holds the lease before it
+ * starts; a finish that lands in the &lt;em&gt;parent&lt;/em&gt; working set
+ * short-holds that lease too ({@link ParentLeaseHold}). Design:
+ * {@code dev-working-set-lease} in ike-lab-documents,
+ * IKE-Network/ike-issues#1002; this half is #1005.
+ *
+ * &lt;p&gt;&lt;strong&gt;Inert outside that setup.&lt;/strong&gt; No
+ * {@code ~/.ike-machine-id}, no development folder, or a path that does
+ * not resolve to a working set, and the goal proceeds exactly as it did
+ * before — this plugin is published and run by people with no
+ * Syncthing-paired fleet, for whom the lease protocol does not exist. It
+ * fails open for the same reason the Claude fence does: a coordination
+ * aid that can wedge a build is worse than no coordination aid.
+ *
+ * &lt;p&gt;System properties {@code ike.lease.home}, {@code ike.lease.ikeDev}
+ * and {@code ike.lease.settleSeconds} override the environment
+ * ({@code HOME}, {@code IKE_DEV}, {@code IKE_LEASE_SETTLE_SECONDS}) —
+ * the seam sandboxed tests set, since a JVM cannot re-point its
+ * environment per test.
+ */
+final class WorkingSetLease {
+
+    private WorkingSetLease() { }
+
+    /**
+     * The outcome of asking the lease protocol whether this machine may write.
+     *
+     * @param verdict  what the protocol decided
+     * @param detail   the protocol's own explanation, for the operator; empty
+     *                 when there is nothing to say
+     */
+<span class="fc" id="L53">    record Decision(Verdict verdict, String detail) { }</span>
+
+    /** What {@link #confirm} concluded. */
+<span class="fc" id="L56">    enum Verdict {</span>
+        /** This machine holds the lease; proceed. */
+<span class="fc" id="L58">        HELD,</span>
+        /** No lease machinery, or not a working set. Proceed. */
+<span class="fc" id="L60">        NOT_APPLICABLE,</span>
+        /** Another machine holds it, or won the race. Do not write. */
+<span class="fc" id="L62">        FENCED</span>
+    }
+
+    /**
+     * A read-only look at a working set's lease, for draft goals and
+     * listings that must not acquire anything.
+     *
+     * @param liveElsewhere {@code true} when another machine holds the
+     *                      lease live — the one state that refuses a write
+     * @param line          the protocol's own one-line description
+     */
+<span class="fc" id="L73">    record Status(boolean liveElsewhere, String line) { }</span>
+
+    /**
+     * Confirms this machine holds the working set's lease, waiting out the
+     * sync layer's propagation window and reading the record back — the
+     * #1005 confirmed acquisition, for consequential steps.
+     *
+     * @param workingSetRoot the directory the goal is about to write to
+     * @return the decision; never {@code null}
+     */
+    static Decision confirm(Path workingSetRoot) {
+<span class="fc" id="L84">        Optional&lt;Context&gt; context = Context.of(workingSetRoot);</span>
+<span class="fc bfc" id="L85" title="All 2 branches covered.">        if (context.isEmpty()) {</span>
+<span class="fc" id="L86">            return new Decision(Verdict.NOT_APPLICABLE, &quot;&quot;);</span>
+        }
+<span class="fc" id="L88">        LeaseProtocol.Outcome outcome =</span>
+<span class="fc" id="L89">                context.get().protocol().ensure(context.get().workingSet(), true);</span>
+<span class="pc bpc" id="L90" title="1 of 3 branches missed.">        return switch (outcome.exitCode()) {</span>
+<span class="fc" id="L91">            case 0 -&gt; new Decision(Verdict.HELD, context.get().workingSet());</span>
+<span class="fc" id="L92">            case 1 -&gt; new Decision(Verdict.FENCED, outcome.stdout().trim());</span>
+<span class="nc" id="L93">            default -&gt; new Decision(Verdict.NOT_APPLICABLE, &quot;&quot;);</span>
+        };
+    }
+
+    /**
+     * Reads a working set's lease state without changing it.
+     *
+     * @param workingSetRoot the working set's directory
+     * @return the status, or empty when the lease machinery is absent or
+     *         the path is not a working set — the not-applicable cases
+     */
+    static Optional&lt;Status&gt; status(Path workingSetRoot) {
+<span class="fc" id="L105">        return Context.of(workingSetRoot).map(context -&gt; {</span>
+<span class="fc" id="L106">            LeaseProtocol.Outcome outcome =</span>
+<span class="fc" id="L107">                    context.protocol().status(context.workingSet());</span>
+<span class="fc bfc" id="L108" title="All 2 branches covered.">            return new Status(outcome.exitCode() == 1,</span>
+<span class="fc" id="L109">                    outcome.stdout().trim());</span>
+        });
+    }
+
+    /**
+     * Releases a lease this machine holds — the closing half of a
+     * short-hold. The protocol refuses politely when the lease is not
+     * held here; anything but a clean release is the caller's to log,
+     * never to fail on.
+     *
+     * @param workingSetRoot the working set's directory
+     * @return {@code true} when the lease was released (or no record
+     *         existed); {@code false} otherwise
+     */
+    static boolean release(Path workingSetRoot) {
+<span class="fc" id="L124">        return Context.of(workingSetRoot)</span>
+<span class="fc" id="L125">                .map(context -&gt; context.protocol()</span>
+<span class="pc bpc" id="L126" title="1 of 2 branches missed.">                        .release(context.workingSet()).exitCode() == 0)</span>
+<span class="fc" id="L127">                .orElse(true);</span>
+    }
+
+    /**
+     * The resolved protocol instance and working-set name for a path, or
+     * empty in every not-applicable case.
+     *
+     * @param protocol   the in-process protocol
+     * @param workingSet the resolved working-set name
+     */
+<span class="fc" id="L137">    private record Context(LeaseProtocol protocol, String workingSet) {</span>
+
+        static Optional&lt;Context&gt; of(Path workingSetRoot) {
+<span class="fc bfc" id="L140" title="All 2 branches covered.">            if (workingSetRoot == null) {</span>
+<span class="fc" id="L141">                return Optional.empty();</span>
+            }
+<span class="fc" id="L143">            String home = firstNonBlank(</span>
+<span class="fc" id="L144">                    System.getProperty(&quot;ike.lease.home&quot;),</span>
+<span class="fc" id="L145">                    System.getenv(&quot;HOME&quot;),</span>
+<span class="fc" id="L146">                    System.getProperty(&quot;user.home&quot;));</span>
+<span class="fc" id="L147">            String ikeDev = firstNonBlank(</span>
+<span class="fc" id="L148">                    System.getProperty(&quot;ike.lease.ikeDev&quot;),</span>
+<span class="fc" id="L149">                    System.getenv(&quot;IKE_DEV&quot;),</span>
+                    home + &quot;/ike-dev&quot;);
+<span class="pc bpc" id="L151" title="1 of 2 branches missed.">            if (!Files.isRegularFile(Path.of(home, &quot;.ike-machine-id&quot;))</span>
+<span class="pc bpc" id="L152" title="1 of 2 branches missed.">                    || !Files.isDirectory(Path.of(ikeDev))) {</span>
+<span class="nc" id="L153">                return Optional.empty();</span>
+            }
+<span class="fc" id="L155">            long settle = parseLong(firstNonBlank(</span>
+<span class="fc" id="L156">                    System.getProperty(&quot;ike.lease.settleSeconds&quot;),</span>
+<span class="fc" id="L157">                    System.getenv(&quot;IKE_LEASE_SETTLE_SECONDS&quot;),</span>
+                    &quot;25&quot;), 25L);
+<span class="fc" id="L159">            String ttl = firstNonBlank(System.getenv(&quot;IKE_LEASE_TTL&quot;),</span>
+                    &quot;PT10M&quot;);
+<span class="fc" id="L161">            LeaseProtocol protocol = new LeaseProtocol(Path.of(ikeDev),</span>
+<span class="fc" id="L162">                    Path.of(home), Path.of(System.getProperty(&quot;user.dir&quot;)),</span>
+                    ttl, settle);
+<span class="fc" id="L164">            LeaseProtocol.Outcome resolved =</span>
+<span class="fc" id="L165">                    protocol.resolve(workingSetRoot.toString());</span>
+<span class="fc bfc" id="L166" title="All 2 branches covered.">            if (resolved.exitCode() != 0) {</span>
+<span class="fc" id="L167">                return Optional.empty();</span>
+            }
+<span class="fc" id="L169">            return Optional.of(new Context(protocol,</span>
+<span class="fc" id="L170">                    resolved.stdout().trim()));</span>
+        }
+
+        private static String firstNonBlank(String... values) {
+<span class="pc bpc" id="L174" title="1 of 2 branches missed.">            for (String value : values) {</span>
+<span class="pc bpc" id="L175" title="1 of 4 branches missed.">                if (value != null &amp;&amp; !value.isBlank()) {</span>
+<span class="fc" id="L176">                    return value;</span>
+                }
+            }
+<span class="nc" id="L179">            return &quot;&quot;;</span>
+        }
+
+        private static long parseLong(String value, long fallback) {
+            try {
+<span class="fc" id="L184">                return Long.parseLong(value.trim());</span>
+<span class="nc" id="L185">            } catch (NumberFormatException e) {</span>
+<span class="nc" id="L186">                return fallback;</span>
+            }
+        }
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

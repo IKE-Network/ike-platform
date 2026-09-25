@@ -317,27 +317,33 @@ public class FeatureStartSiblingPublishMojo extends AbstractWorkspaceMojo {
 <span class="fc" id="L317">        Map&lt;String, String&gt; versionByName = new LinkedHashMap&lt;&gt;();</span>
 <span class="fc" id="L318">        String rootQualified = null;</span>
 <span class="fc bfc" id="L319" title="All 2 branches covered.">        if (!skipVersion) {</span>
-<span class="fc bfc" id="L320" title="All 2 branches covered.">            for (String name : branched) {</span>
-<span class="fc" id="L321">                Subproject sub = graph.manifest().subprojects().get(name);</span>
-<span class="fc" id="L322">                File dir = new File(siblingRoot, name);</span>
-<span class="fc" id="L323">                String effectiveVersion = effectiveVersion(sub, dir);</span>
-<span class="pc bpc" id="L324" title="2 of 4 branches missed.">                if (effectiveVersion == null || effectiveVersion.isEmpty()) {</span>
-<span class="nc" id="L325">                    continue;</span>
+            // Resolve every member's base version once, from the fresh
+            // clones, before any POM is qualified (ike-issues#1135).
+<span class="fc" id="L322">            Map&lt;String, String&gt; baseVersions =</span>
+<span class="fc" id="L323">                    support.effectiveVersions(graph, siblingRoot, sorted);</span>
+<span class="fc bfc" id="L324" title="All 2 branches covered.">            for (String name : branched) {</span>
+<span class="fc" id="L325">                File dir = new File(siblingRoot, name);</span>
+<span class="fc" id="L326">                String effectiveVersion = baseVersions.get(name);</span>
+<span class="pc bpc" id="L327" title="1 of 2 branches missed.">                if (effectiveVersion == null) {</span>
+<span class="nc" id="L328">                    continue;</span>
                 }
-<span class="fc" id="L327">                String newVersion = VersionSupport.branchQualifiedVersion(</span>
+<span class="fc" id="L330">                String newVersion = VersionSupport.branchQualifiedVersion(</span>
                         effectiveVersion, branchName);
-<span class="fc" id="L329">                versionByName.put(name, newVersion);</span>
-<span class="fc" id="L330">                support.setPomVersion(dir, effectiveVersion, newVersion);</span>
-<span class="fc" id="L331">                ReleaseSupport.exec(dir, getLog(), &quot;git&quot;, &quot;add&quot;, &quot;pom.xml&quot;);</span>
-<span class="fc" id="L332">                support.commitIfStaged(dir,</span>
+<span class="fc" id="L332">                versionByName.put(name, newVersion);</span>
+<span class="fc" id="L333">                support.setPomVersion(dir, effectiveVersion, newVersion);</span>
+<span class="fc" id="L334">                ReleaseSupport.exec(dir, getLog(), &quot;git&quot;, &quot;add&quot;, &quot;pom.xml&quot;);</span>
+<span class="fc" id="L335">                support.commitIfStaged(dir,</span>
                         &quot;feature: set version &quot; + newVersion + &quot; for &quot; + branchName);
-<span class="fc" id="L334">                getLog().info(Ansi.green(&quot;  ✓ &quot;) + String.format(&quot;%-24s %s → %s&quot;,</span>
+<span class="fc" id="L337">                getLog().info(Ansi.green(&quot;  ✓ &quot;) + String.format(&quot;%-24s %s → %s&quot;,</span>
                         name, effectiveVersion, newVersion));
-<span class="fc" id="L336">            }</span>
-<span class="fc" id="L337">            support.removeIntraReactorPins(siblingRoot, branched, true);</span>
-<span class="fc" id="L338">            support.cascadeVersionProperties(graph, siblingRoot, sorted, branchName);</span>
-<span class="fc" id="L339">            support.cascadeBomProperties(graph, siblingRoot, sorted, branchName);</span>
-<span class="fc" id="L340">            support.cascadeBomImports(graph, siblingRoot, sorted, branchName);</span>
+<span class="fc" id="L339">            }</span>
+<span class="fc" id="L340">            support.removeIntraReactorPins(siblingRoot, branched, true);</span>
+<span class="fc" id="L341">            support.cascadeVersionProperties(graph, siblingRoot, sorted,</span>
+                    baseVersions, branchName);
+<span class="fc" id="L343">            support.cascadeBomProperties(graph, siblingRoot, sorted,</span>
+                    baseVersions, branchName);
+<span class="fc" id="L345">            support.cascadeBomImports(graph, siblingRoot, sorted,</span>
+                    baseVersions, branchName);
 
             // Qualify the aggregator's OWN POM version too — feature-start
             // branches the workspace root, so its version takes the same
@@ -351,63 +357,63 @@ public class FeatureStartSiblingPublishMojo extends AbstractWorkspaceMojo {
             // subproject's. The merge/squash finish paths already de-qualify
             // the aggregator (FeatureFinishSupport.stripWorkspaceRootPom), so
             // qualifying it here makes the round-trip symmetric.
-<span class="fc" id="L354">            File rootPom = new File(siblingRoot, &quot;pom.xml&quot;);</span>
-<span class="pc bpc" id="L355" title="1 of 2 branches missed.">            if (rootPom.exists()) {</span>
+<span class="fc" id="L360">            File rootPom = new File(siblingRoot, &quot;pom.xml&quot;);</span>
+<span class="pc bpc" id="L361" title="1 of 2 branches missed.">            if (rootPom.exists()) {</span>
                 try {
-<span class="fc" id="L357">                    String rootVersion = ReleaseSupport.readPomVersion(rootPom);</span>
-<span class="fc" id="L358">                    String qualified = VersionSupport.branchQualifiedVersion(</span>
+<span class="fc" id="L363">                    String rootVersion = ReleaseSupport.readPomVersion(rootPom);</span>
+<span class="fc" id="L364">                    String qualified = VersionSupport.branchQualifiedVersion(</span>
                             rootVersion, branchName);
-<span class="pc bpc" id="L360" title="1 of 2 branches missed.">                    if (!qualified.equals(rootVersion)) {</span>
-<span class="fc" id="L361">                        support.setPomVersion(siblingRoot, rootVersion, qualified);</span>
-<span class="fc" id="L362">                        ReleaseSupport.exec(siblingRoot, getLog(),</span>
+<span class="pc bpc" id="L366" title="1 of 2 branches missed.">                    if (!qualified.equals(rootVersion)) {</span>
+<span class="fc" id="L367">                        support.setPomVersion(siblingRoot, rootVersion, qualified);</span>
+<span class="fc" id="L368">                        ReleaseSupport.exec(siblingRoot, getLog(),</span>
                                 &quot;git&quot;, &quot;add&quot;, &quot;pom.xml&quot;);
-<span class="fc" id="L364">                        support.commitIfStaged(siblingRoot,</span>
+<span class="fc" id="L370">                        support.commitIfStaged(siblingRoot,</span>
                                 &quot;feature: set version &quot; + qualified
                                         + &quot; for &quot; + branchName);
-<span class="fc" id="L367">                        rootQualified = qualified;</span>
-<span class="fc" id="L368">                        getLog().info(Ansi.green(&quot;  ✓ &quot;) + String.format(</span>
+<span class="fc" id="L373">                        rootQualified = qualified;</span>
+<span class="fc" id="L374">                        getLog().info(Ansi.green(&quot;  ✓ &quot;) + String.format(</span>
                                 &quot;%-24s %s → %s&quot;, baseName, rootVersion, qualified));
                     }
-<span class="nc" id="L371">                } catch (MojoException e) {</span>
-<span class="nc" id="L372">                    getLog().warn(&quot;  Could not qualify aggregator root version: &quot;</span>
-<span class="nc" id="L373">                            + e.getMessage());</span>
-<span class="fc" id="L374">                }</span>
+<span class="nc" id="L377">                } catch (MojoException e) {</span>
+<span class="nc" id="L378">                    getLog().warn(&quot;  Could not qualify aggregator root version: &quot;</span>
+<span class="nc" id="L379">                            + e.getMessage());</span>
+<span class="fc" id="L380">                }</span>
             }
         }
 
         // 4. Rewrite the sibling's workspace.yaml branch fields and commit.
-<span class="fc" id="L379">        Path siblingManifest = Manifests.path(siblingRoot);</span>
-<span class="pc bpc" id="L380" title="2 of 4 branches missed.">        if (Files.exists(siblingManifest) &amp;&amp; !branched.isEmpty()) {</span>
+<span class="fc" id="L385">        Path siblingManifest = Manifests.path(siblingRoot);</span>
+<span class="pc bpc" id="L386" title="2 of 4 branches missed.">        if (Files.exists(siblingManifest) &amp;&amp; !branched.isEmpty()) {</span>
             try {
-<span class="fc" id="L382">                Map&lt;String, String&gt; branchUpdates = new LinkedHashMap&lt;&gt;();</span>
-<span class="fc bfc" id="L383" title="All 2 branches covered.">                for (String name : branched) {</span>
-<span class="fc" id="L384">                    branchUpdates.put(name, branchName);</span>
-<span class="fc" id="L385">                }</span>
-<span class="fc" id="L386">                ManifestWriter.updateBranches(siblingManifest, branchUpdates);</span>
-<span class="fc" id="L387">                ReleaseSupport.exec(siblingRoot, getLog(),</span>
-<span class="fc" id="L388">                        &quot;git&quot;, &quot;add&quot;, Manifests.name(siblingRoot));</span>
-<span class="fc" id="L389">                support.commitIfStaged(siblingRoot,</span>
+<span class="fc" id="L388">                Map&lt;String, String&gt; branchUpdates = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc bfc" id="L389" title="All 2 branches covered.">                for (String name : branched) {</span>
+<span class="fc" id="L390">                    branchUpdates.put(name, branchName);</span>
+<span class="fc" id="L391">                }</span>
+<span class="fc" id="L392">                ManifestWriter.updateBranches(siblingManifest, branchUpdates);</span>
+<span class="fc" id="L393">                ReleaseSupport.exec(siblingRoot, getLog(),</span>
+<span class="fc" id="L394">                        &quot;git&quot;, &quot;add&quot;, Manifests.name(siblingRoot));</span>
+<span class="fc" id="L395">                support.commitIfStaged(siblingRoot,</span>
                         &quot;workspace: update branches for &quot; + branchName);
-<span class="fc" id="L391">                getLog().info(&quot;  Updated workspace.yaml branches for &quot;</span>
-<span class="fc" id="L392">                        + branched.size() + &quot; components&quot;);</span>
-<span class="nc" id="L393">            } catch (IOException e) {</span>
-<span class="nc" id="L394">                getLog().warn(&quot;  Could not update sibling workspace.yaml: &quot;</span>
-<span class="nc" id="L395">                        + e.getMessage());</span>
-<span class="fc" id="L396">            }</span>
+<span class="fc" id="L397">                getLog().info(&quot;  Updated workspace.yaml branches for &quot;</span>
+<span class="fc" id="L398">                        + branched.size() + &quot; components&quot;);</span>
+<span class="nc" id="L399">            } catch (IOException e) {</span>
+<span class="nc" id="L400">                getLog().warn(&quot;  Could not update sibling workspace.yaml: &quot;</span>
+<span class="nc" id="L401">                        + e.getMessage());</span>
+<span class="fc" id="L402">            }</span>
         }
 
-<span class="fc" id="L399">        getLog().info(&quot;&quot;);</span>
-<span class="fc" id="L400">        getLog().info(Ansi.green(&quot;  ✓ &quot;) + &quot;Sibling ready: &quot;</span>
-<span class="fc" id="L401">                + siblingRoot.getAbsolutePath());</span>
-<span class="fc" id="L402">        getLog().info(&quot;    cd &quot; + siblingRoot.getAbsolutePath());</span>
-<span class="fc" id="L403">        getLog().info(&quot;    # work, then ws:commit-publish / ws:push; &quot;</span>
-                + &quot;rm -rf to discard&quot;);
 <span class="fc" id="L405">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L406">        getLog().info(Ansi.green(&quot;  ✓ &quot;) + &quot;Sibling ready: &quot;</span>
+<span class="fc" id="L407">                + siblingRoot.getAbsolutePath());</span>
+<span class="fc" id="L408">        getLog().info(&quot;    cd &quot; + siblingRoot.getAbsolutePath());</span>
+<span class="fc" id="L409">        getLog().info(&quot;    # work, then ws:commit-publish / ws:push; &quot;</span>
+                + &quot;rm -rf to discard&quot;);
+<span class="fc" id="L411">        getLog().info(&quot;&quot;);</span>
 
-<span class="fc" id="L407">        boolean verified = false;</span>
-<span class="pc bpc" id="L408" title="1 of 2 branches missed.">        if (shouldVerify()) {</span>
-<span class="nc" id="L409">            verifySibling(siblingRoot);</span>
-<span class="nc" id="L410">            verified = true;</span>
+<span class="fc" id="L413">        boolean verified = false;</span>
+<span class="pc bpc" id="L414" title="1 of 2 branches missed.">        if (shouldVerify()) {</span>
+<span class="nc" id="L415">            verifySibling(siblingRoot);</span>
+<span class="nc" id="L416">            verified = true;</span>
         }
 
         // Build the report rows over the whole working set — every
@@ -417,39 +423,39 @@ public class FeatureStartSiblingPublishMojo extends AbstractWorkspaceMojo {
         // Identity and kind come from the resolved working set; each row's
         // version/branch/sha are read from the corresponding SIBLING dir,
         // since the goal's effect lives in the sibling, not the primary.
-<span class="fc" id="L420">        List&lt;WorkingSetReportTable.Row&gt; rows = new ArrayList&lt;&gt;();</span>
-<span class="fc bfc" id="L421" title="All 2 branches covered.">        for (WorkingSet.Member member : resolveWorkingSet().members()) {</span>
-<span class="fc bfc" id="L422" title="All 2 branches covered.">            File dir = member.isAggregator()</span>
-<span class="fc" id="L423">                    ? siblingRoot</span>
-<span class="fc" id="L424">                    : new File(siblingRoot, member.name());</span>
+<span class="fc" id="L426">        List&lt;WorkingSetReportTable.Row&gt; rows = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L427" title="All 2 branches covered.">        for (WorkingSet.Member member : resolveWorkingSet().members()) {</span>
+<span class="fc bfc" id="L428" title="All 2 branches covered.">            File dir = member.isAggregator()</span>
+<span class="fc" id="L429">                    ? siblingRoot</span>
+<span class="fc" id="L430">                    : new File(siblingRoot, member.name());</span>
             String effect;
-<span class="fc bfc" id="L426" title="All 2 branches covered.">            if (member.isAggregator()) {</span>
+<span class="fc bfc" id="L432" title="All 2 branches covered.">            if (member.isAggregator()) {</span>
                 // The aggregator is cloned + branched, its own POM version
                 // qualified like every subproject (#777), and its
                 // workspace.yaml rewritten + committed.
-<span class="fc bfc" id="L430" title="All 2 branches covered.">                effect = (rootQualified != null)</span>
-<span class="fc" id="L431">                        ? &quot;cloned + branched &quot; + branchName + &quot; → &quot; + rootQualified</span>
-<span class="fc" id="L432">                        : &quot;cloned + branched &quot; + branchName;</span>
-<span class="pc bpc" id="L433" title="1 of 2 branches missed.">            } else if (branched.contains(member.name())) {</span>
-<span class="fc" id="L434">                String qualified = versionByName.get(member.name());</span>
-<span class="fc bfc" id="L435" title="All 2 branches covered.">                effect = (qualified != null)</span>
-                        ? &quot;cloned + branched &quot; + branchName
-<span class="fc" id="L437">                                + &quot; → &quot; + qualified</span>
+<span class="fc bfc" id="L436" title="All 2 branches covered.">                effect = (rootQualified != null)</span>
+<span class="fc" id="L437">                        ? &quot;cloned + branched &quot; + branchName + &quot; → &quot; + rootQualified</span>
 <span class="fc" id="L438">                        : &quot;cloned + branched &quot; + branchName;</span>
-<span class="fc" id="L439">            } else {</span>
-<span class="nc" id="L440">                effect = &quot;skipped (no repo URL)&quot;;</span>
-<span class="nc" id="L441">                rows.add(new WorkingSetReportTable.Row(member,</span>
+<span class="pc bpc" id="L439" title="1 of 2 branches missed.">            } else if (branched.contains(member.name())) {</span>
+<span class="fc" id="L440">                String qualified = versionByName.get(member.name());</span>
+<span class="fc bfc" id="L441" title="All 2 branches covered.">                effect = (qualified != null)</span>
+                        ? &quot;cloned + branched &quot; + branchName
+<span class="fc" id="L443">                                + &quot; → &quot; + qualified</span>
+<span class="fc" id="L444">                        : &quot;cloned + branched &quot; + branchName;</span>
+<span class="fc" id="L445">            } else {</span>
+<span class="nc" id="L446">                effect = &quot;skipped (no repo URL)&quot;;</span>
+<span class="nc" id="L447">                rows.add(new WorkingSetReportTable.Row(member,</span>
                         WorkingSetReportTable.NONE, WorkingSetReportTable.NONE,
                         WorkingSetReportTable.NONE, effect));
-<span class="nc" id="L444">                continue;</span>
+<span class="nc" id="L450">                continue;</span>
             }
-<span class="fc" id="L446">            rows.add(new WorkingSetReportTable.Row(member,</span>
-<span class="fc" id="L447">                    siblingVersion(dir), gitBranch(dir), gitShortSha(dir),</span>
+<span class="fc" id="L452">            rows.add(new WorkingSetReportTable.Row(member,</span>
+<span class="fc" id="L453">                    siblingVersion(dir), gitBranch(dir), gitShortSha(dir),</span>
                     effect));
-<span class="fc" id="L449">        }</span>
+<span class="fc" id="L455">        }</span>
 
-<span class="fc" id="L451">        return new WorkspaceReportSpec(reportGoal(),</span>
-<span class="fc" id="L452">                buildReport(siblingName, siblingRoot, branchName, base, rows,</span>
+<span class="fc" id="L457">        return new WorkspaceReportSpec(reportGoal(),</span>
+<span class="fc" id="L458">                buildReport(siblingName, siblingRoot, branchName, base, rows,</span>
                         verified));
     }
 
@@ -476,99 +482,99 @@ public class FeatureStartSiblingPublishMojo extends AbstractWorkspaceMojo {
             throws MojoException {
         // The single repo to fork is a working set of one (ike-issues#611) —
         // resolve it through the shared resolver, not user.dir directly.
-<span class="fc" id="L479">        WorkingSet workingSet = resolveWorkingSet();</span>
-<span class="fc" id="L480">        File repo = workingSet.members().getFirst().directory().toFile();</span>
-<span class="pc bpc" id="L481" title="1 of 2 branches missed.">        if (!new File(repo, &quot;.git&quot;).exists()) {</span>
-<span class="nc" id="L482">            throw new MojoException(</span>
+<span class="fc" id="L485">        WorkingSet workingSet = resolveWorkingSet();</span>
+<span class="fc" id="L486">        File repo = workingSet.members().getFirst().directory().toFile();</span>
+<span class="pc bpc" id="L487" title="1 of 2 branches missed.">        if (!new File(repo, &quot;.git&quot;).exists()) {</span>
+<span class="nc" id="L488">            throw new MojoException(</span>
                     &quot;ws:feature-start-sibling: &quot; + repo + &quot; is not a git repository &quot;
                     + &quot;and no workspace.yaml was found — run it inside a repo or a &quot;
                     + &quot;workspace.&quot;);
         }
-<span class="fc" id="L487">        File parent = repo.getParentFile();</span>
-<span class="pc bpc" id="L488" title="1 of 2 branches missed.">        if (parent == null) {</span>
-<span class="nc" id="L489">            throw new MojoException(</span>
+<span class="fc" id="L493">        File parent = repo.getParentFile();</span>
+<span class="pc bpc" id="L494" title="1 of 2 branches missed.">        if (parent == null) {</span>
+<span class="nc" id="L495">            throw new MojoException(</span>
                     &quot;Cannot resolve the parent of &quot; + repo
                     + &quot;; the sibling clone lives alongside it.&quot;);
         }
         // Base resolution + guard. With no manifest, the base branch is main.
-<span class="fc" id="L494">        String base = SiblingBaseResolution.resolveAndGuard(</span>
-<span class="fc" id="L495">                from, gitBranch(repo), &quot;main&quot;);</span>
+<span class="fc" id="L500">        String base = SiblingBaseResolution.resolveAndGuard(</span>
+<span class="fc" id="L501">                from, gitBranch(repo), &quot;main&quot;);</span>
 
-<span class="fc" id="L497">        String siblingName = featureName.siblingDirectoryName(workingSet.baseName());</span>
-<span class="fc" id="L498">        File siblingRoot = new File(parent, siblingName);</span>
-<span class="fc bfc" id="L499" title="All 2 branches covered.">        if (siblingRoot.exists()) {</span>
-<span class="fc" id="L500">            throw new MojoException(</span>
+<span class="fc" id="L503">        String siblingName = featureName.siblingDirectoryName(workingSet.baseName());</span>
+<span class="fc" id="L504">        File siblingRoot = new File(parent, siblingName);</span>
+<span class="fc bfc" id="L505" title="All 2 branches covered.">        if (siblingRoot.exists()) {</span>
+<span class="fc" id="L506">            throw new MojoException(</span>
                     &quot;Sibling '&quot; + siblingName + &quot;' already exists at &quot;
-<span class="fc" id="L502">                    + siblingRoot.getAbsolutePath()</span>
+<span class="fc" id="L508">                    + siblingRoot.getAbsolutePath()</span>
                     + &quot;. Remove it (rm -rf) or pick a different feature name.&quot;);
         }
 
-<span class="fc" id="L506">        getLog().info(&quot;&quot;);</span>
-<span class="fc" id="L507">        getLog().info(header(&quot;Feature Start (sibling)&quot;));</span>
-<span class="fc" id="L508">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
-<span class="fc" id="L509">        getLog().info(&quot;  Feature: &quot; + feature);</span>
-<span class="fc" id="L510">        getLog().info(&quot;  Branch:  &quot; + branchName);</span>
-<span class="fc" id="L511">        getLog().info(&quot;  Base:    &quot; + base);</span>
-<span class="fc" id="L512">        getLog().info(&quot;  Sibling: &quot; + siblingRoot.getAbsolutePath());</span>
-<span class="fc" id="L513">        getLog().info(&quot;  Mode:    single repo (no workspace.yaml)&quot;);</span>
-<span class="fc" id="L514">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L512">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L513">        getLog().info(header(&quot;Feature Start (sibling)&quot;));</span>
+<span class="fc" id="L514">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+<span class="fc" id="L515">        getLog().info(&quot;  Feature: &quot; + feature);</span>
+<span class="fc" id="L516">        getLog().info(&quot;  Branch:  &quot; + branchName);</span>
+<span class="fc" id="L517">        getLog().info(&quot;  Base:    &quot; + base);</span>
+<span class="fc" id="L518">        getLog().info(&quot;  Sibling: &quot; + siblingRoot.getAbsolutePath());</span>
+<span class="fc" id="L519">        getLog().info(&quot;  Mode:    single repo (no workspace.yaml)&quot;);</span>
+<span class="fc" id="L520">        getLog().info(&quot;&quot;);</span>
 
-<span class="fc" id="L516">        getLog().info(&quot;  Cloning &quot; + repo.getName() + &quot; → &quot; + siblingName);</span>
-<span class="fc" id="L517">        cloneOnFeatureBranch(parent, siblingName, repo, base, branchName);</span>
-<span class="fc" id="L518">        recordParentWorkspace(siblingRoot, repo);</span>
+<span class="fc" id="L522">        getLog().info(&quot;  Cloning &quot; + repo.getName() + &quot; → &quot; + siblingName);</span>
+<span class="fc" id="L523">        cloneOnFeatureBranch(parent, siblingName, repo, base, branchName);</span>
+<span class="fc" id="L524">        recordParentWorkspace(siblingRoot, repo);</span>
 
-<span class="fc" id="L520">        String qualified = &quot;—&quot;;</span>
-<span class="fc bfc" id="L521" title="All 2 branches covered.">        if (!skipVersion) {</span>
-<span class="fc" id="L522">            File pom = new File(siblingRoot, &quot;pom.xml&quot;);</span>
-<span class="fc" id="L523">            String effectiveVersion = null;</span>
-<span class="pc bpc" id="L524" title="1 of 2 branches missed.">            if (pom.exists()) {</span>
+<span class="fc" id="L526">        String qualified = &quot;—&quot;;</span>
+<span class="fc bfc" id="L527" title="All 2 branches covered.">        if (!skipVersion) {</span>
+<span class="fc" id="L528">            File pom = new File(siblingRoot, &quot;pom.xml&quot;);</span>
+<span class="fc" id="L529">            String effectiveVersion = null;</span>
+<span class="pc bpc" id="L530" title="1 of 2 branches missed.">            if (pom.exists()) {</span>
                 try {
-<span class="fc" id="L526">                    effectiveVersion = ReleaseSupport.readPomVersion(pom);</span>
-<span class="nc" id="L527">                } catch (MojoException e) {</span>
-<span class="nc" id="L528">                    getLog().debug(&quot;Could not read POM version: &quot; + e.getMessage());</span>
-<span class="fc" id="L529">                }</span>
+<span class="fc" id="L532">                    effectiveVersion = ReleaseSupport.readPomVersion(pom);</span>
+<span class="nc" id="L533">                } catch (MojoException e) {</span>
+<span class="nc" id="L534">                    getLog().debug(&quot;Could not read POM version: &quot; + e.getMessage());</span>
+<span class="fc" id="L535">                }</span>
             }
-<span class="pc bpc" id="L531" title="2 of 4 branches missed.">            if (effectiveVersion != null &amp;&amp; !effectiveVersion.isEmpty()) {</span>
-<span class="fc" id="L532">                String newVersion = VersionSupport.branchQualifiedVersion(</span>
+<span class="pc bpc" id="L537" title="2 of 4 branches missed.">            if (effectiveVersion != null &amp;&amp; !effectiveVersion.isEmpty()) {</span>
+<span class="fc" id="L538">                String newVersion = VersionSupport.branchQualifiedVersion(</span>
                         effectiveVersion, branchName);
-<span class="fc" id="L534">                qualified = newVersion;</span>
-<span class="fc" id="L535">                new FeatureStartSupport(getLog()).setPomVersion(</span>
+<span class="fc" id="L540">                qualified = newVersion;</span>
+<span class="fc" id="L541">                new FeatureStartSupport(getLog()).setPomVersion(</span>
                         siblingRoot, effectiveVersion, newVersion);
-<span class="fc" id="L537">                ReleaseSupport.exec(siblingRoot, getLog(), &quot;git&quot;, &quot;add&quot;, &quot;pom.xml&quot;);</span>
-<span class="fc" id="L538">                ReleaseSupport.exec(siblingRoot, getLog(), &quot;git&quot;, &quot;commit&quot;, &quot;-m&quot;,</span>
+<span class="fc" id="L543">                ReleaseSupport.exec(siblingRoot, getLog(), &quot;git&quot;, &quot;add&quot;, &quot;pom.xml&quot;);</span>
+<span class="fc" id="L544">                ReleaseSupport.exec(siblingRoot, getLog(), &quot;git&quot;, &quot;commit&quot;, &quot;-m&quot;,</span>
                         &quot;feature: set version &quot; + newVersion + &quot; for &quot; + branchName);
-<span class="fc" id="L540">                getLog().info(Ansi.green(&quot;  ✓ &quot;) + String.format(&quot;%-24s %s → %s&quot;,</span>
-<span class="fc" id="L541">                        repo.getName(), effectiveVersion, newVersion));</span>
+<span class="fc" id="L546">                getLog().info(Ansi.green(&quot;  ✓ &quot;) + String.format(&quot;%-24s %s → %s&quot;,</span>
+<span class="fc" id="L547">                        repo.getName(), effectiveVersion, newVersion));</span>
             }
         }
 
-<span class="fc" id="L545">        getLog().info(&quot;&quot;);</span>
-<span class="fc" id="L546">        getLog().info(Ansi.green(&quot;  ✓ &quot;) + &quot;Sibling ready: &quot;</span>
-<span class="fc" id="L547">                + siblingRoot.getAbsolutePath());</span>
-<span class="fc" id="L548">        getLog().info(&quot;    cd &quot; + siblingRoot.getAbsolutePath());</span>
-<span class="fc" id="L549">        getLog().info(&quot;    # work, then ws:commit-publish / ws:push; &quot;</span>
-                + &quot;rm -rf to discard&quot;);
 <span class="fc" id="L551">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L552">        getLog().info(Ansi.green(&quot;  ✓ &quot;) + &quot;Sibling ready: &quot;</span>
+<span class="fc" id="L553">                + siblingRoot.getAbsolutePath());</span>
+<span class="fc" id="L554">        getLog().info(&quot;    cd &quot; + siblingRoot.getAbsolutePath());</span>
+<span class="fc" id="L555">        getLog().info(&quot;    # work, then ws:commit-publish / ws:push; &quot;</span>
+                + &quot;rm -rf to discard&quot;);
+<span class="fc" id="L557">        getLog().info(&quot;&quot;);</span>
 
-<span class="fc" id="L553">        boolean verified = false;</span>
-<span class="fc bfc" id="L554" title="All 2 branches covered.">        if (shouldVerify()) {</span>
-<span class="fc" id="L555">            verifySibling(siblingRoot);</span>
-<span class="fc" id="L556">            verified = true;</span>
+<span class="fc" id="L559">        boolean verified = false;</span>
+<span class="fc bfc" id="L560" title="All 2 branches covered.">        if (shouldVerify()) {</span>
+<span class="fc" id="L561">            verifySibling(siblingRoot);</span>
+<span class="fc" id="L562">            verified = true;</span>
         }
 
         // Single-repo working set: one member (the repo, resolved as the
         // aggregator), mapped to its sibling clone. The aggregator is a row
         // here too, so a bare-mode report is shaped identically to the
         // workspace one (#763/#766).
-<span class="fc" id="L563">        WorkingSet.Member member = workingSet.members().getFirst();</span>
-<span class="fc bfc" id="L564" title="All 2 branches covered.">        String effect = !&quot;—&quot;.equals(qualified)</span>
-<span class="fc" id="L565">                ? &quot;cloned + branched &quot; + branchName + &quot; → &quot; + qualified</span>
-<span class="fc" id="L566">                : &quot;cloned + branched &quot; + branchName;</span>
-<span class="fc" id="L567">        List&lt;WorkingSetReportTable.Row&gt; rows = List.of(</span>
-<span class="fc" id="L568">                new WorkingSetReportTable.Row(member, siblingVersion(siblingRoot),</span>
-<span class="fc" id="L569">                        gitBranch(siblingRoot), gitShortSha(siblingRoot), effect));</span>
-<span class="fc" id="L570">        return new WorkspaceReportSpec(reportGoal(),</span>
-<span class="fc" id="L571">                buildReport(siblingName, siblingRoot, branchName, base, rows,</span>
+<span class="fc" id="L569">        WorkingSet.Member member = workingSet.members().getFirst();</span>
+<span class="fc bfc" id="L570" title="All 2 branches covered.">        String effect = !&quot;—&quot;.equals(qualified)</span>
+<span class="fc" id="L571">                ? &quot;cloned + branched &quot; + branchName + &quot; → &quot; + qualified</span>
+<span class="fc" id="L572">                : &quot;cloned + branched &quot; + branchName;</span>
+<span class="fc" id="L573">        List&lt;WorkingSetReportTable.Row&gt; rows = List.of(</span>
+<span class="fc" id="L574">                new WorkingSetReportTable.Row(member, siblingVersion(siblingRoot),</span>
+<span class="fc" id="L575">                        gitBranch(siblingRoot), gitShortSha(siblingRoot), effect));</span>
+<span class="fc" id="L576">        return new WorkspaceReportSpec(reportGoal(),</span>
+<span class="fc" id="L577">                buildReport(siblingName, siblingRoot, branchName, base, rows,</span>
                         verified));
     }
 
@@ -604,22 +610,22 @@ public class FeatureStartSiblingPublishMojo extends AbstractWorkspaceMojo {
     private void cloneOnFeatureBranch(File workDir, String targetName,
                                       File sourceDir, String baseBranch,
                                       String branchName) throws MojoException {
-<span class="pc bpc" id="L607" title="1 of 2 branches missed.">        if (!new File(sourceDir, &quot;.git&quot;).exists()) {</span>
-<span class="nc" id="L608">            throw new MojoException(</span>
+<span class="pc bpc" id="L613" title="1 of 2 branches missed.">        if (!new File(sourceDir, &quot;.git&quot;).exists()) {</span>
+<span class="nc" id="L614">            throw new MojoException(</span>
                     &quot;Cannot create sibling member '&quot; + targetName + &quot;': &quot;
-<span class="nc" id="L610">                    + sourceDir.getAbsolutePath() + &quot; has no git repository to &quot;</span>
+<span class="nc" id="L616">                    + sourceDir.getAbsolutePath() + &quot; has no git repository to &quot;</span>
                     + &quot;clone from, and the sibling chains through its local &quot;
                     + &quot;parent (ike-issues#992). Materialize the primary first, &quot;
                     + &quot;then re-run.&quot;);
         }
-<span class="fc" id="L615">        ReleaseSupport.exec(workDir, getLog(), &quot;git&quot;, &quot;clone&quot;,</span>
+<span class="fc" id="L621">        ReleaseSupport.exec(workDir, getLog(), &quot;git&quot;, &quot;clone&quot;,</span>
                 &quot;-c&quot;, &quot;core.fsmonitor=false&quot;,
                 &quot;-b&quot;, baseBranch,
-<span class="fc" id="L618">                sourceDir.getAbsolutePath(), targetName);</span>
+<span class="fc" id="L624">                sourceDir.getAbsolutePath(), targetName);</span>
 
-<span class="fc" id="L620">        File target = new File(workDir, targetName);</span>
-<span class="fc" id="L621">        ReleaseSupport.exec(target, getLog(), &quot;git&quot;, &quot;checkout&quot;, &quot;-b&quot;, branchName);</span>
-<span class="fc" id="L622">    }</span>
+<span class="fc" id="L626">        File target = new File(workDir, targetName);</span>
+<span class="fc" id="L627">        ReleaseSupport.exec(target, getLog(), &quot;git&quot;, &quot;checkout&quot;, &quot;-b&quot;, branchName);</span>
+<span class="fc" id="L628">    }</span>
 
     /**
      * Record the derived-from parent in the sibling's
@@ -644,56 +650,31 @@ public class FeatureStartSiblingPublishMojo extends AbstractWorkspaceMojo {
     private void recordParentWorkspace(File siblingRoot, File primaryRoot)
             throws MojoException {
         try {
-<span class="fc" id="L647">            Path ikeDir = siblingRoot.toPath().resolve(&quot;.ike&quot;);</span>
-<span class="fc" id="L648">            Files.createDirectories(ikeDir);</span>
-<span class="fc" id="L649">            Path relative = siblingRoot.toPath().toAbsolutePath().normalize()</span>
-<span class="fc" id="L650">                    .relativize(primaryRoot.toPath().toAbsolutePath().normalize());</span>
-<span class="fc" id="L651">            Files.writeString(ikeDir.resolve(&quot;parent-workspace&quot;),</span>
-<span class="fc" id="L652">                    relative + System.lineSeparator(), StandardCharsets.UTF_8);</span>
+<span class="fc" id="L653">            Path ikeDir = siblingRoot.toPath().resolve(&quot;.ike&quot;);</span>
+<span class="fc" id="L654">            Files.createDirectories(ikeDir);</span>
+<span class="fc" id="L655">            Path relative = siblingRoot.toPath().toAbsolutePath().normalize()</span>
+<span class="fc" id="L656">                    .relativize(primaryRoot.toPath().toAbsolutePath().normalize());</span>
+<span class="fc" id="L657">            Files.writeString(ikeDir.resolve(&quot;parent-workspace&quot;),</span>
+<span class="fc" id="L658">                    relative + System.lineSeparator(), StandardCharsets.UTF_8);</span>
 
-<span class="fc" id="L654">            Path exclude = siblingRoot.toPath().resolve(&quot;.git/info/exclude&quot;);</span>
-<span class="fc" id="L655">            Files.createDirectories(exclude.getParent());</span>
-<span class="fc" id="L656">            String line = &quot;.ike/parent-workspace&quot;;</span>
-<span class="pc bpc" id="L657" title="1 of 2 branches missed.">            String existing = Files.exists(exclude)</span>
-<span class="pc" id="L658">                    ? Files.readString(exclude, StandardCharsets.UTF_8) : &quot;&quot;;</span>
-<span class="pc bpc" id="L659" title="1 of 2 branches missed.">            if (existing.lines().noneMatch(l -&gt; l.trim().equals(line))) {</span>
-<span class="pc bpc" id="L660" title="2 of 4 branches missed.">                String separator = existing.isEmpty() || existing.endsWith(&quot;\n&quot;)</span>
-<span class="pc" id="L661">                        ? &quot;&quot; : &quot;\n&quot;;</span>
-<span class="fc" id="L662">                Files.writeString(exclude,</span>
+<span class="fc" id="L660">            Path exclude = siblingRoot.toPath().resolve(&quot;.git/info/exclude&quot;);</span>
+<span class="fc" id="L661">            Files.createDirectories(exclude.getParent());</span>
+<span class="fc" id="L662">            String line = &quot;.ike/parent-workspace&quot;;</span>
+<span class="pc bpc" id="L663" title="1 of 2 branches missed.">            String existing = Files.exists(exclude)</span>
+<span class="pc" id="L664">                    ? Files.readString(exclude, StandardCharsets.UTF_8) : &quot;&quot;;</span>
+<span class="pc bpc" id="L665" title="1 of 2 branches missed.">            if (existing.lines().noneMatch(l -&gt; l.trim().equals(line))) {</span>
+<span class="pc bpc" id="L666" title="2 of 4 branches missed.">                String separator = existing.isEmpty() || existing.endsWith(&quot;\n&quot;)</span>
+<span class="pc" id="L667">                        ? &quot;&quot; : &quot;\n&quot;;</span>
+<span class="fc" id="L668">                Files.writeString(exclude,</span>
                         existing + separator + line + &quot;\n&quot;,
                         StandardCharsets.UTF_8);
             }
-<span class="nc" id="L666">        } catch (IOException e) {</span>
-<span class="nc" id="L667">            throw new MojoException(</span>
+<span class="nc" id="L672">        } catch (IOException e) {</span>
+<span class="nc" id="L673">            throw new MojoException(</span>
                     &quot;Could not record the sibling's parent workspace: &quot;
-<span class="nc" id="L669">                    + e.getMessage(), e);</span>
-<span class="fc" id="L670">        }</span>
-<span class="fc" id="L671">    }</span>
-
-    /**
-     * Resolve a subproject's effective version: the {@code workspace.yaml}
-     * value first, falling back to the cloned POM's {@code &lt;version&gt;}.
-     *
-     * @param sub the subproject definition
-     * @param dir the subproject's directory in the sibling
-     * @return the effective version, or {@code null} if none can be resolved
-     */
-    private String effectiveVersion(Subproject sub, File dir) {
-<span class="fc" id="L682">        String version = sub.version();</span>
-<span class="pc bpc" id="L683" title="2 of 4 branches missed.">        if (version != null &amp;&amp; !version.isEmpty()) {</span>
-<span class="fc" id="L684">            return version;</span>
-        }
-<span class="nc" id="L686">        File pom = new File(dir, &quot;pom.xml&quot;);</span>
-<span class="nc bnc" id="L687" title="All 2 branches missed.">        if (pom.exists()) {</span>
-            try {
-<span class="nc" id="L689">                return ReleaseSupport.readPomVersion(pom);</span>
-<span class="nc" id="L690">            } catch (MojoException e) {</span>
-<span class="nc" id="L691">                getLog().debug(&quot;Could not read POM version for &quot; + sub.name()</span>
-<span class="nc" id="L692">                        + &quot;: &quot; + e.getMessage());</span>
-            }
-        }
-<span class="nc" id="L695">        return null;</span>
-    }
+<span class="nc" id="L675">                    + e.getMessage(), e);</span>
+<span class="fc" id="L676">        }</span>
+<span class="fc" id="L677">    }</span>
 
     /**
      * Read a sibling directory's POM {@code &lt;version&gt;}: the #763 fix when
@@ -705,18 +686,18 @@ public class FeatureStartSiblingPublishMojo extends AbstractWorkspaceMojo {
      *         is no readable {@code pom.xml}
      */
     private String siblingVersion(File dir) {
-<span class="fc" id="L708">        File pom = new File(dir, &quot;pom.xml&quot;);</span>
-<span class="pc bpc" id="L709" title="1 of 2 branches missed.">        if (!pom.exists()) {</span>
-<span class="nc" id="L710">            return WorkingSetReportTable.NONE;</span>
+<span class="fc" id="L689">        File pom = new File(dir, &quot;pom.xml&quot;);</span>
+<span class="pc bpc" id="L690" title="1 of 2 branches missed.">        if (!pom.exists()) {</span>
+<span class="nc" id="L691">            return WorkingSetReportTable.NONE;</span>
         }
         try {
-<span class="fc" id="L713">            String version = ReleaseSupport.readPomVersion(pom);</span>
-<span class="pc bpc" id="L714" title="2 of 4 branches missed.">            return (version == null || version.isEmpty())</span>
-<span class="pc" id="L715">                    ? WorkingSetReportTable.NONE : version;</span>
-<span class="nc" id="L716">        } catch (MojoException e) {</span>
-<span class="nc" id="L717">            getLog().debug(&quot;Could not read sibling POM version for &quot; + dir</span>
-<span class="nc" id="L718">                    + &quot;: &quot; + e.getMessage());</span>
-<span class="nc" id="L719">            return WorkingSetReportTable.NONE;</span>
+<span class="fc" id="L694">            String version = ReleaseSupport.readPomVersion(pom);</span>
+<span class="pc bpc" id="L695" title="2 of 4 branches missed.">            return (version == null || version.isEmpty())</span>
+<span class="pc" id="L696">                    ? WorkingSetReportTable.NONE : version;</span>
+<span class="nc" id="L697">        } catch (MojoException e) {</span>
+<span class="nc" id="L698">            getLog().debug(&quot;Could not read sibling POM version for &quot; + dir</span>
+<span class="nc" id="L699">                    + &quot;: &quot; + e.getMessage());</span>
+<span class="nc" id="L700">            return WorkingSetReportTable.NONE;</span>
         }
     }
 
@@ -743,54 +724,54 @@ public class FeatureStartSiblingPublishMojo extends AbstractWorkspaceMojo {
                                String branchName, String base,
                                List&lt;WorkingSetReportTable.Row&gt; rows,
                                boolean verified) {
-<span class="fc" id="L746">        GoalReportBuilder report = new GoalReportBuilder();</span>
-<span class="fc" id="L747">        report.paragraph(&quot;**Sibling:** `&quot; + siblingName + &quot;`&quot;)</span>
-<span class="fc" id="L748">                .paragraph(&quot;**Branch:** `&quot; + branchName + &quot;`&quot;)</span>
-<span class="fc" id="L749">                .paragraph(&quot;**Base:** `&quot; + base + &quot;`&quot;)</span>
-<span class="fc" id="L750">                .paragraph(&quot;**Location:** `&quot; + siblingRoot.getAbsolutePath() + &quot;`&quot;);</span>
+<span class="fc" id="L727">        GoalReportBuilder report = new GoalReportBuilder();</span>
+<span class="fc" id="L728">        report.paragraph(&quot;**Sibling:** `&quot; + siblingName + &quot;`&quot;)</span>
+<span class="fc" id="L729">                .paragraph(&quot;**Branch:** `&quot; + branchName + &quot;`&quot;)</span>
+<span class="fc" id="L730">                .paragraph(&quot;**Base:** `&quot; + base + &quot;`&quot;)</span>
+<span class="fc" id="L731">                .paragraph(&quot;**Location:** `&quot; + siblingRoot.getAbsolutePath() + &quot;`&quot;);</span>
 
-<span class="fc" id="L752">        WorkingSetReportTable.render(report, &quot;Working set&quot;, rows);</span>
+<span class="fc" id="L733">        WorkingSetReportTable.render(report, &quot;Working set&quot;, rows);</span>
 
-<span class="fc" id="L754">        report.paragraph(&quot;Each component is a clone of the primary's local &quot;</span>
+<span class="fc" id="L735">        report.paragraph(&quot;Each component is a clone of the primary's local &quot;</span>
                 + &quot;member on `&quot; + branchName + &quot;`, cut from `&quot; + base
                 + &quot;`; `origin` is the parent member, so the sibling chains &quot;
                 + &quot;sibling → parent → GitHub and finishes locally to the &quot;
                 + &quot;parent (ike-issues#992). The primary stays on its current &quot;
                 + &quot;branch.&quot;);
 
-<span class="fc bfc" id="L761" title="All 2 branches covered.">        if (verified) {</span>
-<span class="fc" id="L762">            report.paragraph(&quot;**Verified** — `&quot; + verifyGoals</span>
+<span class="fc bfc" id="L742" title="All 2 branches covered.">        if (verified) {</span>
+<span class="fc" id="L743">            report.paragraph(&quot;**Verified** — `&quot; + verifyGoals</span>
                     + &quot;` from the sibling root succeeded, so the reactor builds&quot;
-<span class="fc" id="L764">                    + &quot; and every `-&quot; + branchName.substring(&quot;feature/&quot;.length())</span>
+<span class="fc" id="L745">                    + &quot; and every `-&quot; + branchName.substring(&quot;feature/&quot;.length())</span>
                     + &quot;-SNAPSHOT` artifact is now installed in the local&quot;
                     + &quot; repository (a later `-pl … -am` or IDE build will resolve&quot;
                     + &quot; them).&quot;);
         }
 
-<span class="fc" id="L770">        report.paragraph(&quot;**No push** — clones and branches stay local.&quot;</span>
+<span class="fc" id="L751">        report.paragraph(&quot;**No push** — clones and branches stay local.&quot;</span>
                 + &quot; Next steps:&quot;);
         // The bootstrap build is the first step (#777): a sibling's
         // -&lt;feature&gt;-SNAPSHOT artifacts exist nowhere else, so a partial
         // (-pl … -am) or IDE build cannot resolve them until the whole reactor
         // has been installed once. When already verified this run, it is noted
         // as done but kept for re-running after later edits.
-<span class="fc bfc" id="L777" title="All 2 branches covered.">        String buildStep = verified</span>
-<span class="fc" id="L778">                ? &quot;./mvnw clean install -DskipTests   &quot;</span>
+<span class="fc bfc" id="L758" title="All 2 branches covered.">        String buildStep = verified</span>
+<span class="fc" id="L759">                ? &quot;./mvnw clean install -DskipTests   &quot;</span>
                         + &quot;# already run by verification — re-run after edits&quot;
                 : &quot;./mvnw clean install -DskipTests   &quot;
                         + &quot;# build the whole reactor first — a sibling's\n&quot;
                         + &quot;                                   &quot;
-<span class="fc" id="L783">                        + &quot;# -&quot; + branchName.substring(&quot;feature/&quot;.length())</span>
-<span class="fc" id="L784">                        + &quot;-SNAPSHOT artifacts exist nowhere else&quot;;</span>
-<span class="fc" id="L785">        report.paragraph(&quot;```bash\ncd &quot; + siblingRoot.getAbsolutePath()</span>
+<span class="fc" id="L764">                        + &quot;# -&quot; + branchName.substring(&quot;feature/&quot;.length())</span>
+<span class="fc" id="L765">                        + &quot;-SNAPSHOT artifacts exist nowhere else&quot;;</span>
+<span class="fc" id="L766">        report.paragraph(&quot;```bash\ncd &quot; + siblingRoot.getAbsolutePath()</span>
                 + &quot;\n&quot; + buildStep
                 + &quot;\n# then work, then:\nmvn ws:commit-publish -Dmessage=\&quot;…\&quot;\n&quot;
                 + &quot;mvn ws:push                       # publish the branch\n&quot;
                 + &quot;mvn ws:feature-finish-merge-publish -Dfeature=&quot;
-<span class="fc" id="L790">                + branchName.substring(&quot;feature/&quot;.length())</span>
-<span class="fc" id="L791">                + &quot;   # merge back\nrm -rf &quot; + siblingRoot.getAbsolutePath()</span>
+<span class="fc" id="L771">                + branchName.substring(&quot;feature/&quot;.length())</span>
+<span class="fc" id="L772">                + &quot;   # merge back\nrm -rf &quot; + siblingRoot.getAbsolutePath()</span>
                 + &quot;   # discard the sibling\n```&quot;);
-<span class="fc" id="L793">        return report.build();</span>
+<span class="fc" id="L774">        return report.build();</span>
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

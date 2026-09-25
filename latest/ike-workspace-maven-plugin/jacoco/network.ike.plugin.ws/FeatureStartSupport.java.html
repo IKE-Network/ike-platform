@@ -50,6 +50,83 @@ final class FeatureStartSupport {
 <span class="fc" id="L50">        this.log = log;</span>
 <span class="fc" id="L51">    }</span>
 
+    // ── Base-version resolution ──────────────────────────────────
+
+    /**
+     * Resolve a subproject's base version — the version feature-start
+     * branch-qualifies.
+     *
+     * &lt;p&gt;The subproject's own POM {@code &lt;version&gt;} is authoritative. The
+     * {@code workspace.yaml} {@code version:} is a checkpoint snapshot that
+     * lags every post-release bump (a subproject released at {@code 6}
+     * records {@code &quot;6&quot;} while its POM has moved to {@code 7-SNAPSHOT}),
+     * so it is only the fallback for a subproject with no readable POM
+     * (ike-issues#1135).
+     *
+     * @param sub the subproject definition
+     * @param dir the subproject's directory
+     * @return the base version, or {@code null} if neither the POM nor
+     *         {@code workspace.yaml} yields one
+     */
+    String effectiveVersion(Subproject sub, File dir) {
+<span class="fc" id="L72">        File pom = new File(dir, &quot;pom.xml&quot;);</span>
+<span class="pc bpc" id="L73" title="1 of 2 branches missed.">        if (pom.exists()) {</span>
+            try {
+<span class="fc" id="L75">                String pomVersion = ReleaseSupport.readPomVersion(pom);</span>
+<span class="pc bpc" id="L76" title="2 of 4 branches missed.">                if (pomVersion != null &amp;&amp; !pomVersion.isEmpty()) {</span>
+<span class="fc" id="L77">                    return pomVersion;</span>
+                }
+<span class="nc" id="L79">            } catch (MojoException e) {</span>
+<span class="nc" id="L80">                log.debug(&quot;Could not read POM version for &quot; + sub.name()</span>
+<span class="nc" id="L81">                        + &quot;: &quot; + e.getMessage());</span>
+<span class="nc" id="L82">            }</span>
+        }
+<span class="nc" id="L84">        String recorded = sub.version();</span>
+<span class="nc bnc" id="L85" title="All 4 branches missed.">        return (recorded == null || recorded.isEmpty()) ? null : recorded;</span>
+    }
+
+    /**
+     * Resolve the base version of each named subproject via
+     * {@link #effectiveVersion}. Callers resolve once, before any POM is
+     * qualified, and hand the result to the qualification loop and to all
+     * three cascades, so no cascade re-reads an already-qualified POM.
+     *
+     * @param graph the workspace dependency graph
+     * @param root  the working-set root holding the subproject directories
+     * @param names the subprojects to resolve
+     * @return subproject name → base version, in {@code names} order;
+     *         subprojects with no resolvable version are absent
+     */
+    Map&lt;String, String&gt; effectiveVersions(WorkspaceGraph graph, File root,
+                                          List&lt;String&gt; names) {
+<span class="fc" id="L102">        Map&lt;String, String&gt; versions = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc bfc" id="L103" title="All 2 branches covered.">        for (String name : names) {</span>
+<span class="fc" id="L104">            Subproject sub = graph.manifest().subprojects().get(name);</span>
+<span class="fc" id="L105">            String version = effectiveVersion(sub, new File(root, name));</span>
+<span class="pc bpc" id="L106" title="1 of 2 branches missed.">            if (version != null) {</span>
+<span class="fc" id="L107">                versions.put(name, version);</span>
+            }
+<span class="fc" id="L109">        }</span>
+<span class="fc" id="L110">        return versions;</span>
+    }
+
+    /**
+     * Branch-qualify every base version.
+     *
+     * @param baseVersions subproject name → base version
+     * @param branchName   the feature branch name
+     * @return subproject name → branch-qualified version
+     */
+    private static Map&lt;String, String&gt; qualifiedVersions(
+            Map&lt;String, String&gt; baseVersions, String branchName) {
+<span class="fc" id="L122">        Map&lt;String, String&gt; qualified = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc bfc" id="L123" title="All 2 branches covered.">        for (Map.Entry&lt;String, String&gt; entry : baseVersions.entrySet()) {</span>
+<span class="fc" id="L124">            qualified.put(entry.getKey(), VersionSupport.branchQualifiedVersion(</span>
+<span class="fc" id="L125">                    entry.getValue(), branchName));</span>
+<span class="fc" id="L126">        }</span>
+<span class="fc" id="L127">        return qualified;</span>
+    }
+
     // ── Version setting ──────────────────────────────────────────
 
     /**
@@ -63,43 +140,43 @@ final class FeatureStartSupport {
      */
     void setPomVersion(File dir, String oldVersion, String newVersion)
             throws MojoException {
-<span class="fc" id="L66">        File pom = new File(dir, &quot;pom.xml&quot;);</span>
-<span class="pc bpc" id="L67" title="1 of 2 branches missed.">        if (!pom.exists()) {</span>
-<span class="nc" id="L68">            log.warn(&quot;    No pom.xml found in &quot; + dir.getName());</span>
-<span class="nc" id="L69">            return;</span>
+<span class="fc" id="L143">        File pom = new File(dir, &quot;pom.xml&quot;);</span>
+<span class="pc bpc" id="L144" title="1 of 2 branches missed.">        if (!pom.exists()) {</span>
+<span class="nc" id="L145">            log.warn(&quot;    No pom.xml found in &quot; + dir.getName());</span>
+<span class="nc" id="L146">            return;</span>
         }
 
         // Set version in root POM
-<span class="fc" id="L73">        ReleaseSupport.setPomVersion(pom, oldVersion, newVersion);</span>
+<span class="fc" id="L150">        ReleaseSupport.setPomVersion(pom, oldVersion, newVersion);</span>
 
         // Also update any submodule POMs that reference the old version
         // in their &lt;parent&gt; block (for multi-module projects)
         try {
-<span class="fc" id="L78">            List&lt;File&gt; allPoms = ReleaseSupport.findPomFiles(dir);</span>
-<span class="fc bfc" id="L79" title="All 2 branches covered.">            for (File subPom : allPoms) {</span>
-<span class="fc bfc" id="L80" title="All 2 branches covered.">                if (subPom.equals(pom)) continue;</span>
+<span class="fc" id="L155">            List&lt;File&gt; allPoms = ReleaseSupport.findPomFiles(dir);</span>
+<span class="fc bfc" id="L156" title="All 2 branches covered.">            for (File subPom : allPoms) {</span>
+<span class="fc bfc" id="L157" title="All 2 branches covered.">                if (subPom.equals(pom)) continue;</span>
                 try {
-<span class="fc" id="L82">                    String content = Files.readString(</span>
-<span class="fc" id="L83">                            subPom.toPath(), StandardCharsets.UTF_8);</span>
-<span class="fc bfc" id="L84" title="All 2 branches covered.">                    if (content.contains(&quot;&lt;version&gt;&quot; + oldVersion + &quot;&lt;/version&gt;&quot;)) {</span>
-<span class="fc" id="L85">                        String updated = content.replace(</span>
+<span class="fc" id="L159">                    String content = Files.readString(</span>
+<span class="fc" id="L160">                            subPom.toPath(), StandardCharsets.UTF_8);</span>
+<span class="fc bfc" id="L161" title="All 2 branches covered.">                    if (content.contains(&quot;&lt;version&gt;&quot; + oldVersion + &quot;&lt;/version&gt;&quot;)) {</span>
+<span class="fc" id="L162">                        String updated = content.replace(</span>
                                 &quot;&lt;version&gt;&quot; + oldVersion + &quot;&lt;/version&gt;&quot;,
                                 &quot;&lt;version&gt;&quot; + newVersion + &quot;&lt;/version&gt;&quot;);
-<span class="fc" id="L88">                        Files.writeString(</span>
-<span class="fc" id="L89">                                subPom.toPath(), updated,</span>
+<span class="fc" id="L165">                        Files.writeString(</span>
+<span class="fc" id="L166">                                subPom.toPath(), updated,</span>
                                 StandardCharsets.UTF_8);
-<span class="fc" id="L91">                        String rel = dir.toPath().relativize(subPom.toPath()).toString();</span>
-<span class="fc" id="L92">                        log.info(&quot;    updated: &quot; + rel);</span>
-<span class="fc" id="L93">                        ReleaseSupport.exec(dir, log, &quot;git&quot;, &quot;add&quot;, rel);</span>
+<span class="fc" id="L168">                        String rel = dir.toPath().relativize(subPom.toPath()).toString();</span>
+<span class="fc" id="L169">                        log.info(&quot;    updated: &quot; + rel);</span>
+<span class="fc" id="L170">                        ReleaseSupport.exec(dir, log, &quot;git&quot;, &quot;add&quot;, rel);</span>
                     }
-<span class="nc" id="L95">                } catch (IOException e) {</span>
-<span class="nc" id="L96">                    log.warn(&quot;    Could not update &quot; + subPom + &quot;: &quot; + e.getMessage());</span>
-<span class="fc" id="L97">                }</span>
-<span class="fc" id="L98">            }</span>
-<span class="nc" id="L99">        } catch (MojoException e) {</span>
-<span class="nc" id="L100">            log.warn(&quot;    Could not scan for submodule POMs: &quot; + e.getMessage());</span>
-<span class="fc" id="L101">        }</span>
-<span class="fc" id="L102">    }</span>
+<span class="nc" id="L172">                } catch (IOException e) {</span>
+<span class="nc" id="L173">                    log.warn(&quot;    Could not update &quot; + subPom + &quot;: &quot; + e.getMessage());</span>
+<span class="fc" id="L174">                }</span>
+<span class="fc" id="L175">            }</span>
+<span class="nc" id="L176">        } catch (MojoException e) {</span>
+<span class="nc" id="L177">            log.warn(&quot;    Could not scan for submodule POMs: &quot; + e.getMessage());</span>
+<span class="fc" id="L178">        }</span>
+<span class="fc" id="L179">    }</span>
 
     /**
      * Commit the working tree's pending tracked changes in {@code dir}, or skip
@@ -125,15 +202,15 @@ final class FeatureStartSupport {
      * @throws MojoException if the commit itself fails
      */
     void commitIfStaged(File dir, String message) throws MojoException {
-<span class="fc" id="L128">        String pending = ReleaseSupport.execCapture(</span>
+<span class="fc" id="L205">        String pending = ReleaseSupport.execCapture(</span>
                 dir, &quot;git&quot;, &quot;status&quot;, &quot;--porcelain&quot;, &quot;--untracked-files=no&quot;);
-<span class="pc bpc" id="L130" title="1 of 4 branches missed.">        if (pending == null || pending.isBlank()) {</span>
-<span class="fc" id="L131">            log.info(&quot;    (nothing to commit in &quot; + dir.getName()</span>
+<span class="pc bpc" id="L207" title="1 of 4 branches missed.">        if (pending == null || pending.isBlank()) {</span>
+<span class="fc" id="L208">            log.info(&quot;    (nothing to commit in &quot; + dir.getName()</span>
                     + &quot; — skipped)&quot;);
-<span class="fc" id="L133">            return;</span>
+<span class="fc" id="L210">            return;</span>
         }
-<span class="fc" id="L135">        ReleaseSupport.exec(dir, log, &quot;git&quot;, &quot;commit&quot;, &quot;-a&quot;, &quot;-m&quot;, message);</span>
-<span class="fc" id="L136">    }</span>
+<span class="fc" id="L212">        ReleaseSupport.exec(dir, log, &quot;git&quot;, &quot;commit&quot;, &quot;-a&quot;, &quot;-m&quot;, message);</span>
+<span class="fc" id="L213">    }</span>
 
     // ── Version-property cascade (declared in workspace.yaml) ────
 
@@ -152,68 +229,64 @@ final class FeatureStartSupport {
      *
      * @param graph      the workspace dependency graph
      * @param root       workspace root directory
-     * @param sorted     subprojects in topological order
-     * @param branchName the feature branch name (e.g., {@code feature/foo})
+     * @param sorted       subprojects in topological order
+     * @param baseVersions subproject name → base version, resolved by
+     *                     {@link #effectiveVersions} before qualification
+     * @param branchName   the feature branch name (e.g., {@code feature/foo})
      * @throws MojoException if a per-subproject git operation fails
      */
     void cascadeVersionProperties(WorkspaceGraph graph, File root,
-                                  List&lt;String&gt; sorted, String branchName)
+                                  List&lt;String&gt; sorted,
+                                  Map&lt;String, String&gt; baseVersions,
+                                  String branchName)
             throws MojoException {
 
-        // Build map of upstream subproject → new branch-qualified version
-<span class="fc" id="L164">        Map&lt;String, String&gt; newVersions = new LinkedHashMap&lt;&gt;();</span>
-<span class="fc bfc" id="L165" title="All 2 branches covered.">        for (String name : sorted) {</span>
-<span class="fc" id="L166">            Subproject sub = graph.manifest().subprojects().get(name);</span>
-<span class="pc bpc" id="L167" title="2 of 4 branches missed.">            if (sub.version() != null &amp;&amp; !sub.version().isEmpty()) {</span>
-<span class="fc" id="L168">                newVersions.put(name, VersionSupport.branchQualifiedVersion(</span>
-<span class="fc" id="L169">                        sub.version(), branchName));</span>
-            }
-<span class="fc" id="L171">        }</span>
+<span class="fc" id="L244">        Map&lt;String, String&gt; newVersions = qualifiedVersions(baseVersions, branchName);</span>
 
         // For each subproject in topological order, update version-properties
         // that reference upstream subprojects
-<span class="fc bfc" id="L175" title="All 2 branches covered.">        for (String name : sorted) {</span>
-<span class="fc" id="L176">            Subproject sub = graph.manifest().subprojects().get(name);</span>
-<span class="fc" id="L177">            File dir = new File(root, name);</span>
-<span class="fc" id="L178">            File pomFile = new File(dir, &quot;pom.xml&quot;);</span>
-<span class="pc bpc" id="L179" title="1 of 2 branches missed.">            if (!pomFile.exists()) continue;</span>
+<span class="fc bfc" id="L248" title="All 2 branches covered.">        for (String name : sorted) {</span>
+<span class="fc" id="L249">            Subproject sub = graph.manifest().subprojects().get(name);</span>
+<span class="fc" id="L250">            File dir = new File(root, name);</span>
+<span class="fc" id="L251">            File pomFile = new File(dir, &quot;pom.xml&quot;);</span>
+<span class="pc bpc" id="L252" title="1 of 2 branches missed.">            if (!pomFile.exists()) continue;</span>
 
             try {
-<span class="fc" id="L182">                String content = Files.readString(</span>
-<span class="fc" id="L183">                        pomFile.toPath(), StandardCharsets.UTF_8);</span>
-<span class="fc" id="L184">                String original = content;</span>
+<span class="fc" id="L255">                String content = Files.readString(</span>
+<span class="fc" id="L256">                        pomFile.toPath(), StandardCharsets.UTF_8);</span>
+<span class="fc" id="L257">                String original = content;</span>
 
-<span class="fc bfc" id="L186" title="All 2 branches covered.">                for (Dependency dep : sub.dependsOn()) {</span>
-<span class="fc" id="L187">                    String upstreamName = dep.subproject();</span>
-<span class="pc bpc" id="L188" title="1 of 2 branches missed.">                    if (dep.versionProperty() == null) continue;</span>
-<span class="nc bnc" id="L189" title="All 2 branches missed.">                    if (!newVersions.containsKey(upstreamName)) continue;</span>
+<span class="fc bfc" id="L259" title="All 2 branches covered.">                for (Dependency dep : sub.dependsOn()) {</span>
+<span class="fc" id="L260">                    String upstreamName = dep.subproject();</span>
+<span class="pc bpc" id="L261" title="1 of 2 branches missed.">                    if (dep.versionProperty() == null) continue;</span>
+<span class="nc bnc" id="L262" title="All 2 branches missed.">                    if (!newVersions.containsKey(upstreamName)) continue;</span>
 
-<span class="nc" id="L191">                    String upstreamVersion = newVersions.get(upstreamName);</span>
-<span class="nc" id="L192">                    String before = content;</span>
-<span class="nc" id="L193">                    content = PomRewriter.updateProperty(</span>
-<span class="nc" id="L194">                            content, dep.versionProperty(), upstreamVersion);</span>
+<span class="nc" id="L264">                    String upstreamVersion = newVersions.get(upstreamName);</span>
+<span class="nc" id="L265">                    String before = content;</span>
+<span class="nc" id="L266">                    content = PomRewriter.updateProperty(</span>
+<span class="nc" id="L267">                            content, dep.versionProperty(), upstreamVersion);</span>
 
-<span class="nc bnc" id="L196" title="All 2 branches missed.">                    if (!content.equals(before)) {</span>
-<span class="nc" id="L197">                        log.info(&quot;    &quot; + name + &quot;: &quot; + dep.versionProperty()</span>
+<span class="nc bnc" id="L269" title="All 2 branches missed.">                    if (!content.equals(before)) {</span>
+<span class="nc" id="L270">                        log.info(&quot;    &quot; + name + &quot;: &quot; + dep.versionProperty()</span>
                                 + &quot; → &quot; + upstreamVersion
                                 + &quot; (from &quot; + upstreamName + &quot;)&quot;);
                     }
-<span class="nc" id="L201">                }</span>
+<span class="nc" id="L274">                }</span>
 
-<span class="pc bpc" id="L203" title="1 of 2 branches missed.">                if (!content.equals(original)) {</span>
-<span class="nc" id="L204">                    Files.writeString(</span>
-<span class="nc" id="L205">                            pomFile.toPath(), content,</span>
+<span class="pc bpc" id="L276" title="1 of 2 branches missed.">                if (!content.equals(original)) {</span>
+<span class="nc" id="L277">                    Files.writeString(</span>
+<span class="nc" id="L278">                            pomFile.toPath(), content,</span>
                             StandardCharsets.UTF_8);
-<span class="nc" id="L207">                    ReleaseSupport.exec(dir, log, &quot;git&quot;, &quot;add&quot;, &quot;pom.xml&quot;);</span>
-<span class="nc" id="L208">                    commitIfStaged(dir,</span>
+<span class="nc" id="L280">                    ReleaseSupport.exec(dir, log, &quot;git&quot;, &quot;add&quot;, &quot;pom.xml&quot;);</span>
+<span class="nc" id="L281">                    commitIfStaged(dir,</span>
                             &quot;feature: update dependency versions for &quot; + branchName);
                 }
-<span class="nc" id="L211">            } catch (IOException e) {</span>
-<span class="nc" id="L212">                log.warn(&quot;    Could not cascade version properties in &quot;</span>
-<span class="nc" id="L213">                        + name + &quot;: &quot; + e.getMessage());</span>
-<span class="fc" id="L214">            }</span>
-<span class="fc" id="L215">        }</span>
-<span class="fc" id="L216">    }</span>
+<span class="nc" id="L284">            } catch (IOException e) {</span>
+<span class="nc" id="L285">                log.warn(&quot;    Could not cascade version properties in &quot;</span>
+<span class="nc" id="L286">                        + name + &quot;: &quot; + e.getMessage());</span>
+<span class="fc" id="L287">            }</span>
+<span class="fc" id="L288">        }</span>
+<span class="fc" id="L289">    }</span>
 
     // ── BOM property cascade (by subproject name convention) ─────
 
@@ -232,74 +305,61 @@ final class FeatureStartSupport {
      *
      * @param graph      the workspace dependency graph
      * @param root       workspace root directory
-     * @param sorted     subprojects in topological order
-     * @param branchName the feature branch name
+     * @param sorted       subprojects in topological order
+     * @param baseVersions subproject name → base version, resolved by
+     *                     {@link #effectiveVersions} before qualification
+     * @param branchName   the feature branch name
      * @throws MojoException if a per-subproject git operation fails
      */
     void cascadeBomProperties(WorkspaceGraph graph, File root,
-                              List&lt;String&gt; sorted, String branchName)
+                              List&lt;String&gt; sorted,
+                              Map&lt;String, String&gt; baseVersions,
+                              String branchName)
             throws MojoException {
 
-        // Build map of subproject name → new branch-qualified version
-<span class="fc" id="L244">        Map&lt;String, String&gt; newVersions = new LinkedHashMap&lt;&gt;();</span>
-<span class="fc bfc" id="L245" title="All 2 branches covered.">        for (String name : sorted) {</span>
-<span class="fc" id="L246">            Subproject sub = graph.manifest().subprojects().get(name);</span>
-<span class="fc" id="L247">            String effectiveVersion = sub.version();</span>
-<span class="pc bpc" id="L248" title="2 of 4 branches missed.">            if (effectiveVersion == null || effectiveVersion.isEmpty()) {</span>
-<span class="nc" id="L249">                File pom = new File(new File(root, name), &quot;pom.xml&quot;);</span>
-<span class="nc bnc" id="L250" title="All 2 branches missed.">                if (pom.exists()) {</span>
-                    try {
-<span class="nc" id="L252">                        effectiveVersion = ReleaseSupport.readPomVersion(pom);</span>
-<span class="nc" id="L253">                    } catch (MojoException e) { /* skip */ }</span>
-                }
-            }
-<span class="pc bpc" id="L256" title="2 of 4 branches missed.">            if (effectiveVersion != null &amp;&amp; !effectiveVersion.isEmpty()) {</span>
-<span class="fc" id="L257">                newVersions.put(name, VersionSupport.branchQualifiedVersion(</span>
-                        effectiveVersion, branchName));
-            }
-<span class="fc" id="L260">        }</span>
+<span class="fc" id="L320">        Map&lt;String, String&gt; newVersions = qualifiedVersions(baseVersions, branchName);</span>
 
         // For each subproject, check its POM properties for references
         // to other workspace subprojects (e.g., &lt;tinkar-core.version&gt;)
-<span class="fc bfc" id="L264" title="All 2 branches covered.">        for (String name : sorted) {</span>
-<span class="fc" id="L265">            File dir = new File(root, name);</span>
-<span class="fc" id="L266">            File pomFile = new File(dir, &quot;pom.xml&quot;);</span>
-<span class="pc bpc" id="L267" title="1 of 2 branches missed.">            if (!pomFile.exists()) continue;</span>
+<span class="fc bfc" id="L324" title="All 2 branches covered.">        for (String name : sorted) {</span>
+<span class="fc" id="L325">            File dir = new File(root, name);</span>
+<span class="fc" id="L326">            File pomFile = new File(dir, &quot;pom.xml&quot;);</span>
+<span class="pc bpc" id="L327" title="1 of 2 branches missed.">            if (!pomFile.exists()) continue;</span>
 
             try {
-<span class="fc" id="L270">                String content = Files.readString(</span>
-<span class="fc" id="L271">                        pomFile.toPath(), StandardCharsets.UTF_8);</span>
-<span class="fc" id="L272">                String original = content;</span>
+<span class="fc" id="L330">                String content = Files.readString(</span>
+<span class="fc" id="L331">                        pomFile.toPath(), StandardCharsets.UTF_8);</span>
+<span class="fc" id="L332">                String original = content;</span>
 
-<span class="fc bfc" id="L274" title="All 2 branches covered.">                for (Map.Entry&lt;String, String&gt; vEntry : newVersions.entrySet()) {</span>
-<span class="fc" id="L275">                    String subName = vEntry.getKey();</span>
-<span class="fc bfc" id="L276" title="All 2 branches covered.">                    if (subName.equals(name)) continue;</span>
+<span class="fc bfc" id="L334" title="All 2 branches covered.">                for (Map.Entry&lt;String, String&gt; vEntry : newVersions.entrySet()) {</span>
+<span class="fc" id="L335">                    String subName = vEntry.getKey();</span>
+<span class="fc bfc" id="L336" title="All 2 branches covered.">                    if (subName.equals(name)) continue;</span>
 
-<span class="fc" id="L278">                    String propertyName = subName + &quot;.version&quot;;</span>
-<span class="fc" id="L279">                    String before = content;</span>
-<span class="fc" id="L280">                    content = PomRewriter.updateProperty(</span>
-<span class="fc" id="L281">                            content, propertyName, vEntry.getValue());</span>
+<span class="fc" id="L338">                    String propertyName = subName + &quot;.version&quot;;</span>
+<span class="fc" id="L339">                    String before = content;</span>
+<span class="fc" id="L340">                    content = PomRewriter.updateProperty(</span>
+<span class="fc" id="L341">                            content, propertyName, vEntry.getValue());</span>
 
-<span class="pc bpc" id="L283" title="1 of 2 branches missed.">                    if (!content.equals(before)) {</span>
-<span class="nc" id="L284">                        log.info(&quot;    &quot; + name + &quot;: &lt;&quot; + propertyName</span>
-<span class="nc" id="L285">                                + &quot;&gt; → &quot; + vEntry.getValue());</span>
+<span class="pc bpc" id="L343" title="1 of 2 branches missed.">                    if (!content.equals(before)) {</span>
+<span class="nc" id="L344">                        log.info(&quot;    &quot; + name + &quot;: &lt;&quot; + propertyName</span>
+<span class="nc" id="L345">                                + &quot;&gt; → &quot; + vEntry.getValue());</span>
                     }
-<span class="fc" id="L287">                }</span>
+<span class="fc" id="L347">                }</span>
 
-<span class="pc bpc" id="L289" title="1 of 2 branches missed.">                if (!content.equals(original)) {</span>
-<span class="nc" id="L290">                    Files.writeString(</span>
-<span class="nc" id="L291">                            pomFile.toPath(), content,</span>
+<span class="pc bpc" id="L349" title="1 of 2 branches missed.">                if (!content.equals(original)) {</span>
+<span class="nc" id="L350">                    Files.writeString(</span>
+<span class="nc" id="L351">                            pomFile.toPath(), content,</span>
                             StandardCharsets.UTF_8);
-<span class="nc" id="L293">                    ReleaseSupport.exec(dir, log, &quot;git&quot;, &quot;add&quot;, &quot;pom.xml&quot;);</span>
-<span class="nc" id="L294">                    commitIfStaged(dir,</span>
+<span class="nc" id="L353">                    ReleaseSupport.exec(dir, log, &quot;git&quot;, &quot;add&quot;, &quot;pom.xml&quot;);</span>
+<span class="nc" id="L354">                    commitIfStaged(dir,</span>
                             &quot;feature: update BOM properties for &quot; + branchName);
                 }
-<span class="nc" id="L297">            } catch (IOException e) {</span>
-<span class="nc" id="L298">                log.warn(&quot;    Could not cascade BOM properties in &quot;</span>
-<span class="nc" id="L299">                        + name + &quot;: &quot; + e.getMessage());</span>
-<span class="fc" id="L300">            }</span>
-<span class="fc" id="L301">        }</span>
-<span class="fc" id="L302">    }</span>
+<span class="nc" id="L357">            } catch (IOException e) {</span>
+<span class="nc" id="L358">                log.warn(&quot;    Could not cascade BOM properties in &quot;</span>
+<span class="nc" id="L359">                        + name + &quot;: &quot; + e.getMessage());</span>
+<span class="fc" id="L360">            }</span>
+<span class="fc" id="L361">        }</span>
+<span class="fc" id="L362">    }</span>
 
     // ── BOM-import cascade ───────────────────────────────────────
 
@@ -315,98 +375,86 @@ final class FeatureStartSupport {
      *
      * @param graph      the workspace dependency graph
      * @param root       workspace root directory
-     * @param sorted     subprojects in topological order
-     * @param branchName the feature branch name
+     * @param sorted       subprojects in topological order
+     * @param baseVersions subproject name → base version, resolved by
+     *                     {@link #effectiveVersions} before qualification
+     * @param branchName   the feature branch name
      * @throws MojoException if a per-subproject git operation fails
      */
     void cascadeBomImports(WorkspaceGraph graph, File root,
-                           List&lt;String&gt; sorted, String branchName)
+                           List&lt;String&gt; sorted,
+                           Map&lt;String, String&gt; baseVersions,
+                           String branchName)
             throws MojoException {
-        // Build published artifact sets and new version map
-<span class="fc" id="L326">        Map&lt;String, Set&lt;PublishedArtifactSet.Artifact&gt;&gt; workspaceArtifacts =</span>
+        // Build published artifact sets
+<span class="fc" id="L390">        Map&lt;String, Set&lt;PublishedArtifactSet.Artifact&gt;&gt; workspaceArtifacts =</span>
                 new LinkedHashMap&lt;&gt;();
-<span class="fc" id="L328">        Map&lt;String, String&gt; newVersions = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc" id="L392">        Map&lt;String, String&gt; newVersions = qualifiedVersions(baseVersions, branchName);</span>
 
-<span class="fc bfc" id="L330" title="All 2 branches covered.">        for (String name : sorted) {</span>
-<span class="fc" id="L331">            Subproject sub = graph.manifest().subprojects().get(name);</span>
-<span class="fc" id="L332">            Path subDir = root.toPath().resolve(name);</span>
+<span class="fc bfc" id="L394" title="All 2 branches covered.">        for (String name : sorted) {</span>
+<span class="fc" id="L395">            Path subDir = root.toPath().resolve(name);</span>
 
-<span class="pc bpc" id="L334" title="1 of 2 branches missed.">            if (Files.exists(subDir.resolve(&quot;pom.xml&quot;))) {</span>
+<span class="pc bpc" id="L397" title="1 of 2 branches missed.">            if (Files.exists(subDir.resolve(&quot;pom.xml&quot;))) {</span>
                 try {
-<span class="fc" id="L336">                    workspaceArtifacts.put(name,</span>
-<span class="fc" id="L337">                            PublishedArtifactSet.scan(subDir));</span>
-<span class="nc" id="L338">                } catch (IOException e) {</span>
+<span class="fc" id="L399">                    workspaceArtifacts.put(name,</span>
+<span class="fc" id="L400">                            PublishedArtifactSet.scan(subDir));</span>
+<span class="nc" id="L401">                } catch (IOException e) {</span>
                     // Skip
-<span class="fc" id="L340">                }</span>
+<span class="fc" id="L403">                }</span>
             }
-
-            // Resolve effective version (same logic as the branching loop)
-<span class="fc" id="L344">            String effectiveVersion = sub.version();</span>
-<span class="pc bpc" id="L345" title="2 of 4 branches missed.">            if (effectiveVersion == null || effectiveVersion.isEmpty()) {</span>
-<span class="nc" id="L346">                File pom = new File(new File(root, name), &quot;pom.xml&quot;);</span>
-<span class="nc bnc" id="L347" title="All 2 branches missed.">                if (pom.exists()) {</span>
-                    try {
-<span class="nc" id="L349">                        effectiveVersion = ReleaseSupport.readPomVersion(pom);</span>
-<span class="nc" id="L350">                    } catch (MojoException e) { /* skip */ }</span>
-                }
-            }
-<span class="pc bpc" id="L353" title="2 of 4 branches missed.">            if (effectiveVersion != null &amp;&amp; !effectiveVersion.isEmpty()) {</span>
-<span class="fc" id="L354">                newVersions.put(name, VersionSupport.branchQualifiedVersion(</span>
-                        effectiveVersion, branchName));
-            }
-<span class="fc" id="L357">        }</span>
+<span class="fc" id="L405">        }</span>
 
         // For each subproject in topological order, check if it imports
         // a BOM published by an upstream subproject that got a new version
-<span class="fc bfc" id="L361" title="All 2 branches covered.">        for (String name : sorted) {</span>
-<span class="fc" id="L362">            File dir = new File(root, name);</span>
-<span class="fc" id="L363">            Path pomPath = dir.toPath().resolve(&quot;pom.xml&quot;);</span>
+<span class="fc bfc" id="L409" title="All 2 branches covered.">        for (String name : sorted) {</span>
+<span class="fc" id="L410">            File dir = new File(root, name);</span>
+<span class="fc" id="L411">            Path pomPath = dir.toPath().resolve(&quot;pom.xml&quot;);</span>
 
-<span class="pc bpc" id="L365" title="1 of 2 branches missed.">            if (!Files.exists(pomPath)) continue;</span>
+<span class="pc bpc" id="L413" title="1 of 2 branches missed.">            if (!Files.exists(pomPath)) continue;</span>
 
             List&lt;BomAnalysis.BomImport&gt; bomImports;
             try {
-<span class="fc" id="L369">                bomImports = BomAnalysis.extractBomImports(</span>
+<span class="fc" id="L417">                bomImports = BomAnalysis.extractBomImports(</span>
                         pomPath, workspaceArtifacts);
-<span class="nc" id="L371">            } catch (IOException e) {</span>
-<span class="nc" id="L372">                continue;</span>
-<span class="fc" id="L373">            }</span>
+<span class="nc" id="L419">            } catch (IOException e) {</span>
+<span class="nc" id="L420">                continue;</span>
+<span class="fc" id="L421">            }</span>
 
-<span class="fc" id="L375">            boolean pomChanged = false;</span>
-<span class="pc bpc" id="L376" title="1 of 2 branches missed.">            for (BomAnalysis.BomImport bom : bomImports) {</span>
-<span class="nc bnc" id="L377" title="All 2 branches missed.">                if (!bom.isWorkspaceInternal()) continue;</span>
+<span class="fc" id="L423">            boolean pomChanged = false;</span>
+<span class="pc bpc" id="L424" title="1 of 2 branches missed.">            for (BomAnalysis.BomImport bom : bomImports) {</span>
+<span class="nc bnc" id="L425" title="All 2 branches missed.">                if (!bom.isWorkspaceInternal()) continue;</span>
 
-<span class="nc" id="L379">                String upstreamName = bom.publishingSubproject();</span>
-<span class="nc bnc" id="L380" title="All 2 branches missed.">                if (!newVersions.containsKey(upstreamName)) continue;</span>
+<span class="nc" id="L427">                String upstreamName = bom.publishingSubproject();</span>
+<span class="nc bnc" id="L428" title="All 2 branches missed.">                if (!newVersions.containsKey(upstreamName)) continue;</span>
 
-<span class="nc" id="L382">                String newVersion = newVersions.get(upstreamName);</span>
+<span class="nc" id="L430">                String newVersion = newVersions.get(upstreamName);</span>
                 try {
-<span class="nc" id="L384">                    boolean updated = BomAnalysis.updateBomImportVersion(</span>
-<span class="nc" id="L385">                            pomPath, bom.groupId(), bom.artifactId(), newVersion);</span>
-<span class="nc bnc" id="L386" title="All 2 branches missed.">                    if (updated) {</span>
-<span class="nc" id="L387">                        log.info(&quot;    &quot; + name + &quot;: BOM import &quot;</span>
-<span class="nc" id="L388">                                + bom.groupId() + &quot;:&quot; + bom.artifactId()</span>
+<span class="nc" id="L432">                    boolean updated = BomAnalysis.updateBomImportVersion(</span>
+<span class="nc" id="L433">                            pomPath, bom.groupId(), bom.artifactId(), newVersion);</span>
+<span class="nc bnc" id="L434" title="All 2 branches missed.">                    if (updated) {</span>
+<span class="nc" id="L435">                        log.info(&quot;    &quot; + name + &quot;: BOM import &quot;</span>
+<span class="nc" id="L436">                                + bom.groupId() + &quot;:&quot; + bom.artifactId()</span>
                                 + &quot; → &quot; + newVersion);
-<span class="nc" id="L390">                        pomChanged = true;</span>
+<span class="nc" id="L438">                        pomChanged = true;</span>
                     }
-<span class="nc" id="L392">                } catch (IOException e) {</span>
-<span class="nc" id="L393">                    log.warn(&quot;    Could not update BOM import in &quot;</span>
-<span class="nc" id="L394">                            + name + &quot;: &quot; + e.getMessage());</span>
-<span class="nc" id="L395">                }</span>
-<span class="nc" id="L396">            }</span>
+<span class="nc" id="L440">                } catch (IOException e) {</span>
+<span class="nc" id="L441">                    log.warn(&quot;    Could not update BOM import in &quot;</span>
+<span class="nc" id="L442">                            + name + &quot;: &quot; + e.getMessage());</span>
+<span class="nc" id="L443">                }</span>
+<span class="nc" id="L444">            }</span>
 
-<span class="pc bpc" id="L398" title="1 of 2 branches missed.">            if (pomChanged) {</span>
+<span class="pc bpc" id="L446" title="1 of 2 branches missed.">            if (pomChanged) {</span>
                 try {
-<span class="nc" id="L400">                    ReleaseSupport.exec(dir, log, &quot;git&quot;, &quot;add&quot;, &quot;pom.xml&quot;);</span>
-<span class="nc" id="L401">                    commitIfStaged(dir,</span>
+<span class="nc" id="L448">                    ReleaseSupport.exec(dir, log, &quot;git&quot;, &quot;add&quot;, &quot;pom.xml&quot;);</span>
+<span class="nc" id="L449">                    commitIfStaged(dir,</span>
                             &quot;feature: update BOM imports for &quot; + branchName);
-<span class="nc" id="L403">                } catch (MojoException e) {</span>
-<span class="nc" id="L404">                    log.warn(&quot;    Could not commit BOM update in &quot;</span>
-<span class="nc" id="L405">                            + name + &quot;: &quot; + e.getMessage());</span>
-<span class="nc" id="L406">                }</span>
+<span class="nc" id="L451">                } catch (MojoException e) {</span>
+<span class="nc" id="L452">                    log.warn(&quot;    Could not commit BOM update in &quot;</span>
+<span class="nc" id="L453">                            + name + &quot;: &quot; + e.getMessage());</span>
+<span class="nc" id="L454">                }</span>
             }
-<span class="fc" id="L408">        }</span>
-<span class="fc" id="L409">    }</span>
+<span class="fc" id="L456">        }</span>
+<span class="fc" id="L457">    }</span>
 
     // ── Shallow-clone unshallowing ───────────────────────────────
 
@@ -422,18 +470,18 @@ final class FeatureStartSupport {
     void ensureFullClone(File dir, String name)
             throws MojoException {
         try {
-<span class="fc" id="L425">            String isShallow = ReleaseSupport.execCapture(dir,</span>
+<span class="fc" id="L473">            String isShallow = ReleaseSupport.execCapture(dir,</span>
                     &quot;git&quot;, &quot;rev-parse&quot;, &quot;--is-shallow-repository&quot;);
-<span class="pc bpc" id="L427" title="1 of 2 branches missed.">            if (&quot;true&quot;.equals(isShallow.trim())) {</span>
-<span class="nc" id="L428">                log.info(&quot;    Fetching full history (shallow clone detected)...&quot;);</span>
-<span class="nc" id="L429">                ReleaseSupport.exec(dir, log,</span>
+<span class="pc bpc" id="L475" title="1 of 2 branches missed.">            if (&quot;true&quot;.equals(isShallow.trim())) {</span>
+<span class="nc" id="L476">                log.info(&quot;    Fetching full history (shallow clone detected)...&quot;);</span>
+<span class="nc" id="L477">                ReleaseSupport.exec(dir, log,</span>
                         &quot;git&quot;, &quot;fetch&quot;, &quot;--unshallow&quot;);
             }
-<span class="nc" id="L432">        } catch (MojoException e) {</span>
-<span class="nc" id="L433">            log.warn(&quot;    Could not check/unshallow &quot; + name</span>
-<span class="nc" id="L434">                    + &quot;: &quot; + e.getMessage());</span>
-<span class="fc" id="L435">        }</span>
-<span class="fc" id="L436">    }</span>
+<span class="nc" id="L480">        } catch (MojoException e) {</span>
+<span class="nc" id="L481">            log.warn(&quot;    Could not check/unshallow &quot; + name</span>
+<span class="nc" id="L482">                    + &quot;: &quot; + e.getMessage());</span>
+<span class="fc" id="L483">        }</span>
+<span class="fc" id="L484">    }</span>
 
     // ── Intra-reactor version pin removal ────────────────────────
 
@@ -455,79 +503,79 @@ final class FeatureStartSupport {
     void removeIntraReactorPins(File root, List&lt;String&gt; components,
                                 boolean publish)
             throws MojoException {
-<span class="fc bfc" id="L458" title="All 2 branches covered.">        for (String name : components) {</span>
-<span class="fc" id="L459">            File subDir = new File(root, name);</span>
-<span class="fc" id="L460">            File rootPom = new File(subDir, &quot;pom.xml&quot;);</span>
-<span class="pc bpc" id="L461" title="1 of 2 branches missed.">            if (!rootPom.exists()) continue;</span>
+<span class="fc bfc" id="L506" title="All 2 branches covered.">        for (String name : components) {</span>
+<span class="fc" id="L507">            File subDir = new File(root, name);</span>
+<span class="fc" id="L508">            File rootPom = new File(subDir, &quot;pom.xml&quot;);</span>
+<span class="pc bpc" id="L509" title="1 of 2 branches missed.">            if (!rootPom.exists()) continue;</span>
 
             try {
                 // Build the set of all reactor artifactIds by walking
                 // the subproject tree from the subproject root POM.
-<span class="fc" id="L466">                PomModel rootModel = PomModel.parse(rootPom.toPath());</span>
-<span class="fc" id="L467">                String reactorGroupId = rootModel.groupId();</span>
-<span class="fc" id="L468">                Set&lt;String&gt; reactorArtifacts = new LinkedHashSet&lt;&gt;();</span>
-<span class="fc" id="L469">                collectReactorArtifacts(subDir.toPath(), rootModel,</span>
+<span class="fc" id="L514">                PomModel rootModel = PomModel.parse(rootPom.toPath());</span>
+<span class="fc" id="L515">                String reactorGroupId = rootModel.groupId();</span>
+<span class="fc" id="L516">                Set&lt;String&gt; reactorArtifacts = new LinkedHashSet&lt;&gt;();</span>
+<span class="fc" id="L517">                collectReactorArtifacts(subDir.toPath(), rootModel,</span>
                         reactorArtifacts);
 
-<span class="fc bfc" id="L472" title="All 2 branches covered.">                if (reactorArtifacts.size() &lt;= 1) continue;  // no submodules</span>
+<span class="fc bfc" id="L520" title="All 2 branches covered.">                if (reactorArtifacts.size() &lt;= 1) continue;  // no submodules</span>
 
                 // Scan all POMs for pinned intra-reactor dependencies
-<span class="fc" id="L475">                List&lt;File&gt; allPoms = ReleaseSupport.findPomFiles(subDir);</span>
-<span class="fc" id="L476">                boolean anyChanged = false;</span>
+<span class="fc" id="L523">                List&lt;File&gt; allPoms = ReleaseSupport.findPomFiles(subDir);</span>
+<span class="fc" id="L524">                boolean anyChanged = false;</span>
 
-<span class="fc bfc" id="L478" title="All 2 branches covered.">                for (File pom : allPoms) {</span>
-<span class="fc" id="L479">                    PomModel model = PomModel.parse(pom.toPath());</span>
-<span class="fc" id="L480">                    String content = model.content();</span>
-<span class="fc" id="L481">                    String updated = content;</span>
+<span class="fc bfc" id="L526" title="All 2 branches covered.">                for (File pom : allPoms) {</span>
+<span class="fc" id="L527">                    PomModel model = PomModel.parse(pom.toPath());</span>
+<span class="fc" id="L528">                    String content = model.content();</span>
+<span class="fc" id="L529">                    String updated = content;</span>
 
-<span class="fc bfc" id="L483" title="All 2 branches covered.">                    for (org.apache.maven.api.model.Dependency dep : model.allDependencies()) {</span>
-<span class="fc" id="L484">                        String version = dep.getVersion();</span>
-<span class="pc bpc" id="L485" title="1 of 2 branches missed.">                        if (version == null) continue;</span>
+<span class="fc bfc" id="L531" title="All 2 branches covered.">                    for (org.apache.maven.api.model.Dependency dep : model.allDependencies()) {</span>
+<span class="fc" id="L532">                        String version = dep.getVersion();</span>
+<span class="pc bpc" id="L533" title="1 of 2 branches missed.">                        if (version == null) continue;</span>
 
                         // Check if this dependency is a reactor sibling
                         // — any explicit &lt;version&gt; is redundant, whether
                         // literal (&quot;1.0.0-SNAPSHOT&quot;) or property-based
                         // (&quot;${project.version}&quot;)
-<span class="fc" id="L491">                        String depGroupId = dep.getGroupId();</span>
-<span class="pc bpc" id="L492" title="1 of 2 branches missed.">                        if (depGroupId == null) depGroupId = reactorGroupId;</span>
-<span class="pc bpc" id="L493" title="1 of 2 branches missed.">                        if (!reactorArtifacts.contains(dep.getArtifactId())) continue;</span>
+<span class="fc" id="L539">                        String depGroupId = dep.getGroupId();</span>
+<span class="pc bpc" id="L540" title="1 of 2 branches missed.">                        if (depGroupId == null) depGroupId = reactorGroupId;</span>
+<span class="pc bpc" id="L541" title="1 of 2 branches missed.">                        if (!reactorArtifacts.contains(dep.getArtifactId())) continue;</span>
 
                         // Found an intra-reactor pin
-<span class="fc" id="L496">                        String relPath = subDir.toPath()</span>
-<span class="fc" id="L497">                                .relativize(pom.toPath()).toString();</span>
+<span class="fc" id="L544">                        String relPath = subDir.toPath()</span>
+<span class="fc" id="L545">                                .relativize(pom.toPath()).toString();</span>
 
-<span class="pc bpc" id="L499" title="1 of 2 branches missed.">                        if (publish) {</span>
-<span class="fc" id="L500">                            updated = PomModel.removeDependencyVersion(</span>
-<span class="fc" id="L501">                                    updated, depGroupId, dep.getArtifactId());</span>
-<span class="fc" id="L502">                            log.info(&quot;    removed intra-reactor pin &quot;</span>
-<span class="fc" id="L503">                                    + dep.getArtifactId() + &quot; &quot; + version</span>
+<span class="pc bpc" id="L547" title="1 of 2 branches missed.">                        if (publish) {</span>
+<span class="fc" id="L548">                            updated = PomModel.removeDependencyVersion(</span>
+<span class="fc" id="L549">                                    updated, depGroupId, dep.getArtifactId());</span>
+<span class="fc" id="L550">                            log.info(&quot;    removed intra-reactor pin &quot;</span>
+<span class="fc" id="L551">                                    + dep.getArtifactId() + &quot; &quot; + version</span>
                                     + &quot; from &quot; + relPath);
                         } else {
-<span class="nc" id="L506">                            log.info(&quot;  [draft] &quot; + name + &quot;/&quot; + relPath</span>
-<span class="nc" id="L507">                                    + &quot;: intra-reactor pin &quot; + dep.getArtifactId()</span>
+<span class="nc" id="L554">                            log.info(&quot;  [draft] &quot; + name + &quot;/&quot; + relPath</span>
+<span class="nc" id="L555">                                    + &quot;: intra-reactor pin &quot; + dep.getArtifactId()</span>
                                     + &quot; &quot; + version
                                     + &quot; would be removed (reactor resolves version)&quot;);
                         }
-<span class="fc" id="L511">                    }</span>
+<span class="fc" id="L559">                    }</span>
 
-<span class="pc bpc" id="L513" title="1 of 4 branches missed.">                    if (publish &amp;&amp; !updated.equals(content)) {</span>
-<span class="fc" id="L514">                        Files.writeString(pom.toPath(), updated,</span>
+<span class="pc bpc" id="L561" title="1 of 4 branches missed.">                    if (publish &amp;&amp; !updated.equals(content)) {</span>
+<span class="fc" id="L562">                        Files.writeString(pom.toPath(), updated,</span>
                                 StandardCharsets.UTF_8);
-<span class="fc" id="L516">                        anyChanged = true;</span>
+<span class="fc" id="L564">                        anyChanged = true;</span>
                     }
-<span class="fc" id="L518">                }</span>
+<span class="fc" id="L566">                }</span>
 
-<span class="pc bpc" id="L520" title="1 of 2 branches missed.">                if (anyChanged) {</span>
-<span class="fc" id="L521">                    ReleaseSupport.exec(subDir, log, &quot;git&quot;, &quot;add&quot;, &quot;-A&quot;);</span>
-<span class="fc" id="L522">                    commitIfStaged(subDir,</span>
+<span class="pc bpc" id="L568" title="1 of 2 branches missed.">                if (anyChanged) {</span>
+<span class="fc" id="L569">                    ReleaseSupport.exec(subDir, log, &quot;git&quot;, &quot;add&quot;, &quot;-A&quot;);</span>
+<span class="fc" id="L570">                    commitIfStaged(subDir,</span>
                             &quot;build: remove intra-reactor version pins&quot;);
                 }
-<span class="nc" id="L525">            } catch (IOException e) {</span>
-<span class="nc" id="L526">                log.warn(&quot;    Could not scan &quot; + name</span>
-<span class="nc" id="L527">                        + &quot; for intra-reactor pins: &quot; + e.getMessage());</span>
-<span class="fc" id="L528">            }</span>
-<span class="fc" id="L529">        }</span>
-<span class="fc" id="L530">    }</span>
+<span class="nc" id="L573">            } catch (IOException e) {</span>
+<span class="nc" id="L574">                log.warn(&quot;    Could not scan &quot; + name</span>
+<span class="nc" id="L575">                        + &quot; for intra-reactor pins: &quot; + e.getMessage());</span>
+<span class="fc" id="L576">            }</span>
+<span class="fc" id="L577">        }</span>
+<span class="fc" id="L578">    }</span>
 
     /**
      * Recursively collect all artifactIds in a reactor tree by walking
@@ -542,16 +590,16 @@ final class FeatureStartSupport {
                                          PomModel model,
                                          Set&lt;String&gt; reactorArtifacts)
             throws IOException {
-<span class="fc" id="L545">        reactorArtifacts.add(model.artifactId());</span>
+<span class="fc" id="L593">        reactorArtifacts.add(model.artifactId());</span>
 
-<span class="fc bfc" id="L547" title="All 2 branches covered.">        for (String sub : model.subprojects()) {</span>
-<span class="fc" id="L548">            Path subDir = baseDir.resolve(sub);</span>
-<span class="fc" id="L549">            Path subPom = subDir.resolve(&quot;pom.xml&quot;);</span>
-<span class="pc bpc" id="L550" title="1 of 2 branches missed.">            if (Files.exists(subPom)) {</span>
-<span class="fc" id="L551">                PomModel subModel = PomModel.parse(subPom);</span>
-<span class="fc" id="L552">                collectReactorArtifacts(subDir, subModel, reactorArtifacts);</span>
+<span class="fc bfc" id="L595" title="All 2 branches covered.">        for (String sub : model.subprojects()) {</span>
+<span class="fc" id="L596">            Path subDir = baseDir.resolve(sub);</span>
+<span class="fc" id="L597">            Path subPom = subDir.resolve(&quot;pom.xml&quot;);</span>
+<span class="pc bpc" id="L598" title="1 of 2 branches missed.">            if (Files.exists(subPom)) {</span>
+<span class="fc" id="L599">                PomModel subModel = PomModel.parse(subPom);</span>
+<span class="fc" id="L600">                collectReactorArtifacts(subDir, subModel, reactorArtifacts);</span>
             }
-<span class="fc" id="L554">        }</span>
-<span class="fc" id="L555">    }</span>
+<span class="fc" id="L602">        }</span>
+<span class="fc" id="L603">    }</span>
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

@@ -20,7 +20,7 @@ canonical_url: https://ike.network/ike-platform/plugins.html
 | org.apache.maven.plugins | [maven-site-plugin](https://maven.apache.org/plugins/maven-site-plugin/)[10] | 3.21.0 |
 | org.apache.maven.plugins | [maven-surefire-plugin](https://maven.apache.org/surefire/maven-surefire-plugin/)[11] | 3.5.5 |
 | org.cyclonedx | [cyclonedx-maven-plugin](https://github.com/CycloneDX/cyclonedx-maven-plugin)[12] | 2.9.0 |
-| org.jacoco | [jacoco-maven-plugin](https://www.jacoco.org/jacoco/trunk/doc/maven.html)[13] | 0.8.14 |
+| org.jacoco | [jacoco-maven-plugin](https://www.jacoco.org/jacoco/trunk/doc/maven.html)[13] | 0.8.15 |
 
 # Project Report Plugins
 
@@ -28,4 +28,4 @@ canonical_url: https://ike.network/ike-platform/plugins.html
 | --- | --- | --- |
 | org.apache.maven.plugins | [maven-javadoc-plugin](https://maven.apache.org/plugins/maven-javadoc-plugin/)[14] | 3.11.2 |
 | org.apache.maven.plugins | [maven-project-info-reports-plugin](https://maven.apache.org/plugins/maven-project-info-reports-plugin/)[15] | 3.9.0 |
-| org.jacoco | [jacoco-maven-plugin](https://www.jacoco.org/jacoco/trunk/doc/maven.html)[13] | 0.8.14 |
+| org.jacoco | [jacoco-maven-plugin](https://www.jacoco.org/jacoco/trunk/doc/maven.html)[13] | 0.8.15 |

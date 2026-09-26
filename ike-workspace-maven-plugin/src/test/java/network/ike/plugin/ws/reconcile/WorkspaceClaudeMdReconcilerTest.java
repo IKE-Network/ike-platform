@@ -125,7 +125,8 @@ class WorkspaceClaudeMdReconcilerTest {
     }
 
     private String expected() {
-        return SubprojectInitializer.generateWorkspaceClaudeMd(WS_NAME, graph());
+        return SubprojectInitializer.generateWorkspaceClaudeMd(WS_NAME, graph(),
+                SubprojectInitializer.declaredJavaVersion(tempDir.resolve("pom.xml").toFile()));
     }
 
     private WorkspaceGraph graph() {

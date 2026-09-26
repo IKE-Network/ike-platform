@@ -30,7 +30,7 @@ import java.util.List;
  * this reconciler's scope.
  *
  * <p>Source-of-truth lives in
- * {@link SubprojectInitializer#generateWorkspaceClaudeMd(String, network.ike.workspace.WorkspaceGraph)},
+ * {@link SubprojectInitializer#generateWorkspaceClaudeMd(String, network.ike.workspace.WorkspaceGraph, java.util.Optional)},
  * already static so this reconciler can call it without additional plumbing.
  *
  * <p>Opt-out: {@code -DupdateClaudeMd=false}. Useful when the user has
@@ -111,7 +111,8 @@ public class WorkspaceClaudeMdReconciler implements Reconciler {
 
     private static String generated(WorkspaceContext ctx) {
         return SubprojectInitializer.generateWorkspaceClaudeMd(
-                workspaceName(ctx), ctx.graph());
+                workspaceName(ctx), ctx.graph(),
+                SubprojectInitializer.declaredJavaVersion(new File(ctx.workspaceRoot(), "pom.xml")));
     }
 
     /**

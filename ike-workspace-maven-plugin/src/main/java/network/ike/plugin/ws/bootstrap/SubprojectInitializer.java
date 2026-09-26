@@ -1,5 +1,6 @@
 package network.ike.plugin.ws.bootstrap;
 
+import network.ike.plugin.PomRewriter;
 import network.ike.plugin.ReleaseSupport;
 import network.ike.plugin.ws.Ansi;
 import network.ike.plugin.ws.MavenWrapper;
@@ -20,6 +21,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * Walks the subprojects declared in {@code workspace.yaml} and ensures
@@ -564,7 +566,8 @@ public final class SubprojectInitializer {
     private void writeWorkspaceClaudeMd(Path wsRoot, WorkspaceGraph graph) {
         Path file = wsRoot.resolve("CLAUDE.md");
         try {
-            Files.writeString(file, generateWorkspaceClaudeMd(workspaceName, graph),
+            Files.writeString(file, generateWorkspaceClaudeMd(workspaceName, graph,
+                            declaredJavaVersion(new File(wsRoot.toFile(), "pom.xml"))),
                     StandardCharsets.UTF_8);
             log.info("  Updated CLAUDE.md");
         } catch (IOException e) {
@@ -574,7 +577,10 @@ public final class SubprojectInitializer {
 
     private void writeSubprojectClaudeMd(Path subprojectDir, Subproject subproject) {
         Path file = subprojectDir.resolve("CLAUDE.md");
-        String generated = generateComponentClaudeMd(subproject);
+        // The subproject's own java.version, else the workspace root's (#1147).
+        Optional<String> javaVersion = declaredJavaVersion(subprojectDir.resolve("pom.xml").toFile())
+                .or(() -> declaredJavaVersion(new File(root, "pom.xml")));
+        String generated = generateComponentClaudeMd(subproject, javaVersion);
         try {
             String existing = Files.exists(file)
                     ? Files.readString(file, StandardCharsets.UTF_8) : null;
@@ -678,9 +684,12 @@ public final class SubprojectInitializer {
      * @param graph  the loaded workspace graph (unused in the body but
      *               kept so future per-subproject summaries can be
      *               threaded through without an API break)
+     * @param javaVersion the workspace's {@code java.version}, shown in the
+     *                    enable-preview line; empty omits the number (#1147)
      * @return the markdown content
      */
-    public static String generateWorkspaceClaudeMd(String wsName, WorkspaceGraph graph) {
+    public static String generateWorkspaceClaudeMd(String wsName, WorkspaceGraph graph,
+                                                   Optional<String> javaVersion) {
         StringBuilder sb = new StringBuilder();
         sb.append("# ").append(wsName).append("\n\n");
 
@@ -701,7 +710,7 @@ public final class SubprojectInitializer {
 
                 - Maven 4 with POM modelVersion 4.1.0
                 - `<subprojects>` (not `<modules>`) for aggregation
-                - All projects use `--enable-preview` (Java 25)
+                - All projects use `--enable-preview`{java}
                 - Parent: `network.ike.platform:ike-parent` (from ike-platform)
 
                 ## Prohibited Patterns
@@ -724,7 +733,7 @@ public final class SubprojectInitializer {
 
                 ## Project-Specific Notes
 
-                """);
+                """.replace("{java}", javaSuffix(javaVersion)));
 
         sb.append("See `WS-REFERENCE.md` for complete workspace goal documentation.\n");
         sb.append("See `CLAUDE-").append(wsName)
@@ -738,10 +747,13 @@ public final class SubprojectInitializer {
      * Generate {@code CLAUDE.md} for a subproject directory. Static for
      * testability.
      *
-     * @param subproject the subproject definition
+     * @param subproject  the subproject definition
+     * @param javaVersion the subproject's {@code java.version}, shown in the
+     *                    enable-preview line; empty omits the number (#1147)
      * @return the markdown content
      */
-    public static String generateComponentClaudeMd(Subproject subproject) {
+    public static String generateComponentClaudeMd(Subproject subproject,
+                                                   Optional<String> javaVersion) {
         StringBuilder sb = new StringBuilder();
         sb.append("# ").append(subproject.name()).append("\n\n");
 
@@ -770,7 +782,7 @@ public final class SubprojectInitializer {
         if (subproject.version() != null) {
             sb.append("- Version: `").append(subproject.version()).append("`\n");
         }
-        sb.append("- Uses `--enable-preview` (Java 25)\n");
+        sb.append("- Uses `--enable-preview`").append(javaSuffix(javaVersion)).append("\n");
         sb.append("- BOM: imports `dev.ikm.ike:ike-bom` for dependency version management\n");
 
         sb.append("""
@@ -789,6 +801,42 @@ public final class SubprojectInitializer {
                 .append(".md` for project-specific notes.\n");
 
         return sb.toString();
+    }
+
+    /**
+     * Returns the {@code java.version} a POM declares in its {@code <properties>}
+     * (#1147). Empty when the POM is missing or unreadable, does not declare it
+     * (it may inherit from {@code ike-parent}, which this raw read cannot see), or
+     * declares it as an unresolved expression such as {@code ${...}}.
+     *
+     * @param pom the POM file
+     * @return the declared Java version, if any
+     */
+    public static Optional<String> declaredJavaVersion(File pom) {
+        if (pom == null || !pom.isFile()) {
+            return Optional.empty();
+        }
+        try {
+            String value = PomRewriter.listProperties(Files.readString(pom.toPath(), StandardCharsets.UTF_8))
+                    .get("java.version");
+            if (value == null || value.isBlank() || value.contains("${")) {
+                return Optional.empty();
+            }
+            return Optional.of(value.strip());
+        } catch (IOException | RuntimeException e) {
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * The {@code " (Java N)"} suffix for the generated enable-preview line, or
+     * nothing when the version is unknown — better silent than wrong.
+     *
+     * @param javaVersion the Java version, if known
+     * @return the suffix, possibly empty
+     */
+    static String javaSuffix(Optional<String> javaVersion) {
+        return javaVersion.map(v -> " (Java " + v + ")").orElse("");
     }
 
     /**

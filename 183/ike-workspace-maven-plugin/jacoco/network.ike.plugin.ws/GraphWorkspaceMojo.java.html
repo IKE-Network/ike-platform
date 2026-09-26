@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>GraphWorkspaceMojo.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">GraphWorkspaceMojo.java</span></div><h1>GraphWorkspaceMojo.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.workspace.Subproject;
+import network.ike.workspace.Dependency;
+import network.ike.workspace.WorkspaceGraph;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
+
+import java.util.List;
+
+/**
+ * Print the workspace dependency graph.
+ *
+ * &lt;p&gt;Displays all subprojects in topological order with their
+ * dependencies. Optionally outputs DOT format for Graphviz rendering.
+ *
+ * &lt;pre&gt;{@code
+ * mvn ike:graph
+ * mvn ike:graph -Dformat=dot
+ * }&lt;/pre&gt;
+ */
+@Mojo(name = &quot;graph&quot;, projectRequired = false, aggregator = true)
+public class GraphWorkspaceMojo extends AbstractWorkspaceMojo {
+
+    /**
+     * Output format: &quot;text&quot; (default) or &quot;dot&quot; (Graphviz DOT).
+     */
+    @Parameter(property = &quot;format&quot;, defaultValue = &quot;text&quot;)
+    String format;
+
+    /** Creates this goal instance. */
+<span class="fc" id="L33">    public GraphWorkspaceMojo() {}</span>
+
+    @Override
+    protected WorkspaceReportSpec runGoal() throws MojoException {
+<span class="fc" id="L37">        WorkspaceGraph graph = loadGraph();</span>
+
+<span class="fc bfc" id="L39" title="All 2 branches covered.">        if (&quot;dot&quot;.equalsIgnoreCase(format)) {</span>
+<span class="fc" id="L40">            printDot(graph);</span>
+        } else {
+<span class="fc" id="L42">            printText(graph);</span>
+        }
+
+        // Append the GraphViz dependency graph to the report.
+        // IKE-DIAGRAMS.md mandates GraphViz for dependency graphs;
+        // Mermaid is discouraged (IKE-Network/ike-issues#406).
+<span class="fc" id="L48">        return new WorkspaceReportSpec(WsGoal.GRAPH,</span>
+<span class="fc" id="L49">                DotGraphSupport.buildDotReportBlock(graph));</span>
+    }
+
+    private void printText(WorkspaceGraph graph) {
+<span class="fc" id="L53">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L54">        getLog().info(header(&quot;Dependency Graph&quot;));</span>
+<span class="fc" id="L55">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+<span class="fc" id="L56">        getLog().info(&quot;&quot;);</span>
+
+<span class="fc" id="L58">        List&lt;String&gt; sorted = graph.topologicalSort();</span>
+
+<span class="fc bfc" id="L60" title="All 2 branches covered.">        for (int i = 0; i &lt; sorted.size(); i++) {</span>
+<span class="fc" id="L61">            String name = sorted.get(i);</span>
+<span class="fc" id="L62">            Subproject sub = graph.manifest().subprojects().get(name);</span>
+
+<span class="fc" id="L64">            getLog().info(String.format(&quot;  %2d. %s&quot;, i + 1, name));</span>
+
+<span class="fc bfc" id="L66" title="All 2 branches covered.">            if (!sub.dependsOn().isEmpty()) {</span>
+<span class="fc bfc" id="L67" title="All 2 branches covered.">                for (int j = 0; j &lt; sub.dependsOn().size(); j++) {</span>
+<span class="fc" id="L68">                    Dependency dep = sub.dependsOn().get(j);</span>
+<span class="pc bpc" id="L69" title="1 of 2 branches missed.">                    boolean last = (j == sub.dependsOn().size() - 1);</span>
+<span class="pc bpc" id="L70" title="1 of 2 branches missed.">                    String connector = last ? &quot;└─&quot; : &quot;├─&quot;;</span>
+<span class="fc" id="L71">                    getLog().info(String.format(&quot;        %s %s (%s)&quot;,</span>
+<span class="fc" id="L72">                            connector, dep.subproject(), dep.relationship()));</span>
+                    // Show transitive dependencies
+<span class="fc" id="L74">                    Subproject depComp = graph.manifest().subprojects()</span>
+<span class="fc" id="L75">                            .get(dep.subproject());</span>
+<span class="pc bpc" id="L76" title="1 of 4 branches missed.">                    if (depComp != null &amp;&amp; !depComp.dependsOn().isEmpty()) {</span>
+<span class="pc bpc" id="L77" title="1 of 2 branches missed.">                        String prefix = last ? &quot;           &quot; : &quot;        │  &quot;;</span>
+<span class="fc" id="L78">                        printTransitiveDeps(graph, depComp, prefix, name);</span>
+                    }
+                }
+            }
+        }
+
+<span class="fc" id="L84">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L85">        getLog().info(&quot;  &quot; + sorted.size() + &quot; components in dependency order.&quot;);</span>
+<span class="fc" id="L86">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L87">    }</span>
+
+    /**
+     * Recursively print transitive dependencies with tree indentation.
+     *
+     * @param graph   the workspace graph
+     * @param sub    the subproject whose dependencies to print
+     * @param prefix  indentation prefix for this level
+     * @param root    the root subproject name (to prevent cycles)
+     */
+    private void printTransitiveDeps(WorkspaceGraph graph, Subproject sub,
+                                      String prefix, String root) {
+<span class="fc bfc" id="L99" title="All 2 branches covered.">        for (int i = 0; i &lt; sub.dependsOn().size(); i++) {</span>
+<span class="fc" id="L100">            Dependency dep = sub.dependsOn().get(i);</span>
+            // Prevent infinite recursion if there's a cycle
+<span class="pc bpc" id="L102" title="1 of 2 branches missed.">            if (dep.subproject().equals(root)) continue;</span>
+
+<span class="pc bpc" id="L104" title="1 of 2 branches missed.">            boolean last = (i == sub.dependsOn().size() - 1);</span>
+<span class="pc bpc" id="L105" title="1 of 2 branches missed.">            String connector = last ? &quot;└─&quot; : &quot;├─&quot;;</span>
+<span class="fc" id="L106">            getLog().info(String.format(&quot;%s%s %s (%s)&quot;,</span>
+<span class="fc" id="L107">                    prefix, connector, dep.subproject(), dep.relationship()));</span>
+
+<span class="fc" id="L109">            Subproject depComp = graph.manifest().subprojects()</span>
+<span class="fc" id="L110">                    .get(dep.subproject());</span>
+<span class="pc bpc" id="L111" title="2 of 4 branches missed.">            if (depComp != null &amp;&amp; !depComp.dependsOn().isEmpty()) {</span>
+<span class="nc bnc" id="L112" title="All 2 branches missed.">                String childPrefix = prefix + (last ? &quot;   &quot; : &quot;│  &quot;);</span>
+<span class="nc" id="L113">                printTransitiveDeps(graph, depComp, childPrefix, root);</span>
+            }
+        }
+<span class="fc" id="L116">    }</span>
+
+    private void printDot(WorkspaceGraph graph) {
+        for (String line
+<span class="fc bfc" id="L120" title="All 2 branches covered.">                : DotGraphSupport.dotFromGraph(graph).split(&quot;\n&quot;)) {</span>
+<span class="fc" id="L121">            getLog().info(line);</span>
+        }
+<span class="fc" id="L123">    }</span>
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

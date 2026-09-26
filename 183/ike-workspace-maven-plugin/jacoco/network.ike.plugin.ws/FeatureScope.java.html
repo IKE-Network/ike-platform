@@ -1,0 +1,164 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>FeatureScope.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">FeatureScope.java</span></div><h1>FeatureScope.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.plugin.ws.vcs.VcsOperations;
+import org.apache.maven.api.plugin.MojoException;
+
+import java.io.File;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Optional;
+import java.util.Set;
+
+/**
+ * Shared scope resolution for the feature-branch goals that operate on a
+ * named subset of the workspace — {@link FeatureTrackDraftMojo},
+ * {@link FeaturePrDraftMojo}, and {@code ws:push}'s {@code -Dfeature}
+ * filter.
+ *
+ * &lt;p&gt;Extracted rather than duplicated because these goals form a pipeline
+ * (track → push → PR) that must agree exactly on which subprojects are in
+ * scope; a divergence would open PRs for a different set than was pushed.
+ * {@link FeatureStartDraftMojo} keeps its own private copy of the
+ * {@code --affected} parsing, which predates this class.
+ */
+final class FeatureScope {
+
+    private FeatureScope() {}
+
+    /**
+     * Resolve a comma-separated {@code --affected} list into a concrete
+     * subset of subproject names, preserving the order given.
+     *
+     * &lt;p&gt;Returns {@code known} unchanged when unset. Blank tokens are
+     * discarded so a trailing comma doesn't trip the goal. An unknown name
+     * fails the goal naming the offender — silently dropping it would
+     * produce a narrower operation than the caller asked for, which is
+     * worse than stopping.
+     *
+     * @param affected the raw parameter value, may be {@code null}
+     * @param known    every subproject declared in {@code workspace.yaml}
+     * @return the resolved subset, never empty
+     * @throws MojoException on an unknown name, or when the value resolves
+     *                       to nothing
+     */
+    static Set&lt;String&gt; resolveAffected(String affected, Set&lt;String&gt; known) {
+<span class="fc bfc" id="L45" title="All 4 branches covered.">        if (affected == null || affected.isBlank()) {</span>
+<span class="fc" id="L46">            return known;</span>
+        }
+<span class="fc" id="L48">        Set&lt;String&gt; selected = new LinkedHashSet&lt;&gt;();</span>
+<span class="fc bfc" id="L49" title="All 2 branches covered.">        for (String raw : affected.split(&quot;,&quot;)) {</span>
+<span class="fc" id="L50">            String name = raw.trim();</span>
+<span class="fc bfc" id="L51" title="All 2 branches covered.">            if (name.isEmpty()) {</span>
+<span class="fc" id="L52">                continue;</span>
+            }
+<span class="fc bfc" id="L54" title="All 2 branches covered.">            if (!known.contains(name)) {</span>
+<span class="fc" id="L55">                throw new MojoException(</span>
+                        &quot;Unknown subproject in --affected: '&quot; + name
+                        + &quot;'. Known subprojects: &quot; + known);
+            }
+<span class="fc" id="L59">            selected.add(name);</span>
+        }
+<span class="fc bfc" id="L61" title="All 2 branches covered.">        if (selected.isEmpty()) {</span>
+<span class="fc" id="L62">            throw new MojoException(</span>
+                    &quot;--affected was set but resolved to an empty subset; &quot;
+                    + &quot;supply at least one subproject name or omit the &quot;
+                    + &quot;parameter.&quot;);
+        }
+<span class="fc" id="L67">        return selected;</span>
+    }
+
+    /**
+     * The {@code feature/}-prefixed branch name for a bare feature name.
+     *
+     * @param feature the name without prefix
+     * @return the full branch name
+     */
+    static String branchFor(String feature) {
+<span class="fc" id="L77">        return &quot;feature/&quot; + feature;</span>
+    }
+
+    /**
+     * Derive an {@code owner/repo} slug from a repository's remote URL,
+     * handling both SSH ({@code git@github.com:owner/repo.git}) and HTTPS
+     * ({@code https://github.com/owner/repo.git}) forms.
+     *
+     * &lt;p&gt;Needed because {@code gh} is invoked with an explicit
+     * {@code --repo}: relying on {@code gh}'s own cwd detection would make
+     * the goal's behavior depend on which subproject directory the process
+     * happened to be in.
+     *
+     * @param dir    the repository root directory
+     * @param remote the remote name
+     * @return the slug, or empty when the remote is absent or not GitHub
+     */
+    static Optional&lt;String&gt; githubSlug(File dir, String remote) {
+<span class="fc" id="L95">        return VcsOperations.remoteUrl(dir, remote)</span>
+<span class="fc" id="L96">                .flatMap(url -&gt; githubSlug(url.trim()));</span>
+    }
+
+    /**
+     * Derive an {@code owner/repo} slug from a remote URL.
+     *
+     * &lt;p&gt;Recognizes URL remotes
+     * ({@code scheme://[user@]host/owner/repo(.git)}) and scp-style remotes
+     * ({@code [user@]host:owner/repo(.git)}), including the
+     * {@code github.com-&lt;account&gt;} SSH host aliases multi-account setups use
+     * (#916).
+     *
+     * &lt;p&gt;The host is matched &lt;em&gt;exactly&lt;/em&gt; (or as a {@code github.com-}
+     * alias) rather than by substring: a URL whose host merely contains
+     * {@code github.com} — {@code notgithub.com.example/owner/repo} — is not
+     * GitHub, and accepting it would hand a bogus value to
+     * {@code gh --repo}, addressing a repository nobody asked for.
+     *
+     * &lt;p&gt;This is the canonical parser;
+     * {@link WsScaffoldInitMojo#parseGitHubOrg} delegates to it for the org
+     * segment alone.
+     *
+     * @param url the trimmed remote URL
+     * @return the {@code owner/repo} slug, or empty when the URL is not a
+     *         recognized GitHub form
+     */
+    static Optional&lt;String&gt; githubSlug(String url) {
+<span class="fc bfc" id="L123" title="All 4 branches covered.">        if (url == null || url.isEmpty()) {</span>
+<span class="fc" id="L124">            return Optional.empty();</span>
+        }
+        String authority;
+        String path;
+<span class="fc" id="L128">        int schemeIdx = url.indexOf(&quot;://&quot;);</span>
+<span class="fc bfc" id="L129" title="All 2 branches covered.">        if (schemeIdx &gt;= 0) {</span>
+<span class="fc" id="L130">            String rest = url.substring(schemeIdx + 3);</span>
+<span class="fc" id="L131">            int slash = rest.indexOf('/');</span>
+<span class="pc bpc" id="L132" title="1 of 2 branches missed.">            if (slash &lt; 0) {</span>
+<span class="nc" id="L133">                return Optional.empty();</span>
+            }
+<span class="fc" id="L135">            authority = rest.substring(0, slash);</span>
+<span class="fc" id="L136">            path = rest.substring(slash + 1);</span>
+<span class="fc" id="L137">        } else {</span>
+<span class="fc" id="L138">            int colon = url.indexOf(':');</span>
+<span class="fc bfc" id="L139" title="All 2 branches covered.">            if (colon &lt; 0) {</span>
+<span class="fc" id="L140">                return Optional.empty();</span>
+            }
+<span class="fc" id="L142">            authority = url.substring(0, colon);</span>
+<span class="fc" id="L143">            path = url.substring(colon + 1);</span>
+        }
+<span class="fc" id="L145">        int at = authority.indexOf('@');</span>
+<span class="fc bfc" id="L146" title="All 2 branches covered.">        String host = at &gt;= 0 ? authority.substring(at + 1) : authority;</span>
+<span class="fc bfc" id="L147" title="All 4 branches covered.">        if (!host.equals(&quot;github.com&quot;) &amp;&amp; !host.startsWith(&quot;github.com-&quot;)) {</span>
+<span class="fc" id="L148">            return Optional.empty();</span>
+        }
+<span class="fc bfc" id="L150" title="All 2 branches covered.">        if (path.endsWith(&quot;.git&quot;)) {</span>
+<span class="fc" id="L151">            path = path.substring(0, path.length() - &quot;.git&quot;.length());</span>
+        }
+<span class="fc" id="L153">        path = path.replaceAll(&quot;/+$&quot;, &quot;&quot;);</span>
+        // Exactly owner/repo. A deeper or shorter path must not be
+        // truncated into a plausible-looking slug.
+<span class="fc" id="L156">        List&lt;String&gt; parts = List.of(path.split(&quot;/&quot;));</span>
+<span class="pc bpc" id="L157" title="1 of 4 branches missed.">        if (parts.size() != 2 || parts.get(0).isBlank()</span>
+<span class="pc bpc" id="L158" title="1 of 2 branches missed.">                || parts.get(1).isBlank()) {</span>
+<span class="fc" id="L159">            return Optional.empty();</span>
+        }
+<span class="fc" id="L161">        return Optional.of(parts.get(0) + &quot;/&quot; + parts.get(1));</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

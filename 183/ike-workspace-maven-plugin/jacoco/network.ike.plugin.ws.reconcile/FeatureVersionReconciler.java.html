@@ -1,0 +1,176 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>FeatureVersionReconciler.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws.reconcile</a> &gt; <span class="el_source">FeatureVersionReconciler.java</span></div><h1>FeatureVersionReconciler.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws.reconcile;
+
+import network.ike.plugin.ReleaseSupport;
+import network.ike.plugin.ws.QualificationCascade;
+import network.ike.plugin.ws.WsGoal;
+import network.ike.workspace.ManifestWriter;
+import network.ike.workspace.Subproject;
+import network.ike.workspace.VersionSupport;
+import org.apache.maven.api.plugin.MojoException;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Reconciler that branch-qualifies each subproject's &lt;em&gt;own&lt;/em&gt; Maven
+ * version to match the branch it tracks (IKE-Network/ike-issues#574).
+ *
+ * &lt;p&gt;On a feature branch every subproject's version must carry the
+ * branch slug ({@code &lt;base&gt;-&lt;slug&gt;-SNAPSHOT}) so feature builds are
+ * isolated from main SNAPSHOTs. {@code ws:feature-start} applies this
+ * once, at branch-creation; a subproject added &lt;em&gt;later&lt;/em&gt; (via
+ * {@code ws:add}) — or otherwise left un-qualified — stays un-isolated
+ * and its feature build collides with its own main SNAPSHOT. This
+ * reconciler self-heals that on {@code scaffold-publish}.
+ *
+ * &lt;p&gt;Scope is each subproject's own version across its &lt;em&gt;whole module
+ * tree&lt;/em&gt; — the root POM's {@code &lt;version&gt;}, every child's in-tree
+ * {@code &lt;parent&gt;&lt;version&gt;}, and any child's redundant own
+ * {@code &lt;version&gt;} (IKE-Network/ike-issues#1051, via
+ * {@link QualificationCascade}) — plus the denormalized {@code version}
+ * field in {@code workspace.yaml}. Detection likewise sees a tree whose
+ * root is already qualified but whose children were left at the base
+ * version, the state a root-only read could not see (#1051).
+ * Propagating the new version into &lt;em&gt;consumers'&lt;/em&gt; dependency
+ * references is left to {@link AlignmentReconciler}, which runs after
+ * this one in {@link ReconcilerRegistry}.
+ *
+ * &lt;p&gt;The target branch is read from the manifest ({@code branch:} per
+ * subproject), not git, so the reconciler is deterministic and
+ * branch-coherent. It is a no-op for {@code main}-tracking subprojects
+ * and for members already qualified —
+ * {@link VersionSupport#branchQualifiedVersion} strips any existing slug
+ * before re-applying, so repeated runs converge.
+ */
+<span class="fc" id="L51">public class FeatureVersionReconciler implements Reconciler {</span>
+
+    @Override
+    public String dimension() {
+<span class="fc" id="L55">        return &quot;Feature-branch version qualification&quot;;</span>
+    }
+
+    @Override
+    public String optOutFlag() {
+<span class="fc" id="L60">        return &quot;updateFeatureVersions&quot;;</span>
+    }
+
+    @Override
+    public DriftReport detect(WorkspaceContext ctx) {
+<span class="fc" id="L65">        List&lt;Change&gt; changes = computeChanges(ctx);</span>
+<span class="fc bfc" id="L66" title="All 2 branches covered.">        if (changes.isEmpty()) {</span>
+<span class="fc" id="L67">            return DriftReport.noDrift(dimension());</span>
+        }
+<span class="fc" id="L69">        List&lt;String&gt; detail = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L70" title="All 2 branches covered.">        for (Change c : changes) {</span>
+<span class="fc" id="L71">            detail.add(c.name() + &quot;: &quot; + c.before() + &quot; → &quot; + c.after()</span>
+<span class="fc" id="L72">                    + &quot; (&quot; + c.branch() + &quot;)&quot;);</span>
+<span class="fc" id="L73">        }</span>
+<span class="fc" id="L74">        String summary = changes.size()</span>
+                + &quot; subproject version(s) not branch-qualified&quot;;
+<span class="fc" id="L76">        String action = &quot;qualify each to its branch slug on scaffold-publish&quot;;</span>
+<span class="fc" id="L77">        String optOut = &quot;mvn &quot; + WsGoal.SCAFFOLD_PUBLISH.qualified()</span>
+<span class="fc" id="L78">                + &quot; -D&quot; + optOutFlag() + &quot;=false&quot;;</span>
+<span class="fc" id="L79">        return new DriftReport(dimension(), true, summary, detail,</span>
+                action, optOut);
+    }
+
+    @Override
+    public void apply(WorkspaceContext ctx) {
+<span class="pc bpc" id="L85" title="1 of 2 branches missed.">        if (ctx.options().isOptedOut(optOutFlag())) {</span>
+<span class="nc" id="L86">            ctx.log().info(&quot;  &quot; + dimension() + &quot;: skipped (opted out via -D&quot;</span>
+<span class="nc" id="L87">                    + optOutFlag() + &quot;=false)&quot;);</span>
+<span class="nc" id="L88">            return;</span>
+        }
+<span class="fc" id="L90">        List&lt;Change&gt; changes = computeChanges(ctx);</span>
+<span class="fc bfc" id="L91" title="All 2 branches covered.">        if (changes.isEmpty()) {</span>
+<span class="fc" id="L92">            return;</span>
+        }
+        try {
+            // Rewrite each subproject's own POM &lt;version&gt;, then mirror the
+            // new value into workspace.yaml's denormalized version field in
+            // a single pass (FieldNormalizationReconciler runs *before* this
+            // one, so it won't re-sync the manifest from the rewritten POM).
+<span class="fc" id="L99">            Path manifestPath = ctx.manifestPath();</span>
+<span class="fc" id="L100">            String yaml = Files.readString(manifestPath, StandardCharsets.UTF_8);</span>
+<span class="fc bfc" id="L101" title="All 2 branches covered.">            for (Change c : changes) {</span>
+<span class="fc" id="L102">                File dir = new File(ctx.workspaceRoot(), c.name());</span>
+<span class="fc" id="L103">                QualificationCascade.apply(dir.toPath(), c.before(),</span>
+<span class="fc" id="L104">                        c.after(), ctx.log());</span>
+<span class="fc" id="L105">                yaml = ManifestWriter.updateSubprojectField(</span>
+<span class="fc" id="L106">                        yaml, c.name(), &quot;version&quot;, c.after());</span>
+<span class="fc" id="L107">            }</span>
+<span class="fc" id="L108">            Files.writeString(manifestPath, yaml, StandardCharsets.UTF_8);</span>
+<span class="fc" id="L109">            ctx.log().info(&quot;  &quot; + dimension() + &quot;: qualified &quot;</span>
+<span class="fc" id="L110">                    + changes.size() + &quot; subproject version(s)&quot;);</span>
+<span class="nc" id="L111">        } catch (IOException e) {</span>
+<span class="nc" id="L112">            throw new MojoException(</span>
+<span class="nc" id="L113">                    &quot;Feature-version qualification failed: &quot; + e.getMessage(), e);</span>
+<span class="fc" id="L114">        }</span>
+<span class="fc" id="L115">    }</span>
+
+    // ── Change computation (shared by detect and apply) ─────────────
+
+    /**
+     * One subproject's version qualification.
+     *
+     * @param name   the subproject name
+     * @param branch the branch it tracks (from the manifest)
+     * @param before its current POM version
+     * @param after  the branch-qualified version
+     */
+<span class="fc" id="L127">    private record Change(String name, String branch,</span>
+                          String before, String after) {}
+
+    private List&lt;Change&gt; computeChanges(WorkspaceContext ctx) {
+<span class="fc" id="L131">        List&lt;Change&gt; changes = new ArrayList&lt;&gt;();</span>
+        for (Map.Entry&lt;String, Subproject&gt; entry
+<span class="fc bfc" id="L133" title="All 2 branches covered.">                : ctx.graph().manifest().subprojects().entrySet()) {</span>
+<span class="fc" id="L134">            String name = entry.getKey();</span>
+<span class="fc" id="L135">            String branch = entry.getValue().branch();</span>
+            // Only feature branches qualify; main keeps the plain version.
+<span class="pc bpc" id="L137" title="2 of 6 branches missed.">            if (branch == null || branch.isBlank() || &quot;main&quot;.equals(branch)) {</span>
+<span class="fc" id="L138">                continue;</span>
+            }
+<span class="fc" id="L140">            File pom = new File(new File(ctx.workspaceRoot(), name), &quot;pom.xml&quot;);</span>
+<span class="pc bpc" id="L141" title="1 of 2 branches missed.">            if (!pom.exists()) {</span>
+<span class="nc" id="L142">                continue;</span>
+            }
+            String current;
+            try {
+<span class="fc" id="L146">                current = ReleaseSupport.readPomVersion(pom);</span>
+<span class="nc" id="L147">            } catch (MojoException e) {</span>
+<span class="nc" id="L148">                ctx.log().warn(&quot;  &quot; + name + &quot;: cannot read version — &quot;</span>
+<span class="nc" id="L149">                        + e.getMessage());</span>
+<span class="nc" id="L150">                continue;</span>
+<span class="fc" id="L151">            }</span>
+<span class="pc bpc" id="L152" title="2 of 4 branches missed.">            if (current == null || current.isBlank()) {</span>
+<span class="nc" id="L153">                continue;</span>
+            }
+<span class="fc" id="L155">            String qualified =</span>
+<span class="fc" id="L156">                    VersionSupport.branchQualifiedVersion(current, branch);</span>
+<span class="fc bfc" id="L157" title="All 2 branches covered.">            if (!qualified.equals(current)) {</span>
+<span class="fc" id="L158">                changes.add(new Change(name, branch, current, qualified));</span>
+<span class="fc" id="L159">                continue;</span>
+            }
+            // Root already qualified — the children may still be at the
+            // base version if qualification ran before it cascaded
+            // (#1051). Detect through the tree, not the root alone.
+<span class="fc" id="L164">            String base = VersionSupport.extractNumericBase(</span>
+<span class="fc" id="L165">                    VersionSupport.stripSnapshot(current)) + &quot;-SNAPSHOT&quot;;</span>
+<span class="pc bpc" id="L166" title="1 of 4 branches missed.">            if (!base.equals(current) &amp;&amp; QualificationCascade.hasStaleTree(</span>
+<span class="fc" id="L167">                    new File(ctx.workspaceRoot(), name).toPath(), base,</span>
+<span class="fc" id="L168">                    ctx.log())) {</span>
+<span class="fc" id="L169">                changes.add(new Change(name, branch, base, current));</span>
+            }
+<span class="fc" id="L171">        }</span>
+<span class="fc" id="L172">        return changes;</span>
+    }
+
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

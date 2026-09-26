@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>SiblingListMojo.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws</a> &gt; <span class="el_source">SiblingListMojo.java</span></div><h1>SiblingListMojo.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws;
+
+import network.ike.plugin.support.GoalReportBuilder;
+import network.ike.workspace.WorkingSet;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+
+import java.io.File;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * List the primary's sibling working sets — first-class, scriptable
+ * visibility for what {@code ls} and eyeballing used to answer
+ * (IKE-Network/ike-issues#599).
+ *
+ * &lt;p&gt;Read-only: no fetch ever touches the network (origins that are
+ * remote URLs — the legacy shape — are assessed against their last-fetched
+ * refs and flagged), nothing acquires a lease, nothing mutates. Each
+ * sibling row carries what matters when deciding its fate:
+ * &lt;ul&gt;
+ *   &lt;li&gt;the actual branch, flagged when it is not
+ *       {@code feature/&lt;suffix&gt;};&lt;/li&gt;
+ *   &lt;li&gt;member count, bare members called out — a bare tree is
+ *       unverifiable and dies silently with a removal;&lt;/li&gt;
+ *   &lt;li&gt;uncommitted paths, &lt;b&gt;stashes&lt;/b&gt; (the one thing no upstream
+ *       comparison reveals), and unlanded branches (squash-aware: a
+ *       branch whose tree equals an origin tip's tree has landed);&lt;/li&gt;
+ *   &lt;li&gt;origin conformance — local parent ✓, or the legacy remote-remote
+ *       shape awaiting repair (IKE-Network/ike-issues#992, #1057);&lt;/li&gt;
+ *   &lt;li&gt;the lease line, when this machine runs the lease protocol.&lt;/li&gt;
+ * &lt;/ul&gt;
+ *
+ * &lt;pre&gt;{@code mvn ws:sibling-list}&lt;/pre&gt;
+ *
+ * @see SiblingRemoveDraftMojo for the removal preview these rows feed
+ */
+@Mojo(name = &quot;sibling-list&quot;, projectRequired = false, aggregator = true)
+public class SiblingListMojo extends AbstractWorkspaceMojo {
+
+    /** Creates this goal instance. */
+<span class="fc" id="L42">    public SiblingListMojo() {}</span>
+
+    @Override
+    protected WorkspaceReportSpec runGoal() throws MojoException {
+<span class="fc" id="L46">        WorkingSet workingSet = resolveWorkingSet();</span>
+<span class="fc" id="L47">        String baseName = workingSet.baseName();</span>
+<span class="pc bpc" id="L48" title="1 of 2 branches missed.">        File primaryRoot = isWorkspaceMode()</span>
+<span class="fc" id="L49">                ? workspaceRoot()</span>
+<span class="pc" id="L50">                : workingSet.members().getFirst().directory().toFile();</span>
+
+<span class="fc" id="L52">        List&lt;SiblingInventory.Sibling&gt; siblings =</span>
+<span class="fc" id="L53">                SiblingInventory.discover(primaryRoot, baseName);</span>
+
+<span class="fc" id="L55">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L56">        getLog().info(header(&quot;Sibling List&quot;));</span>
+<span class="fc" id="L57">        getLog().info(&quot;══════════════════════════════════════════════════════════════&quot;);</span>
+<span class="fc" id="L58">        getLog().info(&quot;  Primary:  &quot; + primaryRoot.getAbsolutePath());</span>
+<span class="fc" id="L59">        getLog().info(&quot;  Siblings: &quot; + siblings.size());</span>
+<span class="fc" id="L60">        getLog().info(&quot;&quot;);</span>
+
+<span class="fc" id="L62">        List&lt;String[]&gt; rows = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L63" title="All 2 branches covered.">        for (SiblingInventory.Sibling sibling : siblings) {</span>
+<span class="fc" id="L64">            List&lt;SiblingInventory.MemberState&gt; states =</span>
+<span class="fc" id="L65">                    SiblingInventory.assess(sibling.root(), true);</span>
+<span class="fc" id="L66">            rows.add(row(sibling, states));</span>
+<span class="fc" id="L67">            getLog().info(&quot;  &quot; + sibling.name()</span>
+<span class="fc bfc" id="L68" title="All 2 branches covered.">                    + (sibling.conformant() ? &quot;&quot; : &quot;  [legacy origin]&quot;));</span>
+<span class="fc" id="L69">        }</span>
+
+<span class="fc" id="L71">        GoalReportBuilder report = new GoalReportBuilder();</span>
+<span class="fc" id="L72">        report.paragraph(&quot;**Primary:** `&quot; + primaryRoot.getAbsolutePath() + &quot;`&quot;);</span>
+<span class="pc bpc" id="L73" title="1 of 2 branches missed.">        if (siblings.isEmpty()) {</span>
+<span class="nc" id="L74">            report.paragraph(&quot;No siblings. `ws:feature-start-sibling-publish &quot;</span>
+                    + &quot;-Dfeature=&lt;name&gt;` creates one beside the primary.&quot;);
+        } else {
+<span class="fc" id="L77">            report.section(&quot;Siblings&quot;)</span>
+<span class="fc" id="L78">                    .table(List.of(&quot;Sibling&quot;, &quot;Feature&quot;, &quot;Branch&quot;, &quot;Members&quot;,</span>
+                                    &quot;Uncommitted&quot;, &quot;Stashes&quot;, &quot;Unlanded&quot;,
+                                    &quot;Origin&quot;, &quot;Lease&quot;),
+                            rows);
+<span class="fc" id="L82">            report.paragraph(&quot;*Unlanded is squash-aware (a branch whose tree &quot;</span>
+                    + &quot;equals an origin tip has landed) and is measured &quot;
+                    + &quot;against last-fetched refs — remote-URL origins are &quot;
+                    + &quot;never fetched by a listing. `?` = not determinable. &quot;
+                    + &quot;Remove a finished sibling with &quot;
+                    + &quot;`ws:sibling-remove-draft -Dfeature=&lt;name&gt;`; repair a &quot;
+                    + &quot;legacy origin via the IDE notification or the &quot;
+                    + &quot;materializer CLI (ike-issues#1057).*&quot;);
+        }
+<span class="fc" id="L91">        return new WorkspaceReportSpec(WsGoal.SIBLING_LIST, report.build());</span>
+    }
+
+    private String[] row(SiblingInventory.Sibling sibling,
+                         List&lt;SiblingInventory.MemberState&gt; states) {
+<span class="fc" id="L96">        long bare = states.stream()</span>
+<span class="fc" id="L97">                .filter(SiblingInventory.MemberState::bare).count();</span>
+<span class="fc" id="L98">        int uncommitted = states.stream()</span>
+<span class="fc" id="L99">                .mapToInt(SiblingInventory.MemberState::uncommitted).sum();</span>
+<span class="fc" id="L100">        int stashes = states.stream()</span>
+<span class="fc" id="L101">                .mapToInt(SiblingInventory.MemberState::stashes).sum();</span>
+<span class="fc" id="L102">        boolean undeterminable = states.stream()</span>
+<span class="pc bpc" id="L103" title="3 of 4 branches missed.">                .anyMatch(state -&gt; state.unlanded() == null &amp;&amp; !state.bare());</span>
+<span class="fc" id="L104">        long unlanded = states.stream()</span>
+<span class="pc bpc" id="L105" title="1 of 2 branches missed.">                .filter(state -&gt; state.unlanded() != null)</span>
+<span class="fc" id="L106">                .mapToLong(state -&gt; state.unlanded().size()).sum();</span>
+
+<span class="fc" id="L108">        String expectedBranch = &quot;feature/&quot; + sibling.feature();</span>
+<span class="pc bpc" id="L109" title="1 of 2 branches missed.">        String rootBranch = states.isEmpty() ? &quot;—&quot; : states.getFirst().branch();</span>
+<span class="fc bfc" id="L110" title="All 2 branches covered.">        String branch = rootBranch.equals(expectedBranch)</span>
+<span class="fc" id="L111">                ? rootBranch : rootBranch + &quot; (≠ &quot; + expectedBranch + &quot;)&quot;;</span>
+
+<span class="fc" id="L113">        String members = states.size()</span>
+<span class="pc bpc" id="L114" title="1 of 2 branches missed.">                + (bare &gt; 0 ? &quot; (&quot; + bare + &quot; bare)&quot; : &quot;&quot;);</span>
+<span class="fc bfc" id="L115" title="All 2 branches covered.">        String origin = sibling.conformant() ? &quot;local ✓&quot; : &quot;legacy&quot;;</span>
+<span class="fc" id="L116">        String lease = WorkingSetLease.status(sibling.root().toPath())</span>
+<span class="fc" id="L117">                .map(WorkingSetLease.Status::line).orElse(&quot;—&quot;);</span>
+<span class="fc" id="L118">        return new String[]{sibling.name(), sibling.feature(), branch,</span>
+<span class="fc" id="L119">                members, String.valueOf(uncommitted),</span>
+<span class="fc" id="L120">                String.valueOf(stashes),</span>
+<span class="pc bpc" id="L121" title="1 of 2 branches missed.">                undeterminable ? unlanded + &quot;?&quot; : String.valueOf(unlanded),</span>
+                origin, lease};
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

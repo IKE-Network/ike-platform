@@ -1,0 +1,141 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>WorkspaceClaudeMdReconciler.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws.reconcile</a> &gt; <span class="el_source">WorkspaceClaudeMdReconciler.java</span></div><h1>WorkspaceClaudeMdReconciler.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws.reconcile;
+
+import network.ike.plugin.ReleaseSupport;
+import network.ike.plugin.ws.bootstrap.SubprojectInitializer;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+
+/**
+ * Keeps the workspace-root {@code CLAUDE.md} in lockstep with its
+ * generator (IKE-Network/ike-issues#790).
+ *
+ * &lt;p&gt;The cheatsheets ({@code GOALS.md}, {@code WS-REFERENCE.md}) were
+ * promoted to continuous reconciliation by {@link CheatsheetReconciler}
+ * (#452), but the generated workspace-root {@code CLAUDE.md} was left
+ * behind: it is written only at the tail of {@link SubprojectInitializer}'s
+ * initial {@code ws:scaffold-init} pass. A workspace that exists without a
+ * {@code CLAUDE.md} — created before the generator landed, or renamed —
+ * therefore never gets one, because nothing backfills it. This reconciler
+ * closes that gap so {@code ws:scaffold-draft} reports the drift and
+ * {@code ws:scaffold-publish} heals it, exactly like the cheatsheets.
+ *
+ * &lt;p&gt;Only the fully-generated {@code CLAUDE.md} is managed here. Hand-authored
+ * notes live in {@code CLAUDE-&lt;ws&gt;.md}, which {@link SubprojectInitializer}
+ * creates if absent and never overwrites — so they are intentionally outside
+ * this reconciler's scope.
+ *
+ * &lt;p&gt;Source-of-truth lives in
+ * {@link SubprojectInitializer#generateWorkspaceClaudeMd(String, network.ike.workspace.WorkspaceGraph)},
+ * already static so this reconciler can call it without additional plumbing.
+ *
+ * &lt;p&gt;Opt-out: {@code -DupdateClaudeMd=false}. Useful when the user has
+ * intentionally edited {@code CLAUDE.md} and does not want
+ * {@code ws:scaffold-publish} to overwrite it.
+ */
+<span class="fc" id="L40">public class WorkspaceClaudeMdReconciler implements Reconciler {</span>
+
+    static final String CLAUDE_FILE = &quot;CLAUDE.md&quot;;
+
+    @Override
+    public String dimension() {
+<span class="fc" id="L46">        return &quot;Workspace CLAUDE.md&quot;;</span>
+    }
+
+    @Override
+    public String optOutFlag() {
+<span class="fc" id="L51">        return &quot;updateClaudeMd&quot;;</span>
+    }
+
+    @Override
+    public DriftReport detect(WorkspaceContext ctx) {
+<span class="fc bfc" id="L56" title="All 2 branches covered.">        if (isUpToDate(ctx)) {</span>
+<span class="fc" id="L57">            return DriftReport.noDrift(dimension());</span>
+        }
+<span class="fc" id="L59">        Path file = ctx.workspaceRoot().toPath().resolve(CLAUDE_FILE);</span>
+<span class="fc bfc" id="L60" title="All 2 branches covered.">        String reason = Files.exists(file)</span>
+<span class="fc" id="L61">                ? CLAUDE_FILE + &quot;: content drifted from generator&quot;</span>
+<span class="fc" id="L62">                : CLAUDE_FILE + &quot;: missing&quot;;</span>
+<span class="fc" id="L63">        return new DriftReport(</span>
+<span class="fc" id="L64">                dimension(),</span>
+                true,
+                CLAUDE_FILE + &quot; stale&quot;,
+<span class="fc" id="L67">                List.of(reason),</span>
+                &quot;regenerate &quot; + CLAUDE_FILE,
+<span class="fc" id="L69">                &quot;-D&quot; + optOutFlag() + &quot;=false&quot;);</span>
+    }
+
+    @Override
+    public void apply(WorkspaceContext ctx) {
+<span class="fc bfc" id="L74" title="All 2 branches covered.">        if (ctx.options().isOptedOut(optOutFlag())) {</span>
+<span class="fc" id="L75">            ctx.log().info(&quot;  &quot; + dimension()</span>
+<span class="fc" id="L76">                    + &quot;: skipped (opted out via -D&quot; + optOutFlag() + &quot;=false)&quot;);</span>
+<span class="fc" id="L77">            return;</span>
+        }
+<span class="pc bpc" id="L79" title="1 of 2 branches missed.">        if (isUpToDate(ctx)) {</span>
+<span class="nc" id="L80">            return;</span>
+        }
+<span class="fc" id="L82">        Path file = ctx.workspaceRoot().toPath().resolve(CLAUDE_FILE);</span>
+        try {
+<span class="fc" id="L84">            Files.writeString(file, generated(ctx), StandardCharsets.UTF_8);</span>
+<span class="fc" id="L85">            ctx.log().info(&quot;  &quot; + dimension() + &quot;: regenerated &quot; + CLAUDE_FILE);</span>
+<span class="nc" id="L86">        } catch (IOException e) {</span>
+<span class="nc" id="L87">            ctx.log().warn(&quot;  &quot; + dimension()</span>
+<span class="nc" id="L88">                    + &quot;: could not write &quot; + CLAUDE_FILE + &quot; — &quot; + e.getMessage());</span>
+<span class="fc" id="L89">        }</span>
+<span class="fc" id="L90">    }</span>
+
+    /**
+     * Whether the on-disk {@code CLAUDE.md} exists and already matches the
+     * generator's current output. A missing file counts as stale so a
+     * workspace that never had one still gets it written by
+     * {@code ws:scaffold-publish}.
+     */
+    private static boolean isUpToDate(WorkspaceContext ctx) {
+<span class="fc" id="L99">        Path file = ctx.workspaceRoot().toPath().resolve(CLAUDE_FILE);</span>
+<span class="fc bfc" id="L100" title="All 2 branches covered.">        if (!Files.exists(file)) {</span>
+<span class="fc" id="L101">            return false;</span>
+        }
+        try {
+<span class="fc" id="L104">            return Files.readString(file, StandardCharsets.UTF_8).equals(generated(ctx));</span>
+<span class="nc" id="L105">        } catch (IOException e) {</span>
+            // Unreadable file is treated as drifted — apply then attempts to
+            // overwrite it, surfacing the underlying IO error via its warn path.
+<span class="nc" id="L108">            return false;</span>
+        }
+    }
+
+    private static String generated(WorkspaceContext ctx) {
+<span class="fc" id="L113">        return SubprojectInitializer.generateWorkspaceClaudeMd(</span>
+<span class="fc" id="L114">                workspaceName(ctx), ctx.graph());</span>
+    }
+
+    /**
+     * Derive the workspace name the same way {@code ws:scaffold-init} does —
+     * from the root POM's own {@code &lt;artifactId&gt;} — so the regenerated
+     * heading matches what the initial scaffold wrote and a correct file is
+     * never falsely flagged as drifted. (The manifest's typed
+     * {@code workspace-root} GAV is optional and absent in older workspaces,
+     * so the POM is the reliable source.)
+     *
+     * @param ctx the workspace context
+     * @return the workspace name, or {@code &quot;Workspace&quot;} if the POM cannot
+     *         be read
+     */
+    private static String workspaceName(WorkspaceContext ctx) {
+<span class="fc" id="L130">        File rootPom = new File(ctx.workspaceRoot(), &quot;pom.xml&quot;);</span>
+<span class="pc bpc" id="L131" title="1 of 2 branches missed.">        if (rootPom.exists()) {</span>
+            try {
+<span class="fc" id="L133">                return ReleaseSupport.readPomArtifactId(rootPom);</span>
+<span class="nc" id="L134">            } catch (Exception e) {</span>
+                // Fall through to the stable default.
+            }
+        }
+<span class="nc" id="L138">        return &quot;Workspace&quot;;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.14.202510111229</span></div></body></html>

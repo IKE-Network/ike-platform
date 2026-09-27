@@ -1,6 +1,6 @@
 ---
-date_published: 2026-09-25
-date_modified: 2026-09-25
+date_published: 2026-09-26
+date_modified: 2026-09-26
 canonical_url: https://ike.network/ike-platform/workspace-getting-started.html
 ---
 
@@ -10,7 +10,7 @@ This guide walks you through setting up an IKE workspace and working on tinkar/k
 
 ## [#prerequisites](#prerequisites)Prerequisites
 
-Java 25 Download from [https://jdk.java.net/25/](https://jdk.java.net/25/)[2]. The workspace builds with `--enable-preview` across all modules. Maven 4.0.0-rc-5 or later Download from [https://maven.apache.org/download.cgi](https://maven.apache.org/download.cgi)[3]. All POMs use model version `4.1.0`. Git Any recent version. SSH access to `github.com/ikmdev` and `github.com/IKE-Community` orgs. Maven settings — IKE plugin groups Add to `~/.m2/settings.xml` so that `ike:`, `ws:`, and `idoc:` prefix goals resolve:
+Java 25 Download from [https://jdk.java.net/25/](https://jdk.java.net/25/)[2]. The workspace builds with `--enable-preview` across all modules. Maven 4.0.0-rc-7 or later Download from [https://maven.apache.org/download.cgi](https://maven.apache.org/download.cgi)[3]. All POMs use model version `4.1.0`. Git Any recent version. SSH access to `github.com/ikmdev` and `github.com/IKE-Community` orgs. Maven settings — IKE plugin groups Add to `~/.m2/settings.xml` so that `ike:`, `ws:`, and `idoc:` prefix goals resolve:
 
 ```
 <settings>

@@ -145,7 +145,7 @@ public class WsScaffoldInitMojo implements Mojo {
      * {@code defaults.maven-version} in workspace.yaml. Bootstrap mode
      * only.
      */
-    @Parameter(property = "mavenVersion", defaultValue = "4.0.0-rc-5")
+    @Parameter(property = "mavenVersion", defaultValue = "4.0.0-rc-7")
     String mavenVersion;
 
     /**

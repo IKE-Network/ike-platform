@@ -159,6 +159,24 @@ class WsScaffoldInitMojoTest {
                 .doesNotContain("!.idea/misc.xml");
     }
 
+    /**
+     * Maven 4.0.0-rc-7 writes the project-local repository to
+     * {@code .mvn/target/project-local-repo}; a new root ignores it, after the
+     * {@code !.mvn/**} whitelist so the ignore wins (IKE-Network/ike-issues#1153).
+     */
+    @Test
+    void generated_gitignore_ignores_the_project_local_repository() throws Exception {
+        WorkspaceBootstrap bootstrap = bootstrap("my-ws", "org.example",
+                "1-SNAPSHOT", null);
+
+        Method m = WorkspaceBootstrap.class.getDeclaredMethod("generateGitignore");
+        m.setAccessible(true);
+        String gitignore = (String) m.invoke(bootstrap);
+
+        assertThat(gitignore).contains(".mvn/target/\n");
+        assertThat(gitignore.indexOf(".mvn/target/\n")).isGreaterThan(gitignore.indexOf("!.mvn/**\n"));
+    }
+
     @Test
     void refresh_extensions_block_updates_version_in_place() throws Exception {
         Path xml = tempDir.resolve("extensions.xml");

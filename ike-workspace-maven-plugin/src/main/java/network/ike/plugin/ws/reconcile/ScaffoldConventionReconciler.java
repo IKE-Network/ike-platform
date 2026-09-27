@@ -204,7 +204,9 @@ public class ScaffoldConventionReconciler implements Reconciler {
             ),
             new GitignoreSection(
                     "# ── Whitelist workspace-owned directories ────────────────────────",
-                    "!.mvn/", "!.mvn/**", "!checkpoints/", "!checkpoints/**"
+                    // .mvn/target/ after !.mvn/**: Maven 4.0.0-rc-7 writes the
+                    // project-local repository there (IKE-Network/ike-issues#1153).
+                    "!.mvn/", "!.mvn/**", ".mvn/target/", "!checkpoints/", "!checkpoints/**"
             ),
             new GitignoreSection(
                     "# ── IntelliJ project config (curated slice) ──────────────────────\n"

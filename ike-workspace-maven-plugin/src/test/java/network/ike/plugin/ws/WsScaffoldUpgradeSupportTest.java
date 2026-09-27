@@ -4,6 +4,13 @@ import network.ike.plugin.ws.reconcile.ScaffoldConventionReconciler;
 import network.ike.workspace.IdeSettings;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -51,6 +58,7 @@ class WsScaffoldUpgradeSupportTest {
 
                 !.mvn/
                 !.mvn/**
+                .mvn/target/
                 !checkpoints/
                 !checkpoints/**
 
@@ -65,6 +73,49 @@ class WsScaffoldUpgradeSupportTest {
     }
 
     @Test
+    void gitignore_existingRootGainsTheProjectLocalRepositoryIgnore(@TempDir Path root) throws Exception {
+        // A root scaffolded before Maven 4.0.0-rc-7 whitelists all of .mvn/, so
+        // .mvn/target/project-local-repo showed up as untracked files (#1153).
+        String existing = """
+                *
+                !.gitignore
+                !.gitattributes
+                !pom.xml
+                !workspace.yaml
+                !.mvn/
+                !.mvn/**
+                !checkpoints/
+                !checkpoints/**
+                !.idea/
+                !.idea/.gitignore
+                !.idea/kotlinc.xml
+                """;
+        String additions = ScaffoldConventionReconciler.computeGitignoreAdditions(existing);
+        assertThat(additions).isEqualTo(".mvn/target/\n");
+
+        // Appended after !.mvn/**, the ignore wins: git itself agrees.
+        Files.writeString(root.resolve(".gitignore"), existing + additions, StandardCharsets.UTF_8);
+        git(root, "init", "-q");
+        assertThat(ignored(root, ".mvn/target/project-local-repo/g/a/1/a-1.pom")).isTrue();
+        assertThat(ignored(root, ".mvn/extensions.xml")).isFalse();
+        assertThat(ignored(root, ".mvn/wrapper/maven-wrapper.properties")).isFalse();
+    }
+
+    private static boolean ignored(Path root, String path) throws Exception {
+        return git(root, "check-ignore", "-q", path) == 0;
+    }
+
+    private static int git(Path root, String... args) throws Exception {
+        List<String> command = new ArrayList<>();
+        command.add("git");
+        command.addAll(List.of(args));
+        Process process = new ProcessBuilder(command).directory(root.toFile())
+                .redirectErrorStream(true).start();
+        process.getInputStream().readAllBytes();
+        return process.waitFor();
+    }
+
+    @Test
     void gitignore_missingOnlyIdeaSectionGetsHeader() {
         String existing = """
                 *
@@ -74,6 +125,7 @@ class WsScaffoldUpgradeSupportTest {
                 !workspace.yaml
                 !.mvn/
                 !.mvn/**
+                .mvn/target/
                 !checkpoints/
                 !checkpoints/**
                 """;

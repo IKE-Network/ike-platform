@@ -620,6 +620,10 @@ public final class WorkspaceBootstrap {
         gi.append("# ── Whitelist workspace-owned directories ────────────────────────\n");
         gi.append("!.mvn/\n");
         gi.append("!.mvn/**\n");
+        // Maven 4.0.0-rc-7 writes the project-local repository to
+        // .mvn/target/project-local-repo; keep that build output out of the
+        // whitelisted .mvn/ (IKE-Network/ike-issues#1153).
+        gi.append(".mvn/target/\n");
         gi.append("!checkpoints/\n");
         gi.append("!checkpoints/**\n");
         gi.append("!.run/\n");

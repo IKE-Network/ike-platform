@@ -22,6 +22,8 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Reusable helpers for {@code ws:feature-start} version qualification
@@ -492,6 +494,14 @@ final class FeatureStartSupport {
      * the same reactor — the reactor resolves versions automatically,
      * so explicit pins are redundant and cause cascade issues.
      *
+     * <p>Only a {@code <dependencies>} entry in a POM Maven 4 infers
+     * reactor versions for (model version 4.1.0 or later, see
+     * {@link #infersReactorVersions}) is a pin. A 4.0.0 POM gets no
+     * inference, so its versions are the only declaration and stay; a
+     * {@code <dependencyManagement>} version is a declaration too, read
+     * by whatever imports or inherits the POM, and always stays
+     * (IKE-Network/ike-issues#1137).
+     *
      * <p>In draft mode, reports what would be removed. In publish mode,
      * removes the pins and commits the changes.
      *
@@ -528,7 +538,16 @@ final class FeatureStartSupport {
                     String content = model.content();
                     String updated = content;
 
-                    for (org.apache.maven.api.model.Dependency dep : model.allDependencies()) {
+                    if (!infersReactorVersions(model)) {
+                        if (hasIntraReactorVersion(model, reactorArtifacts)) {
+                            log.info("    " + name + "/" + subDir.toPath().relativize(pom.toPath())
+                                    + ": model version below 4.1.0 — Maven 4 does not infer its"
+                                    + " reactor versions, so they are kept");
+                        }
+                        continue;
+                    }
+
+                    for (org.apache.maven.api.model.Dependency dep : model.model().getDependencies()) {
                         String version = dep.getVersion();
                         if (version == null) continue;
 
@@ -575,6 +594,54 @@ final class FeatureStartSupport {
                         + " for intra-reactor pins: " + e.getMessage());
             }
         }
+    }
+
+    /** The model version from which Maven 4 infers intra-reactor dependency versions. */
+    static final int[] REACTOR_INFERENCE_MODEL_VERSION = {4, 1, 0};
+
+    private static final Pattern POM_NAMESPACE_VERSION =
+            Pattern.compile("xmlns=\"http://maven\\.apache\\.org/POM/([0-9.]+)\"");
+
+    /**
+     * Whether Maven 4 infers intra-reactor dependency versions for a POM.
+     * It does so only for model version 4.1.0 and later; a 4.0.0 POM must
+     * keep an explicit version on every intra-reactor dependency, or plain
+     * Maven fails with {@code 'dependencies.dependency.version' ... is
+     * missing} (IKE-Network/ike-issues#1137). The model version is the
+     * {@code <modelVersion>} element, else the POM namespace's version; a
+     * POM that declares neither is treated as 4.0.0.
+     *
+     * @param model the parsed POM
+     * @return true if the POM's model version is 4.1.0 or later
+     */
+    static boolean infersReactorVersions(PomModel model) {
+        String declared = model.model().getModelVersion();
+        if (declared == null || declared.isBlank()) {
+            Matcher namespace = POM_NAMESPACE_VERSION.matcher(model.content());
+            declared = namespace.find() ? namespace.group(1) : null;
+        }
+        return declared != null && atLeast(declared.strip(), REACTOR_INFERENCE_MODEL_VERSION);
+    }
+
+    private static boolean atLeast(String version, int[] minimum) {
+        String[] parts = version.split("\\.");
+        for (int i = 0; i < minimum.length; i++) {
+            int part;
+            try {
+                part = i < parts.length ? Integer.parseInt(parts[i]) : 0;
+            } catch (NumberFormatException e) {
+                return false;
+            }
+            if (part != minimum[i]) {
+                return part > minimum[i];
+            }
+        }
+        return true;
+    }
+
+    private static boolean hasIntraReactorVersion(PomModel model, Set<String> reactorArtifacts) {
+        return model.model().getDependencies().stream()
+                .anyMatch(dep -> dep.getVersion() != null && reactorArtifacts.contains(dep.getArtifactId()));
     }
 
     /**

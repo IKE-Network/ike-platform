@@ -244,19 +244,26 @@ class FeatureStartIntegrationTest {
                 StandardCharsets.UTF_8)).isEqualTo(appCPom);
     }
 
-    @Test
-    void featureStart_removesIntraReactorPins() throws Exception {
-        // Add submodules to lib-a to create an intra-reactor scenario:
-        // lib-a (reactor root)
-        //   ├── sub-core (leaf)
-        //   └── sub-integration (depends on sub-core with explicit version pin)
+    /**
+     * Rewrites lib-a as a reactor with two subprojects — sub-core, and
+     * sub-integration, which depends on sub-core — all at
+     * {@code modelVersion}, and commits it.
+     *
+     * @param modelVersion    the model version of every POM, e.g. "4.1.0"
+     * @param rootManagement  a {@code <dependencyManagement>} block for the
+     *                        root POM, or empty
+     * @param dependencyVersion the version sub-integration declares on
+     *                        sub-core, e.g. "1.0.0-SNAPSHOT"
+     * @return sub-integration's directory
+     */
+    private Path writeLibAReactor(String modelVersion, String rootManagement,
+                                  String dependencyVersion) throws Exception {
         Path libA = tempDir.resolve("lib-a");
-
-        // Rewrite lib-a as an aggregator with submodules
+        String namespace = "http://maven.apache.org/POM/" + modelVersion;
         Files.writeString(libA.resolve("pom.xml"), """
                 <?xml version="1.0" encoding="UTF-8"?>
-                <project xmlns="http://maven.apache.org/POM/4.0.0">
-                    <modelVersion>4.0.0</modelVersion>
+                <project xmlns="%s">
+                    <modelVersion>%s</modelVersion>
                     <groupId>com.test</groupId>
                     <artifactId>lib-a</artifactId>
                     <version>1.0.0-SNAPSHOT</version>
@@ -265,14 +272,16 @@ class FeatureStartIntegrationTest {
                         <subproject>sub-core</subproject>
                         <subproject>sub-integration</subproject>
                     </subprojects>
+                %s
                 </project>
-                """, StandardCharsets.UTF_8);
+                """.formatted(namespace, modelVersion, rootManagement), StandardCharsets.UTF_8);
 
         Path subCore = libA.resolve("sub-core");
         Files.createDirectories(subCore);
         Files.writeString(subCore.resolve("pom.xml"), """
                 <?xml version="1.0" encoding="UTF-8"?>
-                <project xmlns="http://maven.apache.org/POM/4.0.0">
+                <project xmlns="%s">
+                    <modelVersion>%s</modelVersion>
                     <parent>
                         <groupId>com.test</groupId>
                         <artifactId>lib-a</artifactId>
@@ -280,13 +289,14 @@ class FeatureStartIntegrationTest {
                     </parent>
                     <artifactId>sub-core</artifactId>
                 </project>
-                """, StandardCharsets.UTF_8);
+                """.formatted(namespace, modelVersion), StandardCharsets.UTF_8);
 
         Path subInteg = libA.resolve("sub-integration");
         Files.createDirectories(subInteg);
         Files.writeString(subInteg.resolve("pom.xml"), """
                 <?xml version="1.0" encoding="UTF-8"?>
-                <project xmlns="http://maven.apache.org/POM/4.0.0">
+                <project xmlns="%s">
+                    <modelVersion>%s</modelVersion>
                     <parent>
                         <groupId>com.test</groupId>
                         <artifactId>lib-a</artifactId>
@@ -297,30 +307,38 @@ class FeatureStartIntegrationTest {
                         <dependency>
                             <groupId>com.test</groupId>
                             <artifactId>sub-core</artifactId>
-                            <version>1.0.0-SNAPSHOT</version>
+                            <version>%s</version>
                             <scope>test</scope>
                         </dependency>
                     </dependencies>
                 </project>
-                """, StandardCharsets.UTF_8);
+                """.formatted(namespace, modelVersion, dependencyVersion), StandardCharsets.UTF_8);
 
         exec(libA, "git", "add", ".");
-        exec(libA, "git", "commit", "-m", "Add submodules with intra-reactor pin");
+        exec(libA, "git", "commit", "-m", "Add submodules with an intra-reactor dependency");
+        return subInteg;
+    }
 
+    private void startFeature(String feature) throws Exception {
         FeatureStartDraftMojo mojo = TestLog.createMojo(FeatureStartDraftMojo.class);
         mojo.manifest = helper.workspaceYaml().toFile();
-        mojo.feature = "pin-test";
+        mojo.feature = feature;
         mojo.publish = true;
-
         mojo.execute();
+    }
 
-        // The intra-reactor pin should be removed:
-        // sub-integration should no longer have <version> on sub-core
-        String integPom = Files.readString(
-                subInteg.resolve("pom.xml"), StandardCharsets.UTF_8);
+    @Test
+    void featureStart_removesIntraReactorPins() throws Exception {
+        // 4.1.0: Maven 4 infers the reactor version, so the literal pin is redundant.
+        Path subInteg = writeLibAReactor("4.1.0", "", "1.0.0-SNAPSHOT");
+
+        startFeature("pin-test");
+
+        String integPom = Files.readString(subInteg.resolve("pom.xml"), StandardCharsets.UTF_8);
         assertThat(integPom).contains("<artifactId>sub-core</artifactId>");
-        assertThat(integPom).doesNotContain(
-                "<version>1.0.0-SNAPSHOT</version>\n            <scope>test</scope>");
+        // No <version> left on the sub-core dependency (the parent's <version> comes before it)
+        assertThat(integPom.substring(integPom.indexOf("<artifactId>sub-core</artifactId>")))
+                .doesNotContain("<version>");
         // The dependency should still exist, just without explicit version
         assertThat(integPom).contains("<scope>test</scope>");
     }
@@ -328,77 +346,56 @@ class FeatureStartIntegrationTest {
     @Test
     void featureStart_removesPropertyBasedIntraReactorPins() throws Exception {
         // Same scenario but pin uses ${project.version} instead of literal
-        Path libA = tempDir.resolve("lib-a");
+        Path subInteg = writeLibAReactor("4.1.0", "", "${project.version}");
 
-        Files.writeString(libA.resolve("pom.xml"), """
-                <?xml version="1.0" encoding="UTF-8"?>
-                <project xmlns="http://maven.apache.org/POM/4.0.0">
-                    <modelVersion>4.0.0</modelVersion>
-                    <groupId>com.test</groupId>
-                    <artifactId>lib-a</artifactId>
-                    <version>1.0.0-SNAPSHOT</version>
-                    <packaging>pom</packaging>
-                    <subprojects>
-                        <subproject>sub-core</subproject>
-                        <subproject>sub-integration</subproject>
-                    </subprojects>
-                </project>
-                """, StandardCharsets.UTF_8);
-
-        Path subCore = libA.resolve("sub-core");
-        Files.createDirectories(subCore);
-        Files.writeString(subCore.resolve("pom.xml"), """
-                <?xml version="1.0" encoding="UTF-8"?>
-                <project xmlns="http://maven.apache.org/POM/4.0.0">
-                    <parent>
-                        <groupId>com.test</groupId>
-                        <artifactId>lib-a</artifactId>
-                        <version>1.0.0-SNAPSHOT</version>
-                    </parent>
-                    <artifactId>sub-core</artifactId>
-                </project>
-                """, StandardCharsets.UTF_8);
-
-        Path subInteg = libA.resolve("sub-integration");
-        Files.createDirectories(subInteg);
-        Files.writeString(subInteg.resolve("pom.xml"), """
-                <?xml version="1.0" encoding="UTF-8"?>
-                <project xmlns="http://maven.apache.org/POM/4.0.0">
-                    <parent>
-                        <groupId>com.test</groupId>
-                        <artifactId>lib-a</artifactId>
-                        <version>1.0.0-SNAPSHOT</version>
-                    </parent>
-                    <artifactId>sub-integration</artifactId>
-                    <dependencies>
-                        <dependency>
-                            <groupId>com.test</groupId>
-                            <artifactId>sub-core</artifactId>
-                            <version>${project.version}</version>
-                            <scope>test</scope>
-                        </dependency>
-                    </dependencies>
-                </project>
-                """, StandardCharsets.UTF_8);
-
-        exec(libA, "git", "add", ".");
-        exec(libA, "git", "commit", "-m", "Add submodules with property pin");
-
-        FeatureStartDraftMojo mojo = TestLog.createMojo(FeatureStartDraftMojo.class);
-        mojo.manifest = helper.workspaceYaml().toFile();
-        mojo.feature = "prop-pin-test";
-        mojo.publish = true;
-
-        mojo.execute();
+        startFeature("prop-pin-test");
 
         // ${project.version} pin should also be removed from the dependency,
         // but the parent block's <version> is unrelated and stays.
-        String integPom = Files.readString(
-                subInteg.resolve("pom.xml"), StandardCharsets.UTF_8);
+        String integPom = Files.readString(subInteg.resolve("pom.xml"), StandardCharsets.UTF_8);
         assertThat(integPom).contains("<artifactId>sub-core</artifactId>");
         assertThat(integPom).doesNotContain("${project.version}");
         // dependency itself preserved
         assertThat(integPom).contains("<scope>test</scope>");
+    }
+
+    @Test
+    void featureStart_keepsIntraReactorVersionsInModel400Poms() throws Exception {
+        // 4.0.0: Maven 4 does not infer reactor versions, so the version is the
+        // only declaration; removing it breaks plain Maven (IKE-Network/ike-issues#1137).
+        Path subInteg = writeLibAReactor("4.0.0", "", "${project.version}");
+
+        startFeature("model-400-test");
+
+        // The parent version is qualified as usual; the dependency keeps its version.
+        String integPom = Files.readString(subInteg.resolve("pom.xml"), StandardCharsets.UTF_8);
+        assertThat(integPom.substring(integPom.indexOf("<artifactId>sub-core</artifactId>")))
+                .contains("<version>${project.version}</version>");
+    }
+
+    @Test
+    void featureStart_keepsDependencyManagementVersions() throws Exception {
+        // A managed version is a declaration, read by whatever imports or
+        // inherits the POM — never a pin, even at 4.1.0 (IKE-Network/ike-issues#1137).
+        String management = """
+                    <dependencyManagement>
+                        <dependencies>
+                            <dependency>
+                                <groupId>com.test</groupId>
+                                <artifactId>sub-core</artifactId>
+                                <version>${project.version}</version>
+                            </dependency>
+                        </dependencies>
+                    </dependencyManagement>""";
+        writeLibAReactor("4.1.0", management, "${project.version}");
+
+        startFeature("managed-test");
+
+        String rootPom = Files.readString(tempDir.resolve("lib-a").resolve("pom.xml"), StandardCharsets.UTF_8);
+        String managed = rootPom.substring(rootPom.indexOf("<dependencyManagement>"),
+                rootPom.indexOf("</dependencyManagement>"));
+        assertThat(managed).contains("<artifactId>sub-core</artifactId>")
+                .contains("<version>${project.version}</version>");
     }
 
     // ── --affected subset (IKE-Network/ike-issues#499) ───────────────

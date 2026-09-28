@@ -119,6 +119,106 @@ class FeatureFinishIntegrationTest {
         }
     }
 
+    // ── #1158: finish commit messages ────────────────────────────
+
+    private static final String AUTHORED_MESSAGE = """
+            Ship the widget
+
+            - lib-a: the widget itself
+            - app-c: shows it
+
+            Refs: IKE-Network/ike-issues#1158""";
+
+    private void addOwnCommit(String name) throws Exception {
+        Path subDir = tempDir.resolve(name);
+        Files.writeString(subDir.resolve("only-" + name + ".txt"), name, StandardCharsets.UTF_8);
+        exec(subDir, "git", "add", "only-" + name + ".txt");
+        exec(subDir, "git", "commit", "-m", name + ": work only in " + name);
+    }
+
+    private String lastMessage(String name) throws Exception {
+        return execCapture(tempDir.resolve(name), "git", "log", "-1", "--format=%B");
+    }
+
+    @Test
+    void squash_userMessage_isCommittedExactlyAsGiven() throws Exception {
+        FeatureFinishSquashDraftMojo mojo = TestLog.createMojo(FeatureFinishSquashDraftMojo.class);
+        mojo.manifest = helper.workspaceYaml().toFile();
+        mojo.feature = FEATURE_NAME;
+        mojo.targetBranch = "main";
+        mojo.message = AUTHORED_MESSAGE;
+        mojo.publish = true;
+
+        mojo.execute();
+
+        for (String name : new String[]{"lib-a", "lib-b", "app-c"}) {
+            assertThat(lastMessage(name))
+                    .as("%s squash message is -Dmessage, nothing appended", name)
+                    .isEqualTo(AUTHORED_MESSAGE);
+        }
+    }
+
+    @Test
+    void squash_generatedMessage_listsOnlyTheMembersOwnCommits() throws Exception {
+        addOwnCommit("lib-a");
+        addOwnCommit("app-c");
+        FeatureFinishSquashDraftMojo mojo = TestLog.createMojo(FeatureFinishSquashDraftMojo.class);
+        mojo.manifest = helper.workspaceYaml().toFile();
+        mojo.feature = FEATURE_NAME;
+        mojo.targetBranch = "main";
+        mojo.publish = true;
+
+        mojo.execute();
+
+        String libA = lastMessage("lib-a");
+        String libB = lastMessage("lib-b");
+        String appC = lastMessage("app-c");
+        assertThat(libA).startsWith(BRANCH_NAME)
+                .contains("lib-a: work only in lib-a", "feature: add feature work")
+                .doesNotContain("app-c: work only in app-c");
+        assertThat(appC).contains("app-c: work only in app-c")
+                .doesNotContain("lib-a: work only in lib-a");
+        assertThat(libB).contains("feature: add feature work")
+                .doesNotContain("work only in");
+        for (String message : new String[]{libA, libB, appC}) {
+            assertThat(message).as("no per-repository sections").doesNotContain("## ");
+        }
+    }
+
+    @Test
+    void merge_userMessage_isCommittedExactlyAsGiven() throws Exception {
+        FeatureFinishMergeDraftMojo mojo = TestLog.createMojo(FeatureFinishMergeDraftMojo.class);
+        mojo.manifest = helper.workspaceYaml().toFile();
+        mojo.feature = FEATURE_NAME;
+        mojo.targetBranch = "main";
+        mojo.message = AUTHORED_MESSAGE;
+        mojo.publish = true;
+
+        mojo.execute();
+
+        for (String name : new String[]{"lib-a", "lib-b", "app-c"}) {
+            assertThat(lastMessage(name))
+                    .as("%s merge message is -Dmessage, nothing appended", name)
+                    .isEqualTo(AUTHORED_MESSAGE);
+        }
+    }
+
+    @Test
+    void merge_generatedMessage_listsOnlyTheMembersOwnCommits() throws Exception {
+        addOwnCommit("lib-b");
+        FeatureFinishMergeDraftMojo mojo = TestLog.createMojo(FeatureFinishMergeDraftMojo.class);
+        mojo.manifest = helper.workspaceYaml().toFile();
+        mojo.feature = FEATURE_NAME;
+        mojo.targetBranch = "main";
+        mojo.publish = true;
+
+        mojo.execute();
+
+        assertThat(lastMessage("lib-b")).contains("lib-b: work only in lib-b");
+        assertThat(lastMessage("lib-a")).doesNotContain("work only in");
+        assertThat(lastMessage("app-c")).doesNotContain("work only in");
+    }
+
     @Test
     void merge_preservesHistory() throws Exception {
         FeatureFinishMergeDraftMojo mojo = TestLog.createMojo(FeatureFinishMergeDraftMojo.class);

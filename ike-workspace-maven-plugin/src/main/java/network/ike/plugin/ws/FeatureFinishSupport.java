@@ -175,56 +175,118 @@ class FeatureFinishSupport {
     }
 
     /**
-     * Generate a structured commit message by aggregating per-subproject
-     * commit history from the feature branch.
+     * The finish commit message for one member (IKE-Network/ike-issues#1158).
+     *
+     * <p>A message given with {@code -Dmessage} is the author's account of the
+     * change, so it is used exactly as given, with nothing appended. Without
+     * one, the message is {@code subject}, then this member's own
+     * feature-branch commit subjects. Only this member's: a repository's
+     * history records what landed in it, never what landed in its siblings.
+     *
+     * @param dir          the member's working tree
+     * @param subject      the first line of a generated message
+     * @param branchName   the feature branch, such as {@code feature/x}
+     * @param targetBranch the branch the feature finishes into
+     * @param userMessage  the {@code -Dmessage} value, or {@code null}
+     * @param log          reports a history that cannot be read
+     * @return the message to commit in this member; never blank
      */
-    static String generateFeatureMessage(File root, List<String> components,
-                                          String branchName, String targetBranch,
-                                          String userMessage, Log log) {
-        StringBuilder sb = new StringBuilder();
+    static String finishMessage(File dir, String subject, String branchName,
+                                String targetBranch, String userMessage, Log log) {
         if (userMessage != null && !userMessage.isBlank()) {
-            sb.append(userMessage).append("\n\n");
+            return userMessage.strip();
         }
-        sb.append(branchName).append("\n");
-
-        for (String name : components) {
-            File dir = new File(root, name);
-            try {
-                List<String> commits = VcsOperations.commitLog(
-                        dir, targetBranch, branchName);
-                if (commits.isEmpty()) continue;
-                sb.append("\n## ").append(name)
-                  .append(" (").append(commits.size()).append(" commit")
-                  .append(commits.size() == 1 ? "" : "s").append(")\n");
-                for (String line : commits) {
-                    String msg = line.contains(" ")
-                            ? line.substring(line.indexOf(' ') + 1) : line;
-                    sb.append("- ").append(msg).append("\n");
-                }
-            } catch (MojoException e) {
-                log.debug("Could not get log for " + name + ": " + e.getMessage());
-            }
-        }
-
-        // Workspace repo changes
+        StringBuilder sb = new StringBuilder(subject);
         try {
-            List<String> wsCommits = VcsOperations.commitLog(
-                    root, targetBranch, branchName);
-            if (!wsCommits.isEmpty()) {
-                sb.append("\n## workspace (").append(wsCommits.size())
-                  .append(" commit").append(wsCommits.size() == 1 ? "" : "s")
-                  .append(")\n");
-                for (String line : wsCommits) {
+            List<String> commits = VcsOperations.commitLog(dir, targetBranch, branchName);
+            if (!commits.isEmpty()) {
+                sb.append("\n\n").append(commits.size())
+                  .append(commits.size() == 1 ? " commit" : " commits")
+                  .append(" on ").append(branchName).append(":\n");
+                for (String line : commits) {
                     String msg = line.contains(" ")
                             ? line.substring(line.indexOf(' ') + 1) : line;
                     sb.append("- ").append(msg).append("\n");
                 }
             }
         } catch (MojoException e) {
-            log.debug("Could not get workspace log: " + e.getMessage());
+            log.debug("Could not get log for " + dir.getName() + ": " + e.getMessage());
         }
-
         return sb.toString().stripTrailing();
+    }
+
+    /**
+     * The finish commit message for each member, in member order: the
+     * {@code -Dmessage} value for all of them when one is given, otherwise
+     * each member's own generated message (IKE-Network/ike-issues#1158).
+     * Read before any merge or version strip, so the histories are the
+     * feature branch's own.
+     *
+     * @param root         the workspace root
+     * @param components   the members being finished
+     * @param branchName   the feature branch
+     * @param targetBranch the branch the feature finishes into
+     * @param userMessage  the {@code -Dmessage} value, or {@code null}
+     * @param log          reports a history that cannot be read
+     * @return member name to its message
+     */
+    static Map<String, String> finishMessages(File root, List<String> components,
+                                              String branchName, String targetBranch,
+                                              String userMessage, Log log) {
+        Map<String, String> messages = new LinkedHashMap<>();
+        for (String name : components) {
+            messages.put(name, finishMessage(new File(root, name), branchName,
+                    branchName, targetBranch, userMessage, log));
+        }
+        return messages;
+    }
+
+    /**
+     * Writes the finish messages to the log: once when {@code -Dmessage} was
+     * given (every member gets it as written), otherwise per member, so the
+     * draft shows exactly what each repository will record.
+     *
+     * @param messages    member name to its message, from {@link #finishMessages}
+     * @param userMessage the {@code -Dmessage} value, or {@code null}
+     * @param log         the goal's log
+     */
+    static void logFinishMessages(Map<String, String> messages, String userMessage, Log log) {
+        if (userMessage != null && !userMessage.isBlank()) {
+            log.info("  Commit message (from -Dmessage, used as given in every member):");
+            for (String line : userMessage.strip().split("\n")) {
+                log.info("    " + line);
+            }
+        } else {
+            log.info("  Commit messages (generated; each member lists only its own commits):");
+            for (Map.Entry<String, String> entry : messages.entrySet()) {
+                log.info("    ── " + entry.getKey());
+                for (String line : entry.getValue().split("\n")) {
+                    log.info("    " + line);
+                }
+            }
+        }
+        log.info("");
+    }
+
+    /**
+     * The finish messages as one text block for the goal report.
+     *
+     * @param messages    member name to its message
+     * @param userMessage the {@code -Dmessage} value, or {@code null}
+     * @return the message, or each member's message under its name
+     */
+    static String describeFinishMessages(Map<String, String> messages, String userMessage) {
+        if (userMessage != null && !userMessage.isBlank()) {
+            return userMessage.strip();
+        }
+        StringBuilder sb = new StringBuilder();
+        for (Map.Entry<String, String> entry : messages.entrySet()) {
+            if (!sb.isEmpty()) {
+                sb.append("\n\n");
+            }
+            sb.append("── ").append(entry.getKey()).append("\n").append(entry.getValue());
+        }
+        return sb.toString();
     }
 
     /**

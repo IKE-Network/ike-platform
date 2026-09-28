@@ -410,7 +410,7 @@ class FeatureFinishBareModeTest {
         // #531: publish without -Dmessage now auto-generates the squash
         // commit message from the feature-branch commit history (the
         // earlier behaviour from #160 — hard-fail before any mutation —
-        // is no longer needed because generateFeatureMessage always
+        // is no longer needed because FeatureFinishSupport.finishMessage always
         // returns a non-blank string, so the underlying NPE risk is gone).
         FeatureFinishSquashDraftMojo mojo = TestLog.createMojo(FeatureFinishSquashDraftMojo.class);
         mojo.feature = FEATURE_NAME;
@@ -434,6 +434,21 @@ class FeatureFinishBareModeTest {
         assertThat(latest)
                 .as("auto-generated message should list feature commits")
                 .contains("feature: add feature work");
+    }
+
+    @Test
+    void squash_publishWithMessage_usesItExactlyAsGiven() throws Exception {
+        // #1158: a -Dmessage is the squash message, with no commit list appended.
+        String authored = "Ship the feature\n\nWhy it matters.\n\nRefs: IKE-Network/ike-issues#1158";
+        FeatureFinishSquashDraftMojo mojo = TestLog.createMojo(FeatureFinishSquashDraftMojo.class);
+        mojo.feature = FEATURE_NAME;
+        mojo.targetBranch = "main";
+        mojo.message = authored;
+        mojo.publish = true;
+
+        mojo.execute();
+
+        assertThat(execCapture(tempDir, "git", "log", "-1", "--format=%B")).isEqualTo(authored);
     }
 
     @Test

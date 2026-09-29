@@ -77,6 +77,12 @@ public class FeatureFinishMergeDraftMojo extends AbstractWorkspaceMojo {
     @Parameter(property = "keepRemoteBranch", defaultValue = "false")
     boolean keepRemoteBranch;
 
+    /**
+     * Merge commit message. Optional. When given, it is committed exactly as
+     * written in every member, with nothing appended
+     * (IKE-Network/ike-issues#1158). When omitted, each member's merge
+     * commit lists only its own feature-branch commits.
+     */
     @Parameter(property = "message")
     String message;
 
@@ -218,14 +224,12 @@ public class FeatureFinishMergeDraftMojo extends AbstractWorkspaceMojo {
                     root, eligible, targetBranch, getLog());
         }
 
-        // Auto-generate commit message from per-subproject history
-        String generatedMessage = FeatureFinishSupport.generateFeatureMessage(
+        // #1158: -Dmessage is used exactly as given in every member;
+        // without it each member's merge commit lists only its own
+        // feature-branch commits.
+        java.util.Map<String, String> messages = FeatureFinishSupport.finishMessages(
                 root, eligible, branchName, targetBranch, message, getLog());
-        getLog().info("  Commit message:");
-        for (String line : generatedMessage.split("\n")) {
-            getLog().info("    " + line);
-        }
-        getLog().info("");
+        FeatureFinishSupport.logFinishMessages(messages, message, getLog());
 
         int merged = 0;
         // #532: soft-fail and collect — same behaviour as the squash variant.
@@ -267,7 +271,7 @@ public class FeatureFinishMergeDraftMojo extends AbstractWorkspaceMojo {
                 try {
                     getLog().info(Ansi.cyan("  → ") + name);
                     VcsOperations.checkout(dir, getLog(), targetBranch);
-                    VcsOperations.mergeNoFf(dir, getLog(), branchName, generatedMessage);
+                    VcsOperations.mergeNoFf(dir, getLog(), branchName, messages.get(name));
                     FeatureFinishSupport.verifyAndFixQualifiers(dir, branchName, getLog());
                     // #858: no push and no branch deletion here — pushing is
                     // a dedicated verified phase after every member merged

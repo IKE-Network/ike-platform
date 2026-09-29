@@ -1,6 +1,6 @@
 ---
-date_published: 2026-09-26
-date_modified: 2026-09-26
+date_published: 2026-09-27
+date_modified: 2026-09-27
 canonical_url: https://ike.network/ike-platform/ike-bom/plugins.html
 ---
 

@@ -19,6 +19,7 @@ import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Brings the working-set root (the aggregator) up to date with the target
@@ -34,14 +35,19 @@ import java.util.Map;
  * branch fields and the version qualifiers, the target owns everything else
  * — the pins, the versions' numeric base, the derived edges, the prose.
  *
- * &lt;p&gt;This helper resolves that one conflict by construction: the target's
- * manifest, with the feature's branch fields re-applied and the feature
- * qualifier re-applied onto the target's versions. Any other conflict in
- * the root is a real one — the merge is aborted, because a manifest left
- * with conflict markers would break every later goal, and the files are
- * reported for a human.
+ * &lt;p&gt;This helper resolves that one conflict by construction. The feature
+ * side's {@code branch:} lines and qualified {@code version:} lines are set
+ * back to the merge base's, which removes the adjacency, and the manifest is
+ * then merged three ways as text: every other edit either side made — a
+ * {@code maven-version}, a {@code repo:}, prose — is kept, where taking the
+ * target's file whole dropped the feature's (IKE-Network/ike-issues#1159).
+ * The feature's branch fields and qualifiers are then re-applied onto the
+ * result. If the text merge still conflicts, both sides changed the same
+ * field and the root is reported for a human, like any other conflict: the
+ * merge is aborted, because a manifest left with conflict markers would
+ * break every later goal.
  *
- * &lt;p&gt;See IKE-Network/ike-issues#1099.
+ * &lt;p&gt;See IKE-Network/ike-issues#1099 and #1159.
  */
 final class AggregatorFeatureUpdate {
 
@@ -59,21 +65,21 @@ final class AggregatorFeatureUpdate {
     }
 
     /** Nothing to merge: every target commit is already on the feature branch. */
-<span class="fc" id="L62">    record UpToDate(int behind, int ahead) implements Assessment {}</span>
+<span class="fc" id="L68">    record UpToDate(int behind, int ahead) implements Assessment {}</span>
 
     /** The merge applies without a conflict. */
-<span class="nc" id="L65">    record ConflictFreeMerge(int behind, int ahead) implements Assessment {}</span>
+<span class="nc" id="L71">    record ConflictFreeMerge(int behind, int ahead) implements Assessment {}</span>
 
     /**
      * The manifest is the only conflicting file; its conflict is the
      * adjacency of feature-owned and target-owned fields and is resolved by
      * construction.
      */
-<span class="fc" id="L72">    record ManifestResolvable(int behind, int ahead, String manifestName)</span>
+<span class="fc" id="L78">    record ManifestResolvable(int behind, int ahead, String manifestName)</span>
             implements Assessment {}
 
     /** Files beyond the manifest conflict; the update needs a human. */
-<span class="fc" id="L76">    record Conflicting(int behind, int ahead, List&lt;String&gt; files)</span>
+<span class="fc" id="L82">    record Conflicting(int behind, int ahead, List&lt;String&gt; files)</span>
             implements Assessment {}
 
     /**
@@ -91,19 +97,19 @@ final class AggregatorFeatureUpdate {
      */
     static Assessment assess(File root, String manifestName, String featureBranch,
                              String targetRef) throws MojoException {
-<span class="fc" id="L94">        int behind = VcsOperations.commitLog(root, featureBranch, targetRef).size();</span>
-<span class="fc" id="L95">        int ahead = VcsOperations.commitLog(root, targetRef, featureBranch).size();</span>
-<span class="fc bfc" id="L96" title="All 2 branches covered.">        if (behind == 0) {</span>
-<span class="fc" id="L97">            return new UpToDate(0, ahead);</span>
+<span class="fc" id="L100">        int behind = VcsOperations.commitLog(root, featureBranch, targetRef).size();</span>
+<span class="fc" id="L101">        int ahead = VcsOperations.commitLog(root, targetRef, featureBranch).size();</span>
+<span class="fc bfc" id="L102" title="All 2 branches covered.">        if (behind == 0) {</span>
+<span class="fc" id="L103">            return new UpToDate(0, ahead);</span>
         }
-<span class="fc" id="L99">        List&lt;String&gt; predicted = VcsOperations.predictConflicts(root, featureBranch, targetRef);</span>
-<span class="pc bpc" id="L100" title="1 of 2 branches missed.">        if (predicted.isEmpty()) {</span>
-<span class="nc" id="L101">            return new ConflictFreeMerge(behind, ahead);</span>
+<span class="fc" id="L105">        List&lt;String&gt; predicted = VcsOperations.predictConflicts(root, featureBranch, targetRef);</span>
+<span class="pc bpc" id="L106" title="1 of 2 branches missed.">        if (predicted.isEmpty()) {</span>
+<span class="nc" id="L107">            return new ConflictFreeMerge(behind, ahead);</span>
         }
-<span class="pc bpc" id="L103" title="1 of 4 branches missed.">        if (predicted.size() == 1 &amp;&amp; predicted.get(0).equals(manifestName)) {</span>
-<span class="fc" id="L104">            return new ManifestResolvable(behind, ahead, manifestName);</span>
+<span class="pc bpc" id="L109" title="1 of 4 branches missed.">        if (predicted.size() == 1 &amp;&amp; predicted.get(0).equals(manifestName)) {</span>
+<span class="fc" id="L110">            return new ManifestResolvable(behind, ahead, manifestName);</span>
         }
-<span class="fc" id="L106">        return new Conflicting(behind, ahead, predicted);</span>
+<span class="fc" id="L112">        return new Conflicting(behind, ahead, predicted);</span>
     }
 
     /**
@@ -127,99 +133,289 @@ final class AggregatorFeatureUpdate {
     static Assessment apply(File root, Path manifestPath, Manifest featureSide,
                             String featureBranch, String targetBranch, Log log)
             throws MojoException {
-<span class="fc" id="L130">        String manifestName = manifestPath.getFileName().toString();</span>
-<span class="fc" id="L131">        Assessment assessment = assess(root, manifestName, featureBranch, targetBranch);</span>
-<span class="fc bfc" id="L132" title="All 4 branches covered.">        if (assessment instanceof UpToDate || assessment instanceof Conflicting) {</span>
-<span class="fc" id="L133">            return assessment;</span>
+<span class="fc" id="L136">        String manifestName = manifestPath.getFileName().toString();</span>
+<span class="fc" id="L137">        Assessment assessment = assess(root, manifestName, featureBranch, targetBranch);</span>
+<span class="fc bfc" id="L138" title="All 4 branches covered.">        if (assessment instanceof UpToDate || assessment instanceof Conflicting) {</span>
+<span class="fc" id="L139">            return assessment;</span>
         }
 
-<span class="fc" id="L136">        String message = &quot;update: merge &quot; + targetBranch + &quot; into &quot; + featureBranch;</span>
+<span class="fc" id="L142">        String message = &quot;update: merge &quot; + targetBranch + &quot; into &quot; + featureBranch;</span>
         try {
-<span class="nc" id="L138">            VcsOperations.mergeNoFf(root, log, targetBranch, message);</span>
-<span class="nc" id="L139">            return new ConflictFreeMerge(assessment.behind(), assessment.ahead());</span>
-<span class="fc" id="L140">        } catch (MojoException mergeStopped) {</span>
-<span class="fc" id="L141">            List&lt;String&gt; conflicts = VcsOperations.conflictingFiles(root);</span>
-<span class="pc bpc" id="L142" title="2 of 4 branches missed.">            if (conflicts.size() != 1 || !conflicts.get(0).equals(manifestName)) {</span>
+<span class="nc" id="L144">            VcsOperations.mergeNoFf(root, log, targetBranch, message);</span>
+<span class="nc" id="L145">            return new ConflictFreeMerge(assessment.behind(), assessment.ahead());</span>
+<span class="fc" id="L146">        } catch (MojoException mergeStopped) {</span>
+<span class="fc" id="L147">            List&lt;String&gt; conflicts = VcsOperations.conflictingFiles(root);</span>
+<span class="pc bpc" id="L148" title="2 of 4 branches missed.">            if (conflicts.size() != 1 || !conflicts.get(0).equals(manifestName)) {</span>
                 // The prediction missed something, or git failed outright.
                 // Leave the root as found: a half-merged root — its manifest
                 // holding conflict markers — would break every later goal.
-<span class="nc" id="L146">                VcsOperations.mergeAbortQuiet(root, log);</span>
-<span class="nc bnc" id="L147" title="All 2 branches missed.">                if (conflicts.isEmpty()) {</span>
-<span class="nc" id="L148">                    throw mergeStopped;</span>
+<span class="nc" id="L152">                VcsOperations.mergeAbortQuiet(root, log);</span>
+<span class="nc bnc" id="L153" title="All 2 branches missed.">                if (conflicts.isEmpty()) {</span>
+<span class="nc" id="L154">                    throw mergeStopped;</span>
                 }
-<span class="nc" id="L150">                return new Conflicting(assessment.behind(), assessment.ahead(), conflicts);</span>
+<span class="nc" id="L156">                return new Conflicting(assessment.behind(), assessment.ahead(), conflicts);</span>
             }
             try {
-<span class="fc" id="L153">                resolveManifest(root, manifestPath, featureSide, featureBranch, log);</span>
-<span class="fc" id="L154">                ReleaseSupport.exec(root, log, &quot;git&quot;, &quot;add&quot;, &quot;--&quot;, manifestName);</span>
-<span class="pc bpc" id="L155" title="1 of 2 branches missed.">                if (!VcsOperations.conflictingFiles(root).isEmpty()) {</span>
-<span class="nc" id="L156">                    throw new MojoException(manifestName</span>
+<span class="fc bfc" id="L159" title="All 2 branches covered.">                if (!resolveManifest(root, manifestPath, featureSide, featureBranch, log)) {</span>
+                    // Both sides changed the same manifest field: a real
+                    // conflict, reported like any other (#1159).
+<span class="fc" id="L162">                    VcsOperations.mergeAbortQuiet(root, log);</span>
+<span class="fc" id="L163">                    return new Conflicting(assessment.behind(), assessment.ahead(),</span>
+<span class="fc" id="L164">                            List.of(manifestName));</span>
+                }
+<span class="fc" id="L166">                ReleaseSupport.exec(root, log, &quot;git&quot;, &quot;add&quot;, &quot;--&quot;, manifestName);</span>
+<span class="pc bpc" id="L167" title="1 of 2 branches missed.">                if (!VcsOperations.conflictingFiles(root).isEmpty()) {</span>
+<span class="nc" id="L168">                    throw new MojoException(manifestName</span>
                             + &quot; still reads as conflicted after the resolution&quot;);
                 }
-<span class="fc" id="L159">                VcsOperations.commit(root, log, message);</span>
-<span class="nc" id="L160">            } catch (IOException | ManifestException | MojoException e) {</span>
-<span class="nc" id="L161">                VcsOperations.mergeAbortQuiet(root, log);</span>
-<span class="nc" id="L162">                throw new MojoException(&quot;Could not resolve the &quot; + manifestName</span>
-<span class="nc" id="L163">                        + &quot; conflict in the workspace root: &quot; + e.getMessage(), e);</span>
-<span class="fc" id="L164">            }</span>
-<span class="fc" id="L165">            return new ManifestResolvable(assessment.behind(), assessment.ahead(),</span>
+<span class="fc" id="L171">                VcsOperations.commit(root, log, message);</span>
+<span class="nc" id="L172">            } catch (IOException | ManifestException | MojoException e) {</span>
+<span class="nc" id="L173">                VcsOperations.mergeAbortQuiet(root, log);</span>
+<span class="nc" id="L174">                throw new MojoException(&quot;Could not resolve the &quot; + manifestName</span>
+<span class="nc" id="L175">                        + &quot; conflict in the workspace root: &quot; + e.getMessage(), e);</span>
+<span class="fc" id="L176">            }</span>
+<span class="fc" id="L177">            return new ManifestResolvable(assessment.behind(), assessment.ahead(),</span>
                     manifestName);
         }
     }
 
     /**
-     * Resolve the manifest conflict by construction. The target's manifest
-     * is taken whole — it owns the pins, the versions' numeric base, the
-     * derived edges and the prose — then the feature's {@code branch:}
-     * fields are re-applied for every subproject the feature had on the
-     * feature branch, and the feature qualifier is re-applied onto the
-     * target's version for every subproject whose feature-side version
-     * carried it. A subproject the target no longer declares contributes
-     * nothing; a subproject the target added keeps the target's fields.
+     * Resolve the manifest conflict by construction (IKE-Network/ike-issues#1099,
+     * #1159).
+     *
+     * &lt;p&gt;The merge's own three versions of the manifest are read from the
+     * index: base, feature (ours) and target (theirs). On the feature side,
+     * each subproject's {@code branch:} line that names the feature branch,
+     * and each {@code version:} line carrying the feature qualifier, is set
+     * back to the base's line, so the feature-owned edits no longer sit next
+     * to the target's {@code sha:} pins. The three are then merged as text
+     * with {@code git merge-file}, which keeps every other edit from either
+     * side. Onto the result, the feature's {@code branch:} fields are
+     * re-applied for every subproject the feature had on the feature branch,
+     * and the feature qualifier onto the merged version for every subproject
+     * whose feature-side version carried it. A subproject the target no
+     * longer declares contributes nothing; one the target added keeps the
+     * target's fields.
+     *
+     * @return {@code true} when resolved; {@code false} when the text merge
+     *         still conflicts, meaning both sides changed the same field
      */
-    private static void resolveManifest(File root, Path manifestPath, Manifest featureSide,
-                                        String featureBranch, Log log)
+    private static boolean resolveManifest(File root, Path manifestPath, Manifest featureSide,
+                                           String featureBranch, Log log)
             throws IOException, MojoException {
-<span class="fc" id="L183">        String manifestName = manifestPath.getFileName().toString();</span>
-<span class="fc" id="L184">        ReleaseSupport.exec(root, log, &quot;git&quot;, &quot;checkout&quot;, &quot;--theirs&quot;, &quot;--&quot;, manifestName);</span>
-<span class="fc" id="L185">        Manifest targetSide = ManifestReader.read(manifestPath);</span>
+<span class="fc" id="L206">        String manifestName = manifestPath.getFileName().toString();</span>
+<span class="fc" id="L207">        String base = indexStage(root, 1, manifestName);</span>
+<span class="fc" id="L208">        String ours = indexStage(root, 2, manifestName);</span>
+<span class="fc" id="L209">        String theirs = indexStage(root, 3, manifestName);</span>
+<span class="fc" id="L210">        String neutral = withBaseFeatureFields(ours, base, featureSide, featureBranch);</span>
+<span class="fc" id="L211">        Optional&lt;String&gt; merged = mergeText(root, neutral, base, theirs);</span>
+<span class="fc bfc" id="L212" title="All 2 branches covered.">        if (merged.isEmpty()) {</span>
+<span class="fc" id="L213">            log.info(&quot;    &quot; + manifestName + &quot; — both sides changed the same field;&quot;</span>
+                    + &quot; left for a human&quot;);
+<span class="fc" id="L215">            return false;</span>
+        }
+<span class="fc" id="L217">        Files.writeString(manifestPath, merged.get(), StandardCharsets.UTF_8);</span>
+<span class="fc" id="L218">        Manifest targetSide = ManifestReader.read(manifestPath);</span>
 
-<span class="fc" id="L187">        Map&lt;String, String&gt; branches = new LinkedHashMap&lt;&gt;();</span>
-<span class="fc" id="L188">        Map&lt;String, String&gt; versions = new LinkedHashMap&lt;&gt;();</span>
-<span class="fc bfc" id="L189" title="All 2 branches covered.">        for (Subproject feature : featureSide.subprojects().values()) {</span>
-<span class="fc" id="L190">            Subproject target = targetSide.subprojects().get(feature.name());</span>
-<span class="pc bpc" id="L191" title="1 of 2 branches missed.">            if (target == null) {</span>
-<span class="nc" id="L192">                continue;</span>
+<span class="fc" id="L220">        Map&lt;String, String&gt; branches = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc" id="L221">        Map&lt;String, String&gt; versions = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc bfc" id="L222" title="All 2 branches covered.">        for (Subproject feature : featureSide.subprojects().values()) {</span>
+<span class="fc" id="L223">            Subproject target = targetSide.subprojects().get(feature.name());</span>
+<span class="pc bpc" id="L224" title="1 of 2 branches missed.">            if (target == null) {</span>
+<span class="nc" id="L225">                continue;</span>
             }
-<span class="pc bpc" id="L194" title="1 of 2 branches missed.">            if (featureBranch.equals(feature.branch())) {</span>
-<span class="fc" id="L195">                branches.put(feature.name(), featureBranch);</span>
+<span class="pc bpc" id="L227" title="1 of 2 branches missed.">            if (featureBranch.equals(feature.branch())) {</span>
+<span class="fc" id="L228">                branches.put(feature.name(), featureBranch);</span>
             }
-<span class="pc bpc" id="L197" title="2 of 4 branches missed.">            if (feature.version() != null &amp;&amp; target.version() != null</span>
-<span class="pc bpc" id="L198" title="1 of 2 branches missed.">                    &amp;&amp; VersionSupport.isBranchQualified(feature.version())) {</span>
-<span class="fc" id="L199">                String qualified = VersionSupport.branchQualifiedVersion(</span>
-<span class="fc" id="L200">                        target.version(), featureBranch);</span>
-<span class="pc bpc" id="L201" title="1 of 2 branches missed.">                if (!qualified.equals(target.version())) {</span>
-<span class="fc" id="L202">                    versions.put(feature.name(), qualified);</span>
+<span class="pc bpc" id="L230" title="2 of 4 branches missed.">            if (feature.version() != null &amp;&amp; target.version() != null</span>
+<span class="pc bpc" id="L231" title="1 of 2 branches missed.">                    &amp;&amp; VersionSupport.isBranchQualified(feature.version())) {</span>
+<span class="fc" id="L232">                String qualified = VersionSupport.branchQualifiedVersion(</span>
+<span class="fc" id="L233">                        target.version(), featureBranch);</span>
+<span class="pc bpc" id="L234" title="1 of 2 branches missed.">                if (!qualified.equals(target.version())) {</span>
+<span class="fc" id="L235">                    versions.put(feature.name(), qualified);</span>
                 }
             }
-<span class="fc" id="L205">        }</span>
+<span class="fc" id="L238">        }</span>
 
-<span class="fc" id="L207">        ManifestWriter.updateBranches(manifestPath, branches);</span>
-<span class="pc bpc" id="L208" title="1 of 2 branches missed.">        if (!versions.isEmpty()) {</span>
-<span class="fc" id="L209">            String content = Files.readString(manifestPath, StandardCharsets.UTF_8);</span>
-<span class="fc bfc" id="L210" title="All 2 branches covered.">            for (Map.Entry&lt;String, String&gt; entry : versions.entrySet()) {</span>
-<span class="fc" id="L211">                content = ManifestWriter.updateSubprojectField(</span>
-<span class="fc" id="L212">                        content, entry.getKey(), &quot;version&quot;, entry.getValue());</span>
-<span class="fc" id="L213">            }</span>
-<span class="fc" id="L214">            Files.writeString(manifestPath, content, StandardCharsets.UTF_8);</span>
+<span class="fc" id="L240">        ManifestWriter.updateBranches(manifestPath, branches);</span>
+<span class="pc bpc" id="L241" title="1 of 2 branches missed.">        if (!versions.isEmpty()) {</span>
+<span class="fc" id="L242">            String content = Files.readString(manifestPath, StandardCharsets.UTF_8);</span>
+<span class="fc bfc" id="L243" title="All 2 branches covered.">            for (Map.Entry&lt;String, String&gt; entry : versions.entrySet()) {</span>
+<span class="fc" id="L244">                content = ManifestWriter.updateSubprojectField(</span>
+<span class="fc" id="L245">                        content, entry.getKey(), &quot;version&quot;, entry.getValue());</span>
+<span class="fc" id="L246">            }</span>
+<span class="fc" id="L247">            Files.writeString(manifestPath, content, StandardCharsets.UTF_8);</span>
         }
-<span class="fc" id="L216">        log.info(&quot;    &quot; + manifestName + &quot; — resolved by construction: target's file, &quot;</span>
-<span class="pc bpc" id="L217" title="1 of 2 branches missed.">                + branches.size() + &quot; branch field&quot; + (branches.size() == 1 ? &quot;&quot; : &quot;s&quot;)</span>
+<span class="fc" id="L249">        log.info(&quot;    &quot; + manifestName + &quot; — resolved by construction: three-way merge, &quot;</span>
+<span class="pc bpc" id="L250" title="1 of 2 branches missed.">                + branches.size() + &quot; branch field&quot; + (branches.size() == 1 ? &quot;&quot; : &quot;s&quot;)</span>
                 + &quot; kept on &quot; + featureBranch
-<span class="pc bpc" id="L219" title="1 of 2 branches missed.">                + (versions.isEmpty() ? &quot;&quot; : &quot;, &quot; + versions.size()</span>
-<span class="pc bpc" id="L220" title="1 of 2 branches missed.">                        + &quot; version qualifier&quot; + (versions.size() == 1 ? &quot;&quot; : &quot;s&quot;)</span>
-<span class="fc" id="L221">                        + &quot; re-applied&quot;));</span>
-<span class="fc" id="L222">    }</span>
+<span class="pc bpc" id="L252" title="1 of 2 branches missed.">                + (versions.isEmpty() ? &quot;&quot; : &quot;, &quot; + versions.size()</span>
+<span class="pc bpc" id="L253" title="1 of 2 branches missed.">                        + &quot; version qualifier&quot; + (versions.size() == 1 ? &quot;&quot; : &quot;s&quot;)</span>
+<span class="fc" id="L254">                        + &quot; re-applied&quot;));</span>
+<span class="fc" id="L255">        return true;</span>
+    }
+
+    /**
+     * The feature side of the manifest with its feature-owned lines set back
+     * to the base's: for each subproject, the {@code branch:} line when the
+     * feature side names {@code featureBranch}, and the {@code version:} line
+     * when the feature side's version carries the feature qualifier. Lines
+     * are copied from the base verbatim, so they match it byte for byte and
+     * a text merge sees no feature-side change there. A field the base does
+     * not have is left as it is.
+     *
+     * @param ours          the feature side's manifest text
+     * @param base          the merge base's manifest text
+     * @param featureSide   the feature side, parsed
+     * @param featureBranch the feature branch, such as {@code feature/x}
+     * @return the feature side with those lines set to the base's
+     */
+    static String withBaseFeatureFields(String ours, String base, Manifest featureSide,
+                                        String featureBranch) {
+<span class="fc" id="L275">        Map&lt;String, String&gt; baseLines = subprojectFieldLines(base);</span>
+<span class="fc" id="L276">        String[] lines = ours.split(&quot;\n&quot;, -1);</span>
+<span class="fc" id="L277">        String subproject = null;</span>
+<span class="fc" id="L278">        boolean inSubprojects = false;</span>
+<span class="fc bfc" id="L279" title="All 2 branches covered.">        for (int i = 0; i &lt; lines.length; i++) {</span>
+<span class="fc" id="L280">            String line = lines[i];</span>
+<span class="pc bpc" id="L281" title="1 of 4 branches missed.">            if (line.isBlank() || line.stripLeading().startsWith(&quot;#&quot;)) {</span>
+<span class="nc" id="L282">                continue;</span>
+            }
+<span class="fc bfc" id="L284" title="All 2 branches covered.">            if (!line.startsWith(&quot; &quot;)) {</span>
+<span class="fc" id="L285">                inSubprojects = line.startsWith(&quot;subprojects:&quot;);</span>
+<span class="fc" id="L286">                subproject = null;</span>
+<span class="fc" id="L287">                continue;</span>
+            }
+<span class="fc bfc" id="L289" title="All 2 branches covered.">            if (!inSubprojects) {</span>
+<span class="fc" id="L290">                continue;</span>
+            }
+<span class="fc" id="L292">            java.util.regex.Matcher key = SUBPROJECT_KEY.matcher(line);</span>
+<span class="fc bfc" id="L293" title="All 2 branches covered.">            if (key.matches()) {</span>
+<span class="fc" id="L294">                subproject = key.group(1);</span>
+<span class="fc" id="L295">                continue;</span>
+            }
+<span class="fc" id="L297">            java.util.regex.Matcher field = SUBPROJECT_FIELD.matcher(line);</span>
+<span class="pc bpc" id="L298" title="1 of 4 branches missed.">            if (subproject == null || !field.matches()) {</span>
+<span class="fc" id="L299">                continue;</span>
+            }
+<span class="fc" id="L301">            Subproject feature = featureSide.subprojects().get(subproject);</span>
+<span class="pc bpc" id="L302" title="1 of 2 branches missed.">            if (feature == null) {</span>
+<span class="nc" id="L303">                continue;</span>
+            }
+<span class="fc bfc" id="L305" title="All 3 branches covered.">            boolean featureOwned = switch (field.group(1)) {</span>
+<span class="fc" id="L306">                case &quot;branch&quot; -&gt; featureBranch.equals(feature.branch());</span>
+<span class="pc bpc" id="L307" title="1 of 2 branches missed.">                case &quot;version&quot; -&gt; feature.version() != null</span>
+<span class="pc bpc" id="L308" title="1 of 2 branches missed.">                        &amp;&amp; VersionSupport.isBranchQualified(feature.version());</span>
+<span class="fc" id="L309">                default -&gt; false;</span>
+            };
+<span class="fc" id="L311">            String baseLine = baseLines.get(subproject + &quot;\u0000&quot; + field.group(1));</span>
+<span class="pc bpc" id="L312" title="1 of 4 branches missed.">            if (featureOwned &amp;&amp; baseLine != null) {</span>
+<span class="fc" id="L313">                lines[i] = baseLine;</span>
+            }
+        }
+<span class="fc" id="L316">        return String.join(&quot;\n&quot;, lines);</span>
+    }
+
+    /** A subproject key under {@code subprojects:}: two spaces, the name, a colon. */
+<span class="fc" id="L320">    private static final java.util.regex.Pattern SUBPROJECT_KEY =</span>
+<span class="fc" id="L321">            java.util.regex.Pattern.compile(&quot;^  ([A-Za-z0-9._-]+):\\s*$&quot;);</span>
+
+    /** A subproject's own field: four spaces, the field name, a colon. */
+<span class="fc" id="L324">    private static final java.util.regex.Pattern SUBPROJECT_FIELD =</span>
+<span class="fc" id="L325">            java.util.regex.Pattern.compile(&quot;^    ([A-Za-z][A-Za-z0-9_-]*):.*$&quot;);</span>
+
+    /**
+     * Each subproject field line in a manifest, keyed by subproject name and
+     * field name joined with a NUL.
+     */
+    private static Map&lt;String, String&gt; subprojectFieldLines(String yaml) {
+<span class="fc" id="L332">        Map&lt;String, String&gt; fields = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc" id="L333">        String subproject = null;</span>
+<span class="fc" id="L334">        boolean inSubprojects = false;</span>
+<span class="fc bfc" id="L335" title="All 2 branches covered.">        for (String line : yaml.split(&quot;\n&quot;, -1)) {</span>
+<span class="pc bpc" id="L336" title="1 of 4 branches missed.">            if (line.isBlank() || line.stripLeading().startsWith(&quot;#&quot;)) {</span>
+<span class="nc" id="L337">                continue;</span>
+            }
+<span class="fc bfc" id="L339" title="All 2 branches covered.">            if (!line.startsWith(&quot; &quot;)) {</span>
+<span class="fc" id="L340">                inSubprojects = line.startsWith(&quot;subprojects:&quot;);</span>
+<span class="fc" id="L341">                subproject = null;</span>
+<span class="fc" id="L342">                continue;</span>
+            }
+<span class="fc bfc" id="L344" title="All 2 branches covered.">            if (!inSubprojects) {</span>
+<span class="fc" id="L345">                continue;</span>
+            }
+<span class="fc" id="L347">            java.util.regex.Matcher key = SUBPROJECT_KEY.matcher(line);</span>
+<span class="fc bfc" id="L348" title="All 2 branches covered.">            if (key.matches()) {</span>
+<span class="fc" id="L349">                subproject = key.group(1);</span>
+<span class="fc" id="L350">                continue;</span>
+            }
+<span class="fc" id="L352">            java.util.regex.Matcher field = SUBPROJECT_FIELD.matcher(line);</span>
+<span class="pc bpc" id="L353" title="1 of 4 branches missed.">            if (subproject != null &amp;&amp; field.matches()) {</span>
+<span class="fc" id="L354">                fields.putIfAbsent(subproject + &quot;\u0000&quot; + field.group(1), line);</span>
+            }
+        }
+<span class="fc" id="L357">        return fields;</span>
+    }
+
+    /**
+     * One version of a conflicted file from the index: stage 1 is the merge
+     * base, 2 the current branch (ours), 3 the branch being merged (theirs).
+     */
+    private static String indexStage(File root, int stage, String file)
+            throws IOException, MojoException {
+<span class="fc" id="L366">        GitOutput shown = git(root, &quot;show&quot;, &quot;:&quot; + stage + &quot;:&quot; + file);</span>
+<span class="pc bpc" id="L367" title="1 of 2 branches missed.">        if (shown.exit() != 0) {</span>
+<span class="nc" id="L368">            throw new MojoException(&quot;No stage &quot; + stage + &quot; of &quot; + file + &quot; in the index&quot;);</span>
+        }
+<span class="fc" id="L370">        return shown.stdout();</span>
+    }
+
+    /**
+     * A three-way text merge with {@code git merge-file}.
+     *
+     * @return the merged text, or empty when it conflicts
+     */
+    private static Optional&lt;String&gt; mergeText(File root, String ours, String base,
+                                              String theirs) throws IOException {
+<span class="fc" id="L380">        Path dir = Files.createTempDirectory(&quot;ws-manifest-merge&quot;);</span>
+        try {
+<span class="fc" id="L382">            Path oursFile = Files.writeString(dir.resolve(&quot;ours&quot;), ours, StandardCharsets.UTF_8);</span>
+<span class="fc" id="L383">            Path baseFile = Files.writeString(dir.resolve(&quot;base&quot;), base, StandardCharsets.UTF_8);</span>
+<span class="fc" id="L384">            Path theirsFile = Files.writeString(dir.resolve(&quot;theirs&quot;), theirs,</span>
+                    StandardCharsets.UTF_8);
+<span class="fc" id="L386">            GitOutput merged = git(root, &quot;merge-file&quot;, &quot;-p&quot;,</span>
+<span class="fc" id="L387">                    oursFile.toString(), baseFile.toString(), theirsFile.toString());</span>
+<span class="fc bfc" id="L388" title="All 2 branches covered.">            return merged.exit() == 0 ? Optional.of(merged.stdout()) : Optional.empty();</span>
+        } finally {
+<span class="fc" id="L390">            try (java.util.stream.Stream&lt;Path&gt; files = Files.list(dir)) {</span>
+<span class="fc bfc" id="L391" title="All 2 branches covered.">                for (Path file : files.toList()) {</span>
+<span class="fc" id="L392">                    Files.deleteIfExists(file);</span>
+<span class="fc" id="L393">                }</span>
+            }
+<span class="fc" id="L395">            Files.deleteIfExists(dir);</span>
+        }
+    }
+
+    /** A git command's exit code and its standard output, byte-exact. */
+<span class="fc" id="L400">    private record GitOutput(int exit, String stdout) {}</span>
+
+    private static GitOutput git(File root, String... args) throws IOException {
+<span class="fc" id="L403">        List&lt;String&gt; command = new java.util.ArrayList&lt;&gt;();</span>
+<span class="fc" id="L404">        command.add(&quot;git&quot;);</span>
+<span class="fc" id="L405">        command.addAll(List.of(args));</span>
+<span class="fc" id="L406">        Process process = new ProcessBuilder(command)</span>
+<span class="fc" id="L407">                .directory(root)</span>
+<span class="fc" id="L408">                .redirectError(ProcessBuilder.Redirect.DISCARD)</span>
+<span class="fc" id="L409">                .start();</span>
+<span class="fc" id="L410">        String stdout = new String(process.getInputStream().readAllBytes(),</span>
+                StandardCharsets.UTF_8);
+        try {
+<span class="fc" id="L413">            return new GitOutput(process.waitFor(), stdout);</span>
+<span class="nc" id="L414">        } catch (InterruptedException e) {</span>
+<span class="nc" id="L415">            Thread.currentThread().interrupt();</span>
+<span class="nc" id="L416">            throw new IOException(&quot;Interrupted running git &quot; + String.join(&quot; &quot;, args), e);</span>
+        }
+    }
 
     /**
      * The one-line effect for the working-set report and the goal log.
@@ -231,22 +427,22 @@ final class AggregatorFeatureUpdate {
      * @return the effect text
      */
     static String describe(Assessment assessment, boolean preview, String targetBranch) {
-<span class="pc bpc" id="L234" title="1 of 4 branches missed.">        return switch (assessment) {</span>
-<span class="fc" id="L235">            case UpToDate u -&gt; &quot;up to date with `&quot; + targetBranch + &quot;`&quot;;</span>
-<span class="nc bnc" id="L236" title="All 2 branches missed.">            case ConflictFreeMerge c -&gt; preview</span>
-<span class="nc" id="L237">                    ? &quot;conflict-free update expected (&quot; + c.behind() + &quot; behind, &quot; + c.ahead() + &quot; ahead)&quot;</span>
-<span class="nc" id="L238">                    : &quot;merged `&quot; + targetBranch + &quot;` (&quot; + c.behind() + &quot; behind, &quot;</span>
-<span class="nc" id="L239">                            + c.ahead() + &quot; ahead)&quot;;</span>
-<span class="fc bfc" id="L240" title="All 2 branches covered.">            case ManifestResolvable m -&gt; preview</span>
-<span class="fc" id="L241">                    ? &quot;update expected; `&quot; + m.manifestName() + &quot;` conflicts by adjacency&quot;</span>
+<span class="pc bpc" id="L430" title="1 of 4 branches missed.">        return switch (assessment) {</span>
+<span class="fc" id="L431">            case UpToDate u -&gt; &quot;up to date with `&quot; + targetBranch + &quot;`&quot;;</span>
+<span class="nc bnc" id="L432" title="All 2 branches missed.">            case ConflictFreeMerge c -&gt; preview</span>
+<span class="nc" id="L433">                    ? &quot;conflict-free update expected (&quot; + c.behind() + &quot; behind, &quot; + c.ahead() + &quot; ahead)&quot;</span>
+<span class="nc" id="L434">                    : &quot;merged `&quot; + targetBranch + &quot;` (&quot; + c.behind() + &quot; behind, &quot;</span>
+<span class="nc" id="L435">                            + c.ahead() + &quot; ahead)&quot;;</span>
+<span class="fc bfc" id="L436" title="All 2 branches covered.">            case ManifestResolvable m -&gt; preview</span>
+<span class="fc" id="L437">                    ? &quot;update expected; `&quot; + m.manifestName() + &quot;` conflicts by adjacency&quot;</span>
                             + &quot; and is resolved by construction, branch fields kept (&quot;
-<span class="fc" id="L243">                            + m.behind() + &quot; behind, &quot; + m.ahead() + &quot; ahead)&quot;</span>
-<span class="fc" id="L244">                    : &quot;merged `&quot; + targetBranch + &quot;`; `&quot; + m.manifestName()</span>
+<span class="fc" id="L439">                            + m.behind() + &quot; behind, &quot; + m.ahead() + &quot; ahead)&quot;</span>
+<span class="fc" id="L440">                    : &quot;merged `&quot; + targetBranch + &quot;`; `&quot; + m.manifestName()</span>
                             + &quot;` resolved by construction, branch fields kept (&quot;
-<span class="fc" id="L246">                            + m.behind() + &quot; behind, &quot; + m.ahead() + &quot; ahead)&quot;;</span>
-<span class="pc bpc" id="L247" title="1 of 2 branches missed.">            case Conflicting x -&gt; (preview ? &quot;&quot; : &quot;merge not applied — &quot;)</span>
-<span class="pc bpc" id="L248" title="1 of 2 branches missed.">                    + x.files().size() + &quot; conflict&quot; + (x.files().size() == 1 ? &quot;&quot; : &quot;s&quot;)</span>
-<span class="pc bpc" id="L249" title="1 of 2 branches missed.">                    + (preview ? &quot; expected: &quot; : &quot;: &quot;) + String.join(&quot;, &quot;, x.files());</span>
+<span class="fc" id="L442">                            + m.behind() + &quot; behind, &quot; + m.ahead() + &quot; ahead)&quot;;</span>
+<span class="pc bpc" id="L443" title="1 of 2 branches missed.">            case Conflicting x -&gt; (preview ? &quot;&quot; : &quot;merge not applied — &quot;)</span>
+<span class="fc bfc" id="L444" title="All 2 branches covered.">                    + x.files().size() + &quot; conflict&quot; + (x.files().size() == 1 ? &quot;&quot; : &quot;s&quot;)</span>
+<span class="pc bpc" id="L445" title="1 of 2 branches missed.">                    + (preview ? &quot; expected: &quot; : &quot;: &quot;) + String.join(&quot;, &quot;, x.files());</span>
         };
     }
 }

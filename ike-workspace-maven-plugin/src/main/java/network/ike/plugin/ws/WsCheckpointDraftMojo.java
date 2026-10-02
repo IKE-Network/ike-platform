@@ -195,7 +195,7 @@ public class WsCheckpointDraftMojo extends AbstractWorkspaceMojo {
 
             // Collect issue refs from closing-keyword trailers in commits
             // since the last release tag. Pure read — does not close
-            // issues or remove pending-release labels (#394).
+            // issues (#394).
             List<ReleaseNotesSupport.IssueRef> issues =
                     collectClosingTrailerIssuesSinceLastRelease(dir);
             if (!issues.isEmpty()) {
@@ -470,7 +470,7 @@ public class WsCheckpointDraftMojo extends AbstractWorkspaceMojo {
 
         // #394: report issues referenced by closing trailers in commits
         // since each subproject's last release tag. Report-only — checkpoint
-        // never closes issues or removes pending-release labels.
+        // never closes issues.
         report.section("Issues since last release");
         if (ctx.issuesSinceLastRelease().isEmpty()) {
             report.paragraph("No closing-trailer issue references found in "
@@ -704,9 +704,9 @@ public class WsCheckpointDraftMojo extends AbstractWorkspaceMojo {
      * range, or when {@code git} or the parser fails.
      *
      * <p>Per IKE-Network/ike-issues#394: this is a <em>report-only</em>
-     * collection. The checkpoint never closes any of these issues and
-     * never removes {@code pending-release} labels — that's reserved
-     * for actual releases ({@link ReleaseNotesSupport#removePendingReleaseLabels}).
+     * collection. The checkpoint never closes any of these issues —
+     * that's reserved for actual releases
+     * ({@link ReleaseNotesSupport#closeReferencedIssues}).
      *
      * @param subDir the subproject's git working tree
      * @return ordered set of unique issue references, empty when none

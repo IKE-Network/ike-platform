@@ -1,12 +1,12 @@
 ---
-date_published: 2026-10-01
-date_modified: 2026-10-01
+date_published: 2026-10-02
+date_modified: 2026-10-02
 canonical_url: https://ike.network/ike-platform/ike-bom/built-with.html
 ---
 
 # Built With
 
-Open-source software that `ike-bom` 193 depends on, links against, ships within, or invokes at runtime.
+Open-source software that `ike-bom` 194 depends on, links against, ships within, or invokes at runtime.
 
 Three layers of attribution ship with each release:
 

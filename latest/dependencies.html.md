@@ -1,12 +1,12 @@
 ---
-date_published: 2026-10-01
-date_modified: 2026-10-01
+date_published: 2026-10-02
+date_modified: 2026-10-02
 canonical_url: https://ike.network/ike-platform/dependencies.html
 ---
 
 # Dependencies (SBOM)
 
-Full transitive dependency graph for `ike-platform` 193, generated from [bom.json](bom.json) (CycloneDX 1.6) at build time. Same SBOM source as the SPDX-grouped [licenses.html](licenses.html) and the curated [built-with.html](built-with.html) — three views of the same data.
+Full transitive dependency graph for `ike-platform` 194, generated from [bom.json](bom.json) (CycloneDX 1.6) at build time. Same SBOM source as the SPDX-grouped [licenses.html](licenses.html) and the curated [built-with.html](built-with.html) — three views of the same data.
 
 ## [#summary](#summary)Summary
 
@@ -28,7 +28,7 @@ Sorted by group, artifact, version. Click [bom.json](bom.json) for the raw machi
 
 - [Software Bill of Materials (CycloneDX, JSON)](bom.json) — raw machine-readable form. Includes purls, hashes, and dependency-graph edges that this page summarizes.
 - [bom.xml](bom.xml) — same content in XML.
-- As a Maven artifact: pull `ike-platform:​193` with `<classifier>cyclonedx</classifier><type>json</type>` from Nexus / Maven Central.
+- As a Maven artifact: pull `ike-platform:​194` with `<classifier>cyclonedx</classifier><type>json</type>` from Nexus / Maven Central.
 
 ## [#see-also](#see-also)See also
 

@@ -1,6 +1,6 @@
 ---
-date_published: 2026-10-01
-date_modified: 2026-10-01
+date_published: 2026-10-02
+date_modified: 2026-10-02
 canonical_url: https://ike.network/ike-platform/project-info.html
 ---
 

@@ -1,16 +1,16 @@
 ---
-date_published: 2026-09-29
-date_modified: 2026-09-29
+date_published: 2026-10-01
+date_modified: 2026-10-01
 canonical_url: https://ike.network/ike-platform/workspace-getting-started.html
 ---
 
 # Workspace Developer Getting Started
 
-This guide walks you through setting up an IKE workspace and working on tinkar/komet components day to day. For conventions and architecture rationale, see `ike-workspace-conventions.adoc` in `ike-build-standards` (the docs classifier) and the goal reference at [ws-goals](ike-workspace-maven-plugin/ws-goals.html)[1].
+This guide walks you through setting up an IKE workspace and working on tinkar/komet components day to day. For conventions and architecture rationale, see `ike-workspace-conventions.adoc` in `ike-build-standards` (the docs classifier) and the goal reference at [ws-goals](ike-workspace-maven-plugin/ws-goals.html).
 
 ## [#prerequisites](#prerequisites)Prerequisites
 
-Java 25 Download from [https://jdk.java.net/25/](https://jdk.java.net/25/)[2]. The workspace builds with `--enable-preview` across all modules. Maven 4.0.0-rc-7 or later Download from [https://maven.apache.org/download.cgi](https://maven.apache.org/download.cgi)[3]. All POMs use model version `4.1.0`. Git Any recent version. SSH access to `github.com/ikmdev` and `github.com/IKE-Community` orgs. Maven settings — IKE plugin groups Add to `~/.m2/settings.xml` so that `ike:`, `ws:`, and `idoc:` prefix goals resolve:
+Java 25 Download from [https://jdk.java.net/25/](https://jdk.java.net/25/). The workspace builds with `--enable-preview` across all modules. Maven 4.0.0-rc-7 or later Download from [https://maven.apache.org/download.cgi](https://maven.apache.org/download.cgi). All POMs use model version `4.1.0`. Git Any recent version. SSH access to `github.com/ikmdev` and `github.com/IKE-Community` orgs. Maven settings — IKE plugin groups Add to `~/.m2/settings.xml` so that `ike:`, `ws:`, and `idoc:` prefix goals resolve:
 
 ```
 <settings>
@@ -176,7 +176,7 @@ java -cp "<IntelliJ plugins>/ike-lease-plugin/lib/ike-lease-core-*.jar" \
 
 ## [#troubleshooting](#troubleshooting)Troubleshooting
 
-### [#ws-release-publish-fails-mid-cascade](#ws-release-publish-fails-mid-cascade)`ws:release-publish` fails mid-cascade
+### [#wsrelease-publish-fails-mid-cascade](#wsrelease-publish-fails-mid-cascade)`ws:release-publish` fails mid-cascade
 
 Run `mvn ws:release-status` first — it’s read-only and reports what state each subproject is in (release branches, unpushed tags, etc.) plus a recommended recovery step.
 
@@ -210,7 +210,7 @@ Verify that `~/.m2/settings.xml` declares the IKE plugin groups:
 
 Also confirm that `ike-maven-plugin` is declared in the workspace `pom.xml`.
 
-### [#updating-the-parent-version-after-an-ike-platform-](#updating-the-parent-version-after-an-ike-platform-)Updating the parent version after an ike-platform release
+### [#updating-the-parent-version-after-an-ike-platform-release](#updating-the-parent-version-after-an-ike-platform-release)Updating the parent version after an ike-platform release
 
 After a new ike-platform release, the recommended way to pick up the new parent + matching standard properties together is via the scaffold drift workflow (`#345`):
 

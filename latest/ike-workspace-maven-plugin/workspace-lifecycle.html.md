@@ -1,12 +1,12 @@
 ---
-date_published: 2026-09-29
-date_modified: 2026-09-29
+date_published: 2026-10-01
+date_modified: 2026-10-01
 canonical_url: https://ike.network/ike-platform/ike-workspace-maven-plugin/workspace-lifecycle.html
 ---
 
 # Workspace Lifecycle
 
-This page tells the story of how `ws:*` goals fit together day-to-day. For a per-goal reference, see [ws:* Goal Reference](ws-goals.html)[1].
+This page tells the story of how `ws:*` goals fit together day-to-day. For a per-goal reference, see [ws:* Goal Reference](ws-goals.html).
 
 The mental model is a finite state machine. A workspace is in one of five states at any moment, and `ws:*` goals are the named transitions between them. Knowing where you are and where you want to be tells you which goal to invoke next.
 
@@ -47,7 +47,7 @@ To add a new repo to an existing workspace:
 mvn ws:add -Drepo=git@github.com:IKE-Network/new-component.git
 ```
 
-To start a workspace from scratch in a fresh directory, see [Workspace Getting Started](../workspace-getting-started.html)[2].
+To start a workspace from scratch in a fresh directory, see [Workspace Getting Started](../workspace-getting-started.html).
 
 ## [#daily-flow-stay-in-sync](#daily-flow-stay-in-sync)Daily flow: stay in sync
 
@@ -239,6 +239,6 @@ But for any **workspace-wide** git operation, prefer the `ws:*` goal — the top
 
 ## [#see-also](#see-also)See also
 
-- [ws:* Goal Reference](ws-goals.html)[1] — full goal-by-goal docs.
-- [Workspace Getting Started](../workspace-getting-started.html)[2] — hands-on first-time setup.
-- [Workspace Plugin Home](index.html)[3] — module overview.
+- [ws:* Goal Reference](ws-goals.html) — full goal-by-goal docs.
+- [Workspace Getting Started](../workspace-getting-started.html) — hands-on first-time setup.
+- [Workspace Plugin Home](index.html) — module overview.

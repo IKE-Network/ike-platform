@@ -1,6 +1,6 @@
 ---
-date_published: 2026-09-29
-date_modified: 2026-09-29
+date_published: 2026-10-01
+date_modified: 2026-10-01
 canonical_url: https://ike.network/ike-platform/distribution-management.html
 ---
 
@@ -8,14 +8,14 @@ canonical_url: https://ike.network/ike-platform/distribution-management.html
 
 The following is the distribution management information used by this project.
 
-## [Repository - ike-staging](#repository---ike-staging)
+## Repository - ike-staging
 
-[https://nexus.tinkar.org/repository/ike-staging/](https://nexus.tinkar.org/repository/ike-staging/)[1] 
+[https://nexus.tinkar.org/repository/ike-staging/](https://nexus.tinkar.org/repository/ike-staging/) 
 
-## [Snapshot Repository - ike-snapshots](#snapshot-repository---ike-snapshots)
+## Snapshot Repository - ike-snapshots
 
-[https://nexus.tinkar.org/repository/ike-snapshots/](https://nexus.tinkar.org/repository/ike-snapshots/)[2] 
+[https://nexus.tinkar.org/repository/ike-snapshots/](https://nexus.tinkar.org/repository/ike-snapshots/) 
 
-## [Site - ike-site](#site---ike-site)
+## Site - ike-site
 
-[https://ike.network/ike-platform/](https://ike.network/ike-platform/)[3]
+[https://ike.network/ike-platform/](https://ike.network/ike-platform/)

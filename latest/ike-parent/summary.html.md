@@ -1,31 +1,31 @@
 ---
-date_published: 2026-09-29
-date_modified: 2026-09-29
+date_published: 2026-10-01
+date_modified: 2026-10-01
 canonical_url: https://ike.network/ike-platform/ike-parent/summary.html
 ---
 
 # Project Summary
 
-## [Project Information](#project-information)
+## Project Information
 
 | Field | Value |
 | --- | --- |
 | Name | IKE Parent |
 | Description | Standard parent POM for IKE Network projects. Inheriting this POM provides build conventions (Java 25 compiler, test harness, GPG signing, AsciiDoc documentation pipeline) from the ike-platform reactor root and centralized dependency version management declared inline. Declares ike-doc-maven-plugin (from network.ike.docs) with extensions=true to provide the ike-doc custom packaging type to external doc projects. |
-| Homepage | [https://ike.network/ike-platform/ike-parent/](https://ike.network/ike-platform/ike-parent/)[1] |
+| Homepage | [https://ike.network/ike-platform/ike-parent/](https://ike.network/ike-platform/ike-parent/) |
 
-## [Project Organization](#project-organization)
+## Project Organization
 
 | Field | Value |
 | --- | --- |
 | Name | IKE Network |
-| URL | [https://ike.network](https://ike.network)[2] |
+| URL | [https://ike.network](https://ike.network) |
 
-## [Build Information](#build-information)
+## Build Information
 
 | Field | Value |
 | --- | --- |
 | GroupId | network.ike.platform |
 | ArtifactId | ike-parent |
-| Version | 192 |
+| Version | 193 |
 | Type | pom |

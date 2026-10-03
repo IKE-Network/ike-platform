@@ -1,6 +1,6 @@
 ---
-date_published: 2026-09-29
-date_modified: 2026-09-29
+date_published: 2026-10-01
+date_modified: 2026-10-01
 canonical_url: https://ike.network/ike-platform/ike-bom/index.html
 ---
 
@@ -65,7 +65,7 @@ The BOM pins versions for:
 - **IKE Docs** — `ike-doc-maven-plugin`, `koncept-asciidoc-extension`, `ike-doc-resources`, `minimal-fonts`, `docbook-xsl`, `semantic-linebreak`.
 - **IKE Platform** — `ike-parent`, `ike-workspace-maven-plugin`.
 
-The complete inventory is generated from the BOM’s `<dependencyManagement>` during the build; see the [Dependency Info](dependency-info.html)[1] report for the current concrete version table.
+The complete inventory is generated from the BOM’s `<dependencyManagement>` during the build; see the [Dependency Info](dependency-info.html) report for the current concrete version table.
 
 ## [#generation](#generation)Generation
 
@@ -73,5 +73,5 @@ The BOM is auto-generated from the `<dependencyManagement>` of the parent reacto
 
 ## [#source](#source)Source
 
-- GitHub: [ike-platform/ike-bom](https://github.com/IKE-Network/ike-platform/tree/main/ike-bom)[2]
-- Issues: [IKE-Network/ike-issues](https://github.com/IKE-Network/ike-issues)[3]
+- GitHub: [ike-platform/ike-bom](https://github.com/IKE-Network/ike-platform/tree/main/ike-bom)
+- Issues: [IKE-Network/ike-issues](https://github.com/IKE-Network/ike-issues)

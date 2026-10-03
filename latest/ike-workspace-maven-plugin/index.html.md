@@ -1,6 +1,6 @@
 ---
-date_published: 2026-09-29
-date_modified: 2026-09-29
+date_published: 2026-10-01
+date_modified: 2026-10-01
 canonical_url: https://ike.network/ike-platform/ike-workspace-maven-plugin/index.html
 ---
 
@@ -31,8 +31,8 @@ If your operation only touches one repo, plain `git` is the right tool. The work
 
 | Page | Purpose |
 | --- | --- |
-| [ws:* Goal Reference](ws-goals.html)[1] | Comprehensive per-goal docs. Every goal, what it does, key parameters, examples. Quick-reference table at the top. |
-| [Workspace Lifecycle](workspace-lifecycle.html)[2] | Narrative tour. The state machine of a workspace and how the `ws:*` goals are the named transitions between states. Read this first if you’re new to the workspace model. |
+| [ws:* Goal Reference](ws-goals.html) | Comprehensive per-goal docs. Every goal, what it does, key parameters, examples. Quick-reference table at the top. |
+| [Workspace Lifecycle](workspace-lifecycle.html) | Narrative tour. The state machine of a workspace and how the `ws:*` goals are the named transitions between states. Read this first if you’re new to the workspace model. |
 
 ## [#the-two-phase-pattern](#the-two-phase-pattern)The two-phase pattern
 
@@ -85,9 +85,9 @@ mvn ws:feature-finish-squash-publish -Dfeature=foo
 mvn ws:help                                  # generated from WsGoal enum
 ```
 
-For a complete first-time-setup walkthrough, see [Workspace Getting Started](../workspace-getting-started.html)[3].
+For a complete first-time-setup walkthrough, see [Workspace Getting Started](../workspace-getting-started.html).
 
 ## [#source](#source)Source
 
-- GitHub: [ike-platform/ike-workspace-maven-plugin](https://github.com/IKE-Network/ike-platform/tree/main/ike-workspace-maven-plugin)[4]
-- Issues: [IKE-Network/ike-issues](https://github.com/IKE-Network/ike-issues)[5] (cross-project tracker)
+- GitHub: [ike-platform/ike-workspace-maven-plugin](https://github.com/IKE-Network/ike-platform/tree/main/ike-workspace-maven-plugin)
+- Issues: [IKE-Network/ike-issues](https://github.com/IKE-Network/ike-issues) (cross-project tracker)

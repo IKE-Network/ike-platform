@@ -1,12 +1,12 @@
 ---
-date_published: 2026-09-29
-date_modified: 2026-09-29
+date_published: 2026-10-01
+date_modified: 2026-10-01
 canonical_url: https://ike.network/ike-platform/ike-workspace-maven-plugin/licenses.html
 ---
 
 # Licenses (SPDX)
 
-Licenses for declared dependencies of `ike-workspace-maven-plugin` 192, grouped by SPDX expression. Rendered from `[bom.json](bom.json)[1]` (CycloneDX) at `pre-site` phase by `ike:render-spdx-licenses` (ike-issues#335).
+Licenses for declared dependencies of `ike-workspace-maven-plugin` 193, grouped by SPDX expression. Rendered from `[bom.json](bom.json)` (CycloneDX) at `pre-site` phase by `ike:render-spdx-licenses` (ike-issues#335).
 
 ## [#summary](#summary)Summary
 
@@ -21,9 +21,9 @@ Licenses for declared dependencies of `ike-workspace-maven-plugin` 192, grouped 
 | `MIT` | 2 |
 | **Total** | **56** |
 
-## [#apache-2-0](#apache-2-0)Apache-2.0
+## [#apache-20](#apache-20)Apache-2.0
 
-Reference: [Apache-2.0 on spdx.org](https://spdx.org/licenses/Apache-2.0.html)[2]
+Reference: [Apache-2.0 on spdx.org](https://spdx.org/licenses/Apache-2.0.html)
 
 | Group | Artifact | Version |
 | --- | --- | --- |
@@ -41,7 +41,7 @@ Reference: [Apache-2.0 on spdx.org](https://spdx.org/licenses/Apache-2.0.html)[2
 | `io.micrometer` | `micrometer-core` | `1.9.17` |
 | `io.moderne` | `jsonrpc` | `1.0.5` |
 | `io.quarkus.gizmo` | `gizmo` | `1.0.11.Final` |
-| `network.ike` | `ike-base-parent` | `15` |
+| `network.ike` | `ike-base-parent` | `16` |
 | `network.ike` | `ike-java-support` | `10` |
 | `network.ike` | `ike-lease-core` | `5` |
 | `network.ike.tooling` | `ike-build-standards` | `261` |
@@ -72,7 +72,7 @@ Reference: [Apache-2.0 on spdx.org](https://spdx.org/licenses/Apache-2.0.html)[2
 | `org.openrewrite.tools` | `jgit` | `1.4.1` |
 | `org.yaml` | `snakeyaml` | `2.2` |
 
-## [#apache-2-0-or-lgpl-2-1-or-later](#apache-2-0-or-lgpl-2-1-or-later)Apache-2.0 OR LGPL-2.1-or-later
+## [#apache-20-or-lgpl-21-or-later](#apache-20-or-lgpl-21-or-later)Apache-2.0 OR LGPL-2.1-or-later
 
 | Group | Artifact | Version |
 | --- | --- | --- |
@@ -81,13 +81,13 @@ Reference: [Apache-2.0 on spdx.org](https://spdx.org/licenses/Apache-2.0.html)[2
 
 ## [#bsd-2-clause](#bsd-2-clause)BSD-2-Clause
 
-Reference: [BSD-2-Clause on spdx.org](https://spdx.org/licenses/BSD-2-Clause.html)[3]
+Reference: [BSD-2-Clause on spdx.org](https://spdx.org/licenses/BSD-2-Clause.html)
 
 | Group | Artifact | Version |
 | --- | --- | --- |
 | `org.codehaus.woodstox` | `stax2-api` | `4.2.2` |
 
-## [#bsd-2-clause-or-cc0-1-0](#bsd-2-clause-or-cc0-1-0)BSD-2-Clause OR CC0-1.0
+## [#bsd-2-clause-or-cc0-10](#bsd-2-clause-or-cc0-10)BSD-2-Clause OR CC0-1.0
 
 | Group | Artifact | Version |
 | --- | --- | --- |
@@ -95,7 +95,7 @@ Reference: [BSD-2-Clause on spdx.org](https://spdx.org/licenses/BSD-2-Clause.htm
 
 ## [#bsd-3-clause](#bsd-3-clause)BSD-3-Clause
 
-Reference: [BSD-3-Clause on spdx.org](https://spdx.org/licenses/BSD-3-Clause.html)[4]
+Reference: [BSD-3-Clause on spdx.org](https://spdx.org/licenses/BSD-3-Clause.html)
 
 | Group | Artifact | Version |
 | --- | --- | --- |
@@ -105,9 +105,9 @@ Reference: [BSD-3-Clause on spdx.org](https://spdx.org/licenses/BSD-3-Clause.htm
 | `org.ow2.asm` | `asm-tree` | `9.3` |
 | `org.ow2.asm` | `asm-util` | `9.3` |
 
-## [#cc0-1-0](#cc0-1-0)CC0-1.0
+## [#cc0-10](#cc0-10)CC0-1.0
 
-Reference: [CC0-1.0 on spdx.org](https://spdx.org/licenses/CC0-1.0.html)[5]
+Reference: [CC0-1.0 on spdx.org](https://spdx.org/licenses/CC0-1.0.html)
 
 | Group | Artifact | Version |
 | --- | --- | --- |
@@ -115,7 +115,7 @@ Reference: [CC0-1.0 on spdx.org](https://spdx.org/licenses/CC0-1.0.html)[5]
 
 ## [#mit](#mit)MIT
 
-Reference: [MIT on spdx.org](https://spdx.org/licenses/MIT.html)[6]
+Reference: [MIT on spdx.org](https://spdx.org/licenses/MIT.html)
 
 | Group | Artifact | Version |
 | --- | --- | --- |
@@ -124,6 +124,6 @@ Reference: [MIT on spdx.org](https://spdx.org/licenses/MIT.html)[6]
 
 ## [#see-also](#see-also)See also
 
-- [Software Bill of Materials (CycloneDX)](bom.json)[1] — the canonical machine-readable inventory this page is derived from.
-- [Third-Party Notices](THIRD_PARTY_NOTICES.html)[7] — curated companion that covers components mechanical reports can’t see (Maven Site skin, external services, fonts inside artifacts).
-- [Dependency Info](dependency-info.html)[8] — consumption snippet for this module.
+- [Software Bill of Materials (CycloneDX)](bom.json) — the canonical machine-readable inventory this page is derived from.
+- [Third-Party Notices](THIRD_PARTY_NOTICES.html) — curated companion that covers components mechanical reports can’t see (Maven Site skin, external services, fonts inside artifacts).
+- [Dependency Info](dependency-info.html) — consumption snippet for this module.

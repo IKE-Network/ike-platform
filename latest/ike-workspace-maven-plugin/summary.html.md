@@ -1,32 +1,32 @@
 ---
-date_published: 2026-09-29
-date_modified: 2026-09-29
+date_published: 2026-10-01
+date_modified: 2026-10-01
 canonical_url: https://ike.network/ike-platform/ike-workspace-maven-plugin/summary.html
 ---
 
 # Project Summary
 
-## [Project Information](#project-information)
+## Project Information
 
 | Field | Value |
 | --- | --- |
 | Name | IKE Workspace Maven Plugin |
 | Description | Cross-platform Maven plugin for multi-repository workspace management: initialization, verification, feature branching, release orchestration, and checkpoint creation. |
-| Homepage | [https://ike.network/ike-platform/ike-workspace-maven-plugin/](https://ike.network/ike-platform/ike-workspace-maven-plugin/)[1] |
+| Homepage | [https://ike.network/ike-platform/ike-workspace-maven-plugin/](https://ike.network/ike-platform/ike-workspace-maven-plugin/) |
 
-## [Project Organization](#project-organization)
+## Project Organization
 
 | Field | Value |
 | --- | --- |
 | Name | IKE Network |
-| URL | [https://ike.network](https://ike.network)[2] |
+| URL | [https://ike.network](https://ike.network) |
 
-## [Build Information](#build-information)
+## Build Information
 
 | Field | Value |
 | --- | --- |
 | GroupId | network.ike.platform |
 | ArtifactId | ike-workspace-maven-plugin |
-| Version | 192 |
+| Version | 193 |
 | Type | maven-plugin |
 | Java Version | 25 |

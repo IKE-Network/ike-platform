@@ -1,6 +1,6 @@
 ---
-date_published: 2026-09-29
-date_modified: 2026-09-29
+date_published: 2026-10-01
+date_modified: 2026-10-01
 canonical_url: https://ike.network/ike-platform/ike-workspace-maven-plugin/ws-goals.html
 ---
 
@@ -8,13 +8,13 @@ canonical_url: https://ike.network/ike-platform/ike-workspace-maven-plugin/ws-go
 
 The `ws:*` plugin goals are a typed console over a **working set of one or more** git repositories — the declared subproject members plus the workspace root (the aggregator), all co-located working trees. With a `workspace.yaml` manifest they coordinate cross-repository operations — fanning out across every member of the working set in topological order so feature branches stay aligned, parent versions cascade in lockstep, and releases hold their own tag history even when seven repositories ship together.
 
-Run from a single repository with no `workspace.yaml`, the working-tree and lifecycle goals — `ws:commit`, `ws:push`, `ws:pull`, `ws:sync`, `ws:scaffold`, `ws:release`, `ws:feature-****`** — operate on that one repo: a *working set of one** (ike-issues#601 / #611 / #703). Goals that act on the cross-repository graph (`ws:align`, `ws:graph`, `ws:overview`, `ws:verify-convergence`, …) still require a workspace. Run `ws:help` to see, per goal, which run on a single repo and which need a workspace.
+Run from a single repository with no `workspace.yaml`, the working-tree and lifecycle goals — `ws:commit`, `ws:push`, `ws:pull`, `ws:sync`, `ws:scaffold`, `ws:release`, `ws:feature-`** — operate on that one repo: a *working set of one** (ike-issues#601 / #611 / #703). Goals that act on the cross-repository graph (`ws:align`, `ws:graph`, `ws:overview`, `ws:verify-convergence`, …) still require a workspace. Run `ws:help` to see, per goal, which run on a single repo and which need a workspace.
 
-This page is the comprehensive reference. For a narrative tour of how the goals fit together day-to-day, see the [Workspace Lifecycle](workspace-lifecycle.html)[1] page. For a quick intro to running goals from IntelliJ vs. the command line, see the [Quick Start sections](index.html#_quick_start_intellij_idea)[2] on the workspace plugin home.
+This page is the comprehensive reference. For a narrative tour of how the goals fit together day-to-day, see the [Workspace Lifecycle](workspace-lifecycle.html) page. For a quick intro to running goals from IntelliJ vs. the command line, see the [Quick Start sections](index.html#_quick_start_intellij_idea) on the workspace plugin home.
 
 ## [#conventions](#conventions)Conventions
 
-Draft / publish split Most state-mutating goals come in two forms — `**-draft**`** (preview only, writes a markdown report, makes no on-disk changes) and ``**`-publish` (executes the action). The bare goal name (e.g. `ws:align`) is wired to the draft variant. This is a deliberate convention from ike-issues#200: every workspace mutation is two-phase, with a real chance to audit before committing. When you see `ws:align-publish`, treat the missing `-draft` suffix as the verb. Aggregator goals Most `ws:*` goals are declared as Maven aggregators (`@Mojo(aggregator = true)`). They run once at the workspace root, not once per Maven module. Invoking from any subdirectory works — the goal walks up the filesystem looking for `workspace.yaml`. When none is found, the working-tree and lifecycle goals fall back to the current repository — a working set of one — while graph goals report that a workspace is required. Topological order Working-set members are processed in dependency order. A change to an upstream component is visible to its downstream consumers in the same operation. Reverse-topological order is used for destructive operations (`feature-abandon`, `cleanup`) so downstream is removed first. Per-goal markdown reports Every `ws:*` goal writes its output to a markdown file alongside `workspace.yaml` (e.g., `ws꞉overview.md`, `ws꞉release-draft.md`). The colon in filenames uses the modifier-letter form (`U+A789`) so unix tooling treats the names as plain identifiers. Use `ws:report` to list and open them.  
+Draft / publish split Most state-mutating goals come in two forms — `**-draft**`** (preview only, writes a markdown report, makes no on-disk changes) and ``**`-publish` (executes the action). The bare goal name (e.g. `ws:align`) is wired to the draft variant. This is a deliberate convention from ike-issues#200: every workspace mutation is two-phase, with a real chance to audit before committing. When you see `ws:align-publish`, treat the missing `-draft` suffix as the verb. Aggregator goals Most `ws:*` goals are declared as Maven aggregators (`@Mojo(aggregator = true)`). They run once at the workspace root, not once per Maven module. Invoking from any subdirectory works — the goal walks up the filesystem looking for `workspace.yaml`. When none is found, the working-tree and lifecycle goals fall back to the current repository — a working set of one — while graph goals report that a workspace is required. Topological order Working-set members are processed in dependency order. A change to an upstream component is visible to its downstream consumers in the same operation. Reverse-topological order is used for destructive operations (`feature-abandon`, `cleanup`) so downstream is removed first. Per-goal markdown reports Every `ws:*` goal writes its output to a markdown file alongside `workspace.yaml` (e.g., `ws꞉overview.md`, `ws꞉release-draft.md`). The colon in filenames uses the modifier-letter form (`U+A789`) so unix tooling treats the names as plain identifiers. Use `ws:report` to list and open them. 
 
 ## [#quick-reference](#quick-reference)Quick Reference
 
@@ -81,7 +81,7 @@ Draft / publish split Most state-mutating goals come in two forms — `**-draft*
 
 Goals for adding repositories to a workspace, removing them, and keeping the manifest in sync with the on-disk reality.
 
-### [#ws-scaffold-init--bootstrap-a-workspace](#ws-scaffold-init--bootstrap-a-workspace)ws:scaffold-init — bootstrap a workspace
+### [#wsscaffold-init--bootstrap-a-workspace](#wsscaffold-init--bootstrap-a-workspace)ws:scaffold-init — bootstrap a workspace
 
 Bootstrap a workspace. Idempotent — safe to re-run any time a new subproject is declared in `workspace.yaml`. Two responsibilities:
 
@@ -100,7 +100,7 @@ Folds the retired `ws:create` and `ws:init` goals (ike-issues#393): the same goa
 mvn ws:scaffold-init
 ```
 
-### [#ws-add--add-a-subproject](#ws-add--add-a-subproject)ws:add — add a subproject
+### [#wsadd--add-a-subproject](#wsadd--add-a-subproject)ws:add — add a subproject
 
 Add a single repository to an existing workspace. Given a git URL, the goal:
 
@@ -114,7 +114,7 @@ mvn ws:add -Drepo=git@github.com:IKE-Network/new-component.git
 mvn ws:add -Drepo=... -Dsubproject=custom-name
 ```
 
-### [#ws-remove--remove-a-subproject](#ws-remove--remove-a-subproject)ws:remove — remove a subproject
+### [#wsremove--remove-a-subproject](#wsremove--remove-a-subproject)ws:remove — remove a subproject
 
 Remove a subproject from `workspace.yaml`. Fails with a clear error if any other workspace subproject still depends on the target, unless `-Dforce=true` is passed. The on-disk directory is left in place — the developer chooses whether to delete it.
 
@@ -123,7 +123,7 @@ mvn ws:remove -Dsubproject=old-component
 mvn ws:remove -Dsubproject=old-component -Dforce=true
 ```
 
-### [#ws-stignore--generate-syncthing-ignore-files](#ws-stignore--generate-syncthing-ignore-files)ws:stignore — generate Syncthing ignore files
+### [#wsstignore--generate-syncthing-ignore-files](#wsstignore--generate-syncthing-ignore-files)ws:stignore — generate Syncthing ignore files
 
 Generate Syncthing `.stignore` files for the workspace. Syncthing should sync source files across a developer’s own machines but must **not** sync build artifacts or git metadata (those are machine-specific and trying to sync them produces packfile corruption).
 
@@ -137,7 +137,7 @@ mvn ws:stignore
 
 Read-only goals that report on workspace state without changing anything. Safe to run any time. Most write a markdown report alongside `workspace.yaml`; use `ws:report` to list them.
 
-### [#ws-overview--consolidated-dashboard](#ws-overview--consolidated-dashboard)ws:overview — consolidated dashboard
+### [#wsoverview--consolidated-dashboard](#wsoverview--consolidated-dashboard)ws:overview — consolidated dashboard
 
 Consolidated workspace overview, replacing the former `ws:dashboard`, `ws:status`, and `ws:graph`. Loads the manifest once and presents four sections:
 
@@ -155,7 +155,7 @@ mvn ws:overview -Dformat=dot
 
 This is the right starting point for almost any workspace operation — run it first to see what’s there before mutating anything.
 
-### [#ws-graph--dependency-graph](#ws-graph--dependency-graph)ws:graph — dependency graph
+### [#wsgraph--dependency-graph](#wsgraph--dependency-graph)ws:graph — dependency graph
 
 Print the workspace dependency graph. Displays the members in topological order with their direct dependencies. Optional DOT output for Graphviz rendering.
 
@@ -164,7 +164,7 @@ mvn ws:graph
 mvn ws:graph -Dformat=dot | dot -Tsvg > workspace-graph.svg
 ```
 
-### [#ws-verify-convergence--transitive-dependency-conve](#ws-verify-convergence--transitive-dependency-conve)ws:verify-convergence — transitive dependency convergence
+### [#wsverify-convergence--transitive-dependency-convergence](#wsverify-convergence--transitive-dependency-convergence)ws:verify-convergence — transitive dependency convergence
 
 Check transitive dependency convergence across the working set. Runs `mvn dependency:tree` for each member in topological order, then compares resolved versions of shared dependencies. Divergences (the same artifact resolving to different versions in different components) are reported in the terminal and written to a markdown report. Useful before a release to confirm the workspace is internally consistent.
 
@@ -172,7 +172,7 @@ Check transitive dependency convergence across the working set. Runs `mvn depend
 mvn ws:verify-convergence
 ```
 
-### [#ws-lint--preflight-hygiene-gate](#ws-lint--preflight-hygiene-gate)ws:lint — preflight hygiene gate
+### [#wslint--preflight-hygiene-gate](#wslint--preflight-hygiene-gate)ws:lint — preflight hygiene gate
 
 Surface workspace-hygiene preflight conditions as a standalone gate (ike-issues#217). Runs every preflight condition in **report-only** mode against the current workspace and emits a markdown summary. Always exits 0 — the goal is visibility, not gating.
 
@@ -182,7 +182,7 @@ Catches problems like typo’d `.mvn/jvm.config` comments, uncommitted state, an
 mvn ws:lint
 ```
 
-### [#ws-report--open-per-goal-reports](#ws-report--open-per-goal-reports)ws:report — open per-goal reports
+### [#wsreport--open-per-goal-reports](#wsreport--open-per-goal-reports)ws:report — open per-goal reports
 
 List and open the `ws꞉**.md**`** goal reports at the workspace root. Each `ws:`** goal writes its latest output to a per-goal file (e.g., `ws꞉overview.md`, `ws꞉release-draft.md`). This goal lists those reports newest-first and opens the workspace root in the default file manager so you can browse them.
 
@@ -190,9 +190,9 @@ List and open the `ws꞉**.md**`** goal reports at the workspace root. Each `ws:
 mvn ws:report
 ```
 
-### [#ws-release-status--diagnose-in-flight-releases](#ws-release-status--diagnose-in-flight-releases)ws:release-status — diagnose in-flight releases
+### [#wsrelease-status--diagnose-in-flight-releases](#wsrelease-status--diagnose-in-flight-releases)ws:release-status — diagnose in-flight releases
 
-Read-only diagnostic for any in-flight or partial workspace release. Walks every checked-out member of the working set, collects git artifacts that indicate an interrupted release (`release/****`** branches and unpushed `v`** tags), and prints a punch list with one line per member. The footer recommends a next action — typically pointing at `IKE-RELEASE-RECOVERY.md` for the matching state.
+Read-only diagnostic for any in-flight or partial workspace release. Walks every checked-out member of the working set, collects git artifacts that indicate an interrupted release (`release/`** branches and unpushed `v`** tags), and prints a punch list with one line per member. The footer recommends a next action — typically pointing at `IKE-RELEASE-RECOVERY.md` for the matching state.
 
 Performs no mutations. Run this any time you suspect a release went sideways.
 
@@ -200,7 +200,7 @@ Performs no mutations. Run this any time you suspect a release went sideways.
 mvn ws:release-status
 ```
 
-### [#ws-release-rollback--roll-back-a-failed-release-mi](#ws-release-rollback--roll-back-a-failed-release-mi)ws:release-rollback — roll back a failed release mission
+### [#wsrelease-rollback--roll-back-a-failed-release-mission](#wsrelease-rollback--roll-back-a-failed-release-mission)ws:release-rollback — roll back a failed release mission
 
 Roll the working set back from a failed release mission (ike-issues#1010). For the root and every cloned member, the draft reports the release-cadence commits sitting unpushed on top of the branch, the local tags on them, and the commit a rollback would reset to. Pushed history is never touched; repositories with uncommitted changes, no upstream, or mission commits buried beneath later work are reported as refusals — and the publish is all-or-nothing over the refusal-free set.
 
@@ -209,7 +209,7 @@ mvn ws:release-rollback-draft
 mvn ws:release-rollback-publish
 ```
 
-### [#ws-check-branch--defensive-git-hook](#ws-check-branch--defensive-git-hook)ws:check-branch — defensive git hook
+### [#wscheck-branch--defensive-git-hook](#wscheck-branch--defensive-git-hook)ws:check-branch — defensive git hook
 
 Defensive git hook — warns when a branch is created or switched outside the workspace tooling. Intended to be called from a `post-checkout` git hook:
 
@@ -224,7 +224,7 @@ In workspace mode, compares the current branch to the expected branch in `worksp
 
 Daily git fan-out — pull, push, commit, and the combined `sync`. All operate in topological order across every member of the working set.
 
-### [#ws-sync--pull-refresh-main-push](#ws-sync--pull-refresh-main-push)ws:sync — pull + refresh-main + push
+### [#wssync--pull--refresh-main--push](#wssync--pull--refresh-main--push)ws:sync — pull + refresh-main + push
 
 Pull then push across the workspace — the everyday "sync" operation: bring down what teammates have committed, then push up what I have committed. Replaces the daily two-step of `ws:pull` followed by `ws:push`.
 
@@ -234,7 +234,7 @@ Between the pull and the push, this goal also refreshes local `main` from `origi
 mvn ws:sync
 ```
 
-### [#ws-pull--git-pull-across-the-workspace](#ws-pull--git-pull-across-the-workspace)ws:pull — git pull across the workspace
+### [#wspull--git-pull-across-the-workspace](#wspull--git-pull-across-the-workspace)ws:pull — git pull across the workspace
 
 Pull latest changes across the workspace. When the workspace root is itself a git repository (i.e. has a `.git` directory), it is pulled first so any changes to the root POM or `workspace.yaml` land before subproject operations run. Runs `git pull --rebase` in each cloned subproject directory in topological order. Uninitialized components are skipped with a warning.
 
@@ -242,7 +242,7 @@ Pull latest changes across the workspace. When the workspace root is itself a gi
 mvn ws:pull
 ```
 
-### [#ws-push--git-push-across-the-workspace](#ws-push--git-push-across-the-workspace)ws:push — git push across the workspace
+### [#wspush--git-push-across-the-workspace](#wspush--git-push-across-the-workspace)ws:push — git push across the workspace
 
 Push with a VCS-bridge catch-up preamble. When run from a workspace root, iterates every member of the working set in topological order and pushes each. When run from a single repository, operates on the current directory only.
 
@@ -251,7 +251,7 @@ mvn ws:push
 mvn ws:push -DskipUpToDate=false   # show "already up to date" lines
 ```
 
-### [#ws-commit-draft--preview-a-workspace-wide-commit](#ws-commit-draft--preview-a-workspace-wide-commit)ws:commit-draft — preview a workspace-wide commit
+### [#wscommit-draft--preview-a-workspace-wide-commit](#wscommit-draft--preview-a-workspace-wide-commit)ws:commit-draft — preview a workspace-wide commit
 
 Read-only preview of what `ws:commit-publish` would commit. Scans every repository (workspace root plus each cloned subproject) and reports, per repo, the tracked-modified and untracked-not-ignored work that would be staged and committed. No catch-up, no `git add`, no commit, no push, and no `-Dmessage` required. The `.mvn/jvm.config` preflight lint still runs as a hard gate, since a hash-comment’d `jvm.config` would block the real commit.
 
@@ -259,7 +259,7 @@ Read-only preview of what `ws:commit-publish` would commit. Scans every reposito
 mvn ws:commit-draft
 ```
 
-### [#ws-commit-publish--stage-commit-workspace-wide](#ws-commit-publish--stage-commit-workspace-wide)ws:commit-publish — stage + commit workspace-wide
+### [#wscommit-publish--stage--commit-workspace-wide](#wscommit-publish--stage--commit-workspace-wide)ws:commit-publish — stage + commit workspace-wide
 
 Commit with a VCS-bridge catch-up preamble. By default stages all tracked-modified and untracked-not-ignored files before committing — workspace-wide goals routinely create new files (scaffold writes, IDE settings cleanup, generated configs) and a staged-only default silently dropped them. Pass `-DstagedOnly` to commit only what is already in the index.
 
@@ -274,7 +274,7 @@ mvn ws:commit-publish -Dmessage="fix: deploy-path bug"
 mvn ws:commit-publish -Dmessage="..." -DstagedOnly
 ```
 
-### [#ws-refresh-main--refresh-local-main-from-origin](#ws-refresh-main--refresh-local-main-from-origin)ws:refresh-main — refresh local main from origin
+### [#wsrefresh-main--refresh-local-main-from-origin](#wsrefresh-main--refresh-local-main-from-origin)ws:refresh-main — refresh local main from origin
 
 Refresh local `main` from `origin/main` across the workspace. For each member, fetches origin and reconciles local main with `origin/main`:
 
@@ -292,7 +292,7 @@ mvn ws:refresh-main
 
 Coordinated feature branches across the working set. The flow: `feature-start` → `update-feature` (as needed) → `feature-finish-{merge,squash}` or `feature-abandon`.
 
-### [#ws-feature-start--coordinated-feature-branch](#ws-feature-start--coordinated-feature-branch)ws:feature-start — coordinated feature branch
+### [#wsfeature-start--coordinated-feature-branch](#wsfeature-start--coordinated-feature-branch)ws:feature-start — coordinated feature branch
 
 Create a feature branch with a consistent name across the whole working set, optionally setting branch-qualified SNAPSHOT versions in each POM.
 
@@ -312,7 +312,7 @@ mvn ws:feature-start-draft -Dfeature=my-feature       # preview
 mvn ws:feature-start-publish -Dfeature=my-feature     # execute
 ```
 
-### [#ws-feature-start-sibling--an-isolated-working-set-](#ws-feature-start-sibling--an-isolated-working-set-)ws:feature-start-sibling — an isolated working set for one feature
+### [#wsfeature-start-sibling--an-isolated-working-set-for-one-feature](#wsfeature-start-sibling--an-isolated-working-set-for-one-feature)ws:feature-start-sibling — an isolated working set for one feature
 
 Create a **sibling working set**: a whole second copy of the workspace, `<parent>꞉<feature>` beside its parent (the separator is `꞉`, U+A789 — filesystem-legal where a plain colon is not), every member on branch `feature/<feature>`. The parent stays on its mainline; isolation comes from the directory boundary, so both can build, run, and be open in IDEs at the same time — or on different machines.
 
@@ -325,7 +325,7 @@ mvn ws:feature-start-sibling-draft -Dfeature=issue-42     # preview
 mvn ws:feature-start-sibling-publish -Dfeature=issue-42   # create ike-komet-wsr꞉issue-42
 ```
 
-### [#ws-sibling-list--inventory-the-siblings](#ws-sibling-list--inventory-the-siblings)ws:sibling-list — inventory the siblings
+### [#wssibling-list--inventory-the-siblings](#wssibling-list--inventory-the-siblings)ws:sibling-list — inventory the siblings
 
 List every sibling of this workspace with the facts that matter for lifecycle decisions: real git state (husk-aware), origin wiring (local parent vs the legacy remote-remote shape awaiting repair), and **landed-ness** — whether the sibling’s work is contained in the parent, its tree matches the parent tip, or its only commits are goal-authored `ws:` bookkeeping.
 
@@ -333,7 +333,7 @@ List every sibling of this workspace with the facts that matter for lifecycle de
 mvn ws:sibling-list
 ```
 
-### [#ws-sibling-remove--assessed-removal](#ws-sibling-remove--assessed-removal)ws:sibling-remove — assessed removal
+### [#wssibling-remove--assessed-removal](#wssibling-remove--assessed-removal)ws:sibling-remove — assessed removal
 
 Remove a sibling working set safely. The draft enumerates any unlanded work with remediation (finish it, or force-discard deliberately); the publish deletes the sibling directory sync-safely and garbage-collects its lease record. This is the supported way to delete a sibling — never remove `.git` entries by hand inside the synced folder.
 
@@ -342,7 +342,7 @@ mvn ws:sibling-remove-draft -Dsibling=issue-42     # assess
 mvn ws:sibling-remove-publish -Dsibling=issue-42   # remove + lease GC
 ```
 
-### [#ws-feature-pr--one-review-pr-per-subproject-as-a-s](#ws-feature-pr--one-review-pr-per-subproject-as-a-s)ws:feature-pr — one review PR per subproject, as a set
+### [#wsfeature-pr--one-review-pr-per-subproject-as-a-set](#wsfeature-pr--one-review-pr-per-subproject-as-a-set)ws:feature-pr — one review PR per subproject, as a set
 
 A workspace feature routinely spans several repositories, and GitHub has no pull request that covers more than one. This goal opens one review PR per subproject carrying the feature branch and cross-links them, so a reviewer sees the whole change set rather than approving an incomplete picture. The draft previews the set; the publish opens it.
 
@@ -351,16 +351,16 @@ mvn ws:feature-pr-draft -Dfeature=my-feature
 mvn ws:feature-pr-publish -Dfeature=my-feature
 ```
 
-### [#ws-feature-track--adopt-an-existing-feature-branch](#ws-feature-track--adopt-an-existing-feature-branch)ws:feature-track — adopt an existing feature branch
+### [#wsfeature-track--adopt-an-existing-feature-branch](#wsfeature-track--adopt-an-existing-feature-branch)ws:feature-track — adopt an existing feature branch
 
-Where `ws:feature-start` **creates** `feature/<name>` from the current tip, this goal checks out a branch that already exists — typically pushed from another clone or by another developer — in exactly the subprojects named by `-Daffected`, and aligns `workspace.yaml’s `branch:` fields with the result.
+Where `ws:feature-start` **creates** `feature/<name>` from the current tip, this goal checks out a branch that already exists — typically pushed from another clone or by another developer — in exactly the subprojects named by `-Daffected`, and aligns `workspace.yaml's `branch:` fields with the result.
 
 ```
 mvn ws:feature-track-draft -Dfeature=my-feature -Daffected=komet,tinkar-core
 mvn ws:feature-track-publish -Dfeature=my-feature -Daffected=komet,tinkar-core
 ```
 
-### [#ws-update-feature--incorporate-main-into-feature](#ws-update-feature--incorporate-main-into-feature)ws:update-feature — incorporate main into feature
+### [#wsupdate-feature--incorporate-main-into-feature](#wsupdate-feature--incorporate-main-into-feature)ws:update-feature — incorporate main into feature
 
 Update the current feature branch by incorporating changes from main. For long-lived feature branches, main may advance significantly. This goal brings the feature branch up to date, surfacing merge conflicts incrementally rather than at feature-finish time.
 
@@ -373,7 +373,7 @@ mvn ws:update-feature-draft                       # preview vs origin/main
 mvn ws:update-feature-publish                     # merge main into the feature
 ```
 
-### [#ws-feature-finish-squash--squash-merge-back-to-mai](#ws-feature-finish-squash--squash-merge-back-to-mai)ws:feature-finish-squash — squash-merge back to main
+### [#wsfeature-finish-squash--squash-merge-back-to-main](#wsfeature-finish-squash--squash-merge-back-to-main)ws:feature-finish-squash — squash-merge back to main
 
 Squash-merge a feature branch back to the target branch. **The default and recommended strategy for finishing features.** The feature branch’s full commit history is compressed into a single commit on the target branch. The feature branch is deleted after the finish because squash creates divergent history — continuing on the branch would cause conflicts — but only once the push phase below has confirmed the squashes are on origin.
 
@@ -399,7 +399,7 @@ In a sibling, `-DdeleteSibling` removes the whole sibling working set after the 
 
 Finish and release goals **confirm the working-set lease** before mutating (single writer per working set, ike-issues#1005), and a sibling finish takes a confirmed short-hold on the **parent’s** lease while it fast-forwards. A goal that reports the working set as leased to another machine is telling you to finish there — or to take the lease over deliberately from the IDE — not to retry.
 
-### [#ws-feature-finish-merge--no-fast-forward-merge](#ws-feature-finish-merge--no-fast-forward-merge)ws:feature-finish-merge — no-fast-forward merge
+### [#wsfeature-finish-merge--no-fast-forward-merge](#wsfeature-finish-merge--no-fast-forward-merge)ws:feature-finish-merge — no-fast-forward merge
 
 No-fast-forward merge of a feature branch, preserving full history. Creates a merge commit on the target branch containing the complete feature branch history. The feature branch is **kept alive** by default because histories stay connected — the branch can continue to receive work and be merged again later.
 
@@ -412,7 +412,7 @@ mvn ws:feature-finish-merge-draft -Dfeature=long-running
 mvn ws:feature-finish-merge-publish -Dfeature=long-running
 ```
 
-### [#ws-feature-abandon--discard-a-feature-branch](#ws-feature-abandon--discard-a-feature-branch)ws:feature-abandon — discard a feature branch
+### [#wsfeature-abandon--discard-a-feature-branch](#wsfeature-abandon--discard-a-feature-branch)ws:feature-abandon — discard a feature branch
 
 Abandon a feature branch across the whole working set. The draft variant previews what would be abandoned — which components, how many unmerged commits, what would be lost. The publish variant prompts for confirmation then executes the deletion.
 
@@ -425,7 +425,7 @@ mvn ws:feature-abandon-publish -Dforce=true        # skip confirmation
 mvn ws:feature-abandon-publish -DdeleteRemote=true # also delete remote branches
 ```
 
-### [#ws-switch--coordinated-branch-checkout](#ws-switch--coordinated-branch-checkout)ws:switch — coordinated branch checkout
+### [#wsswitch--coordinated-branch-checkout](#wsswitch--coordinated-branch-checkout)ws:switch — coordinated branch checkout
 
 Switch the whole working set to a different branch with optional auto-stash. Discovers all local feature branches across the working set and presents an interactive menu. The selected branch is checked out in every member that has it locally; members without the branch are skipped with a warning.
 
@@ -441,7 +441,7 @@ mvn ws:switch-publish -Dbranch=feature/foo       # non-interactive
 
 Goals that keep inter-subproject dependency declarations in step. The two-axis split (POM versions vs. git branches; ike-issues#200) puts daily-driver behavior in `align` and recovery behavior in `reconcile-branches`.
 
-### [#ws-align--sync-inter-subproject-dependency-version](#ws-align--sync-inter-subproject-dependency-version)ws:align — sync inter-subproject dependency versions
+### [#wsalign--sync-inter-subproject-dependency-versions](#wsalign--sync-inter-subproject-dependency-versions)ws:align — sync inter-subproject dependency versions
 
 Align inter-subproject dependency versions in POM files. For each member on disk, scans POM dependency declarations. When a dependency’s `groupId:artifactId` matches another workspace subproject, updates the version to match that subproject’s current POM version.
 
@@ -454,7 +454,7 @@ mvn ws:align-draft                              # preview
 mvn ws:align-publish                            # apply
 ```
 
-### [#ws-reconcile-branches--recover-yaml-git-mismatch](#ws-reconcile-branches--recover-yaml-git-mismatch)ws:reconcile-branches — recover yaml/git mismatch
+### [#wsreconcile-branches--recover-yamlgit-mismatch](#wsreconcile-branches--recover-yamlgit-mismatch)ws:reconcile-branches — recover yaml/git mismatch
 
 Reconcile `workspace.yaml` branch fields against on-disk git state. Recovery / rare-use, separated from `ws:align` per ike-issues#200’s two-axis split. Each goal name describes its audience: `ws:align` is the safe daily POM convergence; `ws:reconcile-branches` is the recovery operation when the YAML’s recorded branch and the actual git checkout have drifted apart.
 
@@ -467,7 +467,7 @@ mvn ws:reconcile-branches-publish              # apply
 
 Coordinated multi-repo releases. The flow: `release-draft` → `release-publish` → `post-release`. `checkpoint-{draft,publish}` is the no-deploy variant: tag everything at HEAD without changing POM versions or pushing artifacts.
 
-### [#ws-release-draft--preview-a-coordinated-release](#ws-release-draft--preview-a-coordinated-release)ws:release-draft — preview a coordinated release
+### [#wsrelease-draft--preview-a-coordinated-release](#wsrelease-draft--preview-a-coordinated-release)ws:release-draft — preview a coordinated release
 
 Workspace-level release — releases all release-pending checked-out components (those with unreleased commits since their last tag, or cascaded as transitive downstream of one) in topological order. Scans for commits since each member’s last release tag. The release set is the union of:
 
@@ -480,7 +480,7 @@ The draft variant writes the planned actions to `ws꞉release-draft.md` and exit
 mvn ws:release-draft
 ```
 
-### [#ws-release-publish--execute-the-reactor-pass-relea](#ws-release-publish--execute-the-reactor-pass-relea)ws:release-publish — execute the reactor-pass release cycle
+### [#wsrelease-publish--execute-the-reactor-pass-release-cycle](#wsrelease-publish--execute-the-reactor-pass-release-cycle)ws:release-publish — execute the reactor-pass release cycle
 
 Execute one checkpoint-shaped release cycle of the working set (ike-issues#997): a **single version pass** de-qualifies every releasing member together (each on its own version line, every tracked reference moving to the referenced artifact’s release value), **one reactor build** verifies everything at release versions, `deploy` runs scoped to exactly the releasing set, an annotated release tag lands per releasing repository and the workspace root, the cycle’s `releases/release-<cycle>.yaml` record rides in the root’s tagged tree, the set post-bumps to its next development versions, and everything pushes. Members outside the release set are untouched — no increment, no tag, no deploy.
 
@@ -506,7 +506,7 @@ mvn ws:release-publish -Dcycle=my-cycle-1
 mvn ws:release-publish -DskipCycleTests=true # verify without tests
 ```
 
-### [#ws-post-release--bump-to-next-development-version](#ws-post-release--bump-to-next-development-version)ws:post-release — bump to next development version
+### [#wspost-release--bump-to-next-development-version](#wspost-release--bump-to-next-development-version)ws:post-release — bump to next development version
 
 Post-release version bump across the working set. After a release, this goal bumps every checked-out member’s POM version to the specified `nextVersion`, commits the change, pushes if a remote exists, then updates `workspace.yaml` to reflect the new development versions.
 
@@ -516,7 +516,7 @@ Components are processed in topological order so that upstream components bump b
 mvn ws:post-release -DnextVersion=22-SNAPSHOT
 ```
 
-### [#ws-release-notes--milestone-derived-release-notes](#ws-release-notes--milestone-derived-release-notes)ws:release-notes — milestone-derived release notes
+### [#wsrelease-notes--milestone-derived-release-notes](#wsrelease-notes--milestone-derived-release-notes)ws:release-notes — milestone-derived release notes
 
 Generate release notes from a GitHub milestone’s closed issues. Queries the GitHub REST API to find the named milestone, lists its closed issues, and categorizes them by label into Fixes, Enhancements, and Internal sections. Delegates to the same support class used by `ike:release` to auto-populate GitHub Release notes.
 
@@ -524,7 +524,7 @@ Generate release notes from a GitHub milestone’s closed issues. Queries the Gi
 mvn ws:release-notes -Dmilestone="my-component v17"
 ```
 
-### [#ws-record-release--pin-a-released-member](#ws-record-release--pin-a-released-member)ws:record-release — pin a released member
+### [#wsrecord-release--pin-a-released-member](#wsrecord-release--pin-a-released-member)ws:record-release — pin a released member
 
 Record a member’s release in the working set (IKE-Network/ike-issues#973). After a member’s single-repo `ike:release-publish` succeeds, the publish variant writes — in one workspace-root commit — the member’s manifest transition to `state: tag-aligned, kind: release, tag: vN` with its `version:` field pinned at the released version, plus the member’s row (version, tag, sha, date) in `releases/release-<cycle>.yaml`.
 
@@ -538,7 +538,7 @@ mvn ws:record-release-draft -Dmember=komet-bom           # preview
 mvn ws:record-release-publish -Dmember=komet-bom -Dcycle=komet-wsr-1
 ```
 
-### [#ws-checkpoint--tag-without-releasing](#ws-checkpoint--tag-without-releasing)ws:checkpoint — tag without releasing
+### [#wscheckpoint--tag-without-releasing](#wscheckpoint--tag-without-releasing)ws:checkpoint — tag without releasing
 
 Create a workspace checkpoint — tag every member at its current HEAD and record the snapshot in a YAML manifest. A checkpoint records the current state of the workspace for reproduction. **It is not a build or a release** — no POM version changes, no compilation, no deployment. TeamCity watches for checkpoint tags on the workspace repo and handles CI verification.
 
@@ -553,7 +553,7 @@ mvn ws:checkpoint-publish -Dlabel=before-major-refactor
 
 The convergence pattern (ike-issues#393) collapses what used to be a half-dozen overlapping reconcilers (`ws:fix`, `ws:verify`, `ws:set-parent`, `ws:scaffold-upgrade`, the eager bits of `ws:align`) into a single routine workspace-state reconciler driven by the `ReconcilerRegistry`. The draft variant reports drift; the publish variant applies it. Both walk the same ordered registry of reconcilers — they read identical state and produce identical findings.
 
-### [#ws-scaffold-draft--drift-report](#ws-scaffold-draft--drift-report)ws:scaffold-draft — drift report
+### [#wsscaffold-draft--drift-report](#wsscaffold-draft--drift-report)ws:scaffold-draft — drift report
 
 Read-only convergence drift report. Walks the `ReconcilerRegistry` in declared order and asks each reconciler to surface drift between the workspace’s current state and its declared convention:
 
@@ -569,7 +569,7 @@ Writes the drift to `ws꞉scaffold-draft.md`; makes no on-disk changes. Pair wit
 mvn ws:scaffold-draft
 ```
 
-### [#ws-scaffold-publish--apply-convergence-drift](#ws-scaffold-publish--apply-convergence-drift)ws:scaffold-publish — apply convergence drift
+### [#wsscaffold-publish--apply-convergence-drift](#wsscaffold-publish--apply-convergence-drift)ws:scaffold-publish — apply convergence drift
 
 Apply the drift reported by `ws:scaffold-draft`. Drives the same `ReconcilerRegistry`, but each reconciler is asked to **apply** rather than report. This is the routine workspace-state reconciler — the one to run after any state-changing operation to converge the workspace back to its declared convention.
 
@@ -594,7 +594,7 @@ mvn ws:scaffold-publish -DupdateFields=false -DupdateParent=false  # alignment-o
 
 ## [#cleanup-goals](#cleanup-goals)Cleanup Goals
 
-### [#ws-cleanup-draft--list-finished-feature-branches](#ws-cleanup-draft--list-finished-feature-branches)ws:cleanup-draft — list finished feature branches
+### [#wscleanup-draft--list-finished-feature-branches](#wscleanup-draft--list-finished-feature-branches)ws:cleanup-draft — list finished feature branches
 
 Scan the whole working set — every subproject **and the workspace root repo** — for finished feature branches and report them. Each `feature/*` branch is classified three ways (ike-issues#946):
 
@@ -609,7 +609,7 @@ mvn ws:cleanup-draft                           # list (default target=main)
 mvn ws:cleanup-draft -DtargetBranch=develop    # check against develop
 ```
 
-### [#ws-cleanup-publish--delete-finished-branches](#ws-cleanup-publish--delete-finished-branches)ws:cleanup-publish — delete finished branches
+### [#wscleanup-publish--delete-finished-branches](#wscleanup-publish--delete-finished-branches)ws:cleanup-publish — delete finished branches
 
 Execute workspace cleanup — delete the merged **and** squash-merged feature branches, local and remote (remote deletion soft-fails when branch protection forbids it). This is the sanctioned collection path after a `-Dpush=false` or push-interrupted feature-finish left branches in place.
 
@@ -619,7 +619,7 @@ mvn ws:cleanup-publish
 
 ## [#see-also](#see-also)See also
 
-- [Workspace Lifecycle](workspace-lifecycle.html)[1] — narrative tour showing how the goals connect across a typical day, week, and release.
-- [Workspace Getting Started](../workspace-getting-started.html)[3] — hands-on first-time setup walkthrough.
-- [Workspace Plugin Home](index.html)[4] — module overview.
+- [Workspace Lifecycle](workspace-lifecycle.html) — narrative tour showing how the goals connect across a typical day, week, and release.
+- [Workspace Getting Started](../workspace-getting-started.html) — hands-on first-time setup walkthrough.
+- [Workspace Plugin Home](index.html) — module overview.
 - `ws:help` — runtime help generated from the `WsGoal` enum (single source of truth; never drifts from the actual plugin).

@@ -1,12 +1,12 @@
 ---
-date_published: 2026-09-29
-date_modified: 2026-09-29
+date_published: 2026-10-01
+date_modified: 2026-10-01
 canonical_url: https://ike.network/ike-platform/ike-workspace-maven-plugin/workspace-version-resolution.html
 ---
 
 # Workspace Version Resolution
 
-This page is the durable design record for how a working set decides which version an intra-set dependency binds to — the competition between version-aligned snapshot modules co-built in the reactor and released modules with the same group and artifact available from a repository. Settled 2026-08-16; tracked as IKE-Network/ike-issues#1019. For the release cycle this rule serves, see [the ws:* goal reference](ws-goals.html)[1]; for the day-to-day states, see [the workspace lifecycle](workspace-lifecycle.html)[2].
+This page is the durable design record for how a working set decides which version an intra-set dependency binds to — the competition between version-aligned snapshot modules co-built in the reactor and released modules with the same group and artifact available from a repository. Settled 2026-08-16; tracked as IKE-Network/ike-issues#1019. For the release cycle this rule serves, see [the ws:* goal reference](ws-goals.html); for the day-to-day states, see [the workspace lifecycle](workspace-lifecycle.html).
 
 ## [#the-competition](#the-competition)The competition
 

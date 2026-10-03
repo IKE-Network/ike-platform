@@ -1,6 +1,6 @@
 ---
-date_published: 2026-09-29
-date_modified: 2026-09-29
+date_published: 2026-10-01
+date_modified: 2026-10-01
 canonical_url: https://ike.network/ike-platform/cutting-a-release.html
 ---
 
@@ -35,11 +35,11 @@ Any release runs **two ways** behind the same engine (`ike:release-publish` / `w
 ike-tooling  →  ike-docs  →  ike-platform  →  { downstream consumers }
 ```
 
-Always upstream-first. `ike-docs` consumes `ike-tooling’s `ike-maven-plugin`. `ike-platform’s `ike-parent` consumes both. Downstream consumer repos (workspace aggregators, doc-only projects, ike-example-its) inherit from `ike-parent`. Every release of an upstream causes a property bump in everything downstream — that bump is what triggers a downstream release in the same mission.
+Always upstream-first. `ike-docs` consumes `ike-tooling's `ike-maven-plugin`. `ike-platform's `ike-parent` consumes both. Downstream consumer repos (workspace aggregators, doc-only projects, ike-example-its) inherit from `ike-parent`. Every release of an upstream causes a property bump in everything downstream — that bump is what triggers a downstream release in the same mission.
 
-This cascade is **structural**, not driven by extension-realm timing. See [Design rationale](index.html#design_rationale)[1] on the overview page for why no plugin in this ecosystem uses `<extensions>true</extensions>`.
+This cascade is **structural**, not driven by extension-realm timing. See [Design rationale](index.html#design_rationale) on the overview page for why no plugin in this ecosystem uses `<extensions>true</extensions>`.
 
-## [#what-a-publish-does-to-your-version-pins-the-auto-](#what-a-publish-does-to-your-version-pins-the-auto-)What a publish does to your version pins (the auto-upgrade)
+## [#what-a-publish-does-to-your-version-pins-the-auto-upgrade](#what-a-publish-does-to-your-version-pins-the-auto-upgrade)What a publish does to your version pins (the auto-upgrade)
 
 `ike:release-publish` **rewrites your `*GA*` upstream version pins to the latest released upstream before it cuts the release** — the "align upstream cascade versions" step (B8). This is deliberate: it guarantees a single-repo release never ships against a stale foundation. You do not need to bump `network.ike.tooling*GA*ike-tooling__VERSION` (and friends) by hand before releasing — the publish does it, commits the bump with a message naming each upgrade (`release: align upstream cascade — ike-tooling 221→222, ike-docs 75→76`), and surfaces a **Foundation upgrades** section in the GitHub release notes so a cascade-only rebuild announces what it was rebuilt against rather than "no changes" (IKE-Network/ike-issues#706).
 
@@ -61,7 +61,7 @@ If the artifact does not resolve at the demanded scope, the build **fails before
 
 The order above is not maintained by hand, and not maintained centrally. Each foundation repo version-controls its own `src/main/cascade/release-cascade.yaml` declaring only its own `upstream` and `downstream` edges; the full ordered graph is assembled by traversal (IKE-Network/ike-issues#420). `ike:release-draft` previews the downstream repos a release will make stale; `ike:release-publish` aligns upstream `${X.version}` pins and prints a footer naming the next cascade step; `ike:release-cascade` assembles the graph and walks it end to end. To change the cascade, edit the relevant repo’s own manifest.
 
-## [#before-a-cascade--scope-by-coherence-not-jar-linka](#before-a-cascade--scope-by-coherence-not-jar-linka)Before a cascade — scope by coherence, not jar-linkage
+## [#before-a-cascade--scope-by-coherence-not-jar-linkage](#before-a-cascade--scope-by-coherence-not-jar-linkage)Before a cascade — scope by coherence, not jar-linkage
 
 A release ships a **coherent versioned state: code + standards  
 docs.** A change in `ike-build-standards` (the `claude`/`docs`/`scaffold` bundles — `IKE-WORKSPACE.md`, `MAVEN.md`, scaffold templates) is a real versioned change: `ike-parent` pins the **GA** build-standards version and unpacks it at `validate`, so a new standard reaches consumers **only after a tooling release bumps that pin down the cascade.** Do not scope a release by "does the code link against it?" — scope by coherence. Shipping platform code whose behavior its own embedded standard contradicts is an incomplete release.
@@ -87,7 +87,7 @@ Plan for **30–45 minutes** for a full foundation-plus-consumer cascade. The do
 
 - Per-repo `mvn clean install` + `mvn site site:stage` runs.
 - GitHub Pages publishes (gh-pages branch force-push per repo).
-- Org-site auto-registration on each release ([ike.network/](https://ike.network/)[2] landing page rebuild).
+- Org-site auto-registration on each release ([ike.network/](https://ike.network/) landing page rebuild).
 - Nexus deploys with GPG signing (Bouncy Castle).
 
 Single-repo releases of a foundation repo are typically **5–10 minutes** end to end.
@@ -141,16 +141,16 @@ The goal hits six public-URL targets in one pass and reports green/red for each.
 
 | Target | What it confirms |
 | --- | --- |
-| `[https://ike.network/<repo>/](https://ike.network/<repo>/)[3]` | Current release served at the root path. |
-| `[https://ike.network/<repo>/<N>/](https://ike.network/<repo>/<N>/)[4]` | Version-pinned snapshot for the just-released `<N>`. |
-| `[https://ike.network/<repo>/latest/](https://ike.network/<repo>/latest/)[5]` | Mirror of the just-released `<N>` (auto-updated by ike-issues#303). |
-| `[https://ike.network/](https://ike.network/)[2]` | Org landing page (auto-updated — registration is part of the `ike:site-publish` flow; ike-issues#367, #398). |
+| `[https://ike.network/<repo>/](https://ike.network/<repo>/)` | Current release served at the root path. |
+| `[https://ike.network/<repo>/<N>/](https://ike.network/<repo>/<N>/)` | Version-pinned snapshot for the just-released `<N>`. |
+| `[https://ike.network/<repo>/latest/](https://ike.network/<repo>/latest/)` | Mirror of the just-released `<N>` (auto-updated by ike-issues#303). |
+| `[https://ike.network/](https://ike.network/)` | Org landing page (auto-updated — registration is part of the `ike:site-publish` flow; ike-issues#367, #398). |
 | Nexus | Artifact at the released version is resolvable. |
 | GitHub release | Tag `v<N>` with auto-generated notes. |
 
 ## [#gotchas](#gotchas)Gotchas
 
-### [#workspace-root-release-runs-last-in-ws-release-pub](#workspace-root-release-runs-last-in-ws-release-pub)Workspace-root release runs LAST in `ws:release-publish`
+### [#workspace-root-release-runs-last-in-wsrelease-publish](#workspace-root-release-runs-last-in-wsrelease-publish)Workspace-root release runs LAST in `ws:release-publish`
 
 After every subproject in the cascade tags, the workspace root itself tags — anchoring the mission to a single commit on the workspace’s main. Don’t be surprised by the extra commit at the end. It’s intentional (ike-issues#326, #328).
 
@@ -162,7 +162,7 @@ The workspace root release is gated on `hasUnreleasedWorkspaceChanges(root)` —
 
 ### [#site-url-conventions-are-post-304-only](#site-url-conventions-are-post-304-only)Site URL conventions are post-#304 only
 
-Pre-#304 the platform used `scpexe://proxy/srv/ike-site/…​` site URLs. Post-#304 the canonical site distribution is GitHub Pages served at `[https://ike.network/<repo>/](https://ike.network/<repo>/)[3]` via the org CNAME. A `<site>` URL with a `scpexe://` scheme on a new module is a release-blocker — the wagon is no longer wired up.
+Pre-#304 the platform used `scpexe://proxy/srv/ike-site/…​` site URLs. Post-#304 the canonical site distribution is GitHub Pages served at `[https://ike.network/<repo>/](https://ike.network/<repo>/)` via the org CNAME. A `<site>` URL with a `scpexe://` scheme on a new module is a release-blocker — the wagon is no longer wired up.
 
 A preflight check that fails on `scpexe://` in any `<site>` URL is a tracked followup. Until it lands, scan new modules manually with `grep -r 'scpexe:' .`.
 
@@ -204,16 +204,16 @@ The release flow’s own commits already use explicit paths; the risk is in huma
 | GitHub Pages publishes but ike.network landing page didn’t update | Auto-register may have hit a transient git lock or network issue. From a checkout of the release tag, run `mvn ike:site-publish`. The release itself is complete; this is just the org-site sync. |
 | `git checkout main` fails after a release | Your worktree has uncommitted changes (likely something a tool wrote mid-flight). Commit or stash them, then push the release tag + main, then create the GitHub release manually: `gh release create v<N> --title <N> --generate-notes --verify-tag`. See feedback_release_roll_forward in the operator memory. |
 
-## [#tests-run-during-the-release--keep-sandboxes-herme](#tests-run-during-the-release--keep-sandboxes-herme)Tests run during the release — keep sandboxes hermetic
+## [#tests-run-during-the-release--keep-sandboxes-hermetic](#tests-run-during-the-release--keep-sandboxes-hermetic)Tests run during the release — keep sandboxes hermetic
 
 The release verify (`mvn clean install`) runs the full suite. Any test that shells out to real `git` **must not inherit host git config** — a CI agent with a failing global `core.hooksPath` hook, `commit.gpgsign` without a key, or a different `core.excludesFile` will break the release verify on that agent but not on yours. Make the sandbox hermetic (`GIT_CONFIG_GLOBAL` → a checked-in test gitconfig, `GIT_CONFIG_NOSYSTEM=1`, per-repo empty `core.hooksPath`  
 `gpgsign=false`); mirror `TestWorkspaceHelper.configureHermetic`. Builds must be machine-independent (IKE-Network/ike-issues#560).
 
 ## [#see-also](#see-also)See also
 
-- The [release cascade model](https://ike.network/ike-tooling/ike-maven-plugin/release-cascade.html)[6] — the loosely-coupled, manifest-per-repo design behind the cascade order above (authored in `ike-tooling`).
+- The [release cascade model](https://ike.network/ike-tooling/ike-maven-plugin/release-cascade.html) — the loosely-coupled, manifest-per-repo design behind the cascade order above (authored in `ike-tooling`).
 - **Maintainer operations** (in `ike-infrastructure`, `release-operations.adoc`) — the TeamCity foundation cascade, REST triggers, `op`/1Password credential flow, signing-agent provisioning, hands-off monitoring, and the Maven Central catch-up procedure.
-- [Workspace getting started](workspace-getting-started.html)[7] — setting up a `-ws` aggregator the first time.
-- [ike-maven-plugin docs](https://ike.network/ike-tooling/ike-maven-plugin/)[8] — single-repo release goal.
-- [Self-host bootstrap pattern](https://ike.network/ike-tooling/ike-maven-plugin/self-host-bootstrap.html)[9] — why `ike-tooling’s own release has the extra X-SNAPSHOT step.
-- [Issue tracker](https://github.com/IKE-Network/ike-issues)[10] — release-flow bugs and enhancement tracking.
+- [Workspace getting started](workspace-getting-started.html) — setting up a `-ws` aggregator the first time.
+- [ike-maven-plugin docs](https://ike.network/ike-tooling/ike-maven-plugin/) — single-repo release goal.
+- [Self-host bootstrap pattern](https://ike.network/ike-tooling/ike-maven-plugin/self-host-bootstrap.html) — why `ike-tooling’s own release has the extra X-SNAPSHOT step.
+- [Issue tracker](https://github.com/IKE-Network/ike-issues) — release-flow bugs and enhancement tracking.

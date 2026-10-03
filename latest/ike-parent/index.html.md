@@ -1,6 +1,6 @@
 ---
-date_published: 2026-09-29
-date_modified: 2026-09-29
+date_published: 2026-10-01
+date_modified: 2026-10-01
 canonical_url: https://ike.network/ike-platform/ike-parent/index.html
 ---
 
@@ -24,7 +24,7 @@ canonical_url: https://ike.network/ike-platform/ike-parent/index.html
 </parent>
 ```
 
-After inheriting, declare IKE dependencies without versions — `ike-parent’s `<dependencyManagement>` resolves them:
+After inheriting, declare IKE dependencies without versions — `ike-parent's `<dependencyManagement>` resolves them:
 
 ```
 <dependency>
@@ -75,9 +75,9 @@ Both are **regular plugins** — no `<extensions>true</extensions>`, no custom p
 
 Earlier revisions of `ike-parent` declared both plugins with `<extensions>true</extensions>` to register custom packaging types (`<packaging>ike-doc</packaging>` for documentation modules) into the build extension realm. That declaration came with a structural constraint: Maven resolves extension plugin JARs at project-load time, **before** the Model Builder runs property interpolation, which forced the `<version>` element to be a literal string rather than a `${property}` reference. Across the cross-repo cascade (`ike-tooling` → `ike-docs` → `ike-platform` → consumers), the literal pin became toxic — every consumer POM had to carry an unmaintainable literal version of every upstream extension plugin.
 
-The constraint was eliminated in [ike-issues#321](https://github.com/IKE-Network/ike-issues/issues/321)[1]. The custom `<packaging>ike-doc</packaging>` was retired in favor of a classifier-canonical doc shape (`<classifier>adoc</classifier><type>zip</type>`), which removed the structural reason for `<extensions>true</extensions>` to exist on either upstream plugin. With the extension realm gone, both plugins are now ordinary managed plugins.
+The constraint was eliminated in [ike-issues#321](https://github.com/IKE-Network/ike-issues/issues/321). The custom `<packaging>ike-doc</packaging>` was retired in favor of a classifier-canonical doc shape (`<classifier>adoc</classifier><type>zip</type>`), which removed the structural reason for `<extensions>true</extensions>` to exist on either upstream plugin. With the extension realm gone, both plugins are now ordinary managed plugins.
 
-See [Design rationale](#design-rationale) below for the full discussion. The classifier-canonical migration also resolved [#220](https://github.com/IKE-Network/ike-issues/issues/220)[2] (asciidoc.zip-as-primary), [#236](https://github.com/IKE-Network/ike-issues/issues/236)[3] (extensions=true literals silently lag), and [#320](https://github.com/IKE-Network/ike-issues/issues/320)[4] (stale components.xml in ike-maven-plugin).
+See [Design rationale](#design-rationale) below for the full discussion. The classifier-canonical migration also resolved [#220](https://github.com/IKE-Network/ike-issues/issues/220) (asciidoc.zip-as-primary), [#236](https://github.com/IKE-Network/ike-issues/issues/236) (extensions=true literals silently lag), and [#320](https://github.com/IKE-Network/ike-issues/issues/320) (stale components.xml in ike-maven-plugin).
 
 ## [#ike-parent-vs-ike-bom](#ike-parent-vs-ike-bom)ike-parent vs. ike-bom
 
@@ -88,7 +88,7 @@ External consumers have two ways to align with IKE versions:
 | `<parent>ike-parent</parent>` | You’re an IKE-aligned project; you want build conventions **and** versions. | Compiler config, signing, AsciiDoc pipeline, **plus** dependency version pins. |
 | `<scope>import</scope>` of `ike-bom` | You’re an external project; you want only the version pins, not the build conventions. | Just the version pins. Your build conventions stay your own. |
 
-If you want both build conventions and version alignment, inherit `ike-parent`. If you want only the versions, see [ike-bom](../ike-bom/index.html)[5].
+If you want both build conventions and version alignment, inherit `ike-parent`. If you want only the versions, see [ike-bom](../ike-bom/index.html).
 
 ## [#design-rationale](#design-rationale)Design rationale
 
@@ -106,13 +106,13 @@ The doc-pipeline activates path-conditionally on `<file><exists>src/docs/asciido
 
 The `adoc` classifier is the canonical **source** payload. Renderer outputs (Prince/FOP/XEP/AH/WeasyPrint PDFs, HTML) attach as additional classifiers exactly as before. Consumers depend on whichever shape they need.
 
-### [#why-no-extensionstrue-extensions](#why-no-extensionstrue-extensions)Why no `<extensions>true</extensions>`
+### [#why-no-extensionstrueextensions](#why-no-extensionstrueextensions)Why no `<extensions>true</extensions>`
 
 A plugin with `<extensions>true</extensions>` is loaded into the build extension realm at **project-load time** — during Maven’s “Scanning for projects” phase, before the Model Builder runs property interpolation. This forces the plugin’s `<version>` to be a literal string in the POM; a `${property}` reference produces unresolved-version failures.
 
-For a single-repo reactor, the constraint is manageable. For our cross-repo cascade (`ike-tooling` → `ike-docs` → `ike-platform` → consumers), it became toxic: every consumer POM had to carry the literal version of every upstream extension plugin, the literal had to be kept in sync manually across repos, and routine version-property tooling (`ws:align-publish`, `versions:set-property`) was structurally unable to maintain it. The pain surfaced as [ike-issues#236](https://github.com/IKE-Network/ike-issues/issues/236)[3] — pre-flight release checks repeatedly catching stale literals after upstream releases that the alignment tooling could not see.
+For a single-repo reactor, the constraint is manageable. For our cross-repo cascade (`ike-tooling` → `ike-docs` → `ike-platform` → consumers), it became toxic: every consumer POM had to carry the literal version of every upstream extension plugin, the literal had to be kept in sync manually across repos, and routine version-property tooling (`ws:align-publish`, `versions:set-property`) was structurally unable to maintain it. The pain surfaced as [ike-issues#236](https://github.com/IKE-Network/ike-issues/issues/236) — pre-flight release checks repeatedly catching stale literals after upstream releases that the alignment tooling could not see.
 
-### [#why-no-packagingike-doc-packaging](#why-no-packagingike-doc-packaging)Why no `<packaging>ike-doc</packaging>`
+### [#why-no-packagingike-docpackaging](#why-no-packagingike-docpackaging)Why no `<packaging>ike-doc</packaging>`
 
 The historical reason for `<extensions>true</extensions>` here was to register a custom `<packaging>ike-doc</packaging>` type for documentation modules — a packaging that produces a `.zip` of AsciiDoc sources as the primary artifact, with a lean lifecycle that skips compile/test phases.
 
@@ -123,7 +123,7 @@ Inspection revealed two structural problems with that frame:
 
 The architectural decision was therefore to retire `<packaging>ike-doc</packaging>` in favor of a classifier-canonical shape: `<classifier>adoc</classifier><type>zip</type>` attached to either a `<packaging>pom</packaging>` (doc-only) or `<packaging>jar</packaging>` (hybrid) primary. With no custom packaging type to register, neither upstream plugin needs `<extensions>true</extensions>`. With the extension realm gone, literal-version pinning is gone with it.
 
-### [#the-artifact-uniformity-argument-for-staying-maven](#the-artifact-uniformity-argument-for-staying-maven)The artifact-uniformity argument for staying Maven-canonical
+### [#the-artifact-uniformity-argument-for-staying-maven-canonical](#the-artifact-uniformity-argument-for-staying-maven-canonical)The artifact-uniformity argument for staying Maven-canonical
 
 A natural objection: most large JVM projects (Spring, many Apache projects, Quarkus) publish docs as static sites to gh-pages or CDN-hosted destinations rather than as Maven artifacts. Why not follow that pattern?
 
@@ -135,11 +135,11 @@ The classifier-canonical shape **is** fully Maven-canonical — every artifact d
 
 ### [#tracking](#tracking)Tracking
 
-- [ike-issues#321](https://github.com/IKE-Network/ike-issues/issues/321)[1] — primary tracking issue (umbrella); subsumes #220, #236, #320.
-- [ike-issues#216](https://github.com/IKE-Network/ike-issues/issues/216)[6] — repo split that established the cross-repo boundary the extension realm was working around.
+- [ike-issues#321](https://github.com/IKE-Network/ike-issues/issues/321) — primary tracking issue (umbrella); subsumes #220, #236, #320.
+- [ike-issues#216](https://github.com/IKE-Network/ike-issues/issues/216) — repo split that established the cross-repo boundary the extension realm was working around.
 - Design note: `dev-classifier-canonical-doc-shape` in `ike-lab-documents/topics/` (full Socratic discovery captured for posterity).
 
 ## [#source](#source)Source
 
-- GitHub: [ike-platform/ike-parent](https://github.com/IKE-Network/ike-platform/tree/main/ike-parent)[7]
-- Issues: [IKE-Network/ike-issues](https://github.com/IKE-Network/ike-issues)[8]
+- GitHub: [ike-platform/ike-parent](https://github.com/IKE-Network/ike-platform/tree/main/ike-parent)
+- Issues: [IKE-Network/ike-issues](https://github.com/IKE-Network/ike-issues)

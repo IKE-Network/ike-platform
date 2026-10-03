@@ -6,7 +6,7 @@ canonical_url: https://ike.network/ike-platform/ike-bom/dependencies.html
 
 # Dependencies (SBOM)
 
-Full transitive dependency graph for `ike-bom` 196, generated from [bom.json](bom.json) (CycloneDX 1.6) at build time. Same SBOM source as the SPDX-grouped [licenses.html](licenses.html) and the curated [built-with.html](built-with.html) — three views of the same data.
+Full transitive dependency graph for `ike-bom` 197, generated from [bom.json](bom.json) (CycloneDX 1.6) at build time. Same SBOM source as the SPDX-grouped [licenses.html](licenses.html) and the curated [built-with.html](built-with.html) — three views of the same data.
 
 ## [#summary](#summary)Summary
 
@@ -21,14 +21,14 @@ Sorted by group, artifact, version. Click [bom.json](bom.json) for the raw machi
 | Group | Artifact | Version | License | Type |
 | --- | --- | --- | --- | --- |
 | `network.ike` | `ike-base-parent` | `16` | `Apache-2.0` | library |
-| `network.ike.tooling` | `ike-build-standards` | `261` | `Apache-2.0` | library |
-| `network.ike.tooling` | `ike-build-standards` | `261` | `Apache-2.0` | library |
+| `network.ike.tooling` | `ike-build-standards` | `262` | `Apache-2.0` | library |
+| `network.ike.tooling` | `ike-build-standards` | `262` | `Apache-2.0` | library |
 
 ## [#download](#download)Download
 
 - [Software Bill of Materials (CycloneDX, JSON)](bom.json) — raw machine-readable form. Includes purls, hashes, and dependency-graph edges that this page summarizes.
 - [bom.xml](bom.xml) — same content in XML.
-- As a Maven artifact: pull `ike-bom:​196` with `<classifier>cyclonedx</classifier><type>json</type>` from Nexus / Maven Central.
+- As a Maven artifact: pull `ike-bom:​197` with `<classifier>cyclonedx</classifier><type>json</type>` from Nexus / Maven Central.
 
 ## [#see-also](#see-also)See also
 

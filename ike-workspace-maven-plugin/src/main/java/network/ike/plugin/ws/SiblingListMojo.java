@@ -16,7 +16,7 @@ import java.util.List;
  *
  * <p>Read-only: no fetch ever touches the network (origins that are
  * remote URLs — the legacy shape — are assessed against their last-fetched
- * refs and flagged), nothing acquires a lease, nothing mutates. Each
+ * refs and flagged), nothing takes a lease, nothing mutates. Each
  * sibling row carries what matters when deciding its fate:
  * <ul>
  *   <li>the actual branch, flagged when it is not

@@ -238,7 +238,7 @@ abstract class AbstractWorkspaceMojo implements Mojo {
      * a cost with no writer to protect.
      *
      * <p>Confirmation is the read-back, not merely the claim: two machines
-     * acquiring the same free lease inside the sync layer's propagation
+     * taking the same free lease inside the sync layer's propagation
      * window both succeed, and the loser is never told. It costs about 25
      * seconds, which is nothing against a release and is the difference
      * between one writer and two. IKE-Network/ike-issues#1005.

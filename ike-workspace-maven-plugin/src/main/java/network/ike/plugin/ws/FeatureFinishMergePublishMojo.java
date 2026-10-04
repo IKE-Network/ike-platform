@@ -28,7 +28,7 @@ public class FeatureFinishMergePublishMojo extends FeatureFinishMergeDraftMojo {
         // squash does (FinishLanding unifies the two), so the parent's
         // lease is short-held here too (#992, #1005).
         try (ParentLeaseHold hold =
-                ParentLeaseHold.acquire(workspaceRoot(), getLog())) {
+                ParentLeaseHold.take(workspaceRoot(), getLog())) {
             spec = super.runGoal();
             PostMutationSync.refresh(workspaceRoot(), getLog());
         }

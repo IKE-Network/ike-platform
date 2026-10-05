@@ -1,6 +1,6 @@
 ---
-date_published: 2026-10-02
-date_modified: 2026-10-02
+date_published: 2026-10-04
+date_modified: 2026-10-04
 canonical_url: https://ike.network/ike-platform/workspace-getting-started.html
 ---
 
@@ -162,7 +162,7 @@ Writes `.stignore` files that exclude `target/`, `.git/`, `.idea/`, `.DS_Store`,
 
 ### [#resume-on-another-machine](#resume-on-another-machine)Resume on another machine
 
-Walk away from machine A. Syncthing propagates source files to machine B — uncommitted work included. On machine B, **open the working set in IntelliJ**: the open gesture acquires the working-set lease (one writer per working set, epoch-fenced; taking over a still-live lease is a question the IDE asks), materializes git state for any bare tree from the synced origin manifest, and aligns stale refs to where machine A left them — tree untouched, synced drift preserved as the ordinary status delta.
+Walk away from machine A. Syncthing propagates source files to machine B — uncommitted work included. On machine B, **open the working set in IntelliJ**: the open gesture takes the working-set lease (one writer per working set, epoch-fenced; recalling a still-live lease is a question the IDE asks), materializes git state for any bare tree from the synced origin manifest, and aligns stale refs to where machine A left them — for a sibling, to the history bundles machine A wrote when it returned the lease — tree untouched, synced drift preserved as the ordinary status delta. Close the project when you leave a machine: closing returns the lease.
 
 Headless (scripts, CI, a terminal without the IDE):
 

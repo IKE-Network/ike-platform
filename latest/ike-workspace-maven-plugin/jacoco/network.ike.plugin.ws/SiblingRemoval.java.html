@@ -152,12 +152,15 @@ final class SiblingRemoval {
     }
 
     /**
-     * Deletes the sibling tree, then garbage-collects its lease record —
-     * a record for a working set that no longer exists is the exact thing
-     * the reconciliation daemon's GC removes (IKE-Network/ike-issues#1006),
-     * done eagerly here. Removing a whole working set is the supported
-     * operation; the sync layer propagates the deletion and staggered file
-     * versioning is the net.
+     * Deletes the sibling tree, then garbage-collects its lease record and
+     * the history bundles beside it — a record for a working set that no
+     * longer exists is the exact thing the reconciliation daemon's GC
+     * removes (IKE-Network/ike-issues#1006), done eagerly here. The
+     * bundles ({@code leases/&lt;name&gt;.bundles/}, IKE-Network/ike-issues#1216)
+     * go with it: once the record is gone the daemon never sees them
+     * again. Removing a whole working set is the supported operation; the
+     * sync layer propagates the deletion and staggered file versioning is
+     * the net.
      *
      * @param target the resolved target
      * @return the deleted lease-record path, or {@code null} when none
@@ -165,27 +168,47 @@ final class SiblingRemoval {
      * @throws MojoException if the tree cannot be fully deleted
      */
     static Path delete(Target target) throws MojoException {
-<span class="fc" id="L168">        Path root = target.sibling().root().toPath();</span>
-<span class="fc" id="L169">        try (Stream&lt;Path&gt; tree = Files.walk(root)) {</span>
-<span class="fc bfc" id="L170" title="All 2 branches covered.">            for (Path path : tree.sorted(Comparator.reverseOrder()).toList()) {</span>
-<span class="fc" id="L171">                Files.deleteIfExists(path);</span>
-<span class="fc" id="L172">            }</span>
-<span class="nc" id="L173">        } catch (IOException e) {</span>
-<span class="nc" id="L174">            throw new MojoException(&quot;Could not delete &quot;</span>
-<span class="nc" id="L175">                    + root + &quot;: &quot; + e.getMessage() + &quot;. The tree may be &quot;</span>
+<span class="fc" id="L171">        Path root = target.sibling().root().toPath();</span>
+<span class="fc" id="L172">        try (Stream&lt;Path&gt; tree = Files.walk(root)) {</span>
+<span class="fc bfc" id="L173" title="All 2 branches covered.">            for (Path path : tree.sorted(Comparator.reverseOrder()).toList()) {</span>
+<span class="fc" id="L174">                Files.deleteIfExists(path);</span>
+<span class="fc" id="L175">            }</span>
+<span class="nc" id="L176">        } catch (IOException e) {</span>
+<span class="nc" id="L177">            throw new MojoException(&quot;Could not delete &quot;</span>
+<span class="nc" id="L178">                    + root + &quot;: &quot; + e.getMessage() + &quot;. The tree may be &quot;</span>
                     + &quot;partially removed; re-run to finish.&quot;, e);
-<span class="fc" id="L177">        }</span>
-<span class="fc" id="L178">        Path record = root.getParent()</span>
-<span class="fc" id="L179">                .resolve(&quot;leases&quot;)</span>
-<span class="fc" id="L180">                .resolve(target.sibling().name() + &quot;.lease&quot;);</span>
+<span class="fc" id="L180">        }</span>
+<span class="fc" id="L181">        Path leases = root.getParent().resolve(&quot;leases&quot;);</span>
+<span class="fc" id="L182">        Path record = leases.resolve(target.sibling().name() + &quot;.lease&quot;);</span>
+<span class="fc" id="L183">        deleteBundles(leases.resolve(target.sibling().name() + &quot;.bundles&quot;));</span>
         try {
-<span class="pc bpc" id="L182" title="1 of 2 branches missed.">            return Files.deleteIfExists(record) ? record : null;</span>
-<span class="nc" id="L183">        } catch (IOException e) {</span>
+<span class="fc bfc" id="L185" title="All 2 branches covered.">            return Files.deleteIfExists(record) ? record : null;</span>
+<span class="nc" id="L186">        } catch (IOException e) {</span>
             // The record is now garbage either way; the daemon's GC or the
             // operator can sweep it. Removal itself has succeeded.
-<span class="nc" id="L186">            return null;</span>
+<span class="nc" id="L189">            return null;</span>
         }
     }
+
+    /**
+     * Deletes a sibling's history-bundle directory. Best-effort, like the
+     * record: removal has already succeeded, and a leftover bundle is
+     * inert — nothing aligns to a working set that no longer exists.
+     *
+     * @param bundles the {@code leases/&lt;name&gt;.bundles} directory
+     */
+    private static void deleteBundles(Path bundles) {
+<span class="fc bfc" id="L201" title="All 2 branches covered.">        if (!Files.isDirectory(bundles)) {</span>
+<span class="fc" id="L202">            return;</span>
+        }
+<span class="fc" id="L204">        try (Stream&lt;Path&gt; tree = Files.walk(bundles)) {</span>
+<span class="fc bfc" id="L205" title="All 2 branches covered.">            for (Path path : tree.sorted(Comparator.reverseOrder()).toList()) {</span>
+<span class="fc" id="L206">                Files.deleteIfExists(path);</span>
+<span class="fc" id="L207">            }</span>
+<span class="nc" id="L208">        } catch (IOException e) {</span>
+            // Leave the remainder for the operator; removal succeeded.
+<span class="fc" id="L210">        }</span>
+<span class="fc" id="L211">    }</span>
 
     /**
      * The report preamble both goals share.
@@ -194,26 +217,26 @@ final class SiblingRemoval {
      * @param target the resolved target
      */
     static void describeTarget(GoalReportBuilder report, Target target) {
-<span class="fc" id="L197">        SiblingInventory.Sibling sibling = target.sibling();</span>
-<span class="fc" id="L198">        report.paragraph(&quot;**Sibling:** `&quot; + sibling.name() + &quot;`&quot;)</span>
-<span class="fc" id="L199">                .paragraph(&quot;**Feature:** `&quot; + sibling.feature() + &quot;`&quot;)</span>
-<span class="fc" id="L200">                .paragraph(&quot;**Location:** `&quot;</span>
-<span class="fc" id="L201">                        + sibling.root().getAbsolutePath() + &quot;`&quot;)</span>
-<span class="fc" id="L202">                .paragraph(&quot;**Origin chain:** &quot;</span>
-<span class="pc bpc" id="L203" title="1 of 2 branches missed.">                        + (sibling.conformant()</span>
-<span class="fc" id="L204">                                ? &quot;local parent ✓ (ike-issues#992)&quot;</span>
-<span class="pc" id="L205">                                : &quot;legacy remote-remote — landed-state is &quot;</span>
+<span class="fc" id="L220">        SiblingInventory.Sibling sibling = target.sibling();</span>
+<span class="fc" id="L221">        report.paragraph(&quot;**Sibling:** `&quot; + sibling.name() + &quot;`&quot;)</span>
+<span class="fc" id="L222">                .paragraph(&quot;**Feature:** `&quot; + sibling.feature() + &quot;`&quot;)</span>
+<span class="fc" id="L223">                .paragraph(&quot;**Location:** `&quot;</span>
+<span class="fc" id="L224">                        + sibling.root().getAbsolutePath() + &quot;`&quot;)</span>
+<span class="fc" id="L225">                .paragraph(&quot;**Origin chain:** &quot;</span>
+<span class="pc bpc" id="L226" title="1 of 2 branches missed.">                        + (sibling.conformant()</span>
+<span class="fc" id="L227">                                ? &quot;local parent ✓ (ike-issues#992)&quot;</span>
+<span class="pc" id="L228">                                : &quot;legacy remote-remote — landed-state is &quot;</span>
                                         + &quot;measured against that remote&quot;));
-<span class="fc" id="L207">    }</span>
+<span class="fc" id="L230">    }</span>
 
     private static boolean isSelfOrAncestor(File sibling, File primaryRoot) {
         try {
-<span class="fc" id="L211">            Path siblingPath = sibling.getCanonicalFile().toPath();</span>
-<span class="fc" id="L212">            Path cwd = Path.of(&quot;&quot;).toAbsolutePath();</span>
-<span class="fc" id="L213">            Path primary = primaryRoot.getCanonicalFile().toPath();</span>
-<span class="pc bpc" id="L214" title="2 of 4 branches missed.">            return cwd.startsWith(siblingPath) || primary.startsWith(siblingPath);</span>
-<span class="nc" id="L215">        } catch (IOException e) {</span>
-<span class="nc" id="L216">            return false;</span>
+<span class="fc" id="L234">            Path siblingPath = sibling.getCanonicalFile().toPath();</span>
+<span class="fc" id="L235">            Path cwd = Path.of(&quot;&quot;).toAbsolutePath();</span>
+<span class="fc" id="L236">            Path primary = primaryRoot.getCanonicalFile().toPath();</span>
+<span class="pc bpc" id="L237" title="2 of 4 branches missed.">            return cwd.startsWith(siblingPath) || primary.startsWith(siblingPath);</span>
+<span class="nc" id="L238">        } catch (IOException e) {</span>
+<span class="nc" id="L239">            return false;</span>
         }
     }
 }

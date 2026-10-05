@@ -1,12 +1,12 @@
 ---
-date_published: 2026-10-02
-date_modified: 2026-10-02
+date_published: 2026-10-04
+date_modified: 2026-10-04
 canonical_url: https://ike.network/ike-platform/ike-bom/licenses.html
 ---
 
 # Licenses (SPDX)
 
-Licenses for declared dependencies of `ike-bom` 197, grouped by SPDX expression. Rendered from `[bom.json](bom.json)` (CycloneDX) at `pre-site` phase by `ike:render-spdx-licenses` (ike-issues#335).
+Licenses for declared dependencies of `ike-bom` 198, grouped by SPDX expression. Rendered from `[bom.json](bom.json)` (CycloneDX) at `pre-site` phase by `ike:render-spdx-licenses` (ike-issues#335).
 
 ## [#summary](#summary)Summary
 

@@ -1,6 +1,6 @@
 ---
-date_published: 2026-10-02
-date_modified: 2026-10-02
+date_published: 2026-10-04
+date_modified: 2026-10-04
 canonical_url: https://ike.network/ike-platform/ike-workspace-maven-plugin/ws-goals.html
 ---
 
@@ -68,7 +68,7 @@ Draft / publish split Most state-mutating goals come in two forms — `**-draft*
 | [ws:scaffold-publish — apply convergence drift](#scaffold-publish) | convergence | Apply the convergence drift — single reconciler-driven goal for routine workspace upkeep |
 | [ws:sibling-list — inventory the siblings](#sibling-list) | sibling | Inventory every sibling: git state, origin wiring, landed-ness |
 | [sibling-remove](#sibling-remove-draft) | sibling | Preview an assessed sibling removal |
-| [ws:sibling-remove — assessed removal](#sibling-remove-publish) | sibling | Remove the sibling working set and GC its lease |
+| [ws:sibling-remove — assessed removal](#sibling-remove-publish) | sibling | Remove the sibling working set and GC its lease and bundles |
 | [ws:stignore — generate Syncthing ignore files](#stignore) | setup | Generate Syncthing `.stignore` files |
 | [switch](#switch-draft) | feature | Preview a coordinated branch checkout |
 | [ws:switch — coordinated branch checkout](#switch-publish) | feature | Execute the coordinated checkout |
@@ -316,7 +316,7 @@ mvn ws:feature-start-publish -Dfeature=my-feature     # execute
 
 Create a **sibling working set**: a whole second copy of the workspace, `<parent>꞉<feature>` beside its parent (the separator is `꞉`, U+A789 — filesystem-legal where a plain colon is not), every member on branch `feature/<feature>`. The parent stays on its mainline; isolation comes from the directory boundary, so both can build, run, and be open in IDEs at the same time — or on different machines.
 
-The wiring is the sibling model’s contract (ike-issues#992): each member’s `origin` is the **local parent member path, never GitHub**. Per-issue WIP history is disposable and per-machine; the synced tree is the medium of exchange; the finish squashes into the sibling and fast-forwards the parent. A pre-push guard — in the IDE plugin and the Claude fence alike — refuses any push from a sibling to a non-local remote. The `.ike/parent-workspace` record ties the sibling to its parent and syncs with the tree, so a sibling started on one machine is finishable on another (git state materializes at the open gesture).
+The wiring is the sibling model’s contract (ike-issues#992): each member’s `origin` is the **local parent member path, never GitHub**. The synced tree carries the files, and the sibling’s committed history travels between machines as git bundles beside its lease record (ike-issues#1216); the finish squashes into the sibling and fast-forwards the parent. A pre-push guard — in the IDE plugin and the Claude fence alike — refuses any push from a sibling to a non-local remote. The `.ike/parent-workspace` record ties the sibling to its parent and syncs with the tree, so a sibling started on one machine is finishable on another (git state materializes, and the history aligns, at the open gesture).
 
 `-publish-verify` extends the creation with a reactor build of the new sibling before declaring it ready.
 
@@ -335,11 +335,11 @@ mvn ws:sibling-list
 
 ### [#wssibling-remove--assessed-removal](#wssibling-remove--assessed-removal)ws:sibling-remove — assessed removal
 
-Remove a sibling working set safely. The draft enumerates any unlanded work with remediation (finish it, or force-discard deliberately); the publish deletes the sibling directory sync-safely and garbage-collects its lease record. This is the supported way to delete a sibling — never remove `.git` entries by hand inside the synced folder.
+Remove a sibling working set safely. The draft enumerates any unlanded work with remediation (finish it, or force-discard deliberately); the publish deletes the sibling directory sync-safely and garbage-collects its lease record and history bundles (`leases/<name>.bundles/`). This is the supported way to delete a sibling — never remove `.git` entries by hand inside the synced folder.
 
 ```
 mvn ws:sibling-remove-draft -Dsibling=issue-42     # assess
-mvn ws:sibling-remove-publish -Dsibling=issue-42   # remove + lease GC
+mvn ws:sibling-remove-publish -Dsibling=issue-42   # remove + lease and bundle GC
 ```
 
 ### [#wsfeature-pr--one-review-pr-per-subproject-as-a-set](#wsfeature-pr--one-review-pr-per-subproject-as-a-set)ws:feature-pr — one review PR per subproject, as a set
@@ -397,7 +397,7 @@ mvn ws:feature-finish-squash-publish -Dfeature=done -DdeleteSibling     # siblin
 
 In a sibling, `-DdeleteSibling` removes the whole sibling working set after the finish lands — a receipt is written into the parent first, and the removal runs the same assessment as `ws:sibling-remove`.
 
-Finish and release goals **confirm the working-set lease** before mutating (single writer per working set, ike-issues#1005), and a sibling finish takes a confirmed short-hold on the **parent’s** lease while it fast-forwards. A goal that reports the working set as leased to another machine is telling you to finish there — or to take the lease over deliberately from the IDE — not to retry.
+Finish and release goals **confirm the working-set lease** before mutating (single writer per working set, ike-issues#1005), and a sibling finish takes a confirmed short-hold on the **parent’s** lease while it fast-forwards. A goal that reports the working set as leased to another machine is telling you to finish there — or to recall the lease deliberately from the IDE — not to retry.
 
 ### [#wsfeature-finish-merge--no-fast-forward-merge](#wsfeature-finish-merge--no-fast-forward-merge)ws:feature-finish-merge — no-fast-forward merge
 

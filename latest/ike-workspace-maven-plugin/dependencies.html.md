@@ -1,12 +1,12 @@
 ---
-date_published: 2026-10-02
-date_modified: 2026-10-02
+date_published: 2026-10-04
+date_modified: 2026-10-04
 canonical_url: https://ike.network/ike-platform/ike-workspace-maven-plugin/dependencies.html
 ---
 
 # Dependencies (SBOM)
 
-Full transitive dependency graph for `ike-workspace-maven-plugin` 197, generated from [bom.json](bom.json) (CycloneDX 1.6) at build time. Same SBOM source as the SPDX-grouped [licenses.html](licenses.html) and the curated [built-with.html](built-with.html) — three views of the same data.
+Full transitive dependency graph for `ike-workspace-maven-plugin` 198, generated from [bom.json](bom.json) (CycloneDX 1.6) at build time. Same SBOM source as the SPDX-grouped [licenses.html](licenses.html) and the curated [built-with.html](built-with.html) — three views of the same data.
 
 ## [#summary](#summary)Summary
 
@@ -39,7 +39,7 @@ Sorted by group, artifact, version. Click [bom.json](bom.json) for the raw machi
 | `net.java.dev.jna` | `jna-platform` | `5.18.1` | `Apache-2.0 OR LGPL-2.1-or-later` | library |
 | `network.ike` | `ike-base-parent` | `16` | `Apache-2.0` | library |
 | `network.ike` | `ike-java-support` | `10` | `Apache-2.0` | library |
-| `network.ike` | `ike-lease-core` | `5` | `Apache-2.0` | library |
+| `network.ike` | `ike-lease-core` | `7` | `Apache-2.0` | library |
 | `network.ike.tooling` | `ike-build-standards` | `262` | `Apache-2.0` | library |
 | `network.ike.tooling` | `ike-build-standards` | `262` | `Apache-2.0` | library |
 | `network.ike.tooling` | `ike-build-standards` | `262` | `Apache-2.0` | library |
@@ -81,7 +81,7 @@ Sorted by group, artifact, version. Click [bom.json](bom.json) for the raw machi
 
 - [Software Bill of Materials (CycloneDX, JSON)](bom.json) — raw machine-readable form. Includes purls, hashes, and dependency-graph edges that this page summarizes.
 - [bom.xml](bom.xml) — same content in XML.
-- As a Maven artifact: pull `ike-workspace-maven-plugin:​197` with `<classifier>cyclonedx</classifier><type>json</type>` from Nexus / Maven Central.
+- As a Maven artifact: pull `ike-workspace-maven-plugin:​198` with `<classifier>cyclonedx</classifier><type>json</type>` from Nexus / Maven Central.
 
 ## [#see-also](#see-also)See also
 

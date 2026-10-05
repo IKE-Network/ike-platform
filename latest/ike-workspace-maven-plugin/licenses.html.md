@@ -1,12 +1,12 @@
 ---
-date_published: 2026-10-02
-date_modified: 2026-10-02
+date_published: 2026-10-04
+date_modified: 2026-10-04
 canonical_url: https://ike.network/ike-platform/ike-workspace-maven-plugin/licenses.html
 ---
 
 # Licenses (SPDX)
 
-Licenses for declared dependencies of `ike-workspace-maven-plugin` 197, grouped by SPDX expression. Rendered from `[bom.json](bom.json)` (CycloneDX) at `pre-site` phase by `ike:render-spdx-licenses` (ike-issues#335).
+Licenses for declared dependencies of `ike-workspace-maven-plugin` 198, grouped by SPDX expression. Rendered from `[bom.json](bom.json)` (CycloneDX) at `pre-site` phase by `ike:render-spdx-licenses` (ike-issues#335).
 
 ## [#summary](#summary)Summary
 
@@ -43,7 +43,7 @@ Reference: [Apache-2.0 on spdx.org](https://spdx.org/licenses/Apache-2.0.html)
 | `io.quarkus.gizmo` | `gizmo` | `1.0.11.Final` |
 | `network.ike` | `ike-base-parent` | `16` |
 | `network.ike` | `ike-java-support` | `10` |
-| `network.ike` | `ike-lease-core` | `5` |
+| `network.ike` | `ike-lease-core` | `7` |
 | `network.ike.tooling` | `ike-build-standards` | `262` |
 | `network.ike.tooling` | `ike-build-standards` | `262` |
 | `network.ike.tooling` | `ike-build-standards` | `262` |

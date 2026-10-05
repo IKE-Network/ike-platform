@@ -16,25 +16,25 @@ import java.util.Optional;
  * &lt;p&gt;A sibling finish lands in the parent: the absorb fast-forwards the
  * parent's refs, which makes the finish a &lt;em&gt;writer of the parent&lt;/em&gt;,
  * and single-writer is per working set. So the finish confirms the
- * parent's lease before landing — free or expired acquires silently,
+ * parent's lease before landing — free or expired is taken silently,
  * already-mine simply confirms, and live on another machine refuses with
- * the takeover left to the human, the one rule every surface shares.
+ * the recall left to the human, the one rule every surface shares.
  *
  * &lt;p&gt;&quot;Short&quot; means the hold gives back exactly what it took: a lease this
- * machine already held stays held; one acquired fresh for the landing is
- * released when the hold closes, success or failure, so a finished (or
+ * machine already held stays held; one taken fresh for the landing is
+ * returned when the hold closes, success or failure, so a finished (or
  * failed) sibling never leaves its parent pinned to this machine.
  * Inert wherever the lease machinery is ({@link WorkingSetLease}).
  */
 final class ParentLeaseHold implements AutoCloseable {
 
     private final Path parent;
-    private final boolean acquiredFresh;
+    private final boolean takenFresh;
     private final Log log;
 
-<span class="fc" id="L35">    private ParentLeaseHold(Path parent, boolean acquiredFresh, Log log) {</span>
+<span class="fc" id="L35">    private ParentLeaseHold(Path parent, boolean takenFresh, Log log) {</span>
 <span class="fc" id="L36">        this.parent = parent;</span>
-<span class="fc" id="L37">        this.acquiredFresh = acquiredFresh;</span>
+<span class="fc" id="L37">        this.takenFresh = takenFresh;</span>
 <span class="fc" id="L38">        this.log = log;</span>
 <span class="fc" id="L39">    }</span>
 
@@ -49,7 +49,7 @@ final class ParentLeaseHold implements AutoCloseable {
      * @throws MojoException if another machine holds the parent live —
      *                       landing there would collide with its writer
      */
-    static ParentLeaseHold acquire(File workingSetRoot, Log log)
+    static ParentLeaseHold take(File workingSetRoot, Log log)
             throws MojoException {
 <span class="fc" id="L54">        Optional&lt;File&gt; parent = SiblingFinish.localParent(workingSetRoot);</span>
 <span class="pc bpc" id="L55" title="1 of 2 branches missed.">        if (parent.isEmpty()) {</span>
@@ -65,7 +65,7 @@ final class ParentLeaseHold implements AutoCloseable {
 <span class="fc" id="L65">            case NOT_APPLICABLE -&gt; new ParentLeaseHold(null, false, log);</span>
             case HELD -&gt; {
 <span class="fc" id="L67">                log.info(&quot;  Parent lease: confirmed for &quot; + decision.detail()</span>
-<span class="pc bpc" id="L68" title="1 of 2 branches missed.">                        + (alreadyMine ? &quot;&quot; : &quot; (short-hold — released after&quot;</span>
+<span class="pc bpc" id="L68" title="1 of 2 branches missed.">                        + (alreadyMine ? &quot;&quot; : &quot; (short-hold — returned after&quot;</span>
                                 + &quot; the landing)&quot;));
 <span class="pc bpc" id="L70" title="1 of 2 branches missed.">                yield new ParentLeaseHold(parentPath, !alreadyMine, log);</span>
             }
@@ -77,19 +77,19 @@ final class ParentLeaseHold implements AutoCloseable {
     }
 
     /**
-     * Gives back what the hold took: releases the parent's lease when it
-     * was acquired fresh for this landing, and only then. Best-effort —
-     * a failed release is logged, never thrown; the record ages out.
+     * Gives back what the hold took: returns the parent's lease when it
+     * was taken fresh for this landing, and only then. Best-effort — a
+     * failed return is logged, never thrown; the record ages out.
      */
     @Override
     public void close() {
-<span class="pc bpc" id="L86" title="1 of 4 branches missed.">        if (parent == null || !acquiredFresh) {</span>
+<span class="pc bpc" id="L86" title="1 of 4 branches missed.">        if (parent == null || !takenFresh) {</span>
 <span class="fc" id="L87">            return;</span>
         }
-<span class="pc bpc" id="L89" title="1 of 2 branches missed.">        if (WorkingSetLease.release(parent)) {</span>
-<span class="fc" id="L90">            log.info(&quot;  Parent lease: short-hold released&quot;);</span>
+<span class="pc bpc" id="L89" title="1 of 2 branches missed.">        if (WorkingSetLease.returnLease(parent)) {</span>
+<span class="fc" id="L90">            log.info(&quot;  Parent lease: short-hold returned&quot;);</span>
         } else {
-<span class="nc" id="L92">            log.warn(&quot;  Parent lease: short-hold release failed; the record &quot;</span>
+<span class="nc" id="L92">            log.warn(&quot;  Parent lease: short-hold return failed; the record &quot;</span>
                     + &quot;will age out at its ttl&quot;);
         }
 <span class="fc" id="L95">    }</span>

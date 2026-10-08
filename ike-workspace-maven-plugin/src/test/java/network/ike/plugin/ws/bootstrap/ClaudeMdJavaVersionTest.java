@@ -81,6 +81,21 @@ class ClaudeMdJavaVersionTest {
         assertThat(without).doesNotContain("(Java");
     }
 
+    /**
+     * The Build section tells a builder inside a working set to build from the working set's
+     * root: a member built from its own root resolves siblings from its own stale
+     * project-local repository (IKE-Network/ike-issues#1265).
+     */
+    @Test
+    void componentClaudeMd_tellsToBuildFromTheWorkspaceRoot() {
+        Subproject lib = graph().manifest().subprojects().get("lib-a");
+        String claudeMd = SubprojectInitializer.generateComponentClaudeMd(lib, Optional.of("27"));
+        assertThat(claudeMd).contains("Inside a workspace, build from the workspace root");
+        assertThat(claudeMd).contains("mvn -pl <this-subproject>/<module>");
+        assertThat(claudeMd.indexOf("## Build")).isLessThan(claudeMd.indexOf("build from the workspace root"));
+        assertThat(claudeMd.indexOf("build from the workspace root")).isLessThan(claudeMd.indexOf("## Key Facts"));
+    }
+
     @Test
     void componentClaudeMd_statesTheDeclaredVersion_orOmitsIt() {
         Subproject lib = graph().manifest().subprojects().get("lib-a");

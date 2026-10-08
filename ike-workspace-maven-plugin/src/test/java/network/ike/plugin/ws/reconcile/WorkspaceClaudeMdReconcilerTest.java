@@ -124,6 +124,43 @@ class WorkspaceClaudeMdReconcilerTest {
                 .isTrue();
     }
 
+    private static final String STANDARDS_POINTER = """
+            <!-- BEGIN ike-managed: standards-pointer -->
+            This workspace follows the IKE build standards. Run `mvn validate`.
+            <!-- END ike-managed: standards-pointer -->""";
+
+    /**
+     * The ike-managed regions ws:scaffold-publish adds to the root CLAUDE.md are kept, as a
+     * subproject's are: not drift when the rest matches the generator, and carried over when
+     * the rest is regenerated (IKE-Network/ike-issues#1261).
+     */
+    @Test
+    void managedBlocks_areNotDriftAndSurviveRegeneration() throws Exception {
+        Path file = tempDir.resolve("CLAUDE.md");
+        String withBlock = expected().stripTrailing() + "\n\n" + STANDARDS_POINTER + "\n";
+        Files.writeString(file, withBlock, StandardCharsets.UTF_8);
+        WorkspaceContext ctx = ctx(ReconcilerOptions.empty());
+        assertThat(reconciler.detect(ctx).hasDrift())
+                .as("a managed block beside the generator's output is not drift")
+                .isFalse();
+
+        Files.writeString(file, "stale content\n\n" + STANDARDS_POINTER + "\n", StandardCharsets.UTF_8);
+        assertThat(reconciler.detect(ctx).hasDrift()).isTrue();
+        reconciler.apply(ctx);
+        String healed = Files.readString(file, StandardCharsets.UTF_8);
+        assertThat(healed).startsWith(expected().stripTrailing());
+        assertThat(healed).contains("<!-- BEGIN ike-managed: standards-pointer -->");
+        assertThat(healed).doesNotContain("stale content");
+        assertThat(reconciler.detect(ctx).hasDrift())
+                .as("the healed file, block included, is up to date")
+                .isFalse();
+
+        Files.writeString(file, withBlock.replace("\n", "\r\n"), StandardCharsets.UTF_8);
+        assertThat(reconciler.detect(ctx).hasDrift())
+                .as("a CRLF checkout of an up-to-date file is not drift")
+                .isFalse();
+    }
+
     private String expected() {
         return SubprojectInitializer.generateWorkspaceClaudeMd(WS_NAME, graph(),
                 SubprojectInitializer.declaredJavaVersion(tempDir.resolve("pom.xml").toFile()));

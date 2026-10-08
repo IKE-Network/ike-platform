@@ -344,7 +344,9 @@ public final class WorkspaceBootstrap {
                                                          String buildReportExtensionVersion,
                                                          String versionManagementExtensionVersion)
             throws IOException {
-        String existing = Files.readString(extensionsXmlPath, StandardCharsets.UTF_8);
+        // LF throughout: a CRLF checkout would otherwise get an LF block inside CRLF text
+        // (IKE-Network/ike-issues#1261).
+        String existing = ClaudeMdMerge.normalize(Files.readString(extensionsXmlPath, StandardCharsets.UTF_8));
         String freshBlock = managedBlock(extensionVersion, buildReportExtensionVersion,
                 versionManagementExtensionVersion);
 

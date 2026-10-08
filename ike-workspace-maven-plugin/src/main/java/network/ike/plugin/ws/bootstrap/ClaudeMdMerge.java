@@ -46,7 +46,7 @@ import java.util.regex.Pattern;
  * with its section — but the reported real-world losses were whole sections,
  * which this preserves.
  */
-final class ClaudeMdMerge {
+public final class ClaudeMdMerge {
 
     private ClaudeMdMerge() {}
 
@@ -65,7 +65,7 @@ final class ClaudeMdMerge {
      * @param text  the full section including its {@code ## } heading line,
      *              with a trailing newline
      */
-    record Section(String title, String text) {}
+    public record Section(String title, String text) {}
 
     /**
      * The result of merging an existing {@code CLAUDE.md} with a freshly
@@ -75,7 +75,7 @@ final class ClaudeMdMerge {
      * @param rescued  hand-authored sections to preserve elsewhere; empty when
      *                 the existing file held nothing the template does not own
      */
-    record Result(String claudeMd, List<Section> rescued) {}
+    public record Result(String claudeMd, List<Section> rescued) {}
 
     /**
      * Merge {@code existing} CLAUDE.md content with a freshly {@code generated}
@@ -86,7 +86,13 @@ final class ClaudeMdMerge {
      * @param generated the freshly generated template content
      * @return the merged content plus any hand-authored sections to rescue
      */
-    static Result merge(String existing, String generated) {
+    public static Result merge(String existing, String generated) {
+        // Line endings are normalized on the way in: a CRLF checkout (Windows, autocrlf) would
+        // otherwise keep its CRs on the lines carried over and get LF on the generated ones, a
+        // file of mixed endings that git shows as modified with an empty diff
+        // (IKE-Network/ike-issues#1261). The merge writes LF; git's autocrlf does the rest.
+        generated = normalize(generated);
+        existing = normalize(existing);
         if (existing == null || existing.isBlank()) {
             return new Result(generated, List.of());
         }
@@ -110,6 +116,11 @@ final class ClaudeMdMerge {
             sb.append("\n\n").append(block.stripTrailing()).append('\n');
         }
         return new Result(sb.toString(), rescued);
+    }
+
+    /** The text with every CRLF, and any lone CR, as LF; null stays null. */
+    public static String normalize(String text) {
+        return text == null ? null : text.replace("\r\n", "\n").replace('\r', '\n');
     }
 
     /**

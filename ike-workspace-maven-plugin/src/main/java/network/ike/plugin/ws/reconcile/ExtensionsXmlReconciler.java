@@ -53,13 +53,15 @@ public class ExtensionsXmlReconciler implements Reconciler {
         if (!Files.exists(xml)) {
             return DriftReport.noDrift(dimension());
         }
-        String wsTarget = resolveVersion("ike-workspace-extension.version", "1");
-        String reportTarget = resolveVersion("ike-build-report-extension.version", "244");
-        String versionsTarget =
-                resolveVersion("ike-version-management-extension.version", "11");
-        String targets = describeTargets(wsTarget, reportTarget, versionsTarget);
         try {
             String existing = Files.readString(xml);
+            String wsTarget = target(existing, "ike-workspace-extension",
+                    resolveVersion("ike-workspace-extension.version", "1"));
+            String reportTarget = target(existing, "ike-build-report-extension",
+                    resolveVersion("ike-build-report-extension.version", "244"));
+            String versionsTarget = target(existing, "ike-version-management-extension",
+                    resolveVersion("ike-version-management-extension.version", "11"));
+            String targets = describeTargets(wsTarget, reportTarget, versionsTarget);
             if (matchesTargets(existing,
                     "ike-workspace-extension", wsTarget,
                     "ike-build-report-extension", reportTarget,
@@ -85,11 +87,14 @@ public class ExtensionsXmlReconciler implements Reconciler {
             ctx.log().debug(dimension() + ": no " + EXTENSIONS_XML + " — skipping");
             return;
         }
-        String wsTarget = resolveVersion("ike-workspace-extension.version", "1");
-        String reportTarget = resolveVersion("ike-build-report-extension.version", "244");
-        String versionsTarget =
-                resolveVersion("ike-version-management-extension.version", "11");
         try {
+            String existing = Files.readString(xml);
+            String wsTarget = target(existing, "ike-workspace-extension",
+                    resolveVersion("ike-workspace-extension.version", "1"));
+            String reportTarget = target(existing, "ike-build-report-extension",
+                    resolveVersion("ike-build-report-extension.version", "244"));
+            String versionsTarget = target(existing, "ike-version-management-extension",
+                    resolveVersion("ike-version-management-extension.version", "11"));
             boolean refreshed = WorkspaceBootstrap.refreshExtensionsManagedBlock(
                     xml, wsTarget, reportTarget, versionsTarget);
             if (refreshed) {
@@ -142,7 +147,42 @@ public class ExtensionsXmlReconciler implements Reconciler {
         return versionAt > at && (nextEntry < 0 || versionAt < nextEntry);
     }
 
-    private static String resolveVersion(String key, String fallback) {
+    /**
+     * The version a managed entry is brought to: the plugin's own, unless the file already
+     * pins a newer one, which stays. Plugin 196 lowered a committed
+     * {@code ike-build-report-extension} 262 to the 261 it was built against; a pin an
+     * operator moved ahead of the plugin is never moved back (IKE-Network/ike-issues#1261).
+     */
+    static String target(String existing, String artifactId, String pluginTarget) {
+        String committed = committedVersion(existing, artifactId);
+        if (committed == null || compareVersions(committed, pluginTarget) <= 0) {
+            return pluginTarget;
+        }
+        return committed;
+    }
+
+    /** The version the file carries for an artifact, in its managed block or anywhere; null if none. */
+    static String committedVersion(String content, String artifactId) {
+        if (content == null) {
+            return null;
+        }
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile(
+                "<artifactId>" + java.util.regex.Pattern.quote(artifactId) + "</artifactId>\\s*<version>([^<]+)</version>")
+                .matcher(content);
+        return m.find() ? m.group(1).trim() : null;
+    }
+
+    /** Integers numerically (the extensions' versions are build numbers), anything else as text. */
+    static int compareVersions(String a, String b) {
+        try {
+            return Integer.compare(Integer.parseInt(a), Integer.parseInt(b));
+        } catch (NumberFormatException e) {
+            return a.compareTo(b);
+        }
+    }
+
+    /** The version the plugin was built against, from its filtered properties; the fallback on an unfiltered classpath. */
+    static String resolveVersion(String key, String fallback) {
         try (InputStream is = ExtensionsXmlReconciler.class
                 .getResourceAsStream(PROPERTIES_RESOURCE)) {
             if (is != null) {

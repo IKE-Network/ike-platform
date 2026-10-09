@@ -6,7 +6,7 @@ canonical_url: https://ike.network/ike-platform/ike-workspace-maven-plugin/licen
 
 # Licenses (SPDX)
 
-Licenses for declared dependencies of `ike-workspace-maven-plugin` 200, grouped by SPDX expression. Rendered from `[bom.json](bom.json)` (CycloneDX) at `pre-site` phase by `ike:render-spdx-licenses` (ike-issues#335).
+Licenses for declared dependencies of `ike-workspace-maven-plugin` 201, grouped by SPDX expression. Rendered from `[bom.json](bom.json)` (CycloneDX) at `pre-site` phase by `ike:render-spdx-licenses` (ike-issues#335).
 
 ## [#summary](#summary)Summary
 

@@ -46,7 +46,7 @@ import java.util.regex.Pattern;
  * with its section — but the reported real-world losses were whole sections,
  * which this preserves.
  */
-final class ClaudeMdMerge {
+public final class ClaudeMdMerge {
 
     private ClaudeMdMerge() {}
 
@@ -65,7 +65,7 @@ final class ClaudeMdMerge {
      * @param text  the full section including its {@code ## } heading line,
      *              with a trailing newline
      */
-<span class="fc" id="L68">    record Section(String title, String text) {}</span>
+<span class="fc" id="L68">    public record Section(String title, String text) {}</span>
 
     /**
      * The result of merging an existing {@code CLAUDE.md} with a freshly
@@ -75,7 +75,7 @@ final class ClaudeMdMerge {
      * @param rescued  hand-authored sections to preserve elsewhere; empty when
      *                 the existing file held nothing the template does not own
      */
-<span class="fc" id="L78">    record Result(String claudeMd, List&lt;Section&gt; rescued) {}</span>
+<span class="fc" id="L78">    public record Result(String claudeMd, List&lt;Section&gt; rescued) {}</span>
 
     /**
      * Merge {@code existing} CLAUDE.md content with a freshly {@code generated}
@@ -86,30 +86,41 @@ final class ClaudeMdMerge {
      * @param generated the freshly generated template content
      * @return the merged content plus any hand-authored sections to rescue
      */
-    static Result merge(String existing, String generated) {
-<span class="fc bfc" id="L90" title="All 4 branches covered.">        if (existing == null || existing.isBlank()) {</span>
-<span class="fc" id="L91">            return new Result(generated, List.of());</span>
+    public static Result merge(String existing, String generated) {
+        // Line endings are normalized on the way in: a CRLF checkout (Windows, autocrlf) would
+        // otherwise keep its CRs on the lines carried over and get LF on the generated ones, a
+        // file of mixed endings that git shows as modified with an empty diff
+        // (IKE-Network/ike-issues#1261). The merge writes LF; git's autocrlf does the rest.
+<span class="fc" id="L94">        generated = normalize(generated);</span>
+<span class="fc" id="L95">        existing = normalize(existing);</span>
+<span class="fc bfc" id="L96" title="All 4 branches covered.">        if (existing == null || existing.isBlank()) {</span>
+<span class="fc" id="L97">            return new Result(generated, List.of());</span>
         }
 
-<span class="fc" id="L94">        List&lt;String&gt; managed = new ArrayList&lt;&gt;();</span>
-<span class="fc" id="L95">        String withoutManaged = extractManaged(existing, managed);</span>
+<span class="fc" id="L100">        List&lt;String&gt; managed = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L101">        String withoutManaged = extractManaged(existing, managed);</span>
 
-<span class="fc" id="L97">        Set&lt;String&gt; templateTitles = sectionTitles(generated);</span>
-<span class="fc" id="L98">        List&lt;Section&gt; rescued = new ArrayList&lt;&gt;();</span>
-<span class="fc bfc" id="L99" title="All 2 branches covered.">        for (Section section : parseSections(withoutManaged)) {</span>
-<span class="fc bfc" id="L100" title="All 2 branches covered.">            if (!templateTitles.contains(section.title())) {</span>
-<span class="fc" id="L101">                rescued.add(section);</span>
+<span class="fc" id="L103">        Set&lt;String&gt; templateTitles = sectionTitles(generated);</span>
+<span class="fc" id="L104">        List&lt;Section&gt; rescued = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L105" title="All 2 branches covered.">        for (Section section : parseSections(withoutManaged)) {</span>
+<span class="fc bfc" id="L106" title="All 2 branches covered.">            if (!templateTitles.contains(section.title())) {</span>
+<span class="fc" id="L107">                rescued.add(section);</span>
             }
-<span class="fc" id="L103">        }</span>
+<span class="fc" id="L109">        }</span>
 
-<span class="fc" id="L105">        StringBuilder sb = new StringBuilder(generated);</span>
-<span class="fc bfc" id="L106" title="All 2 branches covered.">        for (String block : managed) {</span>
-<span class="pc bpc" id="L107" title="1 of 4 branches missed.">            while (sb.length() &gt; 0 &amp;&amp; sb.charAt(sb.length() - 1) == '\n') {</span>
-<span class="fc" id="L108">                sb.deleteCharAt(sb.length() - 1);</span>
+<span class="fc" id="L111">        StringBuilder sb = new StringBuilder(generated);</span>
+<span class="fc bfc" id="L112" title="All 2 branches covered.">        for (String block : managed) {</span>
+<span class="pc bpc" id="L113" title="1 of 4 branches missed.">            while (sb.length() &gt; 0 &amp;&amp; sb.charAt(sb.length() - 1) == '\n') {</span>
+<span class="fc" id="L114">                sb.deleteCharAt(sb.length() - 1);</span>
             }
-<span class="fc" id="L110">            sb.append(&quot;\n\n&quot;).append(block.stripTrailing()).append('\n');</span>
-<span class="fc" id="L111">        }</span>
-<span class="fc" id="L112">        return new Result(sb.toString(), rescued);</span>
+<span class="fc" id="L116">            sb.append(&quot;\n\n&quot;).append(block.stripTrailing()).append('\n');</span>
+<span class="fc" id="L117">        }</span>
+<span class="fc" id="L118">        return new Result(sb.toString(), rescued);</span>
+    }
+
+    /** The text with every CRLF, and any lone CR, as LF; null stays null. */
+    public static String normalize(String text) {
+<span class="fc bfc" id="L123" title="All 2 branches covered.">        return text == null ? null : text.replace(&quot;\r\n&quot;, &quot;\n&quot;).replace('\r', '\n');</span>
     }
 
     /**
@@ -124,42 +135,42 @@ final class ClaudeMdMerge {
      * hand-corrupted markers.
      */
     private static String extractManaged(String content, List&lt;String&gt; managed) {
-<span class="fc" id="L127">        String[] lines = content.split(&quot;\n&quot;, -1);</span>
-<span class="fc" id="L128">        StringBuilder remaining = new StringBuilder();</span>
-<span class="fc" id="L129">        int i = 0;</span>
-<span class="fc bfc" id="L130" title="All 2 branches covered.">        while (i &lt; lines.length) {</span>
-<span class="fc bfc" id="L131" title="All 2 branches covered.">            if (MANAGED_BEGIN.matcher(lines[i]).matches()) {</span>
-<span class="fc" id="L132">                int end = -1;</span>
-<span class="fc bfc" id="L133" title="All 2 branches covered.">                for (int j = i + 1; j &lt; lines.length; j++) {</span>
-<span class="fc bfc" id="L134" title="All 2 branches covered.">                    if (MANAGED_END.matcher(lines[j]).matches()) {</span>
-<span class="fc" id="L135">                        end = j;</span>
-<span class="fc" id="L136">                        break;</span>
+<span class="fc" id="L138">        String[] lines = content.split(&quot;\n&quot;, -1);</span>
+<span class="fc" id="L139">        StringBuilder remaining = new StringBuilder();</span>
+<span class="fc" id="L140">        int i = 0;</span>
+<span class="fc bfc" id="L141" title="All 2 branches covered.">        while (i &lt; lines.length) {</span>
+<span class="fc bfc" id="L142" title="All 2 branches covered.">            if (MANAGED_BEGIN.matcher(lines[i]).matches()) {</span>
+<span class="fc" id="L143">                int end = -1;</span>
+<span class="fc bfc" id="L144" title="All 2 branches covered.">                for (int j = i + 1; j &lt; lines.length; j++) {</span>
+<span class="fc bfc" id="L145" title="All 2 branches covered.">                    if (MANAGED_END.matcher(lines[j]).matches()) {</span>
+<span class="fc" id="L146">                        end = j;</span>
+<span class="fc" id="L147">                        break;</span>
                     }
                 }
-<span class="fc bfc" id="L139" title="All 2 branches covered.">                if (end &gt;= 0) {</span>
-<span class="fc" id="L140">                    StringBuilder block = new StringBuilder();</span>
-<span class="fc bfc" id="L141" title="All 2 branches covered.">                    for (int k = i; k &lt;= end; k++) {</span>
-<span class="fc bfc" id="L142" title="All 2 branches covered.">                        if (k &gt; i) {</span>
-<span class="fc" id="L143">                            block.append('\n');</span>
+<span class="fc bfc" id="L150" title="All 2 branches covered.">                if (end &gt;= 0) {</span>
+<span class="fc" id="L151">                    StringBuilder block = new StringBuilder();</span>
+<span class="fc bfc" id="L152" title="All 2 branches covered.">                    for (int k = i; k &lt;= end; k++) {</span>
+<span class="fc bfc" id="L153" title="All 2 branches covered.">                        if (k &gt; i) {</span>
+<span class="fc" id="L154">                            block.append('\n');</span>
                         }
-<span class="fc" id="L145">                        block.append(lines[k]);</span>
+<span class="fc" id="L156">                        block.append(lines[k]);</span>
                     }
-<span class="fc" id="L147">                    managed.add(block.toString());</span>
-<span class="fc" id="L148">                    i = end + 1;</span>
+<span class="fc" id="L158">                    managed.add(block.toString());</span>
+<span class="fc" id="L159">                    i = end + 1;</span>
                     // Skip a single blank separator line left behind.
-<span class="pc bpc" id="L150" title="2 of 4 branches missed.">                    if (i &lt; lines.length &amp;&amp; lines[i].isBlank()) {</span>
-<span class="fc" id="L151">                        i++;</span>
+<span class="pc bpc" id="L161" title="2 of 4 branches missed.">                    if (i &lt; lines.length &amp;&amp; lines[i].isBlank()) {</span>
+<span class="fc" id="L162">                        i++;</span>
                     }
                     continue;
                 }
             }
-<span class="fc" id="L156">            remaining.append(lines[i]);</span>
-<span class="fc bfc" id="L157" title="All 2 branches covered.">            if (i &lt; lines.length - 1) {</span>
-<span class="fc" id="L158">                remaining.append('\n');</span>
+<span class="fc" id="L167">            remaining.append(lines[i]);</span>
+<span class="fc bfc" id="L168" title="All 2 branches covered.">            if (i &lt; lines.length - 1) {</span>
+<span class="fc" id="L169">                remaining.append('\n');</span>
             }
-<span class="fc" id="L160">            i++;</span>
+<span class="fc" id="L171">            i++;</span>
         }
-<span class="fc" id="L162">        return remaining.toString();</span>
+<span class="fc" id="L173">        return remaining.toString();</span>
     }
 
     /**
@@ -169,28 +180,28 @@ final class ClaudeMdMerge {
      * hand-authored additions.
      */
     private static List&lt;Section&gt; parseSections(String content) {
-<span class="fc" id="L172">        String[] lines = content.split(&quot;\n&quot;, -1);</span>
-<span class="fc" id="L173">        List&lt;Section&gt; sections = new ArrayList&lt;&gt;();</span>
-<span class="fc" id="L174">        StringBuilder current = null;</span>
-<span class="fc" id="L175">        String currentTitle = null;</span>
-<span class="fc bfc" id="L176" title="All 2 branches covered.">        for (String line : lines) {</span>
-<span class="fc bfc" id="L177" title="All 2 branches covered.">            if (line.startsWith(&quot;## &quot;)) {</span>
-<span class="fc bfc" id="L178" title="All 2 branches covered.">                if (current != null) {</span>
-<span class="fc" id="L179">                    sections.add(new Section(currentTitle,</span>
-<span class="fc" id="L180">                            current.toString().stripTrailing() + &quot;\n&quot;));</span>
+<span class="fc" id="L183">        String[] lines = content.split(&quot;\n&quot;, -1);</span>
+<span class="fc" id="L184">        List&lt;Section&gt; sections = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L185">        StringBuilder current = null;</span>
+<span class="fc" id="L186">        String currentTitle = null;</span>
+<span class="fc bfc" id="L187" title="All 2 branches covered.">        for (String line : lines) {</span>
+<span class="fc bfc" id="L188" title="All 2 branches covered.">            if (line.startsWith(&quot;## &quot;)) {</span>
+<span class="fc bfc" id="L189" title="All 2 branches covered.">                if (current != null) {</span>
+<span class="fc" id="L190">                    sections.add(new Section(currentTitle,</span>
+<span class="fc" id="L191">                            current.toString().stripTrailing() + &quot;\n&quot;));</span>
                 }
-<span class="fc" id="L182">                current = new StringBuilder();</span>
-<span class="fc" id="L183">                currentTitle = line.substring(3).strip();</span>
+<span class="fc" id="L193">                current = new StringBuilder();</span>
+<span class="fc" id="L194">                currentTitle = line.substring(3).strip();</span>
             }
-<span class="fc bfc" id="L185" title="All 2 branches covered.">            if (current != null) {</span>
-<span class="fc" id="L186">                current.append(line).append('\n');</span>
+<span class="fc bfc" id="L196" title="All 2 branches covered.">            if (current != null) {</span>
+<span class="fc" id="L197">                current.append(line).append('\n');</span>
             }
         }
-<span class="pc bpc" id="L189" title="1 of 2 branches missed.">        if (current != null) {</span>
-<span class="fc" id="L190">            sections.add(new Section(currentTitle,</span>
-<span class="fc" id="L191">                    current.toString().stripTrailing() + &quot;\n&quot;));</span>
+<span class="fc bfc" id="L200" title="All 2 branches covered.">        if (current != null) {</span>
+<span class="fc" id="L201">            sections.add(new Section(currentTitle,</span>
+<span class="fc" id="L202">                    current.toString().stripTrailing() + &quot;\n&quot;));</span>
         }
-<span class="fc" id="L193">        return sections;</span>
+<span class="fc" id="L204">        return sections;</span>
     }
 
     /**
@@ -198,11 +209,11 @@ final class ClaudeMdMerge {
      * headings a regenerated file legitimately owns.
      */
     private static Set&lt;String&gt; sectionTitles(String generated) {
-<span class="fc" id="L201">        Set&lt;String&gt; titles = new LinkedHashSet&lt;&gt;();</span>
-<span class="fc bfc" id="L202" title="All 2 branches covered.">        for (Section section : parseSections(generated)) {</span>
-<span class="fc" id="L203">            titles.add(section.title());</span>
-<span class="fc" id="L204">        }</span>
-<span class="fc" id="L205">        return titles;</span>
+<span class="fc" id="L212">        Set&lt;String&gt; titles = new LinkedHashSet&lt;&gt;();</span>
+<span class="fc bfc" id="L213" title="All 2 branches covered.">        for (Section section : parseSections(generated)) {</span>
+<span class="fc" id="L214">            titles.add(section.title());</span>
+<span class="fc" id="L215">        }</span>
+<span class="fc" id="L216">        return titles;</span>
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.15.202606040825</span></div></body></html>

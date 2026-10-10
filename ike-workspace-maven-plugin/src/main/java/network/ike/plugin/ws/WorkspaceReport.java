@@ -23,12 +23,15 @@ import java.util.List;
  * draft/publish goals, the filename includes the variant:
  * {@code ws꞉feature-start-draft.md}, {@code ws꞉feature-start-publish.md}.
  *
- * <p><strong>Self-healing gitignore:</strong> before writing, this class
- * ensures {@code ws꞉*.md} is listed in the {@code .gitignore} of the
- * nearest {@code .git} ancestor. If the pattern is missing, it is
- * appended. This keeps reports out of git without any manual setup —
- * a fresh clone of a workspace becomes report-ready the first time a
- * {@code ws:*} goal runs.
+ * <p><strong>Kept out of git without touching the tree:</strong> before
+ * writing, this class checks that {@code ws꞉*.md} is listed in the
+ * {@code .gitignore} of the nearest {@code .git} ancestor. The committed
+ * glob is the scaffold convention's business (the workspace reconciler
+ * commits it); when it is missing, the pattern goes into the repository's
+ * local {@code .git/info/exclude}, which git honours and never tracks, so
+ * a report never leaves an uncommitted change behind for the next publish
+ * to refuse (IKE-Network/ike-issues#1283, #1109). A fresh clone becomes
+ * report-ready the first time a {@code ws:*} goal runs, either way.
  *
  * <p>Parallels {@code network.ike.plugin.IkeReport} in the ike plugin;
  * both writers now target their respective project roots.
@@ -50,11 +53,12 @@ public final class WorkspaceReport {
     private WorkspaceReport() {}
 
     /**
-     * Write a goal's report to its per-goal file at the workspace root,
-     * overwriting any previous content. Self-heals the nearest
-     * {@code .gitignore} so the report does not land in git.
+     * Write a goal's report to its per-goal file at the working set's root,
+     * overwriting any previous content, and keep it out of git without
+     * modifying the tracked tree (see {@link #ensureGitignored}).
      *
-     * @param workspaceRoot the workspace root directory
+     * @param workspaceRoot the working set's root: the workspace root, or
+     *                      the repository in a working set of one
      * @param goalName      the goal name including variant (e.g., "ws:feature-start-draft")
      * @param content       the markdown content to write
      * @param log           Maven logger (warnings only; null-safe)
@@ -129,16 +133,19 @@ public final class WorkspaceReport {
     }
 
     /**
-     * Walk up from {@code workspaceRoot} looking for a {@code .git}
-     * directory; ensure its sibling {@code .gitignore} lists
-     * {@link #GITIGNORE_PATTERN}. If the file is missing, create it.
-     * If the pattern is missing, append it. No-op when no {@code .git}
-     * ancestor is found (e.g. the workspace is not yet in a git repo —
-     * pipeline-ws itself is a syncthing folder rather than a git repo).
+     * Walk up from {@code workspaceRoot} looking for a {@code .git} entry
+     * and make sure {@link #GITIGNORE_PATTERN} is ignored there: by the
+     * sibling {@code .gitignore} when it already lists the glob, otherwise
+     * by the repository's local {@code .git/info/exclude}, created or
+     * appended as needed, so the tracked tree is never modified
+     * (IKE-Network/ike-issues#1283). When {@code .git} is a file (a linked
+     * worktree or a submodule) there is no local exclude beside it, and the
+     * glob is appended to {@code .gitignore} as before. No-op when no
+     * {@code .git} ancestor is found (the folder is not yet a repository).
      *
      * @param workspaceRoot the workspace root to search from
      * @param log           Maven logger (null-safe)
-     * @throws IOException if the gitignore file cannot be read or written
+     * @throws IOException if an ignore file cannot be read or written
      */
     static void ensureGitignored(Path workspaceRoot, Log log)
             throws IOException {
@@ -146,14 +153,36 @@ public final class WorkspaceReport {
         if (gitRoot == null) return;
 
         Path gitignore = gitRoot.resolve(".gitignore");
-        if (Files.exists(gitignore)) {
-            List<String> lines = Files.readAllLines(gitignore,
-                    StandardCharsets.UTF_8);
-            for (String line : lines) {
-                if (matchesPattern(line.trim(), GITIGNORE_PATTERN)) {
-                    return;
-                }
+        if (Files.exists(gitignore)
+                && listsPattern(gitignore, GITIGNORE_PATTERN)) {
+            return;
+        }
+
+        Path gitEntry = gitRoot.resolve(".git");
+        if (Files.isDirectory(gitEntry)) {
+            Path exclude = gitEntry.resolve("info").resolve("exclude");
+            if (Files.exists(exclude)
+                    && listsPattern(exclude, GITIGNORE_PATTERN)) {
+                return;
             }
+            Files.createDirectories(exclude.getParent());
+            String existing = Files.exists(exclude)
+                    ? Files.readString(exclude, StandardCharsets.UTF_8) : "";
+            String appended = existing.isEmpty() || existing.endsWith("\n")
+                    ? existing : existing + "\n";
+            Files.writeString(exclude,
+                    appended + "# ws:* goal reports (local; the scaffold "
+                            + "convention commits the glob to .gitignore)\n"
+                            + GITIGNORE_PATTERN + "\n",
+                    StandardCharsets.UTF_8);
+            if (log != null) {
+                log.info(GITIGNORE_PATTERN + " is not in .gitignore — "
+                        + "excluded locally in .git/info/exclude");
+            }
+            return;
+        }
+
+        if (Files.exists(gitignore)) {
             String existing = Files.readString(gitignore,
                     StandardCharsets.UTF_8);
             String appended = existing.endsWith("\n") ? existing
@@ -172,6 +201,27 @@ public final class WorkspaceReport {
             log.info("Added " + GITIGNORE_PATTERN
                     + " to " + gitRoot.relativize(gitignore));
         }
+    }
+
+    /**
+     * Whether an ignore file lists the pattern, comments and blanks
+     * skipped, a leading slash tolerated.
+     *
+     * @param ignoreFile the {@code .gitignore} or {@code exclude} file
+     * @param pattern    the normalized pattern
+     * @return {@code true} when a line covers the pattern
+     * @throws IOException if the file cannot be read
+     */
+    private static boolean listsPattern(Path ignoreFile, String pattern)
+            throws IOException {
+        List<String> lines = Files.readAllLines(ignoreFile,
+                StandardCharsets.UTF_8);
+        for (String line : lines) {
+            if (matchesPattern(line.trim(), pattern)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

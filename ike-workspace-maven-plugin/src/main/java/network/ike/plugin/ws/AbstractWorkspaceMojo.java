@@ -573,14 +573,25 @@ abstract class AbstractWorkspaceMojo implements Mojo {
      *
      * @param report the report to persist
      */
+    /**
+     * Write the goal's report at the working set's root: the workspace root
+     * in a workspace, the repository itself in a working set of one
+     * (IKE-Network/ike-issues#1283 — resolving through the manifest wrote
+     * no report at all in a single repository).
+     *
+     * @param report the goal's report
+     */
     private void writeReport(WorkspaceReportSpec report) {
+        Path root;
         try {
-            WorkspaceReport.write(workspaceRoot().toPath(),
-                    report.goal().qualified(), report.content(), getLog());
-        } catch (MojoException e) {
-            getLog().debug("Could not resolve workspace root for report: "
+            root = resolveWorkingSet().root();
+        } catch (RuntimeException e) {
+            getLog().debug("Could not resolve the working set for the report: "
                     + e.getMessage());
+            return;
         }
+        WorkspaceReport.write(root, report.goal().qualified(),
+                report.content(), getLog());
     }
 
     /**

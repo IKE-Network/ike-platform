@@ -105,6 +105,11 @@ public class WsCheckpointDraftMojo extends AbstractWorkspaceMojo {
 
     @Override
     protected WorkspaceReportSpec runGoal() throws MojoException {
+        WorkingSet resolved = resolveWorkingSet();
+        if (resolved.isSingleRepo()) {
+            return runSingleRepository(resolved);
+        }
+
         WorkspaceGraph graph = loadGraph();
         File root = workspaceRoot();
 
@@ -229,7 +234,8 @@ public class WsCheckpointDraftMojo extends AbstractWorkspaceMojo {
                 snapshots, absentComponents, issuesSinceLastRelease);
 
         // ── Append testing context from milestone ─────────────────────
-        ReleaseNotesSupport.TestingContext testingContext = snapshotTestingContext(graph);
+        ReleaseNotesSupport.TestingContext testingContext =
+                snapshotTestingContext(defaultMilestone(graph));
         if (testingContext != null) {
             yamlContent = yamlContent + "\n" + testingContext.toYaml("  ");
         }
@@ -350,6 +356,194 @@ public class WsCheckpointDraftMojo extends AbstractWorkspaceMojo {
                 buildCheckpointMarkdownReport(reportContext));
     }
 
+    // ── Single repository (IKE-Network/ike-issues#1281) ───────────────
+
+    /**
+     * Schema marker a single-repository checkpoint records in place of the
+     * workspace manifest's schema version, which a working set of one has
+     * none of.
+     */
+    static final String SINGLE_REPOSITORY_SCHEMA = "single-repository";
+
+    /**
+     * Checkpoint a working set of one (IKE-Network/ike-issues#1281). The
+     * repository is both the sole member and the root, so it gets the
+     * root's treatment: the checkpoint file is committed, the tag lands on
+     * that commit, and branch and tag are pushed. The state recorded is the
+     * head before that commit, as a subproject's pinned sha is in a
+     * workspace. There is nothing to align and no manifest to re-pin.
+     *
+     * @param workingSet the resolved single-repository working set
+     * @return the goal report
+     * @throws MojoException when the publish is refused or a git step fails
+     */
+    private WorkspaceReportSpec runSingleRepository(WorkingSet workingSet)
+            throws MojoException {
+        File root = workingSet.root().toFile();
+        boolean draft = !publish;
+        String repoName = workingSet.members().get(0).name();
+
+        List<String> refusals = singleRepositoryRefusals(root);
+        if (!refusals.isEmpty()) {
+            if (draft) {
+                for (String refusal : refusals) {
+                    getLog().warn("  " + refusal);
+                }
+            } else {
+                throw new MojoException(WsGoal.CHECKPOINT_PUBLISH.qualified()
+                        + " refused:\n  " + String.join("\n  ", refusals));
+            }
+        }
+
+        if (name == null || name.isBlank()) {
+            name = deriveCheckpointName(root);
+        }
+
+        // Idempotency guard, as for a workspace (#294): the checkpoint file
+        // is the durable success marker.
+        if (publish) {
+            Path existing = root.toPath().resolve("checkpoints")
+                    .resolve(checkpointFileName(name));
+            if (Files.isRegularFile(existing)) {
+                getLog().info("");
+                getLog().info("  Checkpoint '" + name
+                        + "' already exists — nothing to do.");
+                getLog().info("    " + existing);
+                getLog().info("");
+                return new WorkspaceReportSpec(WsGoal.CHECKPOINT_PUBLISH,
+                        "Idempotent skip — checkpoint **`" + name
+                                + "`** already exists at `"
+                                + root.toPath().relativize(existing)
+                                + "`.\n");
+            }
+        }
+
+        String tagName = "checkpoint/" + name;
+        String timestamp = ISO_UTC.format(Instant.now());
+        String author = resolveAuthor(root);
+        String branch = gitBranch(root);
+        String sha = gitFullSha(root);
+        String shortSha = gitShortSha(root);
+        String version = readVersionOrNull(root);
+
+        getLog().info("");
+        getLog().info(header("Checkpoint"));
+        getLog().info("══════════════════════════════════════════════════════════════");
+        getLog().info("  Name:   " + name);
+        getLog().info("  Tag:    " + tagName);
+        getLog().info("  Time:   " + timestamp);
+        getLog().info("  Author: " + author);
+        getLog().info("  Repo:   " + repoName + " [" + shortSha + "] " + branch
+                + (version == null ? "" : " (" + version + ")"));
+        if (draft) {
+            getLog().info("  Mode:   DRAFT — no tag, no commit, no file written");
+        }
+        getLog().info("");
+
+        List<ReleaseNotesSupport.IssueRef> issues =
+                collectClosingTrailerIssuesSinceLastRelease(root);
+        Map<String, List<ReleaseNotesSupport.IssueRef>> issuesSinceLastRelease =
+                new LinkedHashMap<>();
+        if (!issues.isEmpty()) {
+            issuesSinceLastRelease.put(repoName, issues);
+        }
+        List<SubprojectSnapshot> snapshots = List.of(new SubprojectSnapshot(
+                repoName, sha, shortSha, branch, version, false));
+
+        String yamlContent = buildCheckpointYaml(name, timestamp, author,
+                SINGLE_REPOSITORY_SCHEMA, snapshots, List.of(),
+                issuesSinceLastRelease);
+        ReleaseNotesSupport.TestingContext testingContext =
+                snapshotTestingContext(defaultMilestone(repoName, version));
+        if (testingContext != null) {
+            yamlContent = yamlContent + "\n" + testingContext.toYaml("  ");
+        }
+
+        Path checkpointFile = null;
+        boolean tagPushed = false;
+        if (draft) {
+            getLog().info("  [DRAFT] Publish would build the repository "
+                    + "(ws.checkpoint.verifyGoals) before tagging and refuse "
+                    + "to cut on failure (#689).");
+            getLog().info("[DRAFT] Checkpoint file would be written to:");
+            getLog().info("[DRAFT]   checkpoints/" + checkpointFileName(name));
+            getLog().info("[DRAFT] It would be committed, tagged " + tagName
+                    + ", and pushed with the branch.");
+            getLog().info("");
+            getLog().info("[DRAFT] Contents:");
+            yamlContent.lines().forEach(line ->
+                    getLog().info("[DRAFT]   " + line));
+            getLog().info("");
+        } else {
+            Path checkpointsDir = root.toPath().resolve("checkpoints");
+            try {
+                Files.createDirectories(checkpointsDir);
+                checkpointFile = checkpointsDir.resolve(checkpointFileName(name));
+                Files.writeString(checkpointFile, yamlContent,
+                        StandardCharsets.UTF_8);
+            } catch (IOException e) {
+                throw new MojoException("Failed to write the checkpoint file under "
+                        + checkpointsDir, e);
+            }
+            ReleaseSupport.exec(root, getLog(), "git", "add",
+                    "checkpoints/" + checkpointFileName(name));
+            ReleaseSupport.exec(root, getLog(), "git", "commit", "-m",
+                    "checkpoint: " + name);
+            ReleaseSupport.exec(root, getLog(), "git", "tag", "-a", tagName,
+                    "-m", "Checkpoint " + name);
+            if (ReleaseSupport.hasRemote(root, "origin")) {
+                ReleaseSupport.exec(root, getLog(), "git", "push", "origin",
+                        ReleaseSupport.currentBranch(root));
+                ReleaseSupport.exec(root, getLog(), "git", "push", "origin",
+                        tagName);
+                tagPushed = true;
+                getLog().info("  Tag pushed: " + tagName);
+            } else {
+                getLog().info("  No 'origin' remote — tag created locally, "
+                        + "not pushed");
+            }
+            if (VcsState.isIkeManaged(root.toPath())) {
+                VcsOperations.writeVcsState(root, VcsState.Action.CHECKPOINT);
+            }
+            getLog().info("");
+            getLog().info("  Checkpoint: " + checkpointFile);
+            getLog().info("");
+        }
+
+        CheckpointReportContext reportContext = new CheckpointReportContext(
+                name, tagName, timestamp, author, draft,
+                snapshots, List.of(), yamlContent,
+                checkpointFile, true, false, tagPushed,
+                testingContext, issuesSinceLastRelease,
+                workingSet, version, branch);
+        return new WorkspaceReportSpec(
+                publish ? WsGoal.CHECKPOINT_PUBLISH : WsGoal.CHECKPOINT_DRAFT,
+                buildCheckpointMarkdownReport(reportContext));
+    }
+
+    /**
+     * Why a checkpoint of a single repository cannot be cut right now:
+     * uncommitted modifications, since the tag must name a committed
+     * state, or a detached head, since the checkpoint commit needs a branch
+     * to push. Empty when the repository is ready.
+     *
+     * @param root the repository
+     * @return the refusals, each a sentence with its remedy
+     */
+    protected List<String> singleRepositoryRefusals(File root) {
+        List<String> refusals = new ArrayList<>();
+        if (!VcsOperations.isClean(root)) {
+            refusals.add("uncommitted modifications in " + root.getName()
+                    + " — commit first (" + WsGoal.COMMIT_PUBLISH.qualified()
+                    + ")");
+        }
+        if ("HEAD".equals(gitBranch(root))) {
+            refusals.add("detached HEAD in " + root.getName()
+                    + " — check out the branch to checkpoint");
+        }
+        return refusals;
+    }
+
     // ── Per-subproject checkpoint (overridable for tests) ──────────────
 
     /**
@@ -411,10 +605,17 @@ public class WsCheckpointDraftMojo extends AbstractWorkspaceMojo {
     private String buildCheckpointMarkdownReport(CheckpointReportContext ctx) {
         GoalReportBuilder report = new GoalReportBuilder();
 
+        boolean singleRepo = ctx.workingSet().isSingleRepo();
         StringBuilder lead = new StringBuilder();
-        lead.append(ctx.snapshots().size()).append(" subproject(s) checkpointed");
-        if (!ctx.absentComponents().isEmpty()) {
-            lead.append(", ").append(ctx.absentComponents().size()).append(" absent");
+        if (singleRepo) {
+            SubprojectSnapshot only = ctx.snapshots().get(0);
+            lead.append("Repository `").append(only.name())
+                    .append("` checkpointed at `").append(only.shortSha()).append("`");
+        } else {
+            lead.append(ctx.snapshots().size()).append(" subproject(s) checkpointed");
+            if (!ctx.absentComponents().isEmpty()) {
+                lead.append(", ").append(ctx.absentComponents().size()).append(" absent");
+            }
         }
         lead.append(ctx.draft() ? " (draft)" : "").append(".");
         report.paragraph(lead.toString());
@@ -431,33 +632,38 @@ public class WsCheckpointDraftMojo extends AbstractWorkspaceMojo {
 
         report.section("Outputs");
         String checkpointPath = "checkpoints/" + checkpointFileName(ctx.name());
+        String tagNoun = singleRepo ? "Tag" : "Workspace tag";
         if (ctx.draft()) {
             report.bullet("Checkpoint file `" + checkpointPath
                     + "` would be written.");
             if (ctx.workspaceHasGit()) {
-                report.bullet("Workspace tag `" + ctx.wsTagName()
+                report.bullet(tagNoun + " `" + ctx.wsTagName()
                         + "` would be created.");
             } else {
                 report.bullet("No `.git` at workspace root; "
                         + "tag/commit/push would be skipped.");
             }
-            report.bullet("`workspace.yaml` subproject SHAs would be updated.");
+            if (!singleRepo) {
+                report.bullet("`workspace.yaml` subproject SHAs would be updated.");
+            }
         } else {
             report.bullet("Checkpoint file written: `" + checkpointPath + "`");
             if (ctx.workspaceHasGit()) {
                 String tagOutcome = ctx.tagPushed()
                         ? "pushed to `origin`."
                         : "created locally (no `origin` remote — not pushed).";
-                report.bullet("Workspace tag `" + ctx.wsTagName()
+                report.bullet(tagNoun + " `" + ctx.wsTagName()
                         + "` " + tagOutcome);
             } else {
                 report.bullet("No `.git` at workspace root; "
                         + "tag/commit/push skipped.");
             }
-            report.bullet("`workspace.yaml` subproject SHAs "
-                    + (ctx.manifestUpdated()
-                            ? "updated" : "**not updated** (write failed)")
-                    + ".");
+            if (!singleRepo) {
+                report.bullet("`workspace.yaml` subproject SHAs "
+                        + (ctx.manifestUpdated()
+                                ? "updated" : "**not updated** (write failed)")
+                        + ".");
+            }
         }
 
         if (ctx.testingContext() != null) {
@@ -741,24 +947,44 @@ public class WsCheckpointDraftMojo extends AbstractWorkspaceMojo {
         }
     }
 
-    private ReleaseNotesSupport.TestingContext snapshotTestingContext(WorkspaceGraph graph)
+    /**
+     * The milestone a workspace checkpoint looks for when none is given:
+     * the first declared subproject at its version without {@code -SNAPSHOT}.
+     *
+     * @param graph the workspace graph
+     * @return the derived milestone name, or {@code null} when the manifest
+     *         declares no subproject or the first one carries no version
+     */
+    private static String defaultMilestone(WorkspaceGraph graph) {
+        Map<String, Subproject> components = graph.manifest().subprojects();
+        if (components.isEmpty()) {
+            return null;
+        }
+        Map.Entry<String, Subproject> first = components.entrySet().iterator().next();
+        return defaultMilestone(first.getKey(), first.getValue().version());
+    }
+
+    /**
+     * The milestone name for a member at a version:
+     * {@code <name> v<version without -SNAPSHOT>}.
+     *
+     * @param name    the member name
+     * @param version the member version, or {@code null} when unknown
+     * @return the milestone name, or {@code null} without a version
+     */
+    private static String defaultMilestone(String name, String version) {
+        if (version == null) {
+            return null;
+        }
+        return name + " v" + version.replace("-SNAPSHOT", "");
+    }
+
+    private ReleaseNotesSupport.TestingContext snapshotTestingContext(String derivedMilestone)
             throws MojoException {
         if (issueRepo == null || issueRepo.isBlank()) return null;
 
-        String milestoneName = milestone;
-
-        if (milestoneName == null || milestoneName.isBlank()) {
-            Map<String, Subproject> components = graph.manifest().subprojects();
-            if (!components.isEmpty()) {
-                Map.Entry<String, Subproject> first = components.entrySet().iterator().next();
-                String subName = first.getKey();
-                String version = first.getValue().version();
-                if (version != null) {
-                    String releaseVersion = version.replace("-SNAPSHOT", "");
-                    milestoneName = subName + " v" + releaseVersion;
-                }
-            }
-        }
+        String milestoneName = (milestone == null || milestone.isBlank())
+                ? derivedMilestone : milestone;
 
         if (milestoneName == null || milestoneName.isBlank()) return null;
 

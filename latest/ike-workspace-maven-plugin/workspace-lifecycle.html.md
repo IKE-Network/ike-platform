@@ -1,6 +1,6 @@
 ---
-date_published: 2026-10-08
-date_modified: 2026-10-08
+date_published: 2026-10-09
+date_modified: 2026-10-09
 canonical_url: https://ike.network/ike-platform/ike-workspace-maven-plugin/workspace-lifecycle.html
 ---
 
@@ -161,6 +161,8 @@ mvn ws:checkpoint-publish -Dlabel=before-refactor
 ```
 
 The publish variant aligns first so the checkpoint captures a consistent inter-subproject state. TeamCity watches for checkpoint tags on the workspace repo and runs CI verification — the artifact side stays SNAPSHOT.
+
+The same goals work in a single repository, where the repository is the working set’s one member: the checkpoint file is committed and tagged, and the tag is pushed (ike-issues#1281).
 
 Checkpoints are intermediate; they are **not** released to Nexus and **should not** be consumed as a stable version by anything outside the workspace.
 

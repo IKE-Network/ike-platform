@@ -23,12 +23,15 @@ import java.util.List;
  * draft/publish goals, the filename includes the variant:
  * {@code ws꞉feature-start-draft.md}, {@code ws꞉feature-start-publish.md}.
  *
- * &lt;p&gt;&lt;strong&gt;Self-healing gitignore:&lt;/strong&gt; before writing, this class
- * ensures {@code ws꞉*.md} is listed in the {@code .gitignore} of the
- * nearest {@code .git} ancestor. If the pattern is missing, it is
- * appended. This keeps reports out of git without any manual setup —
- * a fresh clone of a workspace becomes report-ready the first time a
- * {@code ws:*} goal runs.
+ * &lt;p&gt;&lt;strong&gt;Kept out of git without touching the tree:&lt;/strong&gt; before
+ * writing, this class checks that {@code ws꞉*.md} is listed in the
+ * {@code .gitignore} of the nearest {@code .git} ancestor. The committed
+ * glob is the scaffold convention's business (the workspace reconciler
+ * commits it); when it is missing, the pattern goes into the repository's
+ * local {@code .git/info/exclude}, which git honours and never tracks, so
+ * a report never leaves an uncommitted change behind for the next publish
+ * to refuse (IKE-Network/ike-issues#1283, #1109). A fresh clone becomes
+ * report-ready the first time a {@code ws:*} goal runs, either way.
  *
  * &lt;p&gt;Parallels {@code network.ike.plugin.IkeReport} in the ike plugin;
  * both writers now target their respective project roots.
@@ -44,43 +47,44 @@ public final class WorkspaceReport {
      */
     static final String GITIGNORE_PATTERN = &quot;ws\uA789*.md&quot;;
 
-<span class="fc" id="L47">    private static final DateTimeFormatter TIMESTAMP_FMT =</span>
-<span class="fc" id="L48">            DateTimeFormatter.ofPattern(&quot;yyyy-MM-dd HH:mm:ss&quot;);</span>
+<span class="fc" id="L50">    private static final DateTimeFormatter TIMESTAMP_FMT =</span>
+<span class="fc" id="L51">            DateTimeFormatter.ofPattern(&quot;yyyy-MM-dd HH:mm:ss&quot;);</span>
 
     private WorkspaceReport() {}
 
     /**
-     * Write a goal's report to its per-goal file at the workspace root,
-     * overwriting any previous content. Self-heals the nearest
-     * {@code .gitignore} so the report does not land in git.
+     * Write a goal's report to its per-goal file at the working set's root,
+     * overwriting any previous content, and keep it out of git without
+     * modifying the tracked tree (see {@link #ensureGitignored}).
      *
-     * @param workspaceRoot the workspace root directory
+     * @param workspaceRoot the working set's root: the workspace root, or
+     *                      the repository in a working set of one
      * @param goalName      the goal name including variant (e.g., &quot;ws:feature-start-draft&quot;)
      * @param content       the markdown content to write
      * @param log           Maven logger (warnings only; null-safe)
      */
     public static void write(Path workspaceRoot, String goalName,
                               String content, Log log) {
-<span class="fc" id="L64">        String filename = &quot;ws&quot; + COLON + stripPrefix(goalName) + &quot;.md&quot;;</span>
-<span class="fc" id="L65">        Path reportFile = workspaceRoot.resolve(filename);</span>
+<span class="fc" id="L68">        String filename = &quot;ws&quot; + COLON + stripPrefix(goalName) + &quot;.md&quot;;</span>
+<span class="fc" id="L69">        Path reportFile = workspaceRoot.resolve(filename);</span>
 
         try {
-<span class="fc" id="L68">            ensureGitignored(workspaceRoot, log);</span>
+<span class="fc" id="L72">            ensureGitignored(workspaceRoot, log);</span>
 
-<span class="fc" id="L70">            String timestamp = LocalDateTime.now().format(TIMESTAMP_FMT);</span>
-<span class="fc" id="L71">            String fullContent = &quot;# &quot; + goalName + &quot;\n&quot;</span>
+<span class="fc" id="L74">            String timestamp = LocalDateTime.now().format(TIMESTAMP_FMT);</span>
+<span class="fc" id="L75">            String fullContent = &quot;# &quot; + goalName + &quot;\n&quot;</span>
                     + &quot;_&quot; + timestamp + &quot; · ike-workspace-maven-plugin &quot;
-<span class="fc" id="L73">                    + pluginVersion() + &quot;_\n\n&quot;</span>
-<span class="fc" id="L74">                    + content.stripTrailing() + &quot;\n&quot;;</span>
+<span class="fc" id="L77">                    + pluginVersion() + &quot;_\n\n&quot;</span>
+<span class="fc" id="L78">                    + content.stripTrailing() + &quot;\n&quot;;</span>
 
-<span class="fc" id="L76">            Files.writeString(reportFile, fullContent, StandardCharsets.UTF_8);</span>
-<span class="nc" id="L77">        } catch (IOException e) {</span>
-<span class="nc bnc" id="L78" title="All 2 branches missed.">            if (log != null) {</span>
-<span class="nc" id="L79">                log.debug(&quot;Could not write report &quot; + filename + &quot;: &quot;</span>
-<span class="nc" id="L80">                        + e.getMessage());</span>
+<span class="fc" id="L80">            Files.writeString(reportFile, fullContent, StandardCharsets.UTF_8);</span>
+<span class="nc" id="L81">        } catch (IOException e) {</span>
+<span class="nc bnc" id="L82" title="All 2 branches missed.">            if (log != null) {</span>
+<span class="nc" id="L83">                log.debug(&quot;Could not write report &quot; + filename + &quot;: &quot;</span>
+<span class="nc" id="L84">                        + e.getMessage());</span>
             }
-<span class="fc" id="L82">        }</span>
-<span class="fc" id="L83">    }</span>
+<span class="fc" id="L86">        }</span>
+<span class="fc" id="L87">    }</span>
 
     /**
      * Resolve the report file path for a specific goal.
@@ -90,8 +94,8 @@ public final class WorkspaceReport {
      * @return path to the report file at the workspace root (may not exist yet)
      */
     public static Path reportPath(Path workspaceRoot, String goalName) {
-<span class="fc" id="L93">        String filename = &quot;ws&quot; + COLON + stripPrefix(goalName) + &quot;.md&quot;;</span>
-<span class="fc" id="L94">        return workspaceRoot.resolve(filename);</span>
+<span class="fc" id="L97">        String filename = &quot;ws&quot; + COLON + stripPrefix(goalName) + &quot;.md&quot;;</span>
+<span class="fc" id="L98">        return workspaceRoot.resolve(filename);</span>
     }
 
     /**
@@ -104,75 +108,121 @@ public final class WorkspaceReport {
      * @return {@code true} if opened successfully
      */
     public static boolean openInBrowser(Path workspaceRoot, Log log) {
-<span class="nc bnc" id="L107" title="All 2 branches missed.">        if (!Files.isDirectory(workspaceRoot)) {</span>
-<span class="nc bnc" id="L108" title="All 2 branches missed.">            if (log != null) {</span>
-<span class="nc" id="L109">                log.warn(&quot;Workspace root not found: &quot; + workspaceRoot);</span>
+<span class="nc bnc" id="L111" title="All 2 branches missed.">        if (!Files.isDirectory(workspaceRoot)) {</span>
+<span class="nc bnc" id="L112" title="All 2 branches missed.">            if (log != null) {</span>
+<span class="nc" id="L113">                log.warn(&quot;Workspace root not found: &quot; + workspaceRoot);</span>
             }
-<span class="nc" id="L111">            return false;</span>
+<span class="nc" id="L115">            return false;</span>
         }
 
         try {
-<span class="nc bnc" id="L115" title="All 2 branches missed.">            if (System.getProperty(&quot;os.name&quot;, &quot;&quot;).toLowerCase().contains(&quot;mac&quot;)) {</span>
-<span class="nc" id="L116">                new ProcessBuilder(&quot;open&quot;, workspaceRoot.toString()).start();</span>
-<span class="nc" id="L117">                return true;</span>
-            }
-<span class="nc bnc" id="L119" title="All 2 branches missed.">            if (java.awt.Desktop.isDesktopSupported()) {</span>
-<span class="nc" id="L120">                java.awt.Desktop.getDesktop().open(workspaceRoot.toFile());</span>
+<span class="nc bnc" id="L119" title="All 2 branches missed.">            if (System.getProperty(&quot;os.name&quot;, &quot;&quot;).toLowerCase().contains(&quot;mac&quot;)) {</span>
+<span class="nc" id="L120">                new ProcessBuilder(&quot;open&quot;, workspaceRoot.toString()).start();</span>
 <span class="nc" id="L121">                return true;</span>
             }
-<span class="nc" id="L123">        } catch (IOException e) {</span>
-<span class="nc bnc" id="L124" title="All 2 branches missed.">            if (log != null) {</span>
-<span class="nc" id="L125">                log.warn(&quot;Could not open workspace root: &quot; + e.getMessage());</span>
+<span class="nc bnc" id="L123" title="All 2 branches missed.">            if (java.awt.Desktop.isDesktopSupported()) {</span>
+<span class="nc" id="L124">                java.awt.Desktop.getDesktop().open(workspaceRoot.toFile());</span>
+<span class="nc" id="L125">                return true;</span>
             }
-<span class="nc" id="L127">        }</span>
-<span class="nc" id="L128">        return false;</span>
+<span class="nc" id="L127">        } catch (IOException e) {</span>
+<span class="nc bnc" id="L128" title="All 2 branches missed.">            if (log != null) {</span>
+<span class="nc" id="L129">                log.warn(&quot;Could not open workspace root: &quot; + e.getMessage());</span>
+            }
+<span class="nc" id="L131">        }</span>
+<span class="nc" id="L132">        return false;</span>
     }
 
     /**
-     * Walk up from {@code workspaceRoot} looking for a {@code .git}
-     * directory; ensure its sibling {@code .gitignore} lists
-     * {@link #GITIGNORE_PATTERN}. If the file is missing, create it.
-     * If the pattern is missing, append it. No-op when no {@code .git}
-     * ancestor is found (e.g. the workspace is not yet in a git repo —
-     * pipeline-ws itself is a syncthing folder rather than a git repo).
+     * Walk up from {@code workspaceRoot} looking for a {@code .git} entry
+     * and make sure {@link #GITIGNORE_PATTERN} is ignored there: by the
+     * sibling {@code .gitignore} when it already lists the glob, otherwise
+     * by the repository's local {@code .git/info/exclude}, created or
+     * appended as needed, so the tracked tree is never modified
+     * (IKE-Network/ike-issues#1283). When {@code .git} is a file (a linked
+     * worktree or a submodule) there is no local exclude beside it, and the
+     * glob is appended to {@code .gitignore} as before. No-op when no
+     * {@code .git} ancestor is found (the folder is not yet a repository).
      *
      * @param workspaceRoot the workspace root to search from
      * @param log           Maven logger (null-safe)
-     * @throws IOException if the gitignore file cannot be read or written
+     * @throws IOException if an ignore file cannot be read or written
      */
     static void ensureGitignored(Path workspaceRoot, Log log)
             throws IOException {
-<span class="fc" id="L145">        Path gitRoot = findGitRoot(workspaceRoot);</span>
-<span class="fc bfc" id="L146" title="All 2 branches covered.">        if (gitRoot == null) return;</span>
+<span class="fc" id="L152">        Path gitRoot = findGitRoot(workspaceRoot);</span>
+<span class="fc bfc" id="L153" title="All 2 branches covered.">        if (gitRoot == null) return;</span>
 
-<span class="fc" id="L148">        Path gitignore = gitRoot.resolve(&quot;.gitignore&quot;);</span>
-<span class="fc bfc" id="L149" title="All 2 branches covered.">        if (Files.exists(gitignore)) {</span>
-<span class="fc" id="L150">            List&lt;String&gt; lines = Files.readAllLines(gitignore,</span>
+<span class="fc" id="L155">        Path gitignore = gitRoot.resolve(&quot;.gitignore&quot;);</span>
+<span class="fc bfc" id="L156" title="All 2 branches covered.">        if (Files.exists(gitignore)</span>
+<span class="fc bfc" id="L157" title="All 2 branches covered.">                &amp;&amp; listsPattern(gitignore, GITIGNORE_PATTERN)) {</span>
+<span class="fc" id="L158">            return;</span>
+        }
+
+<span class="fc" id="L161">        Path gitEntry = gitRoot.resolve(&quot;.git&quot;);</span>
+<span class="pc bpc" id="L162" title="1 of 2 branches missed.">        if (Files.isDirectory(gitEntry)) {</span>
+<span class="fc" id="L163">            Path exclude = gitEntry.resolve(&quot;info&quot;).resolve(&quot;exclude&quot;);</span>
+<span class="pc bpc" id="L164" title="1 of 2 branches missed.">            if (Files.exists(exclude)</span>
+<span class="fc bfc" id="L165" title="All 2 branches covered.">                    &amp;&amp; listsPattern(exclude, GITIGNORE_PATTERN)) {</span>
+<span class="fc" id="L166">                return;</span>
+            }
+<span class="fc" id="L168">            Files.createDirectories(exclude.getParent());</span>
+<span class="pc bpc" id="L169" title="1 of 2 branches missed.">            String existing = Files.exists(exclude)</span>
+<span class="pc" id="L170">                    ? Files.readString(exclude, StandardCharsets.UTF_8) : &quot;&quot;;</span>
+<span class="pc bpc" id="L171" title="2 of 4 branches missed.">            String appended = existing.isEmpty() || existing.endsWith(&quot;\n&quot;)</span>
+<span class="pc" id="L172">                    ? existing : existing + &quot;\n&quot;;</span>
+<span class="fc" id="L173">            Files.writeString(exclude,</span>
+                    appended + &quot;# ws:* goal reports (local; the scaffold &quot;
+                            + &quot;convention commits the glob to .gitignore)\n&quot;
+                            + GITIGNORE_PATTERN + &quot;\n&quot;,
                     StandardCharsets.UTF_8);
-<span class="fc bfc" id="L152" title="All 2 branches covered.">            for (String line : lines) {</span>
-<span class="fc bfc" id="L153" title="All 2 branches covered.">                if (matchesPattern(line.trim(), GITIGNORE_PATTERN)) {</span>
-<span class="fc" id="L154">                    return;</span>
-                }
-<span class="fc" id="L156">            }</span>
-<span class="fc" id="L157">            String existing = Files.readString(gitignore,</span>
+<span class="fc bfc" id="L178" title="All 2 branches covered.">            if (log != null) {</span>
+<span class="fc" id="L179">                log.info(GITIGNORE_PATTERN + &quot; is not in .gitignore — &quot;</span>
+                        + &quot;excluded locally in .git/info/exclude&quot;);
+            }
+<span class="fc" id="L182">            return;</span>
+        }
+
+<span class="nc bnc" id="L185" title="All 2 branches missed.">        if (Files.exists(gitignore)) {</span>
+<span class="nc" id="L186">            String existing = Files.readString(gitignore,</span>
                     StandardCharsets.UTF_8);
-<span class="pc bpc" id="L159" title="1 of 2 branches missed.">            String appended = existing.endsWith(&quot;\n&quot;) ? existing</span>
-<span class="pc" id="L160">                    : existing + &quot;\n&quot;;</span>
-<span class="fc" id="L161">            Files.writeString(gitignore,</span>
+<span class="nc bnc" id="L188" title="All 2 branches missed.">            String appended = existing.endsWith(&quot;\n&quot;) ? existing</span>
+<span class="nc" id="L189">                    : existing + &quot;\n&quot;;</span>
+<span class="nc" id="L190">            Files.writeString(gitignore,</span>
                     appended + &quot;\n# ws:* goal reports\n&quot;
                             + GITIGNORE_PATTERN + &quot;\n&quot;,
                     StandardCharsets.UTF_8);
-<span class="fc" id="L165">        } else {</span>
-<span class="fc" id="L166">            Files.writeString(gitignore,</span>
+<span class="nc" id="L194">        } else {</span>
+<span class="nc" id="L195">            Files.writeString(gitignore,</span>
                     &quot;# ws:* goal reports\n&quot;
                             + GITIGNORE_PATTERN + &quot;\n&quot;,
                     StandardCharsets.UTF_8);
         }
-<span class="pc bpc" id="L171" title="1 of 2 branches missed.">        if (log != null) {</span>
-<span class="fc" id="L172">            log.info(&quot;Added &quot; + GITIGNORE_PATTERN</span>
-<span class="fc" id="L173">                    + &quot; to &quot; + gitRoot.relativize(gitignore));</span>
+<span class="nc bnc" id="L200" title="All 2 branches missed.">        if (log != null) {</span>
+<span class="nc" id="L201">            log.info(&quot;Added &quot; + GITIGNORE_PATTERN</span>
+<span class="nc" id="L202">                    + &quot; to &quot; + gitRoot.relativize(gitignore));</span>
         }
-<span class="fc" id="L175">    }</span>
+<span class="nc" id="L204">    }</span>
+
+    /**
+     * Whether an ignore file lists the pattern, comments and blanks
+     * skipped, a leading slash tolerated.
+     *
+     * @param ignoreFile the {@code .gitignore} or {@code exclude} file
+     * @param pattern    the normalized pattern
+     * @return {@code true} when a line covers the pattern
+     * @throws IOException if the file cannot be read
+     */
+    private static boolean listsPattern(Path ignoreFile, String pattern)
+            throws IOException {
+<span class="fc" id="L217">        List&lt;String&gt; lines = Files.readAllLines(ignoreFile,</span>
+                StandardCharsets.UTF_8);
+<span class="fc bfc" id="L219" title="All 2 branches covered.">        for (String line : lines) {</span>
+<span class="fc bfc" id="L220" title="All 2 branches covered.">            if (matchesPattern(line.trim(), pattern)) {</span>
+<span class="fc" id="L221">                return true;</span>
+            }
+<span class="fc" id="L223">        }</span>
+<span class="fc" id="L224">        return false;</span>
+    }
 
     /**
      * Walk up from {@code start} looking for a directory that contains
@@ -183,12 +233,12 @@ public final class WorkspaceReport {
      * @return the git root directory, or {@code null} if none is found
      */
     private static Path findGitRoot(Path start) {
-<span class="fc" id="L186">        Path current = start.toAbsolutePath();</span>
-<span class="fc bfc" id="L187" title="All 2 branches covered.">        while (current != null) {</span>
-<span class="fc bfc" id="L188" title="All 2 branches covered.">            if (Files.exists(current.resolve(&quot;.git&quot;))) return current;</span>
-<span class="fc" id="L189">            current = current.getParent();</span>
+<span class="fc" id="L236">        Path current = start.toAbsolutePath();</span>
+<span class="fc bfc" id="L237" title="All 2 branches covered.">        while (current != null) {</span>
+<span class="fc bfc" id="L238" title="All 2 branches covered.">            if (Files.exists(current.resolve(&quot;.git&quot;))) return current;</span>
+<span class="fc" id="L239">            current = current.getParent();</span>
         }
-<span class="fc" id="L191">        return null;</span>
+<span class="fc" id="L241">        return null;</span>
     }
 
     /**
@@ -200,9 +250,9 @@ public final class WorkspaceReport {
      * @return {@code true} if the line covers the pattern
      */
     private static boolean matchesPattern(String line, String pattern) {
-<span class="pc bpc" id="L203" title="2 of 4 branches missed.">        if (line.isEmpty() || line.startsWith(&quot;#&quot;)) return false;</span>
-<span class="fc bfc" id="L204" title="All 2 branches covered.">        String normalized = line.startsWith(&quot;/&quot;) ? line.substring(1) : line;</span>
-<span class="fc" id="L205">        return normalized.equals(pattern);</span>
+<span class="fc bfc" id="L253" title="All 4 branches covered.">        if (line.isEmpty() || line.startsWith(&quot;#&quot;)) return false;</span>
+<span class="fc bfc" id="L254" title="All 2 branches covered.">        String normalized = line.startsWith(&quot;/&quot;) ? line.substring(1) : line;</span>
+<span class="fc" id="L255">        return normalized.equals(pattern);</span>
     }
 
     /**
@@ -217,9 +267,9 @@ public final class WorkspaceReport {
      *         manifest attribute is absent (e.g. during in-IDE test runs)
      */
     static String pluginVersion() {
-<span class="fc" id="L220">        String v = WorkspaceReport.class.getPackage()</span>
-<span class="fc" id="L221">                .getImplementationVersion();</span>
-<span class="pc bpc" id="L222" title="1 of 2 branches missed.">        return v != null ? v : &quot;(unknown)&quot;;</span>
+<span class="fc" id="L270">        String v = WorkspaceReport.class.getPackage()</span>
+<span class="fc" id="L271">                .getImplementationVersion();</span>
+<span class="pc bpc" id="L272" title="1 of 2 branches missed.">        return v != null ? v : &quot;(unknown)&quot;;</span>
     }
 
     /**
@@ -227,11 +277,11 @@ public final class WorkspaceReport {
      * &quot;ws:overview&quot; → &quot;overview&quot;, &quot;ws:feature-start-draft&quot; → &quot;feature-start-draft&quot;
      */
     private static String stripPrefix(String goalName) {
-<span class="fc" id="L230">        String prefix = WsGoal.PLUGIN_PREFIX + &quot;:&quot;;</span>
-<span class="pc bpc" id="L231" title="1 of 2 branches missed.">        if (goalName.startsWith(prefix)) {</span>
-<span class="fc" id="L232">            return goalName.substring(prefix.length());</span>
+<span class="fc" id="L280">        String prefix = WsGoal.PLUGIN_PREFIX + &quot;:&quot;;</span>
+<span class="pc bpc" id="L281" title="1 of 2 branches missed.">        if (goalName.startsWith(prefix)) {</span>
+<span class="fc" id="L282">            return goalName.substring(prefix.length());</span>
         }
-<span class="nc" id="L234">        return goalName;</span>
+<span class="nc" id="L284">        return goalName;</span>
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.15.202606040825</span></div></body></html>

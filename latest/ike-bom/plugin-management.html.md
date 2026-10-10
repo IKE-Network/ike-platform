@@ -1,6 +1,6 @@
 ---
-date_published: 2026-10-08
-date_modified: 2026-10-08
+date_published: 2026-10-09
+date_modified: 2026-10-09
 canonical_url: https://ike.network/ike-platform/ike-bom/plugin-management.html
 ---
 
@@ -9,7 +9,7 @@ canonical_url: https://ike.network/ike-platform/ike-bom/plugin-management.html
 | GroupId | ArtifactId | Version |
 | --- | --- | --- |
 | network.ike.docs | [semantic-linebreak](https://github.com/IKE-Network/ike-docs) | 121 |
-| network.ike.platform | [ike-workspace-maven-plugin](https://ike.network/ike-platform/ike-workspace-maven-plugin/) | 201 |
+| network.ike.platform | [ike-workspace-maven-plugin](https://ike.network/ike-platform/ike-workspace-maven-plugin/) | 202 |
 | network.ike.tooling | [ike-maven-plugin](https://ike.network/ike-tooling/ike-maven-plugin/) | 264 |
 | org.apache.maven.plugins | [maven-assembly-plugin](https://maven.apache.org/plugins/maven-assembly-plugin/) | 3.7.1 |
 | org.apache.maven.plugins | [maven-clean-plugin](https://maven.apache.org/plugins/maven-clean-plugin/) | 3.4.0 |

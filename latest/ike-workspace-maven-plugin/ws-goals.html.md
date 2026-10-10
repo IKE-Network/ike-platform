@@ -1,6 +1,6 @@
 ---
-date_published: 2026-10-08
-date_modified: 2026-10-08
+date_published: 2026-10-09
+date_modified: 2026-10-09
 canonical_url: https://ike.network/ike-platform/ike-workspace-maven-plugin/ws-goals.html
 ---
 
@@ -542,12 +542,14 @@ mvn ws:record-release-publish -Dmember=komet-bom -Dcycle=komet-wsr-1
 
 Create a workspace checkpoint — tag every member at its current HEAD and record the snapshot in a YAML manifest. A checkpoint records the current state of the workspace for reproduction. **It is not a build or a release** — no POM version changes, no compilation, no deployment. TeamCity watches for checkpoint tags on the workspace repo and handles CI verification.
 
-The publish variant runs `ws:align-publish` first so the checkpoint captures a consistent inter-subproject state.
+The publish variant runs `ws:align-publish` first so the checkpoint captures a consistent inter-subproject state, then builds the reactor and refuses to tag when the build fails.
 
 ```
 mvn ws:checkpoint-draft -Dlabel=before-major-refactor
 mvn ws:checkpoint-publish -Dlabel=before-major-refactor
 ```
+
+In a single repository (a working set of one, no `workspace.yaml`) the same goals cut the same kind of checkpoint (ike-issues#1281): the checkpoint file under `checkpoints/` is committed, the tag `checkpoint/<branch>-<stamp>` lands on that commit, and branch and tag are pushed. The state recorded is the head before that commit. There is nothing to align and no manifest to re-pin; the build gate and the refusals — uncommitted modifications, a detached head — are the same.
 
 ## [#convergence-goals](#convergence-goals)Convergence Goals
 

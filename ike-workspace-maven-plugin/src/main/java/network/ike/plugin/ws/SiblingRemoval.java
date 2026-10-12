@@ -152,12 +152,15 @@ final class SiblingRemoval {
     }
 
     /**
-     * Deletes the sibling tree, then garbage-collects its lease record —
-     * a record for a working set that no longer exists is the exact thing
-     * the reconciliation daemon's GC removes (IKE-Network/ike-issues#1006),
-     * done eagerly here. Removing a whole working set is the supported
-     * operation; the sync layer propagates the deletion and staggered file
-     * versioning is the net.
+     * Deletes the sibling tree, then garbage-collects its lease record and
+     * the history bundles beside it — a record for a working set that no
+     * longer exists is the exact thing the reconciliation daemon's GC
+     * removes (IKE-Network/ike-issues#1006), done eagerly here. The
+     * bundles ({@code leases/<name>.bundles/}, IKE-Network/ike-issues#1216)
+     * go with it: once the record is gone the daemon never sees them
+     * again. Removing a whole working set is the supported operation; the
+     * sync layer propagates the deletion and staggered file versioning is
+     * the net.
      *
      * @param target the resolved target
      * @return the deleted lease-record path, or {@code null} when none
@@ -175,15 +178,35 @@ final class SiblingRemoval {
                     + root + ": " + e.getMessage() + ". The tree may be "
                     + "partially removed; re-run to finish.", e);
         }
-        Path record = root.getParent()
-                .resolve("leases")
-                .resolve(target.sibling().name() + ".lease");
+        Path leases = root.getParent().resolve("leases");
+        Path record = leases.resolve(target.sibling().name() + ".lease");
+        deleteBundles(leases.resolve(target.sibling().name() + ".bundles"));
         try {
             return Files.deleteIfExists(record) ? record : null;
         } catch (IOException e) {
             // The record is now garbage either way; the daemon's GC or the
             // operator can sweep it. Removal itself has succeeded.
             return null;
+        }
+    }
+
+    /**
+     * Deletes a sibling's history-bundle directory. Best-effort, like the
+     * record: removal has already succeeded, and a leftover bundle is
+     * inert — nothing aligns to a working set that no longer exists.
+     *
+     * @param bundles the {@code leases/<name>.bundles} directory
+     */
+    private static void deleteBundles(Path bundles) {
+        if (!Files.isDirectory(bundles)) {
+            return;
+        }
+        try (Stream<Path> tree = Files.walk(bundles)) {
+            for (Path path : tree.sorted(Comparator.reverseOrder()).toList()) {
+                Files.deleteIfExists(path);
+            }
+        } catch (IOException e) {
+            // Leave the remainder for the operator; removal succeeded.
         }
     }
 

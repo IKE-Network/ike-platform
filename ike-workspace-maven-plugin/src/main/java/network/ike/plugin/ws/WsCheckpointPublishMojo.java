@@ -5,6 +5,7 @@ import network.ike.plugin.ws.preflight.Preflight;
 import network.ike.plugin.ws.preflight.PreflightCondition;
 import network.ike.plugin.ws.preflight.PreflightContext;
 import network.ike.plugin.ws.vcs.VcsOperations;
+import network.ike.workspace.WorkingSet;
 import network.ike.workspace.WorkspaceGraph;
 
 import org.apache.maven.api.plugin.MojoException;
@@ -77,6 +78,18 @@ public class WsCheckpointPublishMojo extends WsCheckpointDraftMojo {
     @Override
     protected WorkspaceReportSpec runGoal() throws MojoException {
         publish = true;
+
+        WorkingSet workingSet = resolveWorkingSet();
+        if (workingSet.isSingleRepo()) {
+            // A working set of one (IKE-Network/ike-issues#1281): nothing to
+            // align and no manifest to re-pin. The same gates apply — a
+            // committed tree, then a build before any tag — and the
+            // superclass cuts the checkpoint.
+            requireCleanSingleRepository(workingSet.root().toFile());
+            getLog().info("Single repository — nothing to align.");
+            verifyReactor();
+            return super.runGoal();
+        }
 
         // Preflight up front so we know any subsequent dirtiness came
         // from our own auto-alignment step, not from work the user
@@ -158,7 +171,9 @@ public class WsCheckpointPublishMojo extends WsCheckpointDraftMojo {
                     + "(ws.checkpoint.skipVerify=true).");
             return;
         }
-        File root = workspaceRoot();
+        // The working set's root: the workspace root, or the single
+        // repository itself (ike-issues#1281).
+        File root = resolveWorkingSet().root().toFile();
         String mvn = WsReleaseDraftMojo.resolveMvnCommand(root);
         getLog().info("Verifying the reactor builds before tagging ("
                 + verifyGoals + ") ...");
@@ -192,6 +207,23 @@ public class WsCheckpointPublishMojo extends WsCheckpointDraftMojo {
      *
      * @throws MojoException if any working tree has uncommitted changes
      */
+    /**
+     * The clean-tree gate for a single repository (IKE-Network/ike-issues#1281).
+     * The workspace preflight needs a graph, which a working set of one has
+     * none of; the refusals are the superclass's, so draft and publish
+     * name the same conditions.
+     *
+     * @param root the repository
+     * @throws MojoException naming every refusal, when there is one
+     */
+    private void requireCleanSingleRepository(File root) throws MojoException {
+        List<String> refusals = singleRepositoryRefusals(root);
+        if (!refusals.isEmpty()) {
+            throw new MojoException(WsGoal.CHECKPOINT_PUBLISH.qualified()
+                    + " refused:\n  " + String.join("\n  ", refusals));
+        }
+    }
+
     private void requireCleanUserState() throws MojoException {
         WorkspaceGraph graph = loadGraph();
         File root = workspaceRoot();

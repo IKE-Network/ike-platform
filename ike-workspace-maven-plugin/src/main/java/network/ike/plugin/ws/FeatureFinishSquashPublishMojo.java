@@ -55,9 +55,9 @@ public class FeatureFinishSquashPublishMojo extends FeatureFinishSquashDraftMojo
         // The landing absorbs into the parent, which makes this goal a
         // writer of the parent too — so its lease is short-held across
         // the landing (#992's parent leasing, #1005's ws: half). A hold
-        // acquired fresh is given back on close, success or failure.
+        // taken fresh is returned on close, success or failure.
         try (ParentLeaseHold hold =
-                ParentLeaseHold.acquire(workspaceRoot(), getLog())) {
+                ParentLeaseHold.take(workspaceRoot(), getLog())) {
             spec = super.runGoal();
             PostMutationSync.refresh(workspaceRoot(), getLog());
         }

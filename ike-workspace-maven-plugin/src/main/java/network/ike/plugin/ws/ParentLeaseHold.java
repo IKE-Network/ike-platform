@@ -16,25 +16,25 @@ import java.util.Optional;
  * <p>A sibling finish lands in the parent: the absorb fast-forwards the
  * parent's refs, which makes the finish a <em>writer of the parent</em>,
  * and single-writer is per working set. So the finish confirms the
- * parent's lease before landing — free or expired acquires silently,
+ * parent's lease before landing — free or expired is taken silently,
  * already-mine simply confirms, and live on another machine refuses with
- * the takeover left to the human, the one rule every surface shares.
+ * the recall left to the human, the one rule every surface shares.
  *
  * <p>"Short" means the hold gives back exactly what it took: a lease this
- * machine already held stays held; one acquired fresh for the landing is
- * released when the hold closes, success or failure, so a finished (or
+ * machine already held stays held; one taken fresh for the landing is
+ * returned when the hold closes, success or failure, so a finished (or
  * failed) sibling never leaves its parent pinned to this machine.
  * Inert wherever the lease machinery is ({@link WorkingSetLease}).
  */
 final class ParentLeaseHold implements AutoCloseable {
 
     private final Path parent;
-    private final boolean acquiredFresh;
+    private final boolean takenFresh;
     private final Log log;
 
-    private ParentLeaseHold(Path parent, boolean acquiredFresh, Log log) {
+    private ParentLeaseHold(Path parent, boolean takenFresh, Log log) {
         this.parent = parent;
-        this.acquiredFresh = acquiredFresh;
+        this.takenFresh = takenFresh;
         this.log = log;
     }
 
@@ -49,7 +49,7 @@ final class ParentLeaseHold implements AutoCloseable {
      * @throws MojoException if another machine holds the parent live —
      *                       landing there would collide with its writer
      */
-    static ParentLeaseHold acquire(File workingSetRoot, Log log)
+    static ParentLeaseHold take(File workingSetRoot, Log log)
             throws MojoException {
         Optional<File> parent = SiblingFinish.localParent(workingSetRoot);
         if (parent.isEmpty()) {
@@ -65,7 +65,7 @@ final class ParentLeaseHold implements AutoCloseable {
             case NOT_APPLICABLE -> new ParentLeaseHold(null, false, log);
             case HELD -> {
                 log.info("  Parent lease: confirmed for " + decision.detail()
-                        + (alreadyMine ? "" : " (short-hold — released after"
+                        + (alreadyMine ? "" : " (short-hold — returned after"
                                 + " the landing)"));
                 yield new ParentLeaseHold(parentPath, !alreadyMine, log);
             }
@@ -77,19 +77,19 @@ final class ParentLeaseHold implements AutoCloseable {
     }
 
     /**
-     * Gives back what the hold took: releases the parent's lease when it
-     * was acquired fresh for this landing, and only then. Best-effort —
-     * a failed release is logged, never thrown; the record ages out.
+     * Gives back what the hold took: returns the parent's lease when it
+     * was taken fresh for this landing, and only then. Best-effort — a
+     * failed return is logged, never thrown; the record ages out.
      */
     @Override
     public void close() {
-        if (parent == null || !acquiredFresh) {
+        if (parent == null || !takenFresh) {
             return;
         }
-        if (WorkingSetLease.release(parent)) {
-            log.info("  Parent lease: short-hold released");
+        if (WorkingSetLease.returnLease(parent)) {
+            log.info("  Parent lease: short-hold returned");
         } else {
-            log.warn("  Parent lease: short-hold release failed; the record "
+            log.warn("  Parent lease: short-hold return failed; the record "
                     + "will age out at its ttl");
         }
     }

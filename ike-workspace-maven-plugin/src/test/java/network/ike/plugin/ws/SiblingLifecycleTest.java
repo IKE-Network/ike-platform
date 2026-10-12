@@ -324,7 +324,7 @@ class SiblingLifecycleTest {
     }
 
     @Test
-    void finish_shortHoldsAndReleasesTheParentLease() throws Exception {
+    void finish_shortHoldsAndReturnsTheParentLease() throws Exception {
         Path leasedPrimary = leasedFixture();
         FeatureStartSiblingPublishMojo start =
                 TestLog.createMojo(FeatureStartSiblingPublishMojo.class);
@@ -339,8 +339,8 @@ class SiblingLifecycleTest {
         exec(libA, "git", "commit", "-m", "feat: work");
         // Creation confirmed the primary's lease as this machine, and a
         // lease already MINE is exactly what a short-hold must NOT
-        // release. Clear the record so the finish exercises the other
-        // half: acquire fresh, land, give it back.
+        // return. Clear the record so the finish exercises the other
+        // half: take fresh, land, give it back.
         Files.deleteIfExists(tempDir.resolve("ike-dev/leases/primary.lease"));
 
         FeatureFinishSquashPublishMojo finish =
@@ -361,9 +361,9 @@ class SiblingLifecycleTest {
         var record = network.ike.lease.core.LeaseRecord.read(parentRecord)
                 .orElseThrow();
         assertThat(record.state())
-                .as("a lease acquired fresh for the landing is released "
+                .as("a lease taken fresh for the landing is returned "
                         + "when the hold closes")
-                .isEqualTo("released");
+                .isEqualTo(network.ike.lease.core.RecordState.RETURNED);
         assertThat(record.holder()).isEqualTo("Test-Machine-LEASE");
         assertThat(capture(leasedPrimary.resolve("lib-a"), "git", "show",
                 "--stat", "--oneline", "main"))
@@ -387,7 +387,8 @@ class SiblingLifecycleTest {
                 .withZone(java.time.ZoneOffset.UTC)
                 .format(java.time.Instant.now());
         Files.writeString(tempDir.resolve("ike-dev/leases/primary.lease"),
-                new network.ike.lease.core.LeaseRecord("primary", "held",
+                new network.ike.lease.core.LeaseRecord("primary",
+                        network.ike.lease.core.RecordState.HELD,
                         "Other-Machine-ZZZZ", 9, now, now, "PT10M")
                         .serialize(),
                 StandardCharsets.UTF_8);
@@ -412,6 +413,54 @@ class SiblingLifecycleTest {
                 .orElseThrow().holder())
                 .as("the other machine's live claim is untouched")
                 .isEqualTo("Other-Machine-ZZZZ");
+    }
+
+    @Test
+    void removePublish_deletesTheSiblingsHistoryBundles() throws Exception {
+        Path leasedPrimary = leasedFixture();
+        FeatureStartSiblingPublishMojo start =
+                TestLog.createMojo(FeatureStartSiblingPublishMojo.class);
+        start.manifest = leasedPrimary.resolve("workspace.yaml").toFile();
+        start.feature = "bundled";
+        start.execute();
+        Path ikeDev = tempDir.resolve("ike-dev");
+        Path sibling = ikeDev.resolve("primary꞉bundled");
+        Path libA = sibling.resolve("lib-a");
+        Files.writeString(libA.resolve("feature.txt"), "the work\n",
+                StandardCharsets.UTF_8);
+        exec(libA, "git", "add", "feature.txt");
+        exec(libA, "git", "commit", "-m", "feat: work worth carrying");
+
+        // Returning the sibling through the real core writes its history
+        // bundles (IKE-Network/ike-issues#1216) — the same files a
+        // machine leaves behind when it closes the project.
+        network.ike.lease.core.LeaseProtocol protocol =
+                new network.ike.lease.core.LeaseProtocol(ikeDev,
+                        tempDir.resolve("home"), ikeDev, "PT10M", 0);
+        assertThat(protocol.take("primary꞉bundled", true, false).exitCode())
+                .isZero();
+        assertThat(protocol.returnLease("primary꞉bundled").exitCode())
+                .isZero();
+        Path bundles = ikeDev.resolve("leases/primary꞉bundled.bundles");
+        assertThat(bundles.resolve("lib-a.bundle"))
+                .as("the core wrote the sibling's history where removal "
+                        + "expects it")
+                .exists();
+
+        SiblingRemovePublishMojo publish =
+                TestLog.createMojo(SiblingRemovePublishMojo.class);
+        publish.manifest = leasedPrimary.resolve("workspace.yaml").toFile();
+        publish.feature = "bundled";
+        publish.force = true;
+        publish.runGoal();
+
+        assertThat(sibling).doesNotExist();
+        assertThat(ikeDev.resolve("leases/primary꞉bundled.lease"))
+                .doesNotExist();
+        assertThat(bundles)
+                .as("the bundles go with the record, or nothing would "
+                        + "ever remove them")
+                .doesNotExist();
     }
 
     // ── helpers ──────────────────────────────────────────────────

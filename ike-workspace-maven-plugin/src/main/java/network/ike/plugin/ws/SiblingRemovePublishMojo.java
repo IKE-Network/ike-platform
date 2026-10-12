@@ -17,7 +17,7 @@ import java.util.List;
  * <ol>
  *   <li><b>The sibling's lease.</b> Removal is the last write a working
  *       set ever sees, so this machine confirms it holds the sibling's
- *       lease first ({@link WorkingSetLease}): free or expired acquires
+ *       lease first ({@link WorkingSetLease}): free or expired is taken
  *       silently, live on another machine refuses — and {@code -Dforce}
  *       does <em>not</em> override that, because displacing a live holder
  *       is a human decision on every surface. Inert on machines without
@@ -30,9 +30,10 @@ import java.util.List;
  *   <li><b>The deletion.</b> The whole sibling directory — whole-working-set
  *       removal is the supported operation; the sync layer propagates it
  *       and staggered file versioning is the net — followed by the lease
- *       record it leaves behind ({@code leases/<name>.lease}), the
- *       reconciliation daemon's GC action done eagerly
- *       (IKE-Network/ike-issues#1006).</li>
+ *       record it leaves behind ({@code leases/<name>.lease}) and its
+ *       history bundles ({@code leases/<name>.bundles/},
+ *       IKE-Network/ike-issues#1216), the reconciliation daemon's GC
+ *       action done eagerly (IKE-Network/ike-issues#1006).</li>
  * </ol>
  *
  * <pre>{@code
@@ -90,8 +91,8 @@ public class SiblingRemovePublishMojo extends AbstractWorkspaceMojo {
             case FENCED -> throw new MojoException("Another machine holds '"
                     + target.sibling().name() + "' live; removing it from "
                     + "here would delete a working set someone is in. Have "
-                    + "that machine release it (close the project / "
-                    + "lease.sh release), then re-run.\n" + decision.detail());
+                    + "that machine return it (close the project / "
+                    + "lease.sh return), then re-run.\n" + decision.detail());
         }
 
         // Gate 2 — the content preflight, persisted whichever way it goes.

@@ -17,7 +17,7 @@ import java.util.List;
  * unguarded against exactly the things that die silently with a deleted
  * tree. This preview names them per member repository — uncommitted
  * changes, stashes, unlanded branches (squash-aware), bare member trees —
- * and reads the sibling's lease without acquiring anything. Every finding
+ * and reads the sibling's lease without taking anything. Every finding
  * comes with its remediation; {@code rm -rf} remains valid for the
  * I-know-what-I-am-doing case, and {@code -Dforce=true} is its
  * goal-shaped equivalent.

@@ -161,8 +161,8 @@
              compliant (log4j-core / log4j-slf4j2-impl and slf4j-api 2.0.x ship
              module-info), so a jlinked runtime stays module-path clean.
              Versions are managed via slf4j-bom / log4j-bom below. -->
-        <slf4j.version>2.0.17</slf4j.version>
-        <log4j.version>2.26.0</log4j.version>
+        <slf4j.version>2.0.20</slf4j.version>
+        <log4j.version>2.26.1</log4j.version>
     </properties>
 
     <dependencyManagement>
@@ -481,6 +481,7 @@
                             @{argLine}
                             --enable-preview
                             --enable-native-access=ALL-UNNAMED
+                            --sun-misc-unsafe-memory-access=allow
                             --add-opens java.base/java.lang=ALL-UNNAMED
                             --add-opens java.base/java.util=ALL-UNNAMED
                             --add-opens java.base/java.lang.reflect=ALL-UNNAMED
@@ -517,6 +518,7 @@
                             @{failsafeArgLine}
                             --enable-preview
                             --enable-native-access=ALL-UNNAMED
+                            --sun-misc-unsafe-memory-access=allow
                             --add-opens java.base/java.lang=ALL-UNNAMED
                             --add-opens java.base/java.util=ALL-UNNAMED
                             --add-opens java.base/java.lang.reflect=ALL-UNNAMED
@@ -585,6 +587,13 @@
                         <execution>
                             <id>jacoco-prepare-agent-integration</id>
                             <goals><goal>prepare-agent-integration</goal></goals>
+                            <!-- Both prepare goals set "argLine" unless told otherwise, and
+                                 failsafe below reads @{failsafeArgLine}: without this the
+                                 integration-test JVMs never got the agent and no
+                                 jacoco-it.exec was written (IKE-Network/ike-issues#1206). -->
+                            <configuration>
+                                <propertyName>failsafeArgLine</propertyName>
+                            </configuration>
                         </execution>
                         <execution>
                             <id>jacoco-report</id>
@@ -685,6 +694,31 @@
                                 <outputDirectory>${project.build.directory}</outputDirectory>
                                 <overWriteReleases>true</overWriteReleases>
                                 <overWriteSnapshots>true</overWriteSnapshots>
+                            </configuration>
+                        </execution>
+                        <!-- dependency:analyze reads bytecode, so it reports this parent's
+                             own provided artifacts — the standards, theme, documentation
+                             resource and stylesheet bundles unpacked at validate and
+                             pre-site — as unused in every module. A consumer's analyze
+                             execution (the id every IKE project uses) merges with this one
+                             and inherits the list; a module with no such execution gets an
+                             execution with no goal, which runs nothing. The configuration
+                             sits on the execution rather than the plugin so the unpack
+                             goals are not handed a parameter they do not know, and uses
+                             ignoredDependencies rather than ignoredUnusedDeclaredDependencies
+                             because a consumer's own list of the latter replaces an
+                             inherited one, where this parameter is left alone
+                             (IKE-Network/ike-issues#1193). -->
+                        <execution>
+                            <id>analyze</id>
+                            <configuration>
+                                <ignoredDependencies>
+                                    <ignoredDependency>network.ike.tooling:ike-build-standards</ignoredDependency>
+                                    <ignoredDependency>network.ike:ike-base-parent</ignoredDependency>
+                                    <ignoredDependency>network.ike.docs:ike-doc-resources</ignoredDependency>
+                                    <ignoredDependency>network.ike.docs:minimal-fonts</ignoredDependency>
+                                    <ignoredDependency>network.ike.docs:docbook-xsl</ignoredDependency>
+                                </ignoredDependencies>
                             </configuration>
                         </execution>
                     </executions>
@@ -965,6 +999,26 @@
                         <id>render-sbom-viewer</id>
                         <phase>pre-site</phase>
                         <goals><goal>render-sbom-viewer</goal></goals>
+                    </execution>
+                    <!-- Snapshot metadata repair (ike-issues#1160).
+                         Nexus's background metadata rebuild can leave
+                         a snapshot version's maven-metadata.xml with a
+                         .sha1 that no longer matches (ike-issues#1107),
+                         and every later deploy of that version fails
+                         "Checksum validation failed". Before the
+                         deploy, this checks the version's metadata on
+                         the snapshot deploy target and deletes it and
+                         its checksum files when they disagree, so the
+                         deploy rewrites them. Snapshots only; artifacts
+                         and releases are never touched. Bound to
+                         before:deploy (Maven 4) so it runs just ahead
+                         of maven-deploy-plugin and a plain install
+                         never reaches the network. Skip with
+                         -Dike.metadata.heal.skip=true. -->
+                    <execution>
+                        <id>heal-snapshot-metadata</id>
+                        <phase>before:deploy</phase>
+                        <goals><goal>heal-snapshot-metadata</goal></goals>
                     </execution>
                 </executions>
             </plugin>

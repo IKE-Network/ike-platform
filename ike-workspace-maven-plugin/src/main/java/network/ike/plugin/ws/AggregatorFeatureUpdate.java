@@ -19,6 +19,7 @@ import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Brings the working-set root (the aggregator) up to date with the target
@@ -34,14 +35,19 @@ import java.util.Map;
  * branch fields and the version qualifiers, the target owns everything else
  * — the pins, the versions' numeric base, the derived edges, the prose.
  *
- * <p>This helper resolves that one conflict by construction: the target's
- * manifest, with the feature's branch fields re-applied and the feature
- * qualifier re-applied onto the target's versions. Any other conflict in
- * the root is a real one — the merge is aborted, because a manifest left
- * with conflict markers would break every later goal, and the files are
- * reported for a human.
+ * <p>This helper resolves that one conflict by construction. The feature
+ * side's {@code branch:} lines and qualified {@code version:} lines are set
+ * back to the merge base's, which removes the adjacency, and the manifest is
+ * then merged three ways as text: every other edit either side made — a
+ * {@code maven-version}, a {@code repo:}, prose — is kept, where taking the
+ * target's file whole dropped the feature's (IKE-Network/ike-issues#1159).
+ * The feature's branch fields and qualifiers are then re-applied onto the
+ * result. If the text merge still conflicts, both sides changed the same
+ * field and the root is reported for a human, like any other conflict: the
+ * merge is aborted, because a manifest left with conflict markers would
+ * break every later goal.
  *
- * <p>See IKE-Network/ike-issues#1099.
+ * <p>See IKE-Network/ike-issues#1099 and #1159.
  */
 final class AggregatorFeatureUpdate {
 
@@ -150,7 +156,13 @@ final class AggregatorFeatureUpdate {
                 return new Conflicting(assessment.behind(), assessment.ahead(), conflicts);
             }
             try {
-                resolveManifest(root, manifestPath, featureSide, featureBranch, log);
+                if (!resolveManifest(root, manifestPath, featureSide, featureBranch, log)) {
+                    // Both sides changed the same manifest field: a real
+                    // conflict, reported like any other (#1159).
+                    VcsOperations.mergeAbortQuiet(root, log);
+                    return new Conflicting(assessment.behind(), assessment.ahead(),
+                            List.of(manifestName));
+                }
                 ReleaseSupport.exec(root, log, "git", "add", "--", manifestName);
                 if (!VcsOperations.conflictingFiles(root).isEmpty()) {
                     throw new MojoException(manifestName
@@ -168,20 +180,41 @@ final class AggregatorFeatureUpdate {
     }
 
     /**
-     * Resolve the manifest conflict by construction. The target's manifest
-     * is taken whole — it owns the pins, the versions' numeric base, the
-     * derived edges and the prose — then the feature's {@code branch:}
-     * fields are re-applied for every subproject the feature had on the
-     * feature branch, and the feature qualifier is re-applied onto the
-     * target's version for every subproject whose feature-side version
-     * carried it. A subproject the target no longer declares contributes
-     * nothing; a subproject the target added keeps the target's fields.
+     * Resolve the manifest conflict by construction (IKE-Network/ike-issues#1099,
+     * #1159).
+     *
+     * <p>The merge's own three versions of the manifest are read from the
+     * index: base, feature (ours) and target (theirs). On the feature side,
+     * each subproject's {@code branch:} line that names the feature branch,
+     * and each {@code version:} line carrying the feature qualifier, is set
+     * back to the base's line, so the feature-owned edits no longer sit next
+     * to the target's {@code sha:} pins. The three are then merged as text
+     * with {@code git merge-file}, which keeps every other edit from either
+     * side. Onto the result, the feature's {@code branch:} fields are
+     * re-applied for every subproject the feature had on the feature branch,
+     * and the feature qualifier onto the merged version for every subproject
+     * whose feature-side version carried it. A subproject the target no
+     * longer declares contributes nothing; one the target added keeps the
+     * target's fields.
+     *
+     * @return {@code true} when resolved; {@code false} when the text merge
+     *         still conflicts, meaning both sides changed the same field
      */
-    private static void resolveManifest(File root, Path manifestPath, Manifest featureSide,
-                                        String featureBranch, Log log)
+    private static boolean resolveManifest(File root, Path manifestPath, Manifest featureSide,
+                                           String featureBranch, Log log)
             throws IOException, MojoException {
         String manifestName = manifestPath.getFileName().toString();
-        ReleaseSupport.exec(root, log, "git", "checkout", "--theirs", "--", manifestName);
+        String base = indexStage(root, 1, manifestName);
+        String ours = indexStage(root, 2, manifestName);
+        String theirs = indexStage(root, 3, manifestName);
+        String neutral = withBaseFeatureFields(ours, base, featureSide, featureBranch);
+        Optional<String> merged = mergeText(root, neutral, base, theirs);
+        if (merged.isEmpty()) {
+            log.info("    " + manifestName + " — both sides changed the same field;"
+                    + " left for a human");
+            return false;
+        }
+        Files.writeString(manifestPath, merged.get(), StandardCharsets.UTF_8);
         Manifest targetSide = ManifestReader.read(manifestPath);
 
         Map<String, String> branches = new LinkedHashMap<>();
@@ -213,12 +246,175 @@ final class AggregatorFeatureUpdate {
             }
             Files.writeString(manifestPath, content, StandardCharsets.UTF_8);
         }
-        log.info("    " + manifestName + " — resolved by construction: target's file, "
+        log.info("    " + manifestName + " — resolved by construction: three-way merge, "
                 + branches.size() + " branch field" + (branches.size() == 1 ? "" : "s")
                 + " kept on " + featureBranch
                 + (versions.isEmpty() ? "" : ", " + versions.size()
                         + " version qualifier" + (versions.size() == 1 ? "" : "s")
                         + " re-applied"));
+        return true;
+    }
+
+    /**
+     * The feature side of the manifest with its feature-owned lines set back
+     * to the base's: for each subproject, the {@code branch:} line when the
+     * feature side names {@code featureBranch}, and the {@code version:} line
+     * when the feature side's version carries the feature qualifier. Lines
+     * are copied from the base verbatim, so they match it byte for byte and
+     * a text merge sees no feature-side change there. A field the base does
+     * not have is left as it is.
+     *
+     * @param ours          the feature side's manifest text
+     * @param base          the merge base's manifest text
+     * @param featureSide   the feature side, parsed
+     * @param featureBranch the feature branch, such as {@code feature/x}
+     * @return the feature side with those lines set to the base's
+     */
+    static String withBaseFeatureFields(String ours, String base, Manifest featureSide,
+                                        String featureBranch) {
+        Map<String, String> baseLines = subprojectFieldLines(base);
+        String[] lines = ours.split("\n", -1);
+        String subproject = null;
+        boolean inSubprojects = false;
+        for (int i = 0; i < lines.length; i++) {
+            String line = lines[i];
+            if (line.isBlank() || line.stripLeading().startsWith("#")) {
+                continue;
+            }
+            if (!line.startsWith(" ")) {
+                inSubprojects = line.startsWith("subprojects:");
+                subproject = null;
+                continue;
+            }
+            if (!inSubprojects) {
+                continue;
+            }
+            java.util.regex.Matcher key = SUBPROJECT_KEY.matcher(line);
+            if (key.matches()) {
+                subproject = key.group(1);
+                continue;
+            }
+            java.util.regex.Matcher field = SUBPROJECT_FIELD.matcher(line);
+            if (subproject == null || !field.matches()) {
+                continue;
+            }
+            Subproject feature = featureSide.subprojects().get(subproject);
+            if (feature == null) {
+                continue;
+            }
+            boolean featureOwned = switch (field.group(1)) {
+                case "branch" -> featureBranch.equals(feature.branch());
+                case "version" -> feature.version() != null
+                        && VersionSupport.isBranchQualified(feature.version());
+                default -> false;
+            };
+            String baseLine = baseLines.get(subproject + "\u0000" + field.group(1));
+            if (featureOwned && baseLine != null) {
+                lines[i] = baseLine;
+            }
+        }
+        return String.join("\n", lines);
+    }
+
+    /** A subproject key under {@code subprojects:}: two spaces, the name, a colon. */
+    private static final java.util.regex.Pattern SUBPROJECT_KEY =
+            java.util.regex.Pattern.compile("^  ([A-Za-z0-9._-]+):\\s*$");
+
+    /** A subproject's own field: four spaces, the field name, a colon. */
+    private static final java.util.regex.Pattern SUBPROJECT_FIELD =
+            java.util.regex.Pattern.compile("^    ([A-Za-z][A-Za-z0-9_-]*):.*$");
+
+    /**
+     * Each subproject field line in a manifest, keyed by subproject name and
+     * field name joined with a NUL.
+     */
+    private static Map<String, String> subprojectFieldLines(String yaml) {
+        Map<String, String> fields = new LinkedHashMap<>();
+        String subproject = null;
+        boolean inSubprojects = false;
+        for (String line : yaml.split("\n", -1)) {
+            if (line.isBlank() || line.stripLeading().startsWith("#")) {
+                continue;
+            }
+            if (!line.startsWith(" ")) {
+                inSubprojects = line.startsWith("subprojects:");
+                subproject = null;
+                continue;
+            }
+            if (!inSubprojects) {
+                continue;
+            }
+            java.util.regex.Matcher key = SUBPROJECT_KEY.matcher(line);
+            if (key.matches()) {
+                subproject = key.group(1);
+                continue;
+            }
+            java.util.regex.Matcher field = SUBPROJECT_FIELD.matcher(line);
+            if (subproject != null && field.matches()) {
+                fields.putIfAbsent(subproject + "\u0000" + field.group(1), line);
+            }
+        }
+        return fields;
+    }
+
+    /**
+     * One version of a conflicted file from the index: stage 1 is the merge
+     * base, 2 the current branch (ours), 3 the branch being merged (theirs).
+     */
+    private static String indexStage(File root, int stage, String file)
+            throws IOException, MojoException {
+        GitOutput shown = git(root, "show", ":" + stage + ":" + file);
+        if (shown.exit() != 0) {
+            throw new MojoException("No stage " + stage + " of " + file + " in the index");
+        }
+        return shown.stdout();
+    }
+
+    /**
+     * A three-way text merge with {@code git merge-file}.
+     *
+     * @return the merged text, or empty when it conflicts
+     */
+    private static Optional<String> mergeText(File root, String ours, String base,
+                                              String theirs) throws IOException {
+        Path dir = Files.createTempDirectory("ws-manifest-merge");
+        try {
+            Path oursFile = Files.writeString(dir.resolve("ours"), ours, StandardCharsets.UTF_8);
+            Path baseFile = Files.writeString(dir.resolve("base"), base, StandardCharsets.UTF_8);
+            Path theirsFile = Files.writeString(dir.resolve("theirs"), theirs,
+                    StandardCharsets.UTF_8);
+            GitOutput merged = git(root, "merge-file", "-p",
+                    oursFile.toString(), baseFile.toString(), theirsFile.toString());
+            return merged.exit() == 0 ? Optional.of(merged.stdout()) : Optional.empty();
+        } finally {
+            try (java.util.stream.Stream<Path> files = Files.list(dir)) {
+                for (Path file : files.toList()) {
+                    Files.deleteIfExists(file);
+                }
+            }
+            Files.deleteIfExists(dir);
+        }
+    }
+
+    /** A git command's exit code and its standard output, byte-exact. */
+    private record GitOutput(int exit, String stdout) {}
+
+    private static GitOutput git(File root, String... args) throws IOException {
+        List<String> command = new java.util.ArrayList<>();
+        command.add("git");
+        command.addAll(List.of(args));
+        Process process = new ProcessBuilder(command)
+                .directory(root)
+                .redirectError(ProcessBuilder.Redirect.DISCARD)
+                .start();
+        String stdout = new String(process.getInputStream().readAllBytes(),
+                StandardCharsets.UTF_8);
+        try {
+            return new GitOutput(process.waitFor(), stdout);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Interrupted running git " + String.join(" ", args), e);
+        }
     }
 
     /**

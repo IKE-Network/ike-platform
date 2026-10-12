@@ -165,6 +165,81 @@ class UpdateFeatureAggregatorTest {
     }
 
     @Test
+    void publish_featureManifestEdits_surviveTheUpdate() throws Exception {
+        // #1159: the feature moved the working set to a new Maven and a member
+        // to a new repository. Resolving the manifest by taking main's file
+        // whole dropped both; a three-way merge keeps them.
+        String yaml = Files.readString(manifest, StandardCharsets.UTF_8);
+        yaml = yaml.replace("defaults:\n  branch: main",
+                "defaults:\n  branch: main\n  maven-version: \"4.0.0-rc-7\"");
+        yaml = yaml.replace("repo: https://example.com/lib-b.git",
+                "repo: https://example.com/moved/lib-b.git");
+        Files.writeString(manifest, yaml, StandardCharsets.UTF_8);
+        exec(tempDir, "git", "add", "workspace.yaml");
+        exec(tempDir, "git", "commit", "-m", "workspace: Maven rc-7, lib-b moved");
+        checkpointOnMain();
+
+        runUpdate(true);
+
+        String merged = Files.readString(manifest, StandardCharsets.UTF_8);
+        assertThat(merged).doesNotContain("<<<<<<<").doesNotContain(">>>>>>>");
+        assertThat(merged)
+                .as("the feature's defaults edit survives")
+                .contains("defaults:\n  branch: main\n  maven-version: \"4.0.0-rc-7\"");
+        assertThat(merged)
+                .as("the feature's repo edit survives")
+                .contains("repo: https://example.com/moved/lib-b.git")
+                .doesNotContain("repo: https://example.com/lib-b.git");
+        assertThat(merged)
+                .as("main's checkpoint pins are still taken")
+                .contains("sha: \"" + SHA_A + "\"")
+                .contains("sha: \"" + SHA_B + "\"")
+                .contains("sha: \"" + SHA_C + "\"");
+        assertThat(occurrences(merged, "    branch: " + BRANCH))
+                .as("every subproject keeps its feature branch field").isEqualTo(3);
+        assertThat(merged)
+                .as("the qualifier still rides main's moved numeric base")
+                .contains("1.1.0-" + FEATURE + "-SNAPSHOT")
+                .doesNotContain("1.0.0-");
+        assertThat(execCapture(tempDir, "git", "status", "--porcelain")).isEmpty();
+        assertThat(execCapture(tempDir, "git", "rev-list", "--count", BRANCH + "..main"))
+                .isEqualTo("0");
+    }
+
+    @Test
+    void publish_bothSidesChangeTheSameManifestField_leavesTheRootAsFound()
+            throws Exception {
+        // #1159: a field both sides changed is a real conflict. It is reported
+        // for a human, never settled by picking a side.
+        String yaml = Files.readString(manifest, StandardCharsets.UTF_8);
+        Files.writeString(manifest, yaml.replace("repo: https://example.com/lib-b.git",
+                "repo: https://example.com/feature-side/lib-b.git"), StandardCharsets.UTF_8);
+        exec(tempDir, "git", "add", "workspace.yaml");
+        exec(tempDir, "git", "commit", "-m", "workspace: lib-b moved (feature)");
+        exec(tempDir, "git", "checkout", "main");
+        String mainYaml = Files.readString(manifest, StandardCharsets.UTF_8);
+        Files.writeString(manifest, mainYaml.replace("repo: https://example.com/lib-b.git",
+                "repo: https://example.com/main-side/lib-b.git"), StandardCharsets.UTF_8);
+        exec(tempDir, "git", "add", "workspace.yaml");
+        exec(tempDir, "git", "commit", "-m", "workspace: lib-b moved (main)");
+        exec(tempDir, "git", "checkout", BRANCH);
+        checkpointOnMain();
+        String head = execCapture(tempDir, "git", "rev-parse", "HEAD");
+        String featureYaml = Files.readString(manifest, StandardCharsets.UTF_8);
+
+        assertThatThrownBy(() -> runUpdate(true))
+                .isInstanceOf(MojoException.class)
+                .hasMessageContaining("workspace root");
+
+        assertThat(execCapture(tempDir, "git", "rev-parse", "HEAD"))
+                .as("the root's feature branch did not move").isEqualTo(head);
+        assertThat(tempDir.resolve(".git").resolve("MERGE_HEAD")).doesNotExist();
+        assertThat(execCapture(tempDir, "git", "status", "--porcelain")).isEmpty();
+        assertThat(Files.readString(manifest, StandardCharsets.UTF_8))
+                .as("the manifest is the feature side, marker-free").isEqualTo(featureYaml);
+    }
+
+    @Test
     void publish_rootNotOnFeature_isSkippedAndReported() throws Exception {
         exec(tempDir, "git", "checkout", "main");
         String head = execCapture(tempDir, "git", "rev-parse", "HEAD");

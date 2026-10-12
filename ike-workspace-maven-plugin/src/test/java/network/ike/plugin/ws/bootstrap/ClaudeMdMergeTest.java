@@ -188,4 +188,21 @@ class ClaudeMdMergeTest {
         assertThat(r.rescued()).isEmpty();
         assertThat(List.of(r.claudeMd())).isNotEmpty();
     }
+
+    /**
+     * A CRLF checkout (Windows, autocrlf) merges to LF throughout: the lines carried over do
+     * not keep their CRs beside the generated LF lines (IKE-Network/ike-issues#1261).
+     */
+    @Test
+    void crlfExisting_mergesToLfOnly_keepingManagedBlocks() {
+        String existing = (TEMPLATE + "\n" + STANDARDS_POINTER + "\n").replace("\n", "\r\n");
+        ClaudeMdMerge.Result result = ClaudeMdMerge.merge(existing, TEMPLATE);
+        assertThat(result.claudeMd()).doesNotContain("\r");
+        assertThat(result.claudeMd())
+                .contains("<!-- BEGIN ike-managed: standards-pointer -->")
+                .contains("<!-- END ike-managed: standards-pointer -->");
+        assertThat(ClaudeMdMerge.merge(result.claudeMd(), TEMPLATE).claudeMd())
+                .as("the merged form is a fixed point")
+                .isEqualTo(result.claudeMd());
+    }
 }

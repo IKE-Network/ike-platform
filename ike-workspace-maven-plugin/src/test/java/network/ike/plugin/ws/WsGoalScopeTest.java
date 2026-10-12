@@ -29,6 +29,7 @@ class WsGoalScopeTest {
                 WsGoal.FEATURE_ABANDON_PUBLISH,
                 WsGoal.SCAFFOLD_DRAFT, WsGoal.SCAFFOLD_PUBLISH,
                 WsGoal.SCAFFOLD_INIT,
+                WsGoal.CHECKPOINT_DRAFT, WsGoal.CHECKPOINT_PUBLISH,
                 WsGoal.REPORT, WsGoal.HELP,
         };
         for (WsGoal g : bare) {
@@ -45,7 +46,7 @@ class WsGoalScopeTest {
                 WsGoal.ALIGN_DRAFT, WsGoal.ALIGN_PUBLISH, WsGoal.GRAPH,
                 WsGoal.OVERVIEW, WsGoal.VERIFY_CONVERGENCE,
                 WsGoal.RECONCILE_BRANCHES_PUBLISH, WsGoal.SWITCH_PUBLISH,
-                WsGoal.REFRESH_MAIN, WsGoal.CHECKPOINT_PUBLISH,
+                WsGoal.REFRESH_MAIN,
                 WsGoal.ADD, WsGoal.REMOVE, WsGoal.STIGNORE, WsGoal.LINT,
                 // No-op in a single repo (no manifest to check), so the
                 // goal's purpose still requires a workspace.

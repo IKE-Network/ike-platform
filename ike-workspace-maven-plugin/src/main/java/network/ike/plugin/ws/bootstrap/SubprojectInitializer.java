@@ -566,8 +566,14 @@ public final class SubprojectInitializer {
     private void writeWorkspaceClaudeMd(Path wsRoot, WorkspaceGraph graph) {
         Path file = wsRoot.resolve("CLAUDE.md");
         try {
-            Files.writeString(file, generateWorkspaceClaudeMd(workspaceName, graph,
-                            declaredJavaVersion(new File(wsRoot.toFile(), "pom.xml"))),
+            // Merged, not overwritten, like a subproject's: the ike-managed regions that
+            // ws:scaffold-publish's standards step adds survive a scaffold-init
+            // (IKE-Network/ike-issues#1261).
+            String existing = Files.exists(file)
+                    ? Files.readString(file, StandardCharsets.UTF_8) : null;
+            String generated = generateWorkspaceClaudeMd(workspaceName, graph,
+                    declaredJavaVersion(new File(wsRoot.toFile(), "pom.xml")));
+            Files.writeString(file, ClaudeMdMerge.merge(existing, generated).claudeMd(),
                     StandardCharsets.UTF_8);
             log.info("  Updated CLAUDE.md");
         } catch (IOException e) {
@@ -771,6 +777,11 @@ public final class SubprojectInitializer {
                 ```bash
                 mvn clean verify -DskipTests -T 1C
                 ```
+
+                Inside a workspace, build from the workspace root: `mvn -pl <this-subproject>/<module> ...` there,
+                not from this directory. Maven 4 resolves siblings outside the build from the project-local
+                repository of the nearest `.mvn` root, and this subproject's own one goes stale
+                (IKE-Network/ike-issues#1265).
 
                 ## Key Facts
 

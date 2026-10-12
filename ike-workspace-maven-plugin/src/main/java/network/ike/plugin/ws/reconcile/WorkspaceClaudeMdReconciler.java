@@ -1,6 +1,7 @@
 package network.ike.plugin.ws.reconcile;
 
 import network.ike.plugin.ReleaseSupport;
+import network.ike.plugin.ws.bootstrap.ClaudeMdMerge;
 import network.ike.plugin.ws.bootstrap.SubprojectInitializer;
 
 import java.io.File;
@@ -81,7 +82,7 @@ public class WorkspaceClaudeMdReconciler implements Reconciler {
         }
         Path file = ctx.workspaceRoot().toPath().resolve(CLAUDE_FILE);
         try {
-            Files.writeString(file, generated(ctx), StandardCharsets.UTF_8);
+            Files.writeString(file, expected(ctx, file), StandardCharsets.UTF_8);
             ctx.log().info("  " + dimension() + ": regenerated " + CLAUDE_FILE);
         } catch (IOException e) {
             ctx.log().warn("  " + dimension()
@@ -101,12 +102,24 @@ public class WorkspaceClaudeMdReconciler implements Reconciler {
             return false;
         }
         try {
-            return Files.readString(file, StandardCharsets.UTF_8).equals(generated(ctx));
+            String existing = Files.readString(file, StandardCharsets.UTF_8);
+            return ClaudeMdMerge.normalize(existing).equals(expected(ctx, file));
         } catch (IOException e) {
             // Unreadable file is treated as drifted — apply then attempts to
             // overwrite it, surfacing the underlying IO error via its warn path.
             return false;
         }
+    }
+
+    /**
+     * What the file should hold: the generator's output with the {@code ike-managed} regions
+     * of the existing file carried over, as a subproject's CLAUDE.md is merged, so the
+     * standards pointer {@code ws:scaffold-publish} adds is not drift and is not dropped
+     * (IKE-Network/ike-issues#1261).
+     */
+    private static String expected(WorkspaceContext ctx, Path file) throws IOException {
+        String existing = Files.exists(file) ? Files.readString(file, StandardCharsets.UTF_8) : null;
+        return ClaudeMdMerge.merge(existing, generated(ctx)).claudeMd();
     }
 
     private static String generated(WorkspaceContext ctx) {

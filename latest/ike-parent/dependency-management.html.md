@@ -1,6 +1,6 @@
 ---
-date_published: 2026-10-09
-date_modified: 2026-10-09
+date_published: 2026-10-11
+date_modified: 2026-10-11
 canonical_url: https://ike.network/ike-platform/ike-parent/dependency-management.html
 ---
 

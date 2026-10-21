@@ -1,6 +1,6 @@
 ---
-date_published: 2026-10-14
-date_modified: 2026-10-14
+date_published: 2026-10-20
+date_modified: 2026-10-20
 canonical_url: https://ike.network/ike-platform/index.html
 ---
 

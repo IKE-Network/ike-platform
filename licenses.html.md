@@ -1,12 +1,12 @@
 ---
-date_published: 2026-10-20
-date_modified: 2026-10-20
+date_published: 2026-10-22
+date_modified: 2026-10-22
 canonical_url: https://ike.network/ike-platform/licenses.html
 ---
 
 # Licenses (SPDX)
 
-Licenses for declared dependencies of `ike-platform` 206, grouped by SPDX expression. Rendered from `[bom.json](bom.json)` (CycloneDX) at `pre-site` phase by `ike:render-spdx-licenses` (ike-issues#335).
+Licenses for declared dependencies of `ike-platform` 207, grouped by SPDX expression. Rendered from `[bom.json](bom.json)` (CycloneDX) at `pre-site` phase by `ike:render-spdx-licenses` (ike-issues#335).
 
 ## [#summary](#summary)Summary
 
@@ -22,8 +22,8 @@ Reference: [Apache-2.0 on spdx.org](https://spdx.org/licenses/Apache-2.0.html)
 | Group | Artifact | Version |
 | --- | --- | --- |
 | `network.ike` | `ike-base-parent` | `16` |
-| `network.ike.tooling` | `ike-build-standards` | `266` |
-| `network.ike.tooling` | `ike-build-standards` | `266` |
+| `network.ike.tooling` | `ike-build-standards` | `267` |
+| `network.ike.tooling` | `ike-build-standards` | `267` |
 
 ## [#see-also](#see-also)See also
 

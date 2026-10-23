@@ -1,0 +1,44 @@
+---
+date_published: 2026-10-22
+date_modified: 2026-10-22
+canonical_url: https://ike.network/ike-platform/ike-parent/licenses.html
+---
+
+# Licenses (SPDX)
+
+Licenses for declared dependencies of `ike-parent` 207, grouped by SPDX expression. Rendered from `[bom.json](bom.json)` (CycloneDX) at `pre-site` phase by `ike:render-spdx-licenses` (ike-issues#335).
+
+## [#summary](#summary)Summary
+
+| SPDX Expression | Components |
+| --- | --- |
+| `Apache-2.0` | 6 |
+| `MIT` | 1 |
+| **Total** | **7** |
+
+## [#apache-20](#apache-20)Apache-2.0
+
+Reference: [Apache-2.0 on spdx.org](https://spdx.org/licenses/Apache-2.0.html)
+
+| Group | Artifact | Version |
+| --- | --- | --- |
+| `network.ike` | `ike-base-parent` | `16` |
+| `network.ike.tooling` | `ike-build-standards` | `267` |
+| `network.ike.tooling` | `ike-build-standards` | `267` |
+| `network.ike.tooling` | `ike-build-standards` | `267` |
+| `network.ike.tooling` | `ike-build-standards` | `267` |
+| `network.ike.tooling` | `ike-build-standards` | `267` |
+
+## [#mit](#mit)MIT
+
+Reference: [MIT on spdx.org](https://spdx.org/licenses/MIT.html)
+
+| Group | Artifact | Version |
+| --- | --- | --- |
+| `org.slf4j` | `slf4j-api` | `2.0.20` |
+
+## [#see-also](#see-also)See also
+
+- [Software Bill of Materials (CycloneDX)](bom.json) — the canonical machine-readable inventory this page is derived from.
+- [Third-Party Notices](THIRD_PARTY_NOTICES.html) — curated companion that covers components mechanical reports can’t see (Maven Site skin, external services, fonts inside artifacts).
+- [Dependency Info](dependency-info.html) — consumption snippet for this module.

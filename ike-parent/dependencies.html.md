@@ -1,12 +1,12 @@
 ---
-date_published: 2026-10-22
-date_modified: 2026-10-22
+date_published: 2026-10-23
+date_modified: 2026-10-23
 canonical_url: https://ike.network/ike-platform/ike-parent/dependencies.html
 ---
 
 # Dependencies (SBOM)
 
-Full transitive dependency graph for `ike-parent` 207, generated from [bom.json](bom.json) (CycloneDX 1.6) at build time. Same SBOM source as the SPDX-grouped [licenses.html](licenses.html) and the curated [built-with.html](built-with.html) — three views of the same data.
+Full transitive dependency graph for `ike-parent` 208, generated from [bom.json](bom.json) (CycloneDX 1.6) at build time. Same SBOM source as the SPDX-grouped [licenses.html](licenses.html) and the curated [built-with.html](built-with.html) — three views of the same data.
 
 ## [#summary](#summary)Summary
 
@@ -21,18 +21,18 @@ Sorted by group, artifact, version. Click [bom.json](bom.json) for the raw machi
 | Group | Artifact | Version | License | Type |
 | --- | --- | --- | --- | --- |
 | `network.ike` | `ike-base-parent` | `16` | `Apache-2.0` | library |
-| `network.ike.tooling` | `ike-build-standards` | `267` | `Apache-2.0` | library |
-| `network.ike.tooling` | `ike-build-standards` | `267` | `Apache-2.0` | library |
-| `network.ike.tooling` | `ike-build-standards` | `267` | `Apache-2.0` | library |
-| `network.ike.tooling` | `ike-build-standards` | `267` | `Apache-2.0` | library |
-| `network.ike.tooling` | `ike-build-standards` | `267` | `Apache-2.0` | library |
+| `network.ike.tooling` | `ike-build-standards` | `268` | `Apache-2.0` | library |
+| `network.ike.tooling` | `ike-build-standards` | `268` | `Apache-2.0` | library |
+| `network.ike.tooling` | `ike-build-standards` | `268` | `Apache-2.0` | library |
+| `network.ike.tooling` | `ike-build-standards` | `268` | `Apache-2.0` | library |
+| `network.ike.tooling` | `ike-build-standards` | `268` | `Apache-2.0` | library |
 | `org.slf4j` | `slf4j-api` | `2.0.20` | `MIT` | library |
 
 ## [#download](#download)Download
 
 - [Software Bill of Materials (CycloneDX, JSON)](bom.json) — raw machine-readable form. Includes purls, hashes, and dependency-graph edges that this page summarizes.
 - [bom.xml](bom.xml) — same content in XML.
-- As a Maven artifact: pull `ike-parent:​207` with `<classifier>cyclonedx</classifier><type>json</type>` from Nexus / Maven Central.
+- As a Maven artifact: pull `ike-parent:​208` with `<classifier>cyclonedx</classifier><type>json</type>` from Nexus / Maven Central.
 
 ## [#see-also](#see-also)See also
 

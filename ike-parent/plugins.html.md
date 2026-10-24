@@ -8,9 +8,9 @@ canonical_url: https://ike.network/ike-platform/ike-parent/plugins.html
 
 | GroupId | ArtifactId | Version |
 | --- | --- | --- |
-| network.ike.docs | [ike-doc-maven-plugin](https://github.com/IKE-Network/ike-docs) | 125 |
-| network.ike.platform | [ike-workspace-maven-plugin](https://ike.network/ike-platform/ike-workspace-maven-plugin/) | 208 |
-| network.ike.tooling | [ike-maven-plugin](https://ike.network/ike-tooling/ike-maven-plugin/) | 268 |
+| network.ike.docs | [ike-doc-maven-plugin](https://github.com/IKE-Network/ike-docs) | 126 |
+| network.ike.platform | [ike-workspace-maven-plugin](https://ike.network/ike-platform/ike-workspace-maven-plugin/) | 209 |
+| network.ike.tooling | [ike-maven-plugin](https://ike.network/ike-tooling/ike-maven-plugin/) | 269 |
 | org.apache.maven.plugins | [maven-assembly-plugin](https://maven.apache.org/plugins/maven-assembly-plugin/) | 3.7.1 |
 | org.apache.maven.plugins | [maven-clean-plugin](https://maven.apache.org/plugins/maven-clean-plugin/) | 3.4.0 |
 | org.apache.maven.plugins | [maven-compiler-plugin](https://maven.apache.org/plugins/maven-compiler-plugin/) | 3.14.0 |

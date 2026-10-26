@@ -14,7 +14,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Tests that {@code depends-on} re-derivation merges instead of
  * replacing (IKE-Network/ike-issues#964) and never downgrades a
  * hand-declared {@code relationship: bundle} edge
- * (IKE-Network/ike-issues#963).
+ * (IKE-Network/ike-issues#963), while a surviving build edge still
+ * takes the {@code version-property} derivation detects.
  *
  * <p>The old behavior rewrote the whole block from derivation output:
  * a manual edit — a bundle annotation, a content edge, an explanatory
@@ -195,22 +196,123 @@ class YamlDepsSyncPreservationTest {
         assertThat(manifest).contains("relationship: build");
     }
 
+    @Test
+    void derived_version_property_lands_on_a_surviving_build_edge()
+            throws Exception {
+        // The edge already exists without a version-property; the POM
+        // now versions lib-a through a property. The edge set is
+        // unchanged, yet the property must be written in — the BOM
+        // cascade check passes an edge only when it carries one.
+        createLib("lib-a", "com.example.a", null, null);
+        createLib("lib-b", "com.example.b", "com.example.a", "lib-a",
+                "lib-a.version");
+        addToManifest("lib-a", "com.example.a", "1.0.0-SNAPSHOT",
+                "    depends-on: []\n");
+        addToManifest("lib-b", "com.example.b", """
+                    depends-on:
+                      # lib-a's API is the v3 one
+                      - subproject: lib-a
+                        relationship: build
+                """);
+
+        YamlDepsSync.SyncResult result =
+                YamlDepsSync.run(tempDir.toFile(), log);
+
+        assertThat(result.changed()).isTrue();
+        assertThat(manifest()).contains("""
+                      # lib-a's API is the v3 one
+                      - subproject: lib-a
+                        relationship: build
+                        version-property: lib-a.version
+                """);
+        assertThat(String.join("\n", result.changeLines()))
+                .contains("lib-b")
+                .contains("version-property [lib-a]");
+        assertThat(YamlDepsSync.run(tempDir.toFile(), log).changed())
+                .as("second run makes no further change")
+                .isFalse();
+    }
+
+    @Test
+    void stale_version_property_is_replaced_by_the_derived_one()
+            throws Exception {
+        createLib("lib-a", "com.example.a", null, null);
+        createLib("lib-b", "com.example.b", "com.example.a", "lib-a",
+                "lib-a.version");
+        addToManifest("lib-a", "com.example.a", "1.0.0-SNAPSHOT",
+                "    depends-on: []\n");
+        addToManifest("lib-b", "com.example.b", """
+                    depends-on:
+                      - subproject: lib-a
+                        relationship: build
+                        version-property: old-a.version
+                """);
+
+        YamlDepsSync.run(tempDir.toFile(), log);
+
+        assertThat(manifest())
+                .contains("        version-property: lib-a.version\n")
+                .doesNotContain("old-a.version");
+    }
+
+    @Test
+    void version_property_derivation_cannot_see_is_kept()
+            throws Exception {
+        // No lib-b property holds lib-a's manifest version — as during a
+        // release, before the consumer is aligned — so derivation finds
+        // none. The recorded property is not evidence-free; it stays.
+        createLib("lib-a", "com.example.a", null, null);
+        createLib("lib-b", "com.example.b", "com.example.a", "lib-a");
+        addToManifest("lib-a", "com.example.a", "1.0.0-SNAPSHOT",
+                "    depends-on: []\n");
+        addToManifest("lib-b", "com.example.b", """
+                    depends-on:
+                      - subproject: lib-a
+                        relationship: build
+                        version-property: lib-a.version
+                """);
+
+        YamlDepsSync.run(tempDir.toFile(), log);
+
+        assertThat(manifest())
+                .contains("        version-property: lib-a.version\n");
+    }
+
     // ── Fixture ──────────────────────────────────────────────────
 
     private void createLib(String name, String groupId,
                            String depGroupId, String depArtifact)
             throws Exception {
+        createLib(name, groupId, depGroupId, depArtifact, null);
+    }
+
+    /**
+     * A single-module repo; with {@code versionProperty}, its dependency
+     * is versioned through that property, valued at the upstream's
+     * manifest version {@code 1.0.0-SNAPSHOT}.
+     */
+    private void createLib(String name, String groupId,
+                           String depGroupId, String depArtifact,
+                           String versionProperty)
+            throws Exception {
         Path dir = tempDir.resolve(name);
         Files.createDirectories(dir);
+        String properties = versionProperty == null ? "" : """
+                    <properties>
+                        <%1$s>1.0.0-SNAPSHOT</%1$s>
+                    </properties>
+                """.formatted(versionProperty);
+        String depVersion = versionProperty == null
+                ? "1.0.0" : "${" + versionProperty + "}";
         String deps = depGroupId == null ? "" : """
                     <dependencies>
                         <dependency>
                             <groupId>%s</groupId>
                             <artifactId>%s</artifactId>
-                            <version>1.0.0</version>
+                            <version>%s</version>
                         </dependency>
                     </dependencies>
-                """.formatted(depGroupId, depArtifact);
+                """.formatted(depGroupId, depArtifact, depVersion);
         Files.writeString(dir.resolve("pom.xml"), """
                 <?xml version="1.0" encoding="UTF-8"?>
                 <project>
@@ -218,8 +320,9 @@ class YamlDepsSyncPreservationTest {
                     <groupId>%s</groupId>
                     <artifactId>%s</artifactId>
                     <version>1.0.0-SNAPSHOT</version>
-                %s</project>
-                """.formatted(groupId, name, deps), StandardCharsets.UTF_8);
+                %s%s</project>
+                """.formatted(groupId, name, properties, deps),
+                StandardCharsets.UTF_8);
     }
 
     /** The two-repo komet shape from {@link YamlDepsSyncCycleGateTest}. */
@@ -291,11 +394,18 @@ class YamlDepsSyncPreservationTest {
 
     private void addToManifest(String name, String groupId, String depsBlock)
             throws Exception {
+        addToManifest(name, groupId, null, depsBlock);
+    }
+
+    private void addToManifest(String name, String groupId, String version,
+                               String depsBlock)
+            throws Exception {
         String entry = "\n  " + name + ":\n"
                 + "    type: software\n"
                 + "    description: " + name + "\n"
                 + "    repo: https://example.com/" + name + ".git\n"
                 + "    groupId: " + groupId + "\n"
+                + (version == null ? "" : "    version: " + version + "\n")
                 + depsBlock;
         Files.writeString(tempDir.resolve("workspace.yaml"),
                 manifest() + entry, StandardCharsets.UTF_8);

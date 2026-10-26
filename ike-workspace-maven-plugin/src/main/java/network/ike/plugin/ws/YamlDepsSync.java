@@ -198,8 +198,10 @@ final class YamlDepsSync {
                 removed.removeAll(superseded);
                 totalAdded += added.size();
                 totalRemoved += removed.size();
+                List<String> versioned = merged.versionPropertySet();
 
-                if (added.isEmpty() && removed.isEmpty()) {
+                if (added.isEmpty() && removed.isEmpty()
+                        && versioned.isEmpty()) {
                     // Text-only change: managed-marker annotation.
                     log.info("  workspace.yaml: " + name
                             + " depends-on annotated as managed");
@@ -211,7 +213,9 @@ final class YamlDepsSync {
                         + (added.isEmpty() ? "" : " added " + added)
                         + (removed.isEmpty() ? "" : " removed " + removed)
                         + (superseded.isEmpty()
-                                ? "" : " build→bundle " + superseded);
+                                ? "" : " build→bundle " + superseded)
+                        + (versioned.isEmpty()
+                                ? "" : " version-property " + versioned);
                 changeLines.add(summary);
                 if (removed.isEmpty()) {
                     log.info("  workspace.yaml: " + summary);

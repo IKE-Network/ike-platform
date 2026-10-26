@@ -28,8 +28,11 @@ import java.util.regex.Pattern;
  *       the same target, so a {@code bundle} edge is never downgraded
  *       back to {@code build}.</li>
  *   <li><b>Existing build entries that are still derived keep their
- *       original text</b> — comments and {@code version-property}
- *       included.</li>
+ *       original text</b> — comments included — except their
+ *       {@code version-property}: a property derivation detects is
+ *       written in, replacing a different one. A property derivation
+ *       does not detect is kept, since a version mismatch at derivation
+ *       time hides a property that is still right.</li>
  *   <li><b>Build entries no longer derived are removed</b> (the drift
  *       correction this sync exists for), and newly derived targets are
  *       appended as fresh entries carrying their derived
@@ -62,15 +65,17 @@ final class DependsOnMerge {
      * Outcome of a merge: the updated YAML (identical to the input when
      * nothing changed), the derived targets added per relationship, the
      * build targets removed (a target in both {@code removedBuild} and
-     * {@code addedBundle} was superseded, not dropped), and each final
-     * entry's relationship (for ordering-graph construction by the
-     * acyclicity gate).
+     * {@code addedBundle} was superseded, not dropped), the surviving
+     * build targets whose {@code version-property} was set, and each
+     * final entry's relationship (for ordering-graph construction by
+     * the acyclicity gate).
      */
     record Result(
             String yaml,
             List<String> addedBuild,
             List<String> addedBundle,
             List<String> removedBuild,
+            List<String> versionPropertySet,
             Map<String, String> finalRelationships) {
 
         boolean changed(String original) {
@@ -114,7 +119,7 @@ final class DependsOnMerge {
         Matcher m = blockPattern(subprojectName).matcher(yaml);
         if (!m.find()) {
             return new Result(yaml, List.of(), List.of(), List.of(),
-                    Map.of());
+                    List.of(), Map.of());
         }
         String block = m.group(2);
 
@@ -139,12 +144,24 @@ final class DependsOnMerge {
         // here and re-added below with the derived relationship (#965).
         List<Entry> kept = new ArrayList<>();
         List<String> removedBuild = new ArrayList<>();
+        List<String> versionPropertySet = new ArrayList<>();
         Set<String> covered = new LinkedHashSet<>();
         for (Entry entry : current) {
             boolean build = isBuild(entry.relationship());
             boolean stillBuild = "build".equalsIgnoreCase(
                     derivedRelationship.get(entry.target()));
             if (!build || stillBuild) {
+                if (build) {
+                    // The property is derived like the edge itself: a
+                    // surviving build entry takes the one derivation
+                    // detects, or a release cannot retarget the edge.
+                    Entry aligned = withVersionProperty(entry,
+                            derivedVersionProperty.get(entry.target()));
+                    if (aligned != entry) {
+                        versionPropertySet.add(entry.target());
+                        entry = aligned;
+                    }
+                }
                 kept.add(entry);
                 covered.add(entry.target());
             } else {
@@ -209,11 +226,58 @@ final class DependsOnMerge {
                 + rendered
                 + yaml.substring(m.end(2));
         return new Result(updated, addedBuild, addedBundle, removedBuild,
-                finalRelationships);
+                versionPropertySet, finalRelationships);
     }
 
     private static boolean isBuild(String relationship) {
         return relationship == null || "build".equalsIgnoreCase(relationship);
+    }
+
+    /**
+     * An entry carrying {@code property} as its {@code version-property}:
+     * the existing field's value replaced, or a field added after the
+     * {@code relationship:} line (after the {@code subproject:} line when
+     * there is none). Every other line — comments included — is kept.
+     *
+     * @param entry    the surviving build entry
+     * @param property the derived property, or null when none was derived
+     * @return {@code entry} itself when {@code property} is null or
+     *         already recorded, otherwise the rewritten entry
+     */
+    private static Entry withVersionProperty(Entry entry, String property) {
+        if (property == null) return entry;
+        String[] lines = entry.text().split("\n", -1);
+        int fieldAt = -1;
+        int insertAfter = -1;
+        String fieldIndent = null;
+        for (int i = 0; i < lines.length; i++) {
+            String stripped = lines[i].stripLeading();
+            String indent = lines[i].substring(
+                    0, lines[i].length() - stripped.length());
+            if (stripped.startsWith("version-property:")) {
+                fieldAt = i;
+                fieldIndent = indent;
+            } else if (stripped.startsWith("relationship:")) {
+                insertAfter = i;
+                fieldIndent = indent;
+            } else if (stripped.startsWith("- subproject:")
+                    && insertAfter < 0) {
+                insertAfter = i;
+                if (fieldIndent == null) fieldIndent = indent + "  ";
+            }
+        }
+        String field = fieldIndent + "version-property: " + property;
+        List<String> out = new ArrayList<>(List.of(lines));
+        if (fieldAt >= 0) {
+            String recorded = lines[fieldAt].stripLeading()
+                    .substring("version-property:".length()).trim();
+            if (recorded.equals(property)) return entry;
+            out.set(fieldAt, field);
+        } else {
+            out.add(insertAfter + 1, field);
+        }
+        return new Entry(entry.target(), entry.relationship(),
+                String.join("\n", out));
     }
 
     /** Parsed block: entry chunks plus any trailing comment lines. */

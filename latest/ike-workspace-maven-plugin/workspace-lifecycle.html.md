@@ -1,6 +1,6 @@
 ---
-date_published: 2026-10-25
-date_modified: 2026-10-25
+date_published: 2026-10-27
+date_modified: 2026-10-27
 canonical_url: https://ike.network/ike-platform/ike-workspace-maven-plugin/workspace-lifecycle.html
 ---
 

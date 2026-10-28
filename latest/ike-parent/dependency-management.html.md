@@ -12,10 +12,10 @@ The following is a list of compile dependencies in the DependencyManagement of t
 
 | GroupId | ArtifactId | Version | Classifier | Type | License |
 | --- | --- | --- | --- | --- | --- |
-| network.ike.docs | [docbook-xsl](https://github.com/IKE-Network/ike-docbook-xsl) | 131 | - | jar | [MIT License (DocBook XSL Stylesheets)](https://github.com/docbook/xslt10-stylesheets/blob/master/xsl/COPYING), [Apache License 2.0 (IKE Customization Layer)](https://www.apache.org/licenses/LICENSE-2.0) |
-| network.ike.docs | [ike-doc-resources](https://github.com/IKE-Network/ike-docs) | 131 | - | jar | [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt) |
-| network.ike.docs | [koncept-asciidoc-extension](https://github.com/IKE-Network/ike-docs) | 131 | - | jar | [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt) |
-| network.ike.docs | [minimal-fonts](https://github.com/IKE-Network/ike-minimal-fonts) | 131 | - | zip | [SIL Open Font License 1.1](https://scripts.sil.org/OFL) |
+| network.ike.docs | [docbook-xsl](https://github.com/IKE-Network/ike-docbook-xsl) | 132 | - | jar | [MIT License (DocBook XSL Stylesheets)](https://github.com/docbook/xslt10-stylesheets/blob/master/xsl/COPYING), [Apache License 2.0 (IKE Customization Layer)](https://www.apache.org/licenses/LICENSE-2.0) |
+| network.ike.docs | [ike-doc-resources](https://github.com/IKE-Network/ike-docs) | 132 | - | jar | [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt) |
+| network.ike.docs | [koncept-asciidoc-extension](https://github.com/IKE-Network/ike-docs) | 132 | - | jar | [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt) |
+| network.ike.docs | [minimal-fonts](https://github.com/IKE-Network/ike-minimal-fonts) | 132 | - | zip | [SIL Open Font License 1.1](https://scripts.sil.org/OFL) |
 | network.ike.tooling | [ike-build-standards](https://ike.network/ike-tooling/ike-build-standards/) | 274 | asciidoctorconfig | zip | [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt) |
 | network.ike.tooling | [ike-build-standards](https://ike.network/ike-tooling/ike-build-standards/) | 274 | built-with | zip | [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt) |
 | network.ike.tooling | [ike-build-standards](https://ike.network/ike-tooling/ike-build-standards/) | 274 | claude | zip | [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt) |

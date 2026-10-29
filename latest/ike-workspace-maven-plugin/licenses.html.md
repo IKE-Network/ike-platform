@@ -1,12 +1,12 @@
 ---
-date_published: 2026-10-27
-date_modified: 2026-10-27
+date_published: 2026-10-28
+date_modified: 2026-10-28
 canonical_url: https://ike.network/ike-platform/ike-workspace-maven-plugin/licenses.html
 ---
 
 # Licenses (SPDX)
 
-Licenses for declared dependencies of `ike-workspace-maven-plugin` 215, grouped by SPDX expression. Rendered from `[bom.json](bom.json)` (CycloneDX) at `pre-site` phase by `ike:render-spdx-licenses` (ike-issues#335).
+Licenses for declared dependencies of `ike-workspace-maven-plugin` 216, grouped by SPDX expression. Rendered from `[bom.json](bom.json)` (CycloneDX) at `pre-site` phase by `ike:render-spdx-licenses` (ike-issues#335).
 
 ## [#summary](#summary)Summary
 

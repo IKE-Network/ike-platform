@@ -76,6 +76,27 @@ class FeatureFinishBareModeTest {
 
     // ── Squash strategy tests ────────────────────────────────────
 
+    /**
+     * The {@code -publish} goal confirms the working-set lease and
+     * short-holds a sibling's parent through {@code workspaceRoot()} before
+     * it reaches the bare-mode branch; a bare repo has no manifest, so that
+     * root must be the repository itself, or every bare finish fails with
+     * "Cannot find workspace.yaml" (ike-issues#611).
+     */
+    @Test
+    void publishGoal_bareRepo_landsWithoutManifest() throws Exception {
+        FeatureFinishSquashPublishMojo mojo = TestLog.createMojo(FeatureFinishSquashPublishMojo.class);
+        mojo.feature = FEATURE_NAME;
+        mojo.targetBranch = "main";
+        mojo.message = "Squash: publish in a bare repo";
+
+        mojo.execute();
+
+        assertThat(currentBranch()).isEqualTo("main");
+        String log = execCapture(tempDir, "git", "log", "--oneline", "-3");
+        assertThat(log).contains("Squash: publish in a bare repo");
+    }
+
     @Test
     void squash_mergesAndStripsVersion() throws Exception {
         FeatureFinishSquashDraftMojo mojo = TestLog.createMojo(FeatureFinishSquashDraftMojo.class);

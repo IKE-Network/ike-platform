@@ -219,13 +219,20 @@ abstract class AbstractWorkspaceMojo implements Mojo {
     }
 
     /**
-     * Resolve the workspace root directory (parent of workspace.yaml).
+     * Resolve the working-set root directory: the parent of the manifest in
+     * a declared working set, or the repository itself in a bare repo, a
+     * working set of one (IKE-Network/ike-issues#611). The {@code -publish}
+     * goals confirm the lease and short-hold a sibling's parent through this
+     * root, so a bare repo must resolve one rather than fail on the manifest
+     * it never had.
      *
-     * @return the workspace root directory
-     * @throws MojoException if the manifest cannot be found
+     * @return the working-set root directory
      */
     protected File workspaceRoot() {
-        return resolveManifest().getParent().toFile();
+        if (isWorkspaceMode()) {
+            return resolveManifest().getParent().toFile();
+        }
+        return resolveWorkingSet().root().toFile();
     }
 
     /**

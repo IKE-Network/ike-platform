@@ -1,6 +1,6 @@
 ---
-date_published: 2026-10-28
-date_modified: 2026-10-28
+date_published: 2026-10-29
+date_modified: 2026-10-29
 canonical_url: https://ike.network/ike-platform/ike-parent/plugin-management.html
 ---
 
@@ -10,7 +10,7 @@ canonical_url: https://ike.network/ike-platform/ike-parent/plugin-management.htm
 | --- | --- | --- |
 | network.ike.docs | [ike-doc-maven-plugin](https://github.com/IKE-Network/ike-docs) | 133 |
 | network.ike.docs | [semantic-linebreak](https://github.com/IKE-Network/ike-docs) | 133 |
-| network.ike.platform | [ike-workspace-maven-plugin](https://ike.network/ike-platform/ike-workspace-maven-plugin/) | 216 |
+| network.ike.platform | [ike-workspace-maven-plugin](https://ike.network/ike-platform/ike-workspace-maven-plugin/) | 217 |
 | network.ike.tooling | [ike-maven-plugin](https://ike.network/ike-tooling/ike-maven-plugin/) | 274 |
 | org.apache.maven.plugins | [maven-artifact-plugin](https://maven.apache.org/plugins/maven-artifact-plugin/) | 3.5.2 |
 | org.apache.maven.plugins | [maven-assembly-plugin](https://maven.apache.org/plugins/maven-assembly-plugin/) | 3.7.1 |

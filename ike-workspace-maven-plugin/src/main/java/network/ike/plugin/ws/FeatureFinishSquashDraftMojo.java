@@ -847,19 +847,16 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
             VcsOperations.resetHard(dir, getLog(), "HEAD");
         }
 
-        // #858: push (verified) BEFORE any branch deletion; with
-        // -Dpush=false or a failed push the branch is kept.
-        List<FeatureFinishSupport.PushResult> barePush = List.of();
-        if (push) {
-            java.util.LinkedHashMap<String, File> one =
-                    new java.util.LinkedHashMap<>();
-            one.put(dir.getName(), dir);
-            barePush = FeatureFinishSupport.pushTargetsVerified(
-                    one, targetBranch, getLog());
-        }
-        boolean pushConfirmed = push
-                && barePush.stream().allMatch(
-                        FeatureFinishSupport.PushResult::pushed);
+        // #858: land (verified) BEFORE any branch deletion; with
+        // -Dpush=false or a failed landing the branch is kept. A
+        // local-origin sibling lands by fast-forwarding its parent
+        // working set and pushes nothing (#992), exactly as the
+        // workspace-mode finish does; any other bare repo pushes its
+        // target branch to origin.
+        FinishLanding.Landing landing = push
+                ? FinishLanding.land(dir, List.of(), targetBranch, true, getLog())
+                : FinishLanding.Landing.none(dir);
+        boolean pushConfirmed = push && !landing.failed();
 
         String remoteFailReason = null;
         String bareKeptReason = null;
@@ -869,7 +866,8 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
             bareKeptReason = "-Dpush=false — the branch is only deleted "
                     + "after a confirmed push of " + targetBranch;
         } else if (push && !pushConfirmed) {
-            bareKeptReason = "push failure (see below)";
+            bareKeptReason = landing.toLocalParent()
+                    ? "landing failure (see below)" : "push failure (see below)";
         } else {
             remoteFailReason = FeatureFinishSupport.deleteBranch(
                     dir, getLog(), branchName, keepRemoteBranch);
@@ -881,10 +879,8 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
 
         VcsOperations.writeVcsState(dir, VcsState.Action.FEATURE_FINISH);
 
-        if (push && !pushConfirmed) {
-            throw new MojoException(FeatureFinishSupport.pushPhaseFailureMessage(
-                    barePush.stream().filter(r -> !r.pushed()).toList(),
-                    targetBranch));
+        if (landing.failed()) {
+            throw new MojoException(landing.failureMessage());
         }
 
         getLog().info("");
@@ -899,6 +895,11 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
         StringBuilder body = new StringBuilder();
         body.append("Bare repo: squash-merged `").append(branchName)
                 .append("` → `").append(targetBranch).append("`.\n");
+        if (push && landing.toLocalParent()) {
+            body.append("\nLanded in the parent working set `")
+                    .append(landing.localParent().orElseThrow().getName())
+                    .append("` by fast-forward; nothing pushed (ike-issues#992).\n");
+        }
         if (remoteFailReason != null) {
             body.append("\n**Remote feature branch not deleted** — `")
                     .append(remoteFailReason).append("`.\n\n")

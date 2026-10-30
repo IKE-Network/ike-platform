@@ -68,8 +68,8 @@ When a module has `src/docs/asciidoc/` (or `src/site/asciidoc/`), the AsciiDoc p
 
 Two upstream plugins are declared in `<pluginManagement>` for inheriting projects to invoke as needed:
 
-- `network.ike.tooling:ike-maven-plugin` at `274` — `ike:*` goals (`release-draft`, `release-publish`, `inject-breadcrumb`, etc.).
-- `network.ike.docs:ike-doc-maven-plugin` at `133` — `idoc:*` render goals (AsciiDoc, multi-renderer PDF wrappers, etc.).
+- `network.ike.tooling:ike-maven-plugin` at `275` — `ike:*` goals (`release-draft`, `release-publish`, `inject-breadcrumb`, etc.).
+- `network.ike.docs:ike-doc-maven-plugin` at `134` — `idoc:*` render goals (AsciiDoc, multi-renderer PDF wrappers, etc.).
 
 Both are **regular plugins** — no `<extensions>true</extensions>`, no custom packaging contributed to the build extension realm. Their `<version>` interpolates from `${…​}` properties like any other managed plugin, and ordinary version-property tooling (`ws:align-publish`, `versions:set-property`) maintains them across releases.
 

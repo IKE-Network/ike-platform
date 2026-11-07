@@ -1059,6 +1059,29 @@
                         <phase>validate</phase>
                         <goals><goal>topic-registry</goal></goals>
                     </execution>
+                    <!-- AsciiDoc packages (dev-adoc-packages,
+                         IKE-Network/ike-issues#1343). Both goals are
+                         gated by the library property
+                         ike.adoc.layout=packages and skip silently
+                         without it. lint-packages fails validate on a
+                         package the library does not own, a topic in
+                         the wrong domain directory, or images at the
+                         root; manifest writes
+                         target/adoc-meta/META-INF/ike/<groupId>/<artifactId>/manifest.yaml,
+                         which the adoc zip ships beside the source root
+                         (ike-doc-resources adoc.xml) and ike:adoc-union
+                         reads. Skip with -Dike.skip.lint-packages=true
+                         and -Dike.skip.manifest=true. -->
+                    <execution>
+                        <id>lint-packages</id>
+                        <phase>validate</phase>
+                        <goals><goal>lint-packages</goal></goals>
+                    </execution>
+                    <execution>
+                        <id>manifest</id>
+                        <phase>generate-resources</phase>
+                        <goals><goal>manifest</goal></goals>
+                    </execution>
                 </executions>
             </plugin>
 
@@ -1131,19 +1154,85 @@
                                 <!-- inherits config from pluginManagement -->
                             </execution>
                             <execution>
-                                <id>unpack-doc-dependencies</id>
-                                <!-- inherits config from pluginManagement —
-                                     unpacks the topic-library adoc zip so
-                                     assembly include::{topics}/... resolves
-                                     in a Maven build. IKE-Network/ike-issues#502 -->
-                            </execution>
-                            <execution>
                                 <id>unpack-fonts</id>
                                 <!-- inherits config from pluginManagement -->
                             </execution>
                             <execution>
                                 <id>unpack-docbook-xsl</id>
                                 <!-- inherits config from pluginManagement -->
+                            </execution>
+                        </executions>
+                    </plugin>
+
+                    <!-- Topic libraries: ike:adoc-union unpacks every
+                         dependency with classifier=adoc and type=zip,
+                         transitively, into one AsciiDoc union per
+                         repository, <reactor root>/target/generated-sources/adoc
+                         (dev-adoc-packages, IKE-Network/ike-issues#1342,
+                         #1343). A library that is a module of the same
+                         reactor is linked from its src/docs/asciidoc; an
+                         external one is copied from its zip; two libraries
+                         shipping one package are refused, as is a zip
+                         without a manifest unless ike.adoc.legacy=true.
+                         Every include::{adoc}/... and include::{topics}/...
+                         under src/docs/asciidoc must resolve in the union,
+                         or the build fails naming the <dependency> to add.
+                         The goal sets the project properties adoc and
+                         topics, which the asciidoctor attributes of the
+                         root POM's doc-pipeline profile read. Replaces the
+                         stock unpack-doc-dependencies of #502, kept in the
+                         adoc-legacy-unpack profile below. -->
+                    <plugin>
+                        <groupId>network.ike.tooling</groupId>
+                        <artifactId>ike-maven-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>adoc-union</id>
+                                <phase>generate-sources</phase>
+                                <goals><goal>adoc-union</goal></goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <!-- ── adoc-legacy-unpack ───────────────────────────────────── -->
+        <!-- The stock unpack of topic libraries before the packages     -->
+        <!-- layout (IKE-Network/ike-issues#502): every classifier=adoc  -->
+        <!-- zip into this module's                                      -->
+        <!-- target/generated-sources/asciidoc/topics-asciidoc/, where   -->
+        <!-- include::{topics}/topics/... resolved. Kept through the     -->
+        <!-- migration of the libraries (#1346) for a consumer that      -->
+        <!-- still builds with -Dike.adoc.legacy=true; ike:adoc-union    -->
+        <!-- then unpacks a manifest-less zip into the same directory    -->
+        <!-- and points {topics} at it, so the two agree. Retired with   -->
+        <!-- the {topics} alias once the last consumer has moved (#1343).-->
+        <profile>
+            <id>adoc-legacy-unpack</id>
+            <activation>
+                <property>
+                    <name>ike.adoc.legacy</name>
+                    <value>true</value>
+                </property>
+            </activation>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-dependency-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>unpack-doc-dependencies</id>
+                                <phase>generate-sources</phase>
+                                <goals><goal>unpack-dependencies</goal></goals>
+                                <configuration>
+                                    <includeClassifiers>adoc</includeClassifiers>
+                                    <includeTypes>zip</includeTypes>
+                                    <outputDirectory>${asciidoc.generated.directory}/topics-asciidoc</outputDirectory>
+                                    <overWriteReleases>true</overWriteReleases>
+                                    <overWriteSnapshots>true</overWriteSnapshots>
+                                </configuration>
                             </execution>
                         </executions>
                     </plugin>

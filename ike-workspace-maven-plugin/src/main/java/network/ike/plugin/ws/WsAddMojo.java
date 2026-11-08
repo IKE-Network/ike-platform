@@ -1053,15 +1053,11 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
             return new Derivation(List.of(), Map.of());
         }
 
-        // Read the new subproject's <properties> for version-property detection
-        Map<String, String> newSubProperties;
-        try {
-            DocumentBuilder db = DBF.newDocumentBuilder();
-            Document doc = db.parse(subprojectDir.resolve("pom.xml").toFile());
-            newSubProperties = readProperties(doc.getDocumentElement());
-        } catch (Exception e) {
-            newSubProperties = Map.of();
-        }
+        // Which ${...} property each referenced coordinate's <version>
+        // names, across every module POM — the version-property of an
+        // edge is read from that reference, never guessed (#1352).
+        VersionPropertyReferences versionRefs =
+                scanVersionPropertyReferences(subprojectDir.resolve("pom.xml"));
 
         Manifest manifest = ManifestReader.read(manifestPath);
         SubprojectResolver resolver = SubprojectResolver.scan(wsDir, manifest);
@@ -1070,7 +1066,7 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
         // it (full groupId+artifactId; external coordinates resolve to
         // empty and are skipped). Dedupe by producer, then emit in
         // manifest order to keep derived-dependency ordering stable.
-        Map<String, String> versionPropertyByProducer = new LinkedHashMap<>();
+        Map<String, Set<String>> coordsByProducer = new LinkedHashMap<>();
         Map<String, String> relationshipByProducer = new LinkedHashMap<>();
         Map<String, List<PomRef>> producerSources = new LinkedHashMap<>();
         // Build-strength coordinates first so a producer referenced both
@@ -1101,19 +1097,18 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
             for (Path source : referenceSources.getOrDefault(coord, Set.of())) {
                 refs.add(new PomRef(coord, source));
             }
-            if (!versionPropertyByProducer.containsKey(producerName)) {
-                versionPropertyByProducer.put(producerName,
-                        detectVersionProperty(
-                                manifest.subprojects().get(producerName),
-                                newSubProperties));
-            }
+            coordsByProducer.computeIfAbsent(
+                    producerName, k -> new LinkedHashSet<>()).add(coord);
         }
 
         List<DerivedDep> matched = new ArrayList<>();
         for (String name : manifest.subprojects().keySet()) {
             if (relationshipByProducer.containsKey(name)) {
                 matched.add(new DerivedDep(
-                        name, versionPropertyByProducer.get(name),
+                        name,
+                        detectVersionProperty(name,
+                                manifest.subprojects().get(name),
+                                coordsByProducer.get(name), versionRefs),
                         relationshipByProducer.get(name)));
             }
         }
@@ -1121,28 +1116,142 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
     }
 
     /**
-     * Find a property declared in the newly added subproject whose value
-     * equals the producer subproject's version — the
-     * {@code version-property} hint recorded on a derived
-     * {@code depends-on} edge so {@code ws:align} can track the upstream
-     * version through a {@code ${...}} property. Returns null when the
-     * producer has no known version or no matching property exists.
+     * The {@code version-property} hint recorded on a derived
+     * {@code depends-on} edge, so {@code ws:align} and a release can
+     * track the upstream version through a {@code ${...}} property.
      *
-     * @param producer        the upstream (depended-on) subproject, or null
-     * @param newSubProperties the new subproject's {@code <properties>}
-     * @return the matching property name, or null
+     * <p>The property is read from the consumer's own references: the
+     * {@code ${name}} that a {@code <version>} beside one of the
+     * producer's coordinates names, wherever it appears (a dependency,
+     * a managed dependency, a plugin, an {@code artifactItem}). Only a
+     * property the consumer's POMs declare counts — one inherited from
+     * an external parent is not this repository's to move. When the
+     * references name several, the one named {@code <producer>.version}
+     * wins, then the one whose value equals the producer's version.
+     * When no reference names one (the version comes through a BOM), a
+     * declared {@code <producer>.version} property is the hint.
+     *
+     * <p>A property is never chosen by its value alone: every
+     * {@code 1-SNAPSHOT} property equals every {@code 1-SNAPSHOT}
+     * upstream, and the first such property in document order is
+     * usually another artifact's (IKE-Network/ike-issues#1352).
+     *
+     * @param producerName   the upstream subproject's manifest key
+     * @param producer       the upstream subproject, or null
+     * @param producerCoords the producer's coordinates the consumer
+     *                       references, or null
+     * @param refs           the consumer's version-property references
+     * @return the property name, or null when none can be read
      */
-    private static String detectVersionProperty(Subproject producer,
-                                                Map<String, String> newSubProperties) {
-        if (producer == null) return null;
-        String upstreamVersion = producer.version();
-        if (upstreamVersion == null || newSubProperties.isEmpty()) return null;
-        for (Map.Entry<String, String> prop : newSubProperties.entrySet()) {
-            if (upstreamVersion.equals(prop.getValue())) {
-                return prop.getKey();
+    static String detectVersionProperty(String producerName,
+                                        Subproject producer,
+                                        Set<String> producerCoords,
+                                        VersionPropertyReferences refs) {
+        String named = producerName + ".version";
+        Set<String> referenced = new LinkedHashSet<>();
+        if (producerCoords != null) {
+            for (String coord : producerCoords) {
+                for (String property
+                        : refs.byCoordinate().getOrDefault(coord, Set.of())) {
+                    if (refs.declared().containsKey(property)) {
+                        referenced.add(property);
+                    }
+                }
             }
         }
-        return null;
+        if (referenced.size() == 1) {
+            return referenced.iterator().next();
+        }
+        if (!referenced.isEmpty()) {
+            if (referenced.contains(named)) return named;
+            String upstreamVersion = producer == null ? null : producer.version();
+            for (String property : referenced) {
+                if (upstreamVersion != null
+                        && upstreamVersion.equals(refs.declared().get(property))) {
+                    return property;
+                }
+            }
+            return referenced.iterator().next();
+        }
+        return refs.declared().containsKey(named) ? named : null;
+    }
+
+    /**
+     * A consumer repository's version-property references: for each
+     * referenced {@code groupId:artifactId}, the properties a
+     * {@code <version>${name}</version>} beside it names, and every
+     * property its POMs declare (name → value, first declaration wins).
+     *
+     * @param byCoordinate coordinate → referenced property names
+     * @param declared     declared property name → value
+     */
+    record VersionPropertyReferences(Map<String, Set<String>> byCoordinate,
+                                     Map<String, String> declared) {}
+
+    /**
+     * Scan a POM and its submodules for version-property references:
+     * every element with {@code <groupId>}, {@code <artifactId>}, and a
+     * {@code <version>} that is exactly one {@code ${name}} expression.
+     * A module resolves {@code ${...}} in coordinates against its own
+     * properties over those of the POMs above it.
+     *
+     * @param pomFile the repository's root POM
+     * @return the references; empty when the POM is missing or
+     *         unparseable
+     */
+    static VersionPropertyReferences scanVersionPropertyReferences(Path pomFile) {
+        VersionPropertyReferences refs = new VersionPropertyReferences(
+                new LinkedHashMap<>(), new LinkedHashMap<>());
+        scanVersionPropertyReferences(pomFile, Map.of(), refs);
+        return refs;
+    }
+
+    private static final Pattern WHOLE_PROPERTY_EXPRESSION =
+            Pattern.compile("\\$\\{([^}]+)}");
+
+    private static void scanVersionPropertyReferences(
+            Path pomFile, Map<String, String> inherited,
+            VersionPropertyReferences refs) {
+        if (!Files.exists(pomFile)) return;
+        Element project;
+        try {
+            project = DBF.newDocumentBuilder().parse(pomFile.toFile())
+                    .getDocumentElement();
+        } catch (Exception e) {
+            return;
+        }
+        Map<String, String> local = readProperties(project);
+        local.forEach(refs.declared()::putIfAbsent);
+        Map<String, String> properties = new LinkedHashMap<>(inherited);
+        properties.putAll(local);
+
+        org.w3c.dom.NodeList all = project.getElementsByTagName("*");
+        for (int i = 0; i < all.getLength(); i++) {
+            Element el = (Element) all.item(i);
+            String version = childText(el, "version");
+            if (version == null) continue;
+            Matcher whole = WHOLE_PROPERTY_EXPRESSION.matcher(version.trim());
+            if (!whole.matches()) continue;
+            String gid = resolve(childText(el, "groupId"), properties);
+            String aid = resolve(childText(el, "artifactId"), properties);
+            if (gid == null || aid == null) continue;
+            refs.byCoordinate()
+                    .computeIfAbsent(gid + ":" + aid, k -> new LinkedHashSet<>())
+                    .add(whole.group(1));
+        }
+
+        Path pomDir = pomFile.getParent();
+        for (String container : List.of("subprojects", "modules")) {
+            Element list = firstChild(project, container);
+            if (list == null) continue;
+            String item = container.equals("modules") ? "module" : "subproject";
+            for (Element sub : children(list, item)) {
+                scanVersionPropertyReferences(
+                        pomDir.resolve(sub.getTextContent().trim())
+                                .resolve("pom.xml"),
+                        properties, refs);
+            }
+        }
     }
 
     /**

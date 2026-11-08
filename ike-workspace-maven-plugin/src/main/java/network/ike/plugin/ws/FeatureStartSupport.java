@@ -245,6 +245,16 @@ final class FeatureStartSupport {
 
         Map<String, String> newVersions = qualifiedVersions(baseVersions, branchName);
 
+        // Which subproject produces each coordinate, so a property that
+        // versions another artifact is never moved (#1352).
+        SubprojectResolver resolver;
+        try {
+            resolver = SubprojectResolver.scan(root.toPath(), graph.manifest());
+        } catch (IOException e) {
+            throw new MojoException("Could not scan the workspace's published "
+                    + "artifacts: " + e.getMessage(), e);
+        }
+
         // For each subproject in topological order, update version-properties
         // that reference upstream subprojects
         for (String name : sorted) {
@@ -257,11 +267,28 @@ final class FeatureStartSupport {
                 String content = Files.readString(
                         pomFile.toPath(), StandardCharsets.UTF_8);
                 String original = content;
+                WsAddMojo.VersionPropertyReferences refs = null;
 
                 for (Dependency dep : sub.dependsOn()) {
                     String upstreamName = dep.subproject();
                     if (dep.versionProperty() == null) continue;
                     if (!newVersions.containsKey(upstreamName)) continue;
+
+                    if (refs == null) {
+                        refs = WsAddMojo.scanVersionPropertyReferences(
+                                pomFile.toPath());
+                    }
+                    List<String> foreign = foreignUses(
+                            dep.versionProperty(), upstreamName, refs, resolver);
+                    if (!foreign.isEmpty()) {
+                        log.warn("    " + name + ": left "
+                                + dep.versionProperty() + " alone — it versions "
+                                + String.join(", ", foreign) + ", not "
+                                + upstreamName + "; the depends-on edge names "
+                                + "another artifact's property; re-derive it "
+                                + "(IKE-Network/ike-issues#1352)");
+                        continue;
+                    }
 
                     String upstreamVersion = newVersions.get(upstreamName);
                     String before = content;
@@ -288,6 +315,44 @@ final class FeatureStartSupport {
                         + name + ": " + e.getMessage());
             }
         }
+    }
+
+    /**
+     * The coordinates a consumer versions through {@code property} when
+     * none of them is {@code upstreamName}'s — the property belongs to
+     * another artifact, and moving it to the upstream's qualified
+     * version would retarget that artifact to a version nothing
+     * publishes (IKE-Network/ike-issues#1352: a stale edge naming
+     * {@code ike-starter-set.version} sent an external starter-set
+     * artifact to {@code 1-<feature>-SNAPSHOT}).
+     *
+     * <p>Empty when any reference through the property is the
+     * upstream's, or when no {@code <version>} uses the property at all
+     * (an unused property moves harmlessly, and a BOM-managed upstream
+     * is tracked through such a property).
+     *
+     * @param property     the edge's {@code version-property}
+     * @param upstreamName the edge's target subproject
+     * @param refs         the consumer's version-property references
+     * @param resolver     coordinate → producing subproject
+     * @return the foreign coordinates, or empty when the move is safe
+     */
+    static List<String> foreignUses(String property, String upstreamName,
+                                    WsAddMojo.VersionPropertyReferences refs,
+                                    SubprojectResolver resolver) {
+        List<String> foreign = new java.util.ArrayList<>();
+        for (Map.Entry<String, Set<String>> use
+                : refs.byCoordinate().entrySet()) {
+            if (!use.getValue().contains(property)) continue;
+            String coord = use.getKey();
+            int colon = coord.indexOf(':');
+            String producer = resolver.subprojectForCoordinate(
+                    coord.substring(0, colon), coord.substring(colon + 1))
+                    .orElse(null);
+            if (upstreamName.equals(producer)) return List.of();
+            foreign.add(coord);
+        }
+        return foreign;
     }
 
     // ── BOM property cascade (by subproject name convention) ─────

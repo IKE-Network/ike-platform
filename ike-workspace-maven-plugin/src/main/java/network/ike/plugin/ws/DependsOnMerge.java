@@ -66,7 +66,7 @@ final class DependsOnMerge {
      * nothing changed), the derived targets added per relationship, the
      * build targets removed (a target in both {@code removedBuild} and
      * {@code addedBundle} was superseded, not dropped), the surviving
-     * build targets whose {@code version-property} was set, and each
+     * targets (any relationship) whose {@code version-property} was set, and each
      * final entry's relationship (for ordering-graph construction by
      * the acyclicity gate).
      */
@@ -151,16 +151,17 @@ final class DependsOnMerge {
             boolean stillBuild = "build".equalsIgnoreCase(
                     derivedRelationship.get(entry.target()));
             if (!build || stillBuild) {
-                if (build) {
-                    // The property is derived like the edge itself: a
-                    // surviving build entry takes the one derivation
-                    // detects, or a release cannot retarget the edge.
-                    Entry aligned = withVersionProperty(entry,
-                            derivedVersionProperty.get(entry.target()));
-                    if (aligned != entry) {
-                        versionPropertySet.add(entry.target());
-                        entry = aligned;
-                    }
+                // The property is read from the POM like the edge
+                // itself: a surviving entry of any relationship takes
+                // the one derivation reads, or a release cannot
+                // retarget the edge — a staged bundle pin included
+                // (IKE-Network/ike-issues#1352). The relationship of a
+                // non-build entry stays as declared.
+                Entry aligned = withVersionProperty(entry,
+                        derivedVersionProperty.get(entry.target()));
+                if (aligned != entry) {
+                    versionPropertySet.add(entry.target());
+                    entry = aligned;
                 }
                 kept.add(entry);
                 covered.add(entry.target());
@@ -239,7 +240,7 @@ final class DependsOnMerge {
      * {@code relationship:} line (after the {@code subproject:} line when
      * there is none). Every other line — comments included — is kept.
      *
-     * @param entry    the surviving build entry
+     * @param entry    the surviving entry
      * @param property the derived property, or null when none was derived
      * @return {@code entry} itself when {@code property} is null or
      *         already recorded, otherwise the rewritten entry

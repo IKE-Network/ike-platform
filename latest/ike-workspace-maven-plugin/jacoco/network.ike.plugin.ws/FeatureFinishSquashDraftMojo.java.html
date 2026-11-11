@@ -847,67 +847,68 @@ public class FeatureFinishSquashDraftMojo extends AbstractWorkspaceMojo {
 <span class="fc" id="L847">            VcsOperations.resetHard(dir, getLog(), &quot;HEAD&quot;);</span>
         }
 
-        // #858: push (verified) BEFORE any branch deletion; with
-        // -Dpush=false or a failed push the branch is kept.
-<span class="fc" id="L852">        List&lt;FeatureFinishSupport.PushResult&gt; barePush = List.of();</span>
-<span class="fc bfc" id="L853" title="All 2 branches covered.">        if (push) {</span>
-<span class="fc" id="L854">            java.util.LinkedHashMap&lt;String, File&gt; one =</span>
-                    new java.util.LinkedHashMap&lt;&gt;();
-<span class="fc" id="L856">            one.put(dir.getName(), dir);</span>
-<span class="fc" id="L857">            barePush = FeatureFinishSupport.pushTargetsVerified(</span>
-<span class="fc" id="L858">                    one, targetBranch, getLog());</span>
-        }
-<span class="fc bfc" id="L860" title="All 2 branches covered.">        boolean pushConfirmed = push</span>
-<span class="pc bpc" id="L861" title="1 of 2 branches missed.">                &amp;&amp; barePush.stream().allMatch(</span>
-                        FeatureFinishSupport.PushResult::pushed);
+        // #858: land (verified) BEFORE any branch deletion; with
+        // -Dpush=false or a failed landing the branch is kept. A
+        // local-origin sibling lands by fast-forwarding its parent
+        // working set and pushes nothing (#992), exactly as the
+        // workspace-mode finish does; any other bare repo pushes its
+        // target branch to origin.
+<span class="fc bfc" id="L856" title="All 2 branches covered.">        FinishLanding.Landing landing = push</span>
+<span class="fc" id="L857">                ? FinishLanding.land(dir, List.of(), targetBranch, true, getLog())</span>
+<span class="fc" id="L858">                : FinishLanding.Landing.none(dir);</span>
+<span class="pc bpc" id="L859" title="1 of 4 branches missed.">        boolean pushConfirmed = push &amp;&amp; !landing.failed();</span>
 
-<span class="fc" id="L864">        String remoteFailReason = null;</span>
-<span class="fc" id="L865">        String bareKeptReason = null;</span>
-<span class="fc bfc" id="L866" title="All 2 branches covered.">        if (keepBranch) {</span>
-<span class="fc" id="L867">            bareKeptReason = &quot;-DkeepBranch=true&quot;;</span>
-<span class="pc bpc" id="L868" title="1 of 4 branches missed.">        } else if (!push &amp;&amp; FeatureFinishSupport.anyHasOriginRemote(List.of(dir))) {</span>
-<span class="nc" id="L869">            bareKeptReason = &quot;-Dpush=false — the branch is only deleted &quot;</span>
+<span class="fc" id="L861">        String remoteFailReason = null;</span>
+<span class="fc" id="L862">        String bareKeptReason = null;</span>
+<span class="fc bfc" id="L863" title="All 2 branches covered.">        if (keepBranch) {</span>
+<span class="fc" id="L864">            bareKeptReason = &quot;-DkeepBranch=true&quot;;</span>
+<span class="pc bpc" id="L865" title="1 of 4 branches missed.">        } else if (!push &amp;&amp; FeatureFinishSupport.anyHasOriginRemote(List.of(dir))) {</span>
+<span class="nc" id="L866">            bareKeptReason = &quot;-Dpush=false — the branch is only deleted &quot;</span>
                     + &quot;after a confirmed push of &quot; + targetBranch;
-<span class="pc bpc" id="L871" title="1 of 4 branches missed.">        } else if (push &amp;&amp; !pushConfirmed) {</span>
-<span class="nc" id="L872">            bareKeptReason = &quot;push failure (see below)&quot;;</span>
+<span class="pc bpc" id="L868" title="1 of 4 branches missed.">        } else if (push &amp;&amp; !pushConfirmed) {</span>
+<span class="nc bnc" id="L869" title="All 2 branches missed.">            bareKeptReason = landing.toLocalParent()</span>
+<span class="nc" id="L870">                    ? &quot;landing failure (see below)&quot; : &quot;push failure (see below)&quot;;</span>
         } else {
-<span class="fc" id="L874">            remoteFailReason = FeatureFinishSupport.deleteBranch(</span>
-<span class="fc" id="L875">                    dir, getLog(), branchName, keepRemoteBranch);</span>
+<span class="fc" id="L872">            remoteFailReason = FeatureFinishSupport.deleteBranch(</span>
+<span class="fc" id="L873">                    dir, getLog(), branchName, keepRemoteBranch);</span>
         }
-<span class="fc bfc" id="L877" title="All 2 branches covered.">        if (bareKeptReason != null) {</span>
-<span class="fc" id="L878">            getLog().info(&quot;  Branch kept: &quot; + branchName</span>
+<span class="fc bfc" id="L875" title="All 2 branches covered.">        if (bareKeptReason != null) {</span>
+<span class="fc" id="L876">            getLog().info(&quot;  Branch kept: &quot; + branchName</span>
                     + &quot; (&quot; + bareKeptReason + &quot;)&quot;);
         }
 
-<span class="fc" id="L882">        VcsOperations.writeVcsState(dir, VcsState.Action.FEATURE_FINISH);</span>
+<span class="fc" id="L880">        VcsOperations.writeVcsState(dir, VcsState.Action.FEATURE_FINISH);</span>
 
-<span class="pc bpc" id="L884" title="1 of 4 branches missed.">        if (push &amp;&amp; !pushConfirmed) {</span>
-<span class="nc" id="L885">            throw new MojoException(FeatureFinishSupport.pushPhaseFailureMessage(</span>
-<span class="nc bnc" id="L886" title="All 2 branches missed.">                    barePush.stream().filter(r -&gt; !r.pushed()).toList(),</span>
-                    targetBranch));
+<span class="pc bpc" id="L882" title="1 of 2 branches missed.">        if (landing.failed()) {</span>
+<span class="nc" id="L883">            throw new MojoException(landing.failureMessage());</span>
         }
 
-<span class="fc" id="L890">        getLog().info(&quot;&quot;);</span>
-<span class="fc bfc" id="L891" title="All 2 branches covered.">        if (remoteFailReason != null) {</span>
-<span class="fc" id="L892">            getLog().warn(&quot;  Remote feature branch could not be deleted &quot;</span>
+<span class="fc" id="L886">        getLog().info(&quot;&quot;);</span>
+<span class="fc bfc" id="L887" title="All 2 branches covered.">        if (remoteFailReason != null) {</span>
+<span class="fc" id="L888">            getLog().warn(&quot;  Remote feature branch could not be deleted &quot;</span>
                     + &quot;(soft-fail per #532): &quot; + remoteFailReason);
-<span class="fc" id="L894">            getLog().warn(&quot;  Clean up manually: git push origin --delete &quot;</span>
+<span class="fc" id="L890">            getLog().warn(&quot;  Clean up manually: git push origin --delete &quot;</span>
                     + branchName);
         }
-<span class="fc" id="L897">        getLog().info(&quot;  Done.&quot;);</span>
-<span class="fc" id="L898">        getLog().info(&quot;&quot;);</span>
-<span class="fc" id="L899">        StringBuilder body = new StringBuilder();</span>
-<span class="fc" id="L900">        body.append(&quot;Bare repo: squash-merged `&quot;).append(branchName)</span>
-<span class="fc" id="L901">                .append(&quot;` → `&quot;).append(targetBranch).append(&quot;`.\n&quot;);</span>
-<span class="fc bfc" id="L902" title="All 2 branches covered.">        if (remoteFailReason != null) {</span>
-<span class="fc" id="L903">            body.append(&quot;\n**Remote feature branch not deleted** — `&quot;)</span>
-<span class="fc" id="L904">                    .append(remoteFailReason).append(&quot;`.\n\n&quot;)</span>
-<span class="fc" id="L905">                    .append(&quot;Clean up manually:\n\n```bash\n&quot;)</span>
-<span class="fc" id="L906">                    .append(&quot;git push origin --delete &quot;).append(branchName)</span>
-<span class="fc" id="L907">                    .append(&quot;\n```\n&quot;);</span>
+<span class="fc" id="L893">        getLog().info(&quot;  Done.&quot;);</span>
+<span class="fc" id="L894">        getLog().info(&quot;&quot;);</span>
+<span class="fc" id="L895">        StringBuilder body = new StringBuilder();</span>
+<span class="fc" id="L896">        body.append(&quot;Bare repo: squash-merged `&quot;).append(branchName)</span>
+<span class="fc" id="L897">                .append(&quot;` → `&quot;).append(targetBranch).append(&quot;`.\n&quot;);</span>
+<span class="fc bfc" id="L898" title="All 4 branches covered.">        if (push &amp;&amp; landing.toLocalParent()) {</span>
+<span class="fc" id="L899">            body.append(&quot;\nLanded in the parent working set `&quot;)</span>
+<span class="fc" id="L900">                    .append(landing.localParent().orElseThrow().getName())</span>
+<span class="fc" id="L901">                    .append(&quot;` by fast-forward; nothing pushed (ike-issues#992).\n&quot;);</span>
         }
-<span class="fc" id="L909">        return new WorkspaceReportSpec(WsGoal.FEATURE_FINISH_SQUASH_PUBLISH,</span>
-<span class="fc" id="L910">                body.toString());</span>
+<span class="fc bfc" id="L903" title="All 2 branches covered.">        if (remoteFailReason != null) {</span>
+<span class="fc" id="L904">            body.append(&quot;\n**Remote feature branch not deleted** — `&quot;)</span>
+<span class="fc" id="L905">                    .append(remoteFailReason).append(&quot;`.\n\n&quot;)</span>
+<span class="fc" id="L906">                    .append(&quot;Clean up manually:\n\n```bash\n&quot;)</span>
+<span class="fc" id="L907">                    .append(&quot;git push origin --delete &quot;).append(branchName)</span>
+<span class="fc" id="L908">                    .append(&quot;\n```\n&quot;);</span>
+        }
+<span class="fc" id="L910">        return new WorkspaceReportSpec(WsGoal.FEATURE_FINISH_SQUASH_PUBLISH,</span>
+<span class="fc" id="L911">                body.toString());</span>
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.15.202606040825</span></div></body></html>

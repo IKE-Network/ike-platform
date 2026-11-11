@@ -479,9 +479,64 @@ class WsScaffoldInitMojoTest {
     }
 
     private String invokeGeneratePom(WorkspaceBootstrap bootstrap) throws Exception {
-        Method m = WorkspaceBootstrap.class.getDeclaredMethod("generatePom");
+        return invokeGeneratePom(bootstrap, java.nio.file.Path.of("/work/my-ws"));
+    }
+
+    private String invokeGeneratePom(WorkspaceBootstrap bootstrap, java.nio.file.Path wsDir)
+            throws Exception {
+        Method m = WorkspaceBootstrap.class.getDeclaredMethod("generatePom", java.nio.file.Path.class);
+        m.setAccessible(true);
+        return (String) m.invoke(bootstrap, wsDir);
+    }
+
+    private String invokeGenerateJvmConfig(WorkspaceBootstrap bootstrap) throws Exception {
+        Method m = WorkspaceBootstrap.class.getDeclaredMethod("generateJvmConfig");
         m.setAccessible(true);
         return (String) m.invoke(bootstrap);
+    }
+
+    private WorkspaceBootstrap bootstrapWithOrg(String name, String org) {
+        WorkspaceBootstrap.Params params = new WorkspaceBootstrap.Params(
+                name, name, org, "org.example", name, "1-SNAPSHOT", "4.0.0-rc-7", "main",
+                /*skipGit*/ true, "test", "1-test", "244-test", "11-test");
+        return new WorkspaceBootstrap(params, new TestLog());
+    }
+
+    @Test
+    void generated_pom_declares_a_file_scm_until_a_remote_exists() throws Exception {
+        String pom = invokeGeneratePom(bootstrap("my-ws", "org.example", null, null),
+                java.nio.file.Path.of("/work/my-ws"));
+        assertThat(pom).contains("<scm>")
+                .contains("<url>file:///work/my-ws</url>")
+                .contains("<connection>scm:git:file:///work/my-ws</connection>")
+                .contains("<developerConnection>scm:git:file:///work/my-ws</developerConnection>");
+    }
+
+    @Test
+    void generated_pom_declares_the_github_scm_under_org() throws Exception {
+        String pom = invokeGeneratePom(bootstrapWithOrg("my-ws", "knowledge-sources"),
+                java.nio.file.Path.of("/work/my-ws"));
+        assertThat(pom).contains("<url>https://github.com/knowledge-sources/my-ws.git</url>")
+                .contains("<connection>scm:git:https://github.com/knowledge-sources/my-ws.git</connection>")
+                .doesNotContain("file:");
+    }
+
+    @Test
+    void generated_pom_declares_its_own_site_url() throws Exception {
+        String pom = invokeGeneratePom(bootstrap("my-ws", "org.example", null, "my-ws-reactor"));
+        assertThat(pom).contains("<distributionManagement>")
+                .contains("<id>ike-site</id>")
+                .contains("<url>https://ike.network/my-ws-reactor/</url>");
+        javax.xml.parsers.DocumentBuilderFactory.newInstance().newDocumentBuilder()
+                .parse(new java.io.ByteArrayInputStream(pom.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+    }
+
+    @Test
+    void generated_jvm_config_enables_preview_without_comments() throws Exception {
+        String jvmConfig = invokeGenerateJvmConfig(bootstrap("my-ws", "org.example", null, null));
+        assertThat(jvmConfig.lines()).containsExactly(
+                "--sun-misc-unsafe-memory-access=allow", "--enable-preview");
+        assertThat(jvmConfig).doesNotContain("#");
     }
 
     private String invokeGenerateManifest(WorkspaceBootstrap bootstrap) throws Exception {

@@ -34,6 +34,15 @@ import java.time.LocalDate;
  *       {@code workspace-root:} block holding the workspace's GAV
  *       (ike-issues#183) and an empty {@code subprojects:} list</li>
  *   <li>.mvn/maven.config sets {@code -T 1C}</li>
+ *   <li>.mvn/jvm.config enables preview features, which every IKE
+ *       project uses, so a member's forked tools (the knowledge-base
+ *       seam among them) run in the reactor as they do alone</li>
+ *   <li>the root POM declares its own {@code <scm>}, which
+ *       ike-version-management-extension requires beside {@code .git}:
+ *       the GitHub repository under {@code -Dorg}, else the workspace's
+ *       own folder as a {@code file:} URL until a remote is added
+ *       (IKE-Network/ike-issues#1370, decision 4), and its own site URL,
+ *       which ike-parent's enforcer requires (ike-issues#383)</li>
  * </ul>
  *
  * <p>This class is a pure scaffold writer — it does not consult
@@ -90,7 +99,7 @@ public final class WorkspaceBootstrap {
             Files.createDirectories(wsDir);
             Files.createDirectories(wsDir.resolve(".mvn"));
 
-            writeFile(wsDir.resolve("pom.xml"), generatePom());
+            writeFile(wsDir.resolve("pom.xml"), generatePom(wsDir));
             // Still the former name: nothing writes working-set.yaml
             // until every reader ships (ike-issues#1054 step 1), after
             // which this and the scaffold upgrade flip together.
@@ -100,14 +109,7 @@ public final class WorkspaceBootstrap {
             writeFile(wsDir.resolve(".gitignore"), generateGitignore());
             writeFile(wsDir.resolve(".mvn/maven.config"), "-T 1C\n");
             writeFile(wsDir.resolve(".mvn/extensions.xml"), generateExtensionsXml());
-            // .mvn/jvm.config is parsed as raw JVM args, one token per line,
-            // with NO comment syntax. A `#` at column 0 is passed to the JVM
-            // as a main-class name and fails with ClassNotFoundException: #.
-            // Seed a single standard flag so downstream hand-edits start
-            // from a correct baseline. The flag suppresses sun.misc.Unsafe
-            // deprecation warnings from JRuby/AsciidoctorJ on JDK 24+.
-            writeFile(wsDir.resolve(".mvn/jvm.config"),
-                    "--sun-misc-unsafe-memory-access=allow\n");
+            writeFile(wsDir.resolve(".mvn/jvm.config"), generateJvmConfig());
             writeFile(wsDir.resolve("README.adoc"), generateReadme());
             MavenWrapper.writeMissingFiles(wsDir, params.mavenVersion());
 
@@ -140,12 +142,48 @@ public final class WorkspaceBootstrap {
     // ── File generators (pure, testable) ─────────────────────────
 
     /**
+     * Generate the workspace {@code .mvn/jvm.config}. The file is parsed
+     * as raw JVM arguments, one token per line, with no comment syntax: a
+     * {@code #} at column 0 is passed to the JVM as a main-class name and
+     * fails with {@code ClassNotFoundException: #}. Two standard flags:
+     * one suppresses {@code sun.misc.Unsafe} deprecation warnings from
+     * JRuby/AsciidoctorJ on JDK 24 and later; the other enables preview
+     * features, which every IKE project uses and which Maven reads only
+     * from the reactor root's file, never from a member's.
+     *
+     * @return the {@code .mvn/jvm.config} text
+     */
+    String generateJvmConfig() {
+        return "--sun-misc-unsafe-memory-access=allow\n--enable-preview\n";
+    }
+
+    /**
+     * The URL the root POM's {@code <scm>} names: the GitHub repository
+     * the bootstrap adds as {@code origin} under {@code -Dorg}, else the
+     * workspace's own folder as a {@code file:} URL until a remote is
+     * added (IKE-Network/ike-issues#1370, decision 4).
+     *
+     * @param wsDir the workspace directory
+     * @return the repository URL, without a trailing slash
+     */
+    String scmUrl(Path wsDir) {
+        if (params.org() != null && !params.org().isBlank()) {
+            return "https://github.com/" + params.org() + "/" + params.name() + ".git";
+        }
+        String url = wsDir.toAbsolutePath().normalize().toUri().toString();
+        return url.endsWith("/") ? url.substring(0, url.length() - 1) : url;
+    }
+
+    /**
      * Generate the workspace root POM content. Package-private so
      * tests can invoke it directly.
      *
+     * @param wsDir the workspace directory, which a {@code file:}
+     *              {@code <scm>} names when there is no {@code -Dorg}
      * @return the {@code pom.xml} text
      */
-    String generatePom() {
+    String generatePom(Path wsDir) {
+        String scmUrl = scmUrl(wsDir);
         // ike-parent version is the same as ike-platform version (reactor sibling).
         String parentVersion = params.parentVersion();
 
@@ -188,6 +226,22 @@ public final class WorkspaceBootstrap {
         xml.append("    <version>").append(params.version()).append("</version>\n");
         xml.append("    <packaging>pom</packaging>\n\n");
         xml.append("    <name>").append(params.description()).append("</name>\n\n");
+        xml.append("    <!-- Required: ike-version-management-extension refuses a POM beside\n");
+        xml.append("         .git that declares no <scm> of its own. Until a remote is added\n");
+        xml.append("         it names this folder (IKE-Network/ike-issues#1370). -->\n");
+        xml.append("    <scm>\n");
+        xml.append("        <url>").append(scmUrl).append("</url>\n");
+        xml.append("        <connection>scm:git:").append(scmUrl).append("</connection>\n");
+        xml.append("        <developerConnection>scm:git:").append(scmUrl).append("</developerConnection>\n");
+        xml.append("    </scm>\n\n");
+        xml.append("    <!-- Required: ike-parent's enforcer fails a project whose effective\n");
+        xml.append("         site URL still points at the in-reactor location (ike-issues#383). -->\n");
+        xml.append("    <distributionManagement>\n");
+        xml.append("        <site>\n");
+        xml.append("            <id>ike-site</id>\n");
+        xml.append("            <url>https://ike.network/").append(params.artifactId()).append("/</url>\n");
+        xml.append("        </site>\n");
+        xml.append("    </distributionManagement>\n\n");
         xml.append("    <build>\n");
         xml.append("        <plugins>\n");
         xml.append("            <plugin>\n");

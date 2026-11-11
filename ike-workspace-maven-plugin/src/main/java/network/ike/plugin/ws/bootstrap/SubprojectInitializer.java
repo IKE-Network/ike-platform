@@ -166,7 +166,15 @@ public final class SubprojectInitializer {
             File gitDir = new File(dir, ".git");
 
             if (gitDir.exists()) {
-                if (VcsOperations.isClean(dir)) {
+                if (VcsOperations.remoteUrl(dir, "origin").isEmpty()) {
+                    // A member created in place starts with no remote and a
+                    // file: repo URL until one is added (IKE-Network/ike-issues#1370,
+                    // decision 4): there is nothing to fetch, which is not a failure.
+                    log.info(Ansi.green("  ✓ ") + name
+                            + " — local repository, no remote yet; nothing to update");
+                    rows.add(new String[]{name, "local",
+                            subproject.repo() != null ? subproject.repo() : "—", "no remote"});
+                } else if (VcsOperations.isClean(dir)) {
                     try {
                         String branch = VcsOperations.currentBranch(dir);
                         ReleaseSupport.exec(dir, log,

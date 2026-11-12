@@ -1,6 +1,6 @@
 ---
-date_published: 2026-11-10
-date_modified: 2026-11-10
+date_published: 2026-11-11
+date_modified: 2026-11-11
 canonical_url: https://ike.network/ike-platform/ike-workspace-maven-plugin/index.html
 ---
 

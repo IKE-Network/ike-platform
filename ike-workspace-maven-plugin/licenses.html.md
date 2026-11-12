@@ -1,12 +1,12 @@
 ---
-date_published: 2026-11-10
-date_modified: 2026-11-10
+date_published: 2026-11-11
+date_modified: 2026-11-11
 canonical_url: https://ike.network/ike-platform/ike-workspace-maven-plugin/licenses.html
 ---
 
 # Licenses (SPDX)
 
-Licenses for declared dependencies of `ike-workspace-maven-plugin` 225, grouped by SPDX expression. Rendered from `[bom.json](bom.json)` (CycloneDX) at `pre-site` phase by `ike:render-spdx-licenses` (ike-issues#335).
+Licenses for declared dependencies of `ike-workspace-maven-plugin` 226, grouped by SPDX expression. Rendered from `[bom.json](bom.json)` (CycloneDX) at `pre-site` phase by `ike:render-spdx-licenses` (ike-issues#335).
 
 ## [#summary](#summary)Summary
 
@@ -44,11 +44,11 @@ Reference: [Apache-2.0 on spdx.org](https://spdx.org/licenses/Apache-2.0.html)
 | `network.ike` | `ike-base-parent` | `16` |
 | `network.ike` | `ike-java-support` | `11` |
 | `network.ike` | `ike-lease-core` | `7` |
-| `network.ike.tooling` | `ike-build-standards` | `279` |
-| `network.ike.tooling` | `ike-build-standards` | `279` |
-| `network.ike.tooling` | `ike-build-standards` | `279` |
-| `network.ike.tooling` | `ike-maven-plugin-support` | `279` |
-| `network.ike.tooling` | `ike-workspace-model` | `279` |
+| `network.ike.tooling` | `ike-build-standards` | `280` |
+| `network.ike.tooling` | `ike-build-standards` | `280` |
+| `network.ike.tooling` | `ike-build-standards` | `280` |
+| `network.ike.tooling` | `ike-maven-plugin-support` | `280` |
+| `network.ike.tooling` | `ike-workspace-model` | `280` |
 | `org.apache.commons` | `commons-lang3` | `3.20.0` |
 | `org.apache.commons` | `commons-text` | `1.15.0` |
 | `org.apache.maven` | `maven-api-annotations` | `4.0.0-rc-5` |

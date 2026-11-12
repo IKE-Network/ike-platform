@@ -12,7 +12,7 @@ canonical_url: https://ike.network/ike-platform/ike-parent/dependency-info.html
 <dependency>
   <groupId>network.ike.platform</groupId>
   <artifactId>ike-parent</artifactId>
-  <version>226</version>
+  <version>227</version>
   <type>pom</type>
 </dependency>
 ```
@@ -20,7 +20,7 @@ canonical_url: https://ike.network/ike-platform/ike-parent/dependency-info.html
 ## Apache Ivy
 
 ```
-<dependency org="network.ike.platform" name="ike-parent" rev="226">
+<dependency org="network.ike.platform" name="ike-parent" rev="227">
   <artifact name="ike-parent" type="pom" />
 </dependency>
 ```
@@ -29,24 +29,24 @@ canonical_url: https://ike.network/ike-platform/ike-parent/dependency-info.html
 
 ```
 @Grapes(
-@Grab(group='network.ike.platform', module='ike-parent', version='226')
+@Grab(group='network.ike.platform', module='ike-parent', version='227')
 )
 ```
 
 ## Gradle/Grails
 
 ```
-implementation 'network.ike.platform:ike-parent:226'
+implementation 'network.ike.platform:ike-parent:227'
 ```
 
 ## Scala SBT
 
 ```
-libraryDependencies += "network.ike.platform" % "ike-parent" % "226"
+libraryDependencies += "network.ike.platform" % "ike-parent" % "227"
 ```
 
 ## Leiningen
 
 ```
-[network.ike.platform/ike-parent "226"]
+[network.ike.platform/ike-parent "227"]
 ```

@@ -42,6 +42,13 @@ import java.util.Set;
  * are never downgraded to {@code build}
  * (IKE-Network/ike-issues#963, #964). See {@link DependsOnMerge}.
  *
+ * &lt;p&gt;&lt;b&gt;Each member in its own section.&lt;/b&gt; A member's edges are written
+ * to the block in that member's own section of the manifest, and a
+ * member with no {@code depends-on:} key gains one there. The summary
+ * the sync returns is read back from the manifest it wrote, member by
+ * member, so the re-derivation commit describes its own diff
+ * (IKE-Network/ike-issues#1387).
+ *
  * &lt;p&gt;&lt;b&gt;Acyclic by construction.&lt;/b&gt; Contracting the module graph to
  * repo granularity can manufacture a cycle no module edge actually
  * forms. Before writing, the prospective repo-level ordering graph is
@@ -68,13 +75,14 @@ final class YamlDepsSync {
 
     /**
      * Outcome of a sync: whether {@code workspace.yaml} was rewritten,
-     * and one summary line per changed subproject for the re-derivation
-     * commit message (IKE-Network/ike-issues#964).
+     * and one summary line per subproject whose own block the rewrite
+     * changed, in manifest order, for the re-derivation commit message
+     * (IKE-Network/ike-issues#964, #1387).
      */
-<span class="fc" id="L74">    record SyncResult(boolean changed, List&lt;String&gt; changeLines) {</span>
+<span class="fc" id="L82">    record SyncResult(boolean changed, List&lt;String&gt; changeLines) {</span>
 
-<span class="fc" id="L76">        static final SyncResult UNCHANGED =</span>
-<span class="fc" id="L77">                new SyncResult(false, List.of());</span>
+<span class="fc" id="L84">        static final SyncResult UNCHANGED =</span>
+<span class="fc" id="L85">                new SyncResult(false, List.of());</span>
     }
 
     /**
@@ -88,159 +96,228 @@ final class YamlDepsSync {
      *         processed
      */
     static SyncResult run(File workspaceRoot, Log log) {
-<span class="fc" id="L91">        Path manifestPath = Manifests.path(workspaceRoot);</span>
-<span class="fc bfc" id="L92" title="All 2 branches covered.">        if (!Files.isRegularFile(manifestPath)) {</span>
-<span class="fc" id="L93">            log.debug(&quot;yaml-deps-sync: no workspace.yaml — skipping&quot;);</span>
-<span class="fc" id="L94">            return SyncResult.UNCHANGED;</span>
+<span class="fc" id="L99">        Path manifestPath = Manifests.path(workspaceRoot);</span>
+<span class="fc bfc" id="L100" title="All 2 branches covered.">        if (!Files.isRegularFile(manifestPath)) {</span>
+<span class="fc" id="L101">            log.debug(&quot;yaml-deps-sync: no workspace.yaml — skipping&quot;);</span>
+<span class="fc" id="L102">            return SyncResult.UNCHANGED;</span>
         }
 
         try {
-<span class="fc" id="L98">            Manifest manifest = ManifestReader.read(manifestPath);</span>
-<span class="fc" id="L99">            String yaml = Files.readString(manifestPath, StandardCharsets.UTF_8);</span>
+<span class="fc" id="L106">            Manifest manifest = ManifestReader.read(manifestPath);</span>
+<span class="fc" id="L107">            String yaml = Files.readString(manifestPath, StandardCharsets.UTF_8);</span>
 
             // ── Phase 1: derive and dry-run the merges; no writes ──
-<span class="fc" id="L102">            Map&lt;String, List&lt;WsAddMojo.DerivedDep&gt;&gt; derivedByName =</span>
+<span class="fc" id="L110">            Map&lt;String, List&lt;WsAddMojo.DerivedDep&gt;&gt; derivedByName =</span>
                     new LinkedHashMap&lt;&gt;();
-<span class="fc" id="L104">            Map&lt;String, Map&lt;String, List&lt;WsAddMojo.PomRef&gt;&gt;&gt; edgeSources =</span>
+<span class="fc" id="L112">            Map&lt;String, Map&lt;String, List&lt;WsAddMojo.PomRef&gt;&gt;&gt; edgeSources =</span>
                     new LinkedHashMap&lt;&gt;();
-<span class="fc" id="L106">            Map&lt;String, Set&lt;String&gt;&gt; prospective = new LinkedHashMap&lt;&gt;();</span>
-<span class="fc" id="L107">            Set&lt;String&gt; known = manifest.subprojects().keySet();</span>
-<span class="fc" id="L108">            List&lt;String&gt; driftSkipped = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L114">            Map&lt;String, Set&lt;String&gt;&gt; prospective = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc" id="L115">            Set&lt;String&gt; known = manifest.subprojects().keySet();</span>
+<span class="fc" id="L116">            List&lt;String&gt; driftSkipped = new ArrayList&lt;&gt;();</span>
 
             for (Map.Entry&lt;String, Subproject&gt; entry
-<span class="fc bfc" id="L111" title="All 2 branches covered.">                    : manifest.subprojects().entrySet()) {</span>
-<span class="fc" id="L112">                String name = entry.getKey();</span>
-<span class="fc" id="L113">                Subproject sub = entry.getValue();</span>
-<span class="fc" id="L114">                prospective.put(name,</span>
-<span class="fc" id="L115">                        DependsOnCycleGate.orderingTargets(sub, known));</span>
+<span class="fc bfc" id="L119" title="All 2 branches covered.">                    : manifest.subprojects().entrySet()) {</span>
+<span class="fc" id="L120">                String name = entry.getKey();</span>
+<span class="fc" id="L121">                Subproject sub = entry.getValue();</span>
+<span class="fc" id="L122">                prospective.put(name,</span>
+<span class="fc" id="L123">                        DependsOnCycleGate.orderingTargets(sub, known));</span>
 
-<span class="fc" id="L117">                Path subDir = workspaceRoot.toPath().resolve(name);</span>
-<span class="pc bpc" id="L118" title="1 of 2 branches missed.">                if (!Files.exists(subDir.resolve(&quot;pom.xml&quot;))) {</span>
+<span class="fc" id="L125">                Path subDir = workspaceRoot.toPath().resolve(name);</span>
+<span class="pc bpc" id="L126" title="1 of 2 branches missed.">                if (!Files.exists(subDir.resolve(&quot;pom.xml&quot;))) {</span>
                     // Not cloned — leave existing depends-on alone
-<span class="nc" id="L120">                    continue;</span>
+<span class="nc" id="L128">                    continue;</span>
                 }
-<span class="fc bfc" id="L122" title="All 2 branches covered.">                if (Files.exists(subDir.resolve(&quot;.git&quot;))) {</span>
-<span class="fc" id="L123">                    String drift = driftReason(subDir,</span>
-<span class="fc" id="L124">                            declaredBranch(sub, manifest), sub.sha());</span>
-<span class="fc bfc" id="L125" title="All 2 branches covered.">                    if (drift != null) {</span>
+<span class="fc bfc" id="L130" title="All 2 branches covered.">                if (Files.exists(subDir.resolve(&quot;.git&quot;))) {</span>
+<span class="fc" id="L131">                    String drift = driftReason(subDir,</span>
+<span class="fc" id="L132">                            declaredBranch(sub, manifest), sub.sha());</span>
+<span class="fc bfc" id="L133" title="All 2 branches covered.">                    if (drift != null) {</span>
                         // Drifted checkout — its POM does not represent
                         // the manifest's declared state (#968).
-<span class="fc" id="L128">                        driftSkipped.add(name + &quot; — &quot; + drift);</span>
-<span class="fc" id="L129">                        continue;</span>
+<span class="fc" id="L136">                        driftSkipped.add(name + &quot; — &quot; + drift);</span>
+<span class="fc" id="L137">                        continue;</span>
                     }
                 }
 
-<span class="fc" id="L133">                WsAddMojo.Derivation derivation =</span>
-<span class="fc" id="L134">                        WsAddMojo.deriveDependenciesDetailed(</span>
-<span class="fc" id="L135">                                workspaceRoot.toPath(), manifestPath,</span>
+<span class="fc" id="L141">                WsAddMojo.Derivation derivation =</span>
+<span class="fc" id="L142">                        WsAddMojo.deriveDependenciesDetailed(</span>
+<span class="fc" id="L143">                                workspaceRoot.toPath(), manifestPath,</span>
                                 subDir, name);
 
-<span class="fc" id="L138">                DependsOnMerge.Result merged = DependsOnMerge.merge(</span>
-<span class="fc" id="L139">                        yaml, name, derivation.deps());</span>
-<span class="fc bfc" id="L140" title="All 2 branches covered.">                if (!merged.changed(yaml)) continue;</span>
+<span class="fc" id="L146">                DependsOnMerge.Result merged = DependsOnMerge.merge(</span>
+<span class="fc" id="L147">                        yaml, name, derivation.deps());</span>
+<span class="fc bfc" id="L148" title="All 2 branches covered.">                if (!merged.changed(yaml)) continue;</span>
 
-<span class="fc" id="L142">                derivedByName.put(name, derivation.deps());</span>
-<span class="fc" id="L143">                edgeSources.put(name, derivation.producerSources());</span>
-<span class="fc" id="L144">                prospective.put(name,</span>
-<span class="fc" id="L145">                        orderingTargets(merged.finalRelationships(), known));</span>
-<span class="fc" id="L146">            }</span>
+<span class="fc" id="L150">                derivedByName.put(name, derivation.deps());</span>
+<span class="fc" id="L151">                edgeSources.put(name, derivation.producerSources());</span>
+<span class="fc" id="L152">                prospective.put(name,</span>
+<span class="fc" id="L153">                        orderingTargets(merged.finalRelationships(), known));</span>
+<span class="fc" id="L154">            }</span>
 
-<span class="fc bfc" id="L148" title="All 2 branches covered.">            if (!driftSkipped.isEmpty()) {</span>
-<span class="fc" id="L149">                log.warn(&quot;  yaml-deps-sync: left &quot; + driftSkipped.size()</span>
+<span class="fc bfc" id="L156" title="All 2 branches covered.">            if (!driftSkipped.isEmpty()) {</span>
+<span class="fc" id="L157">                log.warn(&quot;  yaml-deps-sync: left &quot; + driftSkipped.size()</span>
                         + &quot; drifted subproject(s) alone — the checkout &quot;
                         + &quot;disagrees with the manifest, so its POM does &quot;
                         + &quot;not represent the declared state; recorded &quot;
                         + &quot;depends-on kept (IKE-Network/ike-issues#968):&quot;);
-<span class="fc bfc" id="L154" title="All 2 branches covered.">                for (String skipped : driftSkipped) {</span>
-<span class="fc" id="L155">                    log.warn(&quot;    &quot; + skipped);</span>
-<span class="fc" id="L156">                }</span>
-<span class="fc" id="L157">                log.warn(&quot;    Align checkouts to the manifest: &quot;</span>
+<span class="fc bfc" id="L162" title="All 2 branches covered.">                for (String skipped : driftSkipped) {</span>
+<span class="fc" id="L163">                    log.warn(&quot;    &quot; + skipped);</span>
+<span class="fc" id="L164">                }</span>
+<span class="fc" id="L165">                log.warn(&quot;    Align checkouts to the manifest: &quot;</span>
                         + &quot;mvn ws:reconcile-branches-publish -Dfrom=manifest&quot;);
-<span class="fc" id="L159">                log.warn(&quot;    Or accept checkouts as truth:    &quot;</span>
+<span class="fc" id="L167">                log.warn(&quot;    Or accept checkouts as truth:    &quot;</span>
                         + &quot;mvn ws:reconcile-branches-publish&quot;);
             }
 
-<span class="fc bfc" id="L163" title="All 2 branches covered.">            if (derivedByName.isEmpty()) {</span>
-<span class="fc" id="L164">                log.debug(&quot;yaml-deps-sync: workspace.yaml is up to date&quot;);</span>
-<span class="fc" id="L165">                return SyncResult.UNCHANGED;</span>
-            }
-
-            // ── Phase 2: acyclicity gate (#962) ────────────────────
-<span class="fc" id="L169">            List&lt;String&gt; cycle = DependsOnCycleGate.findCycle(prospective);</span>
-<span class="fc bfc" id="L170" title="All 2 branches covered.">            if (!cycle.isEmpty()) {</span>
-<span class="fc" id="L171">                log.error(DependsOnCycleGate.diagnostic(</span>
-<span class="fc" id="L172">                        workspaceRoot.toPath(), cycle, edgeSources));</span>
+<span class="fc bfc" id="L171" title="All 2 branches covered.">            if (derivedByName.isEmpty()) {</span>
+<span class="fc" id="L172">                log.debug(&quot;yaml-deps-sync: workspace.yaml is up to date&quot;);</span>
 <span class="fc" id="L173">                return SyncResult.UNCHANGED;</span>
             }
 
+            // ── Phase 2: acyclicity gate (#962) ────────────────────
+<span class="fc" id="L177">            List&lt;String&gt; cycle = DependsOnCycleGate.findCycle(prospective);</span>
+<span class="fc bfc" id="L178" title="All 2 branches covered.">            if (!cycle.isEmpty()) {</span>
+<span class="fc" id="L179">                log.error(DependsOnCycleGate.diagnostic(</span>
+<span class="fc" id="L180">                        workspaceRoot.toPath(), cycle, edgeSources));</span>
+<span class="fc" id="L181">                return SyncResult.UNCHANGED;</span>
+            }
+
             // ── Phase 3: apply the merges and write once ───────────
-<span class="fc" id="L177">            String updated = yaml;</span>
-<span class="fc" id="L178">            int totalAdded = 0;</span>
-<span class="fc" id="L179">            int totalRemoved = 0;</span>
-<span class="fc" id="L180">            List&lt;String&gt; changeLines = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L185">            String updated = yaml;</span>
             for (Map.Entry&lt;String, List&lt;WsAddMojo.DerivedDep&gt;&gt; entry
-<span class="fc bfc" id="L182" title="All 2 branches covered.">                    : derivedByName.entrySet()) {</span>
-<span class="fc" id="L183">                String name = entry.getKey();</span>
-<span class="fc" id="L184">                DependsOnMerge.Result merged = DependsOnMerge.merge(</span>
-<span class="fc" id="L185">                        updated, name, entry.getValue());</span>
-<span class="fc" id="L186">                updated = merged.yaml();</span>
+<span class="fc bfc" id="L187" title="All 2 branches covered.">                    : derivedByName.entrySet()) {</span>
+<span class="fc" id="L188">                updated = DependsOnMerge.merge(</span>
+<span class="fc" id="L189">                        updated, entry.getKey(), entry.getValue()).yaml();</span>
+<span class="fc" id="L190">            }</span>
+<span class="pc bpc" id="L191" title="1 of 2 branches missed.">            if (updated.equals(yaml)) {</span>
+<span class="nc" id="L192">                log.debug(&quot;yaml-deps-sync: workspace.yaml is up to date&quot;);</span>
+<span class="nc" id="L193">                return SyncResult.UNCHANGED;</span>
+            }
+<span class="fc" id="L195">            Files.writeString(manifestPath, updated, StandardCharsets.UTF_8);</span>
 
-<span class="fc" id="L188">                List&lt;String&gt; added = new ArrayList&lt;&gt;(merged.addedBuild());</span>
-<span class="fc" id="L189">                added.addAll(merged.addedBundle());</span>
-                // A build edge whose derivation moved to bundle is a
-                // supersede (#965), not a discard — report it apart from
-                // true removals so the #964 hand-edit warning stays honest.
-<span class="fc" id="L193">                List&lt;String&gt; superseded =</span>
-<span class="fc" id="L194">                        new ArrayList&lt;&gt;(merged.removedBuild());</span>
-<span class="fc" id="L195">                superseded.retainAll(merged.addedBundle());</span>
-<span class="fc" id="L196">                List&lt;String&gt; removed =</span>
-<span class="fc" id="L197">                        new ArrayList&lt;&gt;(merged.removedBuild());</span>
-<span class="fc" id="L198">                removed.removeAll(superseded);</span>
-<span class="fc" id="L199">                totalAdded += added.size();</span>
-<span class="fc" id="L200">                totalRemoved += removed.size();</span>
-<span class="fc" id="L201">                List&lt;String&gt; versioned = merged.versionPropertySet();</span>
-
-<span class="fc bfc" id="L203" title="All 4 branches covered.">                if (added.isEmpty() &amp;&amp; removed.isEmpty()</span>
-<span class="fc bfc" id="L204" title="All 2 branches covered.">                        &amp;&amp; versioned.isEmpty()) {</span>
-                    // Text-only change: managed-marker annotation.
-<span class="fc" id="L206">                    log.info(&quot;  workspace.yaml: &quot; + name</span>
-                            + &quot; depends-on annotated as managed&quot;);
-<span class="fc" id="L208">                    changeLines.add(name + &quot;: annotate managed block&quot;);</span>
-<span class="fc" id="L209">                    continue;</span>
-                }
-<span class="fc" id="L211">                String summary = name + &quot; depends-on (+&quot; + added.size()</span>
-<span class="fc" id="L212">                        + &quot;, -&quot; + removed.size() + &quot;)&quot;</span>
-<span class="fc bfc" id="L213" title="All 2 branches covered.">                        + (added.isEmpty() ? &quot;&quot; : &quot; added &quot; + added)</span>
-<span class="fc bfc" id="L214" title="All 2 branches covered.">                        + (removed.isEmpty() ? &quot;&quot; : &quot; removed &quot; + removed)</span>
-<span class="fc bfc" id="L215" title="All 2 branches covered.">                        + (superseded.isEmpty()</span>
-<span class="fc" id="L216">                                ? &quot;&quot; : &quot; build→bundle &quot; + superseded)</span>
-<span class="fc bfc" id="L217" title="All 2 branches covered.">                        + (versioned.isEmpty()</span>
-<span class="fc" id="L218">                                ? &quot;&quot; : &quot; version-property &quot; + versioned);</span>
-<span class="fc" id="L219">                changeLines.add(summary);</span>
-<span class="fc bfc" id="L220" title="All 2 branches covered.">                if (removed.isEmpty()) {</span>
-<span class="fc" id="L221">                    log.info(&quot;  workspace.yaml: &quot; + summary);</span>
+            // ── Phase 4: report what was written (#1387) ───────────
+            // Each line is read back from the two texts: what a
+            // member's own block recorded before against what it
+            // records now. A merge step's own account says what was
+            // asked of it, which is not what the file holds when the
+            // step landed in another member's block or a later step
+            // wrote over it.
+<span class="fc" id="L204">            int totalAdded = 0;</span>
+<span class="fc" id="L205">            int totalRemoved = 0;</span>
+<span class="fc" id="L206">            List&lt;String&gt; changeLines = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L207" title="All 2 branches covered.">            for (String name : manifest.subprojects().keySet()) {</span>
+<span class="fc" id="L208">                BlockChange change = BlockChange.between(name,</span>
+<span class="fc" id="L209">                        DependsOnMerge.recorded(yaml, name),</span>
+<span class="fc" id="L210">                        DependsOnMerge.recorded(updated, name));</span>
+<span class="fc bfc" id="L211" title="All 2 branches covered.">                if (change == null) continue;</span>
+<span class="fc" id="L212">                totalAdded += change.added();</span>
+<span class="fc" id="L213">                totalRemoved += change.removed();</span>
+<span class="fc" id="L214">                changeLines.add(change.summary());</span>
+<span class="fc bfc" id="L215" title="All 2 branches covered.">                if (change.removed() == 0) {</span>
+<span class="fc" id="L216">                    log.info(&quot;  workspace.yaml: &quot; + change.summary());</span>
                 } else {
                     // Removals may be discarding a hand edit — say so
                     // where the user can see it (#964).
-<span class="fc" id="L225">                    log.warn(&quot;  workspace.yaml: &quot; + summary</span>
+<span class="fc" id="L220">                    log.warn(&quot;  workspace.yaml: &quot; + change.summary()</span>
                             + &quot; — build edges are re-derived from POMs; &quot;
                             + &quot;a deliberately absent edge needs a non-build &quot;
                             + &quot;relationship (e.g. bundle) to survive&quot;);
                 }
-<span class="fc" id="L230">            }</span>
+<span class="fc" id="L225">            }</span>
+<span class="fc" id="L226">            log.info(&quot;  yaml-deps-sync: &quot; + totalAdded + &quot; edge(s) added, &quot;</span>
+                    + totalRemoved + &quot; edge(s) removed&quot;);
+<span class="fc" id="L228">            return new SyncResult(true, List.copyOf(changeLines));</span>
+<span class="nc" id="L229">        } catch (IOException | ManifestException e) {</span>
+<span class="nc" id="L230">            log.warn(&quot;yaml-deps-sync: cannot update workspace.yaml — &quot;</span>
+<span class="nc" id="L231">                    + e.getMessage());</span>
+<span class="nc" id="L232">            return SyncResult.UNCHANGED;</span>
+        }
+    }
 
-<span class="pc bpc" id="L232" title="1 of 2 branches missed.">            if (!updated.equals(yaml)) {</span>
-<span class="fc" id="L233">                Files.writeString(manifestPath, updated, StandardCharsets.UTF_8);</span>
-<span class="fc" id="L234">                log.info(&quot;  yaml-deps-sync: &quot; + totalAdded + &quot; edge(s) added, &quot;</span>
-                        + totalRemoved + &quot; edge(s) removed&quot;);
-<span class="fc" id="L236">                return new SyncResult(true, List.copyOf(changeLines));</span>
+    /**
+     * What a sync wrote to one member's {@code depends-on} block, as the
+     * difference between the block read from the manifest text before
+     * and after (IKE-Network/ike-issues#1387).
+     *
+     * @param summary the member's line for the log and for the
+     *                re-derivation commit message
+     * @param added   the number of edges the block gained, counting an
+     *                edge re-recorded under another relationship
+     * @param removed the number of edges the block lost outright
+     */
+<span class="fc" id="L247">    private record BlockChange(String summary, int added, int removed) {</span>
+
+        /**
+         * Compare one member's block before and after a sync.
+         *
+         * &lt;p&gt;An edge whose relationship moved — a {@code build} edge
+         * that derivation now reads as {@code bundle} (#965) — is a
+         * supersede, not a discard: it counts as added and is named
+         * apart from the removals, so the hand-edit warning on removals
+         * (#964) stays honest.
+         *
+         * @param name   the member
+         * @param before the block as the manifest recorded it
+         * @param after  the block as the manifest records it now
+         * @return the change, or null when the block is the same
+         */
+        static BlockChange between(String name,
+                                   DependsOnMerge.Recorded before,
+                                   DependsOnMerge.Recorded after) {
+<span class="fc bfc" id="L266" title="All 2 branches covered.">            if (before.equals(after)) return null;</span>
+
+<span class="fc" id="L268">            List&lt;String&gt; added = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L269">            List&lt;String&gt; versioned = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L270">            Map&lt;String, List&lt;String&gt;&gt; moved = new LinkedHashMap&lt;&gt;();</span>
+            for (Map.Entry&lt;String, DependsOnMerge.Edge&gt; entry
+<span class="fc bfc" id="L272" title="All 2 branches covered.">                    : after.edges().entrySet()) {</span>
+<span class="fc" id="L273">                String target = entry.getKey();</span>
+<span class="fc" id="L274">                DependsOnMerge.Edge now = entry.getValue();</span>
+<span class="fc" id="L275">                DependsOnMerge.Edge was = before.edges().get(target);</span>
+<span class="fc bfc" id="L276" title="All 2 branches covered.">                if (was == null) {</span>
+<span class="fc" id="L277">                    added.add(target);</span>
+<span class="fc" id="L278">                } else if (!was.relationship()</span>
+<span class="fc bfc" id="L279" title="All 2 branches covered.">                        .equalsIgnoreCase(now.relationship())) {</span>
+<span class="fc" id="L280">                    added.add(target);</span>
+<span class="fc" id="L281">                    moved.computeIfAbsent(</span>
+<span class="fc" id="L282">                            was.relationship() + &quot;→&quot; + now.relationship(),</span>
+<span class="fc" id="L283">                            transition -&gt; new ArrayList&lt;&gt;()).add(target);</span>
+<span class="fc bfc" id="L284" title="All 2 branches covered.">                } else if (now.versionProperty() != null</span>
+<span class="fc" id="L285">                        &amp;&amp; !now.versionProperty()</span>
+<span class="fc bfc" id="L286" title="All 2 branches covered.">                                .equals(was.versionProperty())) {</span>
+<span class="fc" id="L287">                    versioned.add(target);</span>
+                }
+<span class="fc" id="L289">            }</span>
+<span class="fc" id="L290">            List&lt;String&gt; removed = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L291" title="All 2 branches covered.">            for (String target : before.edges().keySet()) {</span>
+<span class="fc bfc" id="L292" title="All 2 branches covered.">                if (!after.edges().containsKey(target)) removed.add(target);</span>
+<span class="fc" id="L293">            }</span>
+
+<span class="pc bpc" id="L295" title="1 of 4 branches missed.">            boolean created = !before.present() &amp;&amp; after.present();</span>
+<span class="fc bfc" id="L296" title="All 6 branches covered.">            if (added.isEmpty() &amp;&amp; removed.isEmpty() &amp;&amp; versioned.isEmpty()) {</span>
+                // No edge changed: a block written for a member that
+                // has no edges, or the managed marker on an existing one.
+<span class="fc bfc" id="L299" title="All 2 branches covered.">                return new BlockChange(name + (created</span>
+<span class="fc" id="L300">                        ? &quot;: add managed block, no edges&quot;</span>
+<span class="fc" id="L301">                        : &quot;: annotate managed block&quot;), 0, 0);</span>
             }
-<span class="nc" id="L238">            log.debug(&quot;yaml-deps-sync: workspace.yaml is up to date&quot;);</span>
-<span class="nc" id="L239">            return SyncResult.UNCHANGED;</span>
-<span class="nc" id="L240">        } catch (IOException | ManifestException e) {</span>
-<span class="nc" id="L241">            log.warn(&quot;yaml-deps-sync: cannot update workspace.yaml — &quot;</span>
-<span class="nc" id="L242">                    + e.getMessage());</span>
-<span class="nc" id="L243">            return SyncResult.UNCHANGED;</span>
+<span class="fc" id="L303">            StringBuilder summary = new StringBuilder(name)</span>
+<span class="fc" id="L304">                    .append(&quot; depends-on (+&quot;).append(added.size())</span>
+<span class="fc" id="L305">                    .append(&quot;, -&quot;).append(removed.size()).append(')');</span>
+<span class="fc bfc" id="L306" title="All 2 branches covered.">            if (!added.isEmpty()) summary.append(&quot; added &quot;).append(added);</span>
+<span class="fc bfc" id="L307" title="All 2 branches covered.">            if (!removed.isEmpty()) {</span>
+<span class="fc" id="L308">                summary.append(&quot; removed &quot;).append(removed);</span>
+            }
+            for (Map.Entry&lt;String, List&lt;String&gt;&gt; transition
+<span class="fc bfc" id="L311" title="All 2 branches covered.">                    : moved.entrySet()) {</span>
+<span class="fc" id="L312">                summary.append(' ').append(transition.getKey())</span>
+<span class="fc" id="L313">                        .append(' ').append(transition.getValue());</span>
+<span class="fc" id="L314">            }</span>
+<span class="fc bfc" id="L315" title="All 2 branches covered.">            if (!versioned.isEmpty()) {</span>
+<span class="fc" id="L316">                summary.append(&quot; version-property &quot;).append(versioned);</span>
+            }
+<span class="fc bfc" id="L318" title="All 2 branches covered.">            if (created) summary.append(&quot; in a new block&quot;);</span>
+<span class="fc" id="L319">            return new BlockChange(summary.toString(),</span>
+<span class="fc" id="L320">                    added.size(), removed.size());</span>
         }
     }
 
@@ -253,11 +330,11 @@ final class YamlDepsSync {
      * @return the declared branch, or null when neither is set
      */
     private static String declaredBranch(Subproject sub, Manifest manifest) {
-<span class="pc bpc" id="L256" title="2 of 4 branches missed.">        if (sub.branch() != null &amp;&amp; !sub.branch().isBlank()) {</span>
-<span class="fc" id="L257">            return sub.branch();</span>
+<span class="pc bpc" id="L333" title="2 of 4 branches missed.">        if (sub.branch() != null &amp;&amp; !sub.branch().isBlank()) {</span>
+<span class="fc" id="L334">            return sub.branch();</span>
         }
-<span class="nc bnc" id="L259" title="All 2 branches missed.">        return manifest.defaults() == null</span>
-<span class="nc" id="L260">                ? null : manifest.defaults().branch();</span>
+<span class="nc bnc" id="L336" title="All 2 branches missed.">        return manifest.defaults() == null</span>
+<span class="nc" id="L337">                ? null : manifest.defaults().branch();</span>
     }
 
     /**
@@ -278,25 +355,25 @@ final class YamlDepsSync {
     private static String driftReason(Path subDir, String declaredBranch,
                                       String pinnedSha) {
         try {
-<span class="fc" id="L281">            String checkout = VcsOperations.currentBranch(subDir.toFile());</span>
-<span class="pc bpc" id="L282" title="1 of 4 branches missed.">            if (checkout == null || checkout.isBlank()) {</span>
-<span class="fc" id="L283">                String head = VcsOperations.headSha(subDir.toFile());</span>
-<span class="pc bpc" id="L284" title="1 of 4 branches missed.">                if (pinnedSha != null &amp;&amp; pinnedSha.startsWith(head)) {</span>
+<span class="fc" id="L358">            String checkout = VcsOperations.currentBranch(subDir.toFile());</span>
+<span class="pc bpc" id="L359" title="1 of 4 branches missed.">            if (checkout == null || checkout.isBlank()) {</span>
+<span class="fc" id="L360">                String head = VcsOperations.headSha(subDir.toFile());</span>
+<span class="pc bpc" id="L361" title="1 of 4 branches missed.">                if (pinnedSha != null &amp;&amp; pinnedSha.startsWith(head)) {</span>
                     // Parked exactly on the manifest pin — coherent.
-<span class="fc" id="L286">                    return null;</span>
+<span class="fc" id="L363">                    return null;</span>
                 }
-<span class="fc" id="L288">                return &quot;detached at &quot; + head</span>
-<span class="pc bpc" id="L289" title="1 of 2 branches missed.">                        + (declaredBranch == null ? &quot;&quot;</span>
-<span class="fc" id="L290">                                : &quot;, manifest declares &quot; + declaredBranch);</span>
+<span class="fc" id="L365">                return &quot;detached at &quot; + head</span>
+<span class="pc bpc" id="L366" title="1 of 2 branches missed.">                        + (declaredBranch == null ? &quot;&quot;</span>
+<span class="fc" id="L367">                                : &quot;, manifest declares &quot; + declaredBranch);</span>
             }
-<span class="pc bpc" id="L292" title="2 of 4 branches missed.">            if (declaredBranch != null &amp;&amp; !declaredBranch.isBlank()</span>
-<span class="fc bfc" id="L293" title="All 2 branches covered.">                    &amp;&amp; !declaredBranch.equals(checkout)) {</span>
-<span class="fc" id="L294">                return &quot;checkout on &quot; + checkout</span>
+<span class="pc bpc" id="L369" title="2 of 4 branches missed.">            if (declaredBranch != null &amp;&amp; !declaredBranch.isBlank()</span>
+<span class="fc bfc" id="L370" title="All 2 branches covered.">                    &amp;&amp; !declaredBranch.equals(checkout)) {</span>
+<span class="fc" id="L371">                return &quot;checkout on &quot; + checkout</span>
                         + &quot;, manifest declares &quot; + declaredBranch;
             }
-<span class="fc" id="L297">            return null;</span>
-<span class="nc" id="L298">        } catch (MojoException e) {</span>
-<span class="nc" id="L299">            return &quot;git state unreadable (&quot; + e.getMessage() + &quot;)&quot;;</span>
+<span class="fc" id="L374">            return null;</span>
+<span class="nc" id="L375">        } catch (MojoException e) {</span>
+<span class="nc" id="L376">            return &quot;git state unreadable (&quot; + e.getMessage() + &quot;)&quot;;</span>
         }
     }
 
@@ -308,12 +385,12 @@ final class YamlDepsSync {
      */
     private static Set&lt;String&gt; orderingTargets(
             Map&lt;String, String&gt; finalRelationships, Set&lt;String&gt; known) {
-<span class="fc" id="L311">        Set&lt;String&gt; targets = new LinkedHashSet&lt;&gt;();</span>
-<span class="fc bfc" id="L312" title="All 2 branches covered.">        for (Map.Entry&lt;String, String&gt; e : finalRelationships.entrySet()) {</span>
-<span class="fc bfc" id="L313" title="All 2 branches covered.">            if (&quot;bundle&quot;.equalsIgnoreCase(e.getValue())) continue;</span>
-<span class="pc bpc" id="L314" title="1 of 2 branches missed.">            if (known.contains(e.getKey())) targets.add(e.getKey());</span>
-<span class="fc" id="L315">        }</span>
-<span class="fc" id="L316">        return targets;</span>
+<span class="fc" id="L388">        Set&lt;String&gt; targets = new LinkedHashSet&lt;&gt;();</span>
+<span class="fc bfc" id="L389" title="All 2 branches covered.">        for (Map.Entry&lt;String, String&gt; e : finalRelationships.entrySet()) {</span>
+<span class="fc bfc" id="L390" title="All 2 branches covered.">            if (&quot;bundle&quot;.equalsIgnoreCase(e.getValue())) continue;</span>
+<span class="pc bpc" id="L391" title="1 of 2 branches missed.">            if (known.contains(e.getKey())) targets.add(e.getKey());</span>
+<span class="fc" id="L392">        }</span>
+<span class="fc" id="L393">        return targets;</span>
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.15.202606040825</span></div></body></html>

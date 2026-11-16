@@ -50,6 +50,16 @@ import java.util.regex.Pattern;
  * {@code depends-on:} in the style of the {@code ws:scaffold-init}
  * header block, making the ownership boundary visible in the file
  * itself. The marker is regenerated idempotently.
+ *
+ * &lt;p&gt;&lt;b&gt;A member's block is looked for only in that member's own
+ * section&lt;/b&gt; ({@link SubprojectSection}, IKE-Network/ike-issues#1387).
+ * The search once ran from the member's name to the next
+ * {@code depends-on:} anywhere later in the file, so a member with no
+ * block of its own matched the block of a later member, and the edges
+ * of every such member were merged, one over the other, into that one
+ * block. A member with no {@code depends-on:} key now gains a block at
+ * the end of its section, so a manifest written before blocks were
+ * recorded gains its derived edges.
  */
 final class DependsOnMerge {
 
@@ -63,23 +73,30 @@ final class DependsOnMerge {
 
     /**
      * Outcome of a merge: the updated YAML (identical to the input when
-     * nothing changed), the derived targets added per relationship, the
-     * build targets removed (a target in both {@code removedBuild} and
-     * {@code addedBundle} was superseded, not dropped), the surviving
-     * targets (any relationship) whose {@code version-property} was set, and each
-     * final entry's relationship (for ordering-graph construction by
-     * the acyclicity gate).
+     * nothing changed) and each final entry's relationship (for
+     * ordering-graph construction by the acyclicity gate).
+     *
+     * &lt;p&gt;What the merge added and removed is not part of the outcome.
+     * A caller that reports a change reads the member's block back from
+     * the text before and after ({@link #recorded}), so that the report
+     * is of what the file holds (IKE-Network/ike-issues#1387).
+     *
+     * @param yaml               the updated workspace.yaml content
+     * @param finalRelationships each final entry's relationship by
+     *                           target: surviving entries first, then
+     *                           added build edges, then added bundle
+     *                           edges
      */
-<span class="fc" id="L73">    record Result(</span>
-            String yaml,
-            List&lt;String&gt; addedBuild,
-            List&lt;String&gt; addedBundle,
-            List&lt;String&gt; removedBuild,
-            List&lt;String&gt; versionPropertySet,
-            Map&lt;String, String&gt; finalRelationships) {
+<span class="fc" id="L90">    record Result(String yaml, Map&lt;String, String&gt; finalRelationships) {</span>
 
+        /**
+         * Whether the merge changed the text.
+         *
+         * @param original the content the merge was given
+         * @return true when {@link #yaml} differs from {@code original}
+         */
         boolean changed(String original) {
-<span class="fc bfc" id="L82" title="All 2 branches covered.">            return !yaml.equals(original);</span>
+<span class="fc bfc" id="L99" title="All 2 branches covered.">            return !yaml.equals(original);</span>
         }
     }
 
@@ -88,25 +105,176 @@ final class DependsOnMerge {
      * name, relationship, and verbatim text chunk (attached comment
      * lines included).
      */
-<span class="fc" id="L91">    private record Entry(String target, String relationship, String text) {}</span>
+<span class="fc" id="L108">    private record Entry(String target, String relationship, String text) {}</span>
 
     /**
-     * Matches a subproject section up to and including its
-     * {@code depends-on} block — an optional managed marker line, the
-     * {@code depends-on:} line, and every 6-space-indented continuation
-     * (entries, their fields, and attached comments).
+     * One edge as a block records it.
+     *
+     * @param relationship    the entry's relationship; {@code build}
+     *                        when the entry names none
+     * @param versionProperty the entry's {@code version-property}, or
+     *                        null when it has none
      */
-    private static Pattern blockPattern(String subprojectName) {
-<span class="fc" id="L100">        return Pattern.compile(</span>
-<span class="fc" id="L101">                &quot;(&quot; + Pattern.quote(subprojectName) + &quot;:[\\s\\S]*?)&quot;</span>
-                        + &quot;((?:    # ── managed: depends-on[^\n]*\n)?&quot;
-                        + &quot;    depends-on:.*(?:\n      .*)*\n)&quot;,
-                Pattern.MULTILINE);
+<span class="fc" id="L118">    record Edge(String relationship, String versionProperty) {}</span>
+
+    /**
+     * What a member's {@code depends-on} block records, read back from
+     * manifest text.
+     *
+     * @param present whether the member has a block
+     * @param text    the block verbatim — marker, {@code depends-on:}
+     *                line, entries and comments; empty when there is
+     *                no block
+     * @param edges   the recorded edges by target, in block order
+     */
+<span class="fc" id="L130">    record Recorded(boolean present, String text, Map&lt;String, Edge&gt; edges) {}</span>
+
+    /** The first line of a managed marker, whatever its wording. */
+    private static final String MARKER_PREFIX =
+            &quot;    # ── managed: depends-on&quot;;
+
+    /** The {@code depends-on:} key at member-field indentation. */
+    private static final String KEY = &quot;    depends-on:&quot;;
+
+    /**
+     * A {@code depends-on} block at member-field indentation — an
+     * optional managed marker line, the {@code depends-on:} line, and
+     * every 6-space-indented continuation (entries, their fields, and
+     * attached comments). Anchored at the start of a line, so the key's
+     * text inside a deeper-indented line, such as a folded description,
+     * is not the key.
+     */
+<span class="fc" id="L147">    private static final Pattern BLOCK = Pattern.compile(</span>
+<span class="fc" id="L148">            &quot;^(?:&quot; + Pattern.quote(MARKER_PREFIX) + &quot;[^\n]*\n)?&quot;</span>
+<span class="fc" id="L149">                    + Pattern.quote(KEY) + &quot;.*(?:\n      .*)*(?:\n|\\z)&quot;,</span>
+            Pattern.MULTILINE);
+
+    /**
+     * Where a member's {@code depends-on} block is in the manifest
+     * text or, for a member that has none, where it belongs.
+     *
+     * @param start offset of the block's first character, or the
+     *              insertion point
+     * @param end   offset just past the block; equal to {@code start}
+     *              when there is no block
+     * @param block the block verbatim; empty when there is none
+     */
+<span class="fc" id="L162">    private record Located(int start, int end, String block) {</span>
+
+        /** Whether the member has a block, as opposed to a place for one. */
+        boolean present() {
+<span class="fc bfc" id="L166" title="All 2 branches covered.">            return !block.isEmpty();</span>
+        }
+    }
+
+    /**
+     * Locate a member's block within the member's own section
+     * (IKE-Network/ike-issues#1387).
+     *
+     * @param yaml           the full workspace.yaml content
+     * @param subprojectName the member whose block to locate
+     * @return the block, or the place for one at the end of the
+     *         member's section when it has no {@code depends-on:} key;
+     *         null when the member's section cannot be found, or when
+     *         it has a {@code depends-on:} key this class cannot read
+     *         (a manifest with carriage-return line endings) — such a
+     *         member is left alone rather than given a second key
+     */
+    private static Located locate(String yaml, String subprojectName) {
+<span class="fc" id="L184">        SubprojectSection section =</span>
+<span class="fc" id="L185">                SubprojectSection.find(yaml, subprojectName).orElse(null);</span>
+<span class="fc bfc" id="L186" title="All 2 branches covered.">        if (section == null) return null;</span>
+
+<span class="fc" id="L188">        Matcher m = BLOCK.matcher(yaml)</span>
+<span class="fc" id="L189">                .region(section.bodyStart(), section.end());</span>
+<span class="fc bfc" id="L190" title="All 2 branches covered.">        if (m.find()) {</span>
+<span class="fc" id="L191">            return new Located(m.start(), m.end(), m.group());</span>
+        }
+<span class="fc bfc" id="L193" title="All 2 branches covered.">        for (String line : yaml</span>
+<span class="fc" id="L194">                .substring(section.bodyStart(), section.end())</span>
+<span class="fc" id="L195">                .split(&quot;\n&quot;)) {</span>
+<span class="fc bfc" id="L196" title="All 2 branches covered.">            if (line.startsWith(KEY)) return null;</span>
+        }
+<span class="fc" id="L198">        return new Located(section.contentEnd(), section.contentEnd(), &quot;&quot;);</span>
+    }
+
+    /**
+     * {@code yaml} with the located block replaced by {@code rendered},
+     * or with {@code rendered} inserted where a block belongs. A text
+     * whose last line has no line ending gets one before an insertion.
+     */
+    private static String splice(String yaml, Located at,
+                                 CharSequence rendered) {
+<span class="fc" id="L208">        String before = yaml.substring(0, at.start());</span>
+        String separator =
+<span class="pc bpc" id="L210" title="1 of 4 branches missed.">                before.isEmpty() || before.endsWith(&quot;\n&quot;) ? &quot;&quot; : &quot;\n&quot;;</span>
+<span class="fc" id="L211">        return before + separator + rendered + yaml.substring(at.end());</span>
+    }
+
+    /**
+     * Read back what a member's block records.
+     *
+     * &lt;p&gt;This is how a re-derivation reports what it wrote: the same
+     * member read from the text before and the text after
+     * (IKE-Network/ike-issues#1387).
+     *
+     * @param yaml           the full workspace.yaml content
+     * @param subprojectName the member whose block to read
+     * @return the recorded block; not present when the member has no
+     *         block, or its section cannot be found
+     */
+    static Recorded recorded(String yaml, String subprojectName) {
+<span class="fc" id="L227">        Located located = locate(yaml, subprojectName);</span>
+<span class="fc bfc" id="L228" title="All 4 branches covered.">        if (located == null || !located.present()) {</span>
+<span class="fc" id="L229">            return new Recorded(false, &quot;&quot;, Map.of());</span>
+        }
+<span class="fc" id="L231">        Map&lt;String, Edge&gt; edges = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc bfc" id="L232" title="All 2 branches covered.">        for (Entry entry : parseEntries(located.block()).entries()) {</span>
+<span class="fc" id="L233">            edges.put(entry.target(), new Edge(</span>
+<span class="fc bfc" id="L234" title="All 2 branches covered.">                    entry.relationship() == null</span>
+<span class="fc" id="L235">                            ? &quot;build&quot; : entry.relationship(),</span>
+<span class="fc" id="L236">                    versionPropertyOf(entry)));</span>
+<span class="fc" id="L237">        }</span>
+<span class="fc" id="L238">        return new Recorded(true, located.block(), edges);</span>
+    }
+
+    /**
+     * Record one more build edge in a member's block, leaving every
+     * entry already there as written. A member with no block gains
+     * one. Used by {@code ws:add} to record that an existing member
+     * builds against the member being added.
+     *
+     * @param yaml            the full workspace.yaml content
+     * @param subprojectName  the member that depends on {@code target}
+     * @param target          the member depended on
+     * @param versionProperty the property that versions the dependency,
+     *                        or null when there is none
+     * @return the updated content; {@code yaml} itself when the block
+     *         already has an entry for {@code target}, or the member's
+     *         block cannot be located
+     */
+    static String addBuildEdge(String yaml, String subprojectName,
+                               String target, String versionProperty) {
+<span class="fc" id="L258">        Located located = locate(yaml, subprojectName);</span>
+<span class="fc bfc" id="L259" title="All 2 branches covered.">        if (located == null) return yaml;</span>
+
+<span class="fc" id="L261">        ParsedBlock parsed = parseEntries(located.block());</span>
+<span class="fc" id="L262">        StringBuilder rendered = new StringBuilder();</span>
+<span class="fc" id="L263">        rendered.append(MARKER).append('\n');</span>
+<span class="fc" id="L264">        rendered.append(KEY).append('\n');</span>
+<span class="fc bfc" id="L265" title="All 2 branches covered.">        for (Entry entry : parsed.entries()) {</span>
+<span class="fc bfc" id="L266" title="All 2 branches covered.">            if (target.equals(entry.target())) return yaml;</span>
+<span class="fc" id="L267">            rendered.append(entry.text());</span>
+<span class="fc" id="L268">        }</span>
+<span class="fc" id="L269">        appendEntry(rendered, target, &quot;build&quot;, versionProperty);</span>
+<span class="fc" id="L270">        rendered.append(parsed.trailingComments());</span>
+<span class="fc" id="L271">        return splice(yaml, located, rendered);</span>
     }
 
     /**
      * Merge {@code derived} into {@code subprojectName}'s block within
-     * {@code yaml}.
+     * {@code yaml}. A member with no {@code depends-on:} key gains a
+     * block at the end of its section.
      *
      * @param yaml           the full workspace.yaml content
      * @param subprojectName the subproject whose block to merge
@@ -116,122 +284,139 @@ final class DependsOnMerge {
      */
     static Result merge(String yaml, String subprojectName,
                         List&lt;WsAddMojo.DerivedDep&gt; derived) {
-<span class="fc" id="L119">        Matcher m = blockPattern(subprojectName).matcher(yaml);</span>
-<span class="fc bfc" id="L120" title="All 2 branches covered.">        if (!m.find()) {</span>
-<span class="fc" id="L121">            return new Result(yaml, List.of(), List.of(), List.of(),</span>
-<span class="fc" id="L122">                    List.of(), Map.of());</span>
+<span class="fc" id="L287">        Located located = locate(yaml, subprojectName);</span>
+<span class="fc bfc" id="L288" title="All 2 branches covered.">        if (located == null) {</span>
+<span class="fc" id="L289">            return new Result(yaml, Map.of());</span>
         }
-<span class="fc" id="L124">        String block = m.group(2);</span>
 
-<span class="fc" id="L126">        ParsedBlock parsed = parseEntries(block);</span>
-<span class="fc" id="L127">        List&lt;Entry&gt; current = parsed.entries();</span>
-<span class="fc" id="L128">        Set&lt;String&gt; derivedTargets = new LinkedHashSet&lt;&gt;();</span>
-<span class="fc" id="L129">        Map&lt;String, String&gt; derivedVersionProperty = new LinkedHashMap&lt;&gt;();</span>
-<span class="fc" id="L130">        Map&lt;String, String&gt; derivedRelationship = new LinkedHashMap&lt;&gt;();</span>
-<span class="fc bfc" id="L131" title="All 2 branches covered.">        for (WsAddMojo.DerivedDep dep : derived) {</span>
-<span class="fc" id="L132">            derivedTargets.add(dep.subproject());</span>
-<span class="fc" id="L133">            derivedRelationship.put(dep.subproject(), dep.relationship());</span>
-<span class="fc bfc" id="L134" title="All 2 branches covered.">            if (dep.versionProperty() != null) {</span>
-<span class="fc" id="L135">                derivedVersionProperty.put(</span>
-<span class="fc" id="L136">                        dep.subproject(), dep.versionProperty());</span>
+<span class="fc" id="L292">        ParsedBlock parsed = parseEntries(located.block());</span>
+<span class="fc" id="L293">        List&lt;Entry&gt; current = parsed.entries();</span>
+<span class="fc" id="L294">        Set&lt;String&gt; derivedTargets = new LinkedHashSet&lt;&gt;();</span>
+<span class="fc" id="L295">        Map&lt;String, String&gt; derivedVersionProperty = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc" id="L296">        Map&lt;String, String&gt; derivedRelationship = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc bfc" id="L297" title="All 2 branches covered.">        for (WsAddMojo.DerivedDep dep : derived) {</span>
+<span class="fc" id="L298">            derivedTargets.add(dep.subproject());</span>
+<span class="fc" id="L299">            derivedRelationship.put(dep.subproject(), dep.relationship());</span>
+<span class="fc bfc" id="L300" title="All 2 branches covered.">            if (dep.versionProperty() != null) {</span>
+<span class="fc" id="L301">                derivedVersionProperty.put(</span>
+<span class="fc" id="L302">                        dep.subproject(), dep.versionProperty());</span>
             }
-<span class="fc" id="L138">        }</span>
+<span class="fc" id="L304">        }</span>
 
         // Survivors: every non-build entry, plus build entries still
         // derived as build. A preserved entry of any relationship covers
         // its target — no derived duplicate is emitted for it. A build
         // entry whose derivation moved to bundle is superseded: dropped
         // here and re-added below with the derived relationship (#965).
-<span class="fc" id="L145">        List&lt;Entry&gt; kept = new ArrayList&lt;&gt;();</span>
-<span class="fc" id="L146">        List&lt;String&gt; removedBuild = new ArrayList&lt;&gt;();</span>
-<span class="fc" id="L147">        List&lt;String&gt; versionPropertySet = new ArrayList&lt;&gt;();</span>
-<span class="fc" id="L148">        Set&lt;String&gt; covered = new LinkedHashSet&lt;&gt;();</span>
-<span class="fc bfc" id="L149" title="All 2 branches covered.">        for (Entry entry : current) {</span>
-<span class="fc" id="L150">            boolean build = isBuild(entry.relationship());</span>
-<span class="fc" id="L151">            boolean stillBuild = &quot;build&quot;.equalsIgnoreCase(</span>
-<span class="fc" id="L152">                    derivedRelationship.get(entry.target()));</span>
-<span class="fc bfc" id="L153" title="All 4 branches covered.">            if (!build || stillBuild) {</span>
+<span class="fc" id="L311">        List&lt;Entry&gt; kept = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L312">        Set&lt;String&gt; covered = new LinkedHashSet&lt;&gt;();</span>
+<span class="fc bfc" id="L313" title="All 2 branches covered.">        for (Entry entry : current) {</span>
+<span class="fc" id="L314">            boolean build = isBuild(entry.relationship());</span>
+<span class="fc" id="L315">            boolean stillBuild = &quot;build&quot;.equalsIgnoreCase(</span>
+<span class="fc" id="L316">                    derivedRelationship.get(entry.target()));</span>
+<span class="fc bfc" id="L317" title="All 4 branches covered.">            if (!build || stillBuild) {</span>
                 // The property is read from the POM like the edge
                 // itself: a surviving entry of any relationship takes
                 // the one derivation reads, or a release cannot
                 // retarget the edge — a staged bundle pin included
                 // (IKE-Network/ike-issues#1352). The relationship of a
                 // non-build entry stays as declared.
-<span class="fc" id="L160">                Entry aligned = withVersionProperty(entry,</span>
-<span class="fc" id="L161">                        derivedVersionProperty.get(entry.target()));</span>
-<span class="fc bfc" id="L162" title="All 2 branches covered.">                if (aligned != entry) {</span>
-<span class="fc" id="L163">                    versionPropertySet.add(entry.target());</span>
-<span class="fc" id="L164">                    entry = aligned;</span>
-                }
-<span class="fc" id="L166">                kept.add(entry);</span>
-<span class="fc" id="L167">                covered.add(entry.target());</span>
-<span class="fc" id="L168">            } else {</span>
-<span class="fc" id="L169">                removedBuild.add(entry.target());</span>
+<span class="fc" id="L324">                kept.add(withVersionProperty(entry,</span>
+<span class="fc" id="L325">                        derivedVersionProperty.get(entry.target())));</span>
+<span class="fc" id="L326">                covered.add(entry.target());</span>
             }
-<span class="fc" id="L171">        }</span>
+<span class="fc" id="L328">        }</span>
 
-<span class="fc" id="L173">        List&lt;String&gt; addedBuild = new ArrayList&lt;&gt;();</span>
-<span class="fc" id="L174">        List&lt;String&gt; addedBundle = new ArrayList&lt;&gt;();</span>
-<span class="fc" id="L175">        List&lt;String&gt; toAdd = new ArrayList&lt;&gt;();</span>
-<span class="fc bfc" id="L176" title="All 2 branches covered.">        for (String target : derivedTargets) {</span>
-<span class="fc bfc" id="L177" title="All 2 branches covered.">            if (!covered.contains(target)) toAdd.add(target);</span>
-<span class="fc" id="L178">        }</span>
+<span class="fc" id="L330">        List&lt;String&gt; addedBuild = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L331">        List&lt;String&gt; addedBundle = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L332">        List&lt;String&gt; toAdd = new ArrayList&lt;&gt;();</span>
+<span class="fc bfc" id="L333" title="All 2 branches covered.">        for (String target : derivedTargets) {</span>
+<span class="fc bfc" id="L334" title="All 2 branches covered.">            if (!covered.contains(target)) toAdd.add(target);</span>
+<span class="fc" id="L335">        }</span>
 
-<span class="fc" id="L180">        StringBuilder rendered = new StringBuilder();</span>
-<span class="fc" id="L181">        rendered.append(MARKER).append('\n');</span>
-<span class="fc bfc" id="L182" title="All 4 branches covered.">        if (kept.isEmpty() &amp;&amp; toAdd.isEmpty()) {</span>
-<span class="fc" id="L183">            rendered.append(&quot;    depends-on: []\n&quot;);</span>
+<span class="fc" id="L337">        StringBuilder rendered = new StringBuilder();</span>
+<span class="fc" id="L338">        rendered.append(MARKER).append('\n');</span>
+<span class="fc bfc" id="L339" title="All 4 branches covered.">        if (kept.isEmpty() &amp;&amp; toAdd.isEmpty()) {</span>
+<span class="fc" id="L340">            rendered.append(KEY).append(&quot; []\n&quot;);</span>
         } else {
-<span class="fc" id="L185">            rendered.append(&quot;    depends-on:\n&quot;);</span>
-<span class="fc bfc" id="L186" title="All 2 branches covered.">            for (Entry entry : kept) {</span>
-<span class="fc" id="L187">                rendered.append(entry.text());</span>
-<span class="fc" id="L188">            }</span>
-<span class="fc bfc" id="L189" title="All 2 branches covered.">            for (String target : toAdd) {</span>
-<span class="fc" id="L190">                String relationship = derivedRelationship</span>
-<span class="fc" id="L191">                        .getOrDefault(target, &quot;build&quot;);</span>
-<span class="fc bfc" id="L192" title="All 2 branches covered.">                if (&quot;bundle&quot;.equalsIgnoreCase(relationship)) {</span>
-<span class="fc" id="L193">                    addedBundle.add(target);</span>
+<span class="fc" id="L342">            rendered.append(KEY).append('\n');</span>
+<span class="fc bfc" id="L343" title="All 2 branches covered.">            for (Entry entry : kept) {</span>
+<span class="fc" id="L344">                rendered.append(entry.text());</span>
+<span class="fc" id="L345">            }</span>
+<span class="fc bfc" id="L346" title="All 2 branches covered.">            for (String target : toAdd) {</span>
+<span class="fc" id="L347">                String relationship = derivedRelationship</span>
+<span class="fc" id="L348">                        .getOrDefault(target, &quot;build&quot;);</span>
+<span class="fc bfc" id="L349" title="All 2 branches covered.">                if (&quot;bundle&quot;.equalsIgnoreCase(relationship)) {</span>
+<span class="fc" id="L350">                    addedBundle.add(target);</span>
                 } else {
-<span class="fc" id="L195">                    addedBuild.add(target);</span>
+<span class="fc" id="L352">                    addedBuild.add(target);</span>
                 }
-<span class="fc" id="L197">                rendered.append(&quot;      - subproject: &quot;).append(target)</span>
-<span class="fc" id="L198">                        .append('\n');</span>
-<span class="fc" id="L199">                rendered.append(&quot;        relationship: &quot;)</span>
-<span class="fc" id="L200">                        .append(relationship).append('\n');</span>
-<span class="fc" id="L201">                String property = derivedVersionProperty.get(target);</span>
-<span class="fc bfc" id="L202" title="All 2 branches covered.">                if (property != null) {</span>
-<span class="fc" id="L203">                    rendered.append(&quot;        version-property: &quot;)</span>
-<span class="fc" id="L204">                            .append(property).append('\n');</span>
-                }
-<span class="fc" id="L206">            }</span>
+<span class="fc" id="L354">                appendEntry(rendered, target, relationship,</span>
+<span class="fc" id="L355">                        derivedVersionProperty.get(target));</span>
+<span class="fc" id="L356">            }</span>
         }
         // Comments trailing the last entry (or standing in for a
         // deliberately absent edge) survive the rewrite — that text is
         // exactly what the old replace-wholesale behavior destroyed.
-<span class="fc" id="L211">        rendered.append(parsed.trailingComments());</span>
+<span class="fc" id="L361">        rendered.append(parsed.trailingComments());</span>
 
-<span class="fc" id="L213">        Map&lt;String, String&gt; finalRelationships = new LinkedHashMap&lt;&gt;();</span>
-<span class="fc bfc" id="L214" title="All 2 branches covered.">        for (Entry entry : kept) {</span>
-<span class="fc" id="L215">            finalRelationships.put(entry.target(),</span>
-<span class="pc bpc" id="L216" title="1 of 2 branches missed.">                    entry.relationship() == null</span>
-<span class="pc" id="L217">                            ? &quot;build&quot; : entry.relationship());</span>
-<span class="fc" id="L218">        }</span>
-<span class="fc bfc" id="L219" title="All 2 branches covered.">        for (String target : addedBuild) {</span>
-<span class="fc" id="L220">            finalRelationships.put(target, &quot;build&quot;);</span>
-<span class="fc" id="L221">        }</span>
-<span class="fc bfc" id="L222" title="All 2 branches covered.">        for (String target : addedBundle) {</span>
-<span class="fc" id="L223">            finalRelationships.put(target, &quot;bundle&quot;);</span>
-<span class="fc" id="L224">        }</span>
+<span class="fc" id="L363">        Map&lt;String, String&gt; finalRelationships = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc bfc" id="L364" title="All 2 branches covered.">        for (Entry entry : kept) {</span>
+<span class="fc" id="L365">            finalRelationships.put(entry.target(),</span>
+<span class="pc bpc" id="L366" title="1 of 2 branches missed.">                    entry.relationship() == null</span>
+<span class="pc" id="L367">                            ? &quot;build&quot; : entry.relationship());</span>
+<span class="fc" id="L368">        }</span>
+<span class="fc bfc" id="L369" title="All 2 branches covered.">        for (String target : addedBuild) {</span>
+<span class="fc" id="L370">            finalRelationships.put(target, &quot;build&quot;);</span>
+<span class="fc" id="L371">        }</span>
+<span class="fc bfc" id="L372" title="All 2 branches covered.">        for (String target : addedBundle) {</span>
+<span class="fc" id="L373">            finalRelationships.put(target, &quot;bundle&quot;);</span>
+<span class="fc" id="L374">        }</span>
 
-<span class="fc" id="L226">        String updated = yaml.substring(0, m.start(2))</span>
-                + rendered
-<span class="fc" id="L228">                + yaml.substring(m.end(2));</span>
-<span class="fc" id="L229">        return new Result(updated, addedBuild, addedBundle, removedBuild,</span>
-                versionPropertySet, finalRelationships);
+<span class="fc" id="L376">        return new Result(splice(yaml, located, rendered),</span>
+                finalRelationships);
     }
 
     private static boolean isBuild(String relationship) {
-<span class="pc bpc" id="L234" title="1 of 4 branches missed.">        return relationship == null || &quot;build&quot;.equalsIgnoreCase(relationship);</span>
+<span class="pc bpc" id="L381" title="1 of 4 branches missed.">        return relationship == null || &quot;build&quot;.equalsIgnoreCase(relationship);</span>
+    }
+
+    /**
+     * Append a freshly written entry to a block being rendered.
+     *
+     * @param rendered        the block text so far
+     * @param target          the member depended on
+     * @param relationship    the entry's relationship
+     * @param versionProperty the entry's {@code version-property}, or
+     *                        null to write none
+     */
+    private static void appendEntry(StringBuilder rendered, String target,
+                                    String relationship,
+                                    String versionProperty) {
+<span class="fc" id="L396">        rendered.append(&quot;      - subproject: &quot;).append(target).append('\n');</span>
+<span class="fc" id="L397">        rendered.append(&quot;        relationship: &quot;).append(relationship)</span>
+<span class="fc" id="L398">                .append('\n');</span>
+<span class="fc bfc" id="L399" title="All 2 branches covered.">        if (versionProperty != null) {</span>
+<span class="fc" id="L400">            rendered.append(&quot;        version-property: &quot;)</span>
+<span class="fc" id="L401">                    .append(versionProperty).append('\n');</span>
+        }
+<span class="fc" id="L403">    }</span>
+
+    /**
+     * The {@code version-property} an entry records.
+     *
+     * @param entry the entry to read
+     * @return the property, or null when the entry has none
+     */
+    private static String versionPropertyOf(Entry entry) {
+<span class="fc bfc" id="L412" title="All 2 branches covered.">        for (String line : entry.text().split(&quot;\n&quot;)) {</span>
+<span class="fc" id="L413">            String stripped = line.stripLeading();</span>
+<span class="fc bfc" id="L414" title="All 2 branches covered.">            if (stripped.startsWith(&quot;version-property:&quot;)) {</span>
+<span class="fc" id="L415">                return stripped</span>
+<span class="fc" id="L416">                        .substring(&quot;version-property:&quot;.length()).trim();</span>
+            }
+        }
+<span class="fc" id="L419">        return null;</span>
     }
 
     /**
@@ -246,43 +431,43 @@ final class DependsOnMerge {
      *         already recorded, otherwise the rewritten entry
      */
     private static Entry withVersionProperty(Entry entry, String property) {
-<span class="fc bfc" id="L249" title="All 2 branches covered.">        if (property == null) return entry;</span>
-<span class="fc" id="L250">        String[] lines = entry.text().split(&quot;\n&quot;, -1);</span>
-<span class="fc" id="L251">        int fieldAt = -1;</span>
-<span class="fc" id="L252">        int insertAfter = -1;</span>
-<span class="fc" id="L253">        String fieldIndent = null;</span>
-<span class="fc bfc" id="L254" title="All 2 branches covered.">        for (int i = 0; i &lt; lines.length; i++) {</span>
-<span class="fc" id="L255">            String stripped = lines[i].stripLeading();</span>
-<span class="fc" id="L256">            String indent = lines[i].substring(</span>
-<span class="fc" id="L257">                    0, lines[i].length() - stripped.length());</span>
-<span class="fc bfc" id="L258" title="All 2 branches covered.">            if (stripped.startsWith(&quot;version-property:&quot;)) {</span>
-<span class="fc" id="L259">                fieldAt = i;</span>
-<span class="fc" id="L260">                fieldIndent = indent;</span>
-<span class="fc bfc" id="L261" title="All 2 branches covered.">            } else if (stripped.startsWith(&quot;relationship:&quot;)) {</span>
-<span class="fc" id="L262">                insertAfter = i;</span>
-<span class="fc" id="L263">                fieldIndent = indent;</span>
-<span class="pc bpc" id="L264" title="1 of 4 branches missed.">            } else if (stripped.startsWith(&quot;- subproject:&quot;)</span>
+<span class="fc bfc" id="L434" title="All 2 branches covered.">        if (property == null) return entry;</span>
+<span class="fc" id="L435">        String[] lines = entry.text().split(&quot;\n&quot;, -1);</span>
+<span class="fc" id="L436">        int fieldAt = -1;</span>
+<span class="fc" id="L437">        int insertAfter = -1;</span>
+<span class="fc" id="L438">        String fieldIndent = null;</span>
+<span class="fc bfc" id="L439" title="All 2 branches covered.">        for (int i = 0; i &lt; lines.length; i++) {</span>
+<span class="fc" id="L440">            String stripped = lines[i].stripLeading();</span>
+<span class="fc" id="L441">            String indent = lines[i].substring(</span>
+<span class="fc" id="L442">                    0, lines[i].length() - stripped.length());</span>
+<span class="fc bfc" id="L443" title="All 2 branches covered.">            if (stripped.startsWith(&quot;version-property:&quot;)) {</span>
+<span class="fc" id="L444">                fieldAt = i;</span>
+<span class="fc" id="L445">                fieldIndent = indent;</span>
+<span class="fc bfc" id="L446" title="All 2 branches covered.">            } else if (stripped.startsWith(&quot;relationship:&quot;)) {</span>
+<span class="fc" id="L447">                insertAfter = i;</span>
+<span class="fc" id="L448">                fieldIndent = indent;</span>
+<span class="pc bpc" id="L449" title="1 of 4 branches missed.">            } else if (stripped.startsWith(&quot;- subproject:&quot;)</span>
                     &amp;&amp; insertAfter &lt; 0) {
-<span class="fc" id="L266">                insertAfter = i;</span>
-<span class="pc bpc" id="L267" title="1 of 2 branches missed.">                if (fieldIndent == null) fieldIndent = indent + &quot;  &quot;;</span>
+<span class="fc" id="L451">                insertAfter = i;</span>
+<span class="pc bpc" id="L452" title="1 of 2 branches missed.">                if (fieldIndent == null) fieldIndent = indent + &quot;  &quot;;</span>
             }
         }
-<span class="fc" id="L270">        String field = fieldIndent + &quot;version-property: &quot; + property;</span>
-<span class="fc" id="L271">        List&lt;String&gt; out = new ArrayList&lt;&gt;(List.of(lines));</span>
-<span class="fc bfc" id="L272" title="All 2 branches covered.">        if (fieldAt &gt;= 0) {</span>
-<span class="fc" id="L273">            String recorded = lines[fieldAt].stripLeading()</span>
-<span class="fc" id="L274">                    .substring(&quot;version-property:&quot;.length()).trim();</span>
-<span class="fc bfc" id="L275" title="All 2 branches covered.">            if (recorded.equals(property)) return entry;</span>
-<span class="fc" id="L276">            out.set(fieldAt, field);</span>
-<span class="fc" id="L277">        } else {</span>
-<span class="fc" id="L278">            out.add(insertAfter + 1, field);</span>
+<span class="fc" id="L455">        String field = fieldIndent + &quot;version-property: &quot; + property;</span>
+<span class="fc" id="L456">        List&lt;String&gt; out = new ArrayList&lt;&gt;(List.of(lines));</span>
+<span class="fc bfc" id="L457" title="All 2 branches covered.">        if (fieldAt &gt;= 0) {</span>
+<span class="fc" id="L458">            String recorded = lines[fieldAt].stripLeading()</span>
+<span class="fc" id="L459">                    .substring(&quot;version-property:&quot;.length()).trim();</span>
+<span class="fc bfc" id="L460" title="All 2 branches covered.">            if (recorded.equals(property)) return entry;</span>
+<span class="fc" id="L461">            out.set(fieldAt, field);</span>
+<span class="fc" id="L462">        } else {</span>
+<span class="fc" id="L463">            out.add(insertAfter + 1, field);</span>
         }
-<span class="fc" id="L280">        return new Entry(entry.target(), entry.relationship(),</span>
-<span class="fc" id="L281">                String.join(&quot;\n&quot;, out));</span>
+<span class="fc" id="L465">        return new Entry(entry.target(), entry.relationship(),</span>
+<span class="fc" id="L466">                String.join(&quot;\n&quot;, out));</span>
     }
 
     /** Parsed block: entry chunks plus any trailing comment lines. */
-<span class="fc" id="L285">    private record ParsedBlock(List&lt;Entry&gt; entries, String trailingComments) {}</span>
+<span class="fc" id="L470">    private record ParsedBlock(List&lt;Entry&gt; entries, String trailingComments) {}</span>
 
     /**
      * Split a {@code depends-on} block into per-entry chunks. Comment
@@ -293,46 +478,46 @@ final class DependsOnMerge {
      * itself are not part of any chunk.
      */
     private static ParsedBlock parseEntries(String block) {
-<span class="fc" id="L296">        List&lt;Entry&gt; entries = new ArrayList&lt;&gt;();</span>
-<span class="fc" id="L297">        StringBuilder pendingComments = new StringBuilder();</span>
-<span class="fc" id="L298">        StringBuilder chunk = null;</span>
-<span class="fc" id="L299">        String target = null;</span>
-<span class="fc" id="L300">        String relationship = null;</span>
+<span class="fc" id="L481">        List&lt;Entry&gt; entries = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L482">        StringBuilder pendingComments = new StringBuilder();</span>
+<span class="fc" id="L483">        StringBuilder chunk = null;</span>
+<span class="fc" id="L484">        String target = null;</span>
+<span class="fc" id="L485">        String relationship = null;</span>
 
-<span class="fc bfc" id="L302" title="All 2 branches covered.">        for (String line : block.split(&quot;\n&quot;, -1)) {</span>
-<span class="fc bfc" id="L303" title="All 2 branches covered.">            if (line.startsWith(&quot;    # ── managed: depends-on&quot;)</span>
-<span class="fc bfc" id="L304" title="All 2 branches covered.">                    || line.stripLeading().startsWith(&quot;depends-on:&quot;)) {</span>
-<span class="fc" id="L305">                continue;</span>
+<span class="fc bfc" id="L487" title="All 2 branches covered.">        for (String line : block.split(&quot;\n&quot;, -1)) {</span>
+<span class="fc bfc" id="L488" title="All 2 branches covered.">            if (line.startsWith(&quot;    # ── managed: depends-on&quot;)</span>
+<span class="fc bfc" id="L489" title="All 2 branches covered.">                    || line.stripLeading().startsWith(&quot;depends-on:&quot;)) {</span>
+<span class="fc" id="L490">                continue;</span>
             }
-<span class="fc" id="L307">            String stripped = line.stripLeading();</span>
-<span class="fc bfc" id="L308" title="All 2 branches covered.">            if (stripped.isEmpty()) continue;</span>
+<span class="fc" id="L492">            String stripped = line.stripLeading();</span>
+<span class="fc bfc" id="L493" title="All 2 branches covered.">            if (stripped.isEmpty()) continue;</span>
 
-<span class="fc bfc" id="L310" title="All 2 branches covered.">            if (stripped.startsWith(&quot;- subproject:&quot;)) {</span>
-<span class="fc bfc" id="L311" title="All 2 branches covered.">                if (chunk != null) {</span>
-<span class="fc" id="L312">                    entries.add(new Entry(target, relationship,</span>
-<span class="fc" id="L313">                            chunk.toString()));</span>
+<span class="fc bfc" id="L495" title="All 2 branches covered.">            if (stripped.startsWith(&quot;- subproject:&quot;)) {</span>
+<span class="fc bfc" id="L496" title="All 2 branches covered.">                if (chunk != null) {</span>
+<span class="fc" id="L497">                    entries.add(new Entry(target, relationship,</span>
+<span class="fc" id="L498">                            chunk.toString()));</span>
                 }
-<span class="fc" id="L315">                chunk = new StringBuilder(pendingComments);</span>
-<span class="fc" id="L316">                pendingComments.setLength(0);</span>
-<span class="fc" id="L317">                chunk.append(line).append('\n');</span>
-<span class="fc" id="L318">                target = stripped.substring(&quot;- subproject:&quot;.length()).trim();</span>
-<span class="fc" id="L319">                relationship = null;</span>
-<span class="fc bfc" id="L320" title="All 2 branches covered.">            } else if (stripped.startsWith(&quot;#&quot;)) {</span>
-<span class="fc" id="L321">                pendingComments.append(line).append('\n');</span>
-<span class="pc bpc" id="L322" title="1 of 2 branches missed.">            } else if (chunk != null) {</span>
-<span class="fc" id="L323">                chunk.append(line).append('\n');</span>
-<span class="fc bfc" id="L324" title="All 2 branches covered.">                if (stripped.startsWith(&quot;relationship:&quot;)) {</span>
-<span class="fc" id="L325">                    relationship = stripped</span>
-<span class="fc" id="L326">                            .substring(&quot;relationship:&quot;.length()).trim();</span>
+<span class="fc" id="L500">                chunk = new StringBuilder(pendingComments);</span>
+<span class="fc" id="L501">                pendingComments.setLength(0);</span>
+<span class="fc" id="L502">                chunk.append(line).append('\n');</span>
+<span class="fc" id="L503">                target = stripped.substring(&quot;- subproject:&quot;.length()).trim();</span>
+<span class="fc" id="L504">                relationship = null;</span>
+<span class="fc bfc" id="L505" title="All 2 branches covered.">            } else if (stripped.startsWith(&quot;#&quot;)) {</span>
+<span class="fc" id="L506">                pendingComments.append(line).append('\n');</span>
+<span class="pc bpc" id="L507" title="1 of 2 branches missed.">            } else if (chunk != null) {</span>
+<span class="fc" id="L508">                chunk.append(line).append('\n');</span>
+<span class="fc bfc" id="L509" title="All 2 branches covered.">                if (stripped.startsWith(&quot;relationship:&quot;)) {</span>
+<span class="fc" id="L510">                    relationship = stripped</span>
+<span class="fc" id="L511">                            .substring(&quot;relationship:&quot;.length()).trim();</span>
                 }
             }
             // Anything before the first entry that isn't a comment
             // (e.g. the &quot;[]&quot; of an empty list) contributes nothing.
         }
-<span class="fc bfc" id="L332" title="All 2 branches covered.">        if (chunk != null) {</span>
-<span class="fc" id="L333">            entries.add(new Entry(target, relationship, chunk.toString()));</span>
+<span class="fc bfc" id="L517" title="All 2 branches covered.">        if (chunk != null) {</span>
+<span class="fc" id="L518">            entries.add(new Entry(target, relationship, chunk.toString()));</span>
         }
-<span class="fc" id="L335">        return new ParsedBlock(entries, pendingComments.toString());</span>
+<span class="fc" id="L520">        return new ParsedBlock(entries, pendingComments.toString());</span>
     }
 }
 </pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.15.202606040825</span></div></body></html>

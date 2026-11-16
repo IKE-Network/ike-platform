@@ -1,0 +1,203 @@
+<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"><html xmlns="http://www.w3.org/1999/xhtml" lang=""><head><meta http-equiv="Content-Type" content="text/html;charset=UTF-8"/><link rel="stylesheet" href="../jacoco-resources/report.css" type="text/css"/><link rel="stylesheet" href="jacoco-resources/ike-theme.css" type="text/css"/><link rel="shortcut icon" href="../jacoco-resources/report.gif" type="image/gif"/><title>ExtensionsXmlReconciler.java</title><link rel="stylesheet" href="../jacoco-resources/prettify.css" type="text/css"/><script type="text/javascript" src="../jacoco-resources/prettify.js"></script></head><body onload="window['PR_TAB_WIDTH']=4;prettyPrint()"><div class="breadcrumb" id="breadcrumb"><a href="../index.html" style="font-weight:bold;margin-right:8px">← Project Site</a> | <span class="info"><a href="../jacoco-sessions.html" class="el_session">Sessions</a></span><a href="../index.html" class="el_report">IKE Workspace Maven Plugin</a> &gt; <a href="index.source.html" class="el_package">network.ike.plugin.ws.reconcile</a> &gt; <span class="el_source">ExtensionsXmlReconciler.java</span></div><h1>ExtensionsXmlReconciler.java</h1><pre class="source lang-java linenums">package network.ike.plugin.ws.reconcile;
+
+import network.ike.plugin.ws.bootstrap.WorkspaceBootstrap;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+import java.util.Properties;
+
+/**
+ * Keeps the managed extension entries in {@code .mvn/extensions.xml} —
+ * {@code ike-workspace-extension} (IKE-Network/ike-issues#460),
+ * {@code ike-build-report-extension} (IKE-Network/ike-issues#978) and
+ * {@code ike-version-management-extension} (IKE-Network/ike-issues#1094)
+ * — in lockstep with the version properties declared on the platform.
+ *
+ * &lt;p&gt;Maven 4 does not interpolate POM properties inside
+ * {@code .mvn/extensions.xml} at extension-load time — the version
+ * must be a literal string. So the literal is rewritten in place by
+ * this reconciler whenever {@code ws:scaffold-publish} runs.
+ *
+ * &lt;p&gt;On a workspace that predates the managed-block convention (the
+ * file is missing the sentinel markers and the extension entry),
+ * the reconciler migrates it: it inserts the managed block before the
+ * closing {@code &lt;/extensions&gt;} tag, preserving any other entries
+ * (e.g. {@code wagon-ssh-external}).
+ *
+ * &lt;p&gt;The extension version is read from {@code ws-plugin.properties}
+ * (filtered at build time by Maven from the
+ * {@code ike-workspace-extension.version} property in ike-parent).
+ */
+<span class="fc" id="L34">public class ExtensionsXmlReconciler implements Reconciler {</span>
+
+    private static final String EXTENSIONS_XML = &quot;.mvn/extensions.xml&quot;;
+    private static final String PROPERTIES_RESOURCE =
+            &quot;/network/ike/plugin/ws/ws-plugin.properties&quot;;
+
+    @Override
+    public String dimension() {
+<span class="fc" id="L42">        return &quot;.mvn/extensions.xml managed extension versions&quot;;</span>
+    }
+
+    @Override
+    public String optOutFlag() {
+<span class="fc" id="L47">        return &quot;updateExtensions&quot;;</span>
+    }
+
+    @Override
+    public DriftReport detect(WorkspaceContext ctx) {
+<span class="fc" id="L52">        Path xml = ctx.workspaceRoot().toPath().resolve(EXTENSIONS_XML);</span>
+<span class="pc bpc" id="L53" title="1 of 2 branches missed.">        if (!Files.exists(xml)) {</span>
+<span class="nc" id="L54">            return DriftReport.noDrift(dimension());</span>
+        }
+        try {
+<span class="fc" id="L57">            String existing = Files.readString(xml);</span>
+<span class="fc" id="L58">            String wsTarget = target(existing, &quot;ike-workspace-extension&quot;,</span>
+<span class="fc" id="L59">                    resolveVersion(&quot;ike-workspace-extension.version&quot;, &quot;1&quot;));</span>
+<span class="fc" id="L60">            String reportTarget = target(existing, &quot;ike-build-report-extension&quot;,</span>
+<span class="fc" id="L61">                    resolveVersion(&quot;ike-build-report-extension.version&quot;, &quot;244&quot;));</span>
+<span class="fc" id="L62">            String versionsTarget = target(existing, &quot;ike-version-management-extension&quot;,</span>
+<span class="fc" id="L63">                    resolveVersion(&quot;ike-version-management-extension.version&quot;, &quot;11&quot;));</span>
+<span class="fc" id="L64">            String targets = describeTargets(wsTarget, reportTarget, versionsTarget);</span>
+<span class="fc bfc" id="L65" title="All 2 branches covered.">            if (matchesTargets(existing,</span>
+                    &quot;ike-workspace-extension&quot;, wsTarget,
+                    &quot;ike-build-report-extension&quot;, reportTarget,
+                    &quot;ike-version-management-extension&quot;, versionsTarget)) {
+<span class="fc" id="L69">                return DriftReport.noDrift(dimension());</span>
+            }
+<span class="fc" id="L71">            return new DriftReport(</span>
+<span class="fc" id="L72">                    dimension(),</span>
+                    true,
+                    &quot;managed extension entries not at &quot; + targets,
+<span class="fc" id="L75">                    List.of(EXTENSIONS_XML + &quot;: rewrite managed block to &quot; + targets),</span>
+                    &quot;rewrite the managed block in &quot; + EXTENSIONS_XML + &quot; to &quot; + targets,
+<span class="fc" id="L77">                    &quot;-D&quot; + optOutFlag() + &quot;=false&quot;);</span>
+<span class="nc" id="L78">        } catch (IOException e) {</span>
+<span class="nc" id="L79">            return DriftReport.noDrift(dimension());</span>
+        }
+    }
+
+    @Override
+    public void apply(WorkspaceContext ctx) {
+<span class="fc" id="L85">        Path xml = ctx.workspaceRoot().toPath().resolve(EXTENSIONS_XML);</span>
+<span class="pc bpc" id="L86" title="1 of 2 branches missed.">        if (!Files.exists(xml)) {</span>
+<span class="nc" id="L87">            ctx.log().debug(dimension() + &quot;: no &quot; + EXTENSIONS_XML + &quot; — skipping&quot;);</span>
+<span class="nc" id="L88">            return;</span>
+        }
+        try {
+<span class="fc" id="L91">            String existing = Files.readString(xml);</span>
+<span class="fc" id="L92">            String wsTarget = target(existing, &quot;ike-workspace-extension&quot;,</span>
+<span class="fc" id="L93">                    resolveVersion(&quot;ike-workspace-extension.version&quot;, &quot;1&quot;));</span>
+<span class="fc" id="L94">            String reportTarget = target(existing, &quot;ike-build-report-extension&quot;,</span>
+<span class="fc" id="L95">                    resolveVersion(&quot;ike-build-report-extension.version&quot;, &quot;244&quot;));</span>
+<span class="fc" id="L96">            String versionsTarget = target(existing, &quot;ike-version-management-extension&quot;,</span>
+<span class="fc" id="L97">                    resolveVersion(&quot;ike-version-management-extension.version&quot;, &quot;11&quot;));</span>
+<span class="fc" id="L98">            boolean refreshed = WorkspaceBootstrap.refreshExtensionsManagedBlock(</span>
+                    xml, wsTarget, reportTarget, versionsTarget);
+<span class="fc bfc" id="L100" title="All 2 branches covered.">            if (refreshed) {</span>
+<span class="fc" id="L101">                ctx.log().info(&quot;  ✓ &quot; + EXTENSIONS_XML + &quot; → &quot;</span>
+<span class="fc" id="L102">                        + describeTargets(wsTarget, reportTarget, versionsTarget));</span>
+            }
+<span class="nc" id="L104">        } catch (IOException e) {</span>
+<span class="nc" id="L105">            ctx.log().warn(dimension() + &quot;: refresh failed: &quot; + e.getMessage());</span>
+<span class="fc" id="L106">        }</span>
+<span class="fc" id="L107">    }</span>
+
+    /** One line naming every managed entry at its target version. */
+    private static String describeTargets(String wsTarget, String reportTarget,
+                                          String versionsTarget) {
+<span class="fc" id="L112">        return &quot;ike-workspace-extension:&quot; + wsTarget</span>
+                + &quot; + ike-build-report-extension:&quot; + reportTarget
+                + &quot; + ike-version-management-extension:&quot; + versionsTarget;
+    }
+
+    private static boolean matchesTargets(String content,
+                                          String artifactIdA, String targetA,
+                                          String artifactIdB, String targetB,
+                                          String artifactIdC, String targetC) {
+<span class="fc" id="L121">        int begin = content.indexOf(WorkspaceBootstrap.EXTENSIONS_MANAGED_BEGIN);</span>
+<span class="pc bpc" id="L122" title="1 of 2 branches missed.">        if (begin &lt; 0) {</span>
+<span class="nc" id="L123">            return false;</span>
+        }
+<span class="fc" id="L125">        int end = content.indexOf(WorkspaceBootstrap.EXTENSIONS_MANAGED_END, begin);</span>
+<span class="pc bpc" id="L126" title="1 of 2 branches missed.">        if (end &lt; 0) {</span>
+<span class="nc" id="L127">            return false;</span>
+        }
+<span class="fc" id="L129">        String block = content.substring(begin, end);</span>
+<span class="fc bfc" id="L130" title="All 2 branches covered.">        return containsEntryAt(block, artifactIdA, targetA)</span>
+<span class="pc bpc" id="L131" title="1 of 2 branches missed.">                &amp;&amp; containsEntryAt(block, artifactIdB, targetB)</span>
+<span class="pc bpc" id="L132" title="1 of 2 branches missed.">                &amp;&amp; containsEntryAt(block, artifactIdC, targetC);</span>
+    }
+
+    /**
+     * Checks that the managed block carries the named artifact with the
+     * target version literal immediately following it — a per-entry
+     * match, so one entry's version cannot satisfy the other's check.
+     */
+    private static boolean containsEntryAt(String block, String artifactId, String target) {
+<span class="fc" id="L141">        int at = block.indexOf(&quot;&lt;artifactId&gt;&quot; + artifactId + &quot;&lt;/artifactId&gt;&quot;);</span>
+<span class="pc bpc" id="L142" title="1 of 2 branches missed.">        if (at &lt; 0) {</span>
+<span class="nc" id="L143">            return false;</span>
+        }
+<span class="fc" id="L145">        int versionAt = block.indexOf(&quot;&lt;version&gt;&quot; + target + &quot;&lt;/version&gt;&quot;, at);</span>
+<span class="fc" id="L146">        int nextEntry = block.indexOf(&quot;&lt;artifactId&gt;&quot;, at + artifactId.length());</span>
+<span class="pc bpc" id="L147" title="1 of 6 branches missed.">        return versionAt &gt; at &amp;&amp; (nextEntry &lt; 0 || versionAt &lt; nextEntry);</span>
+    }
+
+    /**
+     * The version a managed entry is brought to: the plugin's own, unless the file already
+     * pins a newer one, which stays. Plugin 196 lowered a committed
+     * {@code ike-build-report-extension} 262 to the 261 it was built against; a pin an
+     * operator moved ahead of the plugin is never moved back (IKE-Network/ike-issues#1261).
+     */
+    static String target(String existing, String artifactId, String pluginTarget) {
+<span class="fc" id="L157">        String committed = committedVersion(existing, artifactId);</span>
+<span class="fc bfc" id="L158" title="All 4 branches covered.">        if (committed == null || compareVersions(committed, pluginTarget) &lt;= 0) {</span>
+<span class="fc" id="L159">            return pluginTarget;</span>
+        }
+<span class="fc" id="L161">        return committed;</span>
+    }
+
+    /** The version the file carries for an artifact, in its managed block or anywhere; null if none. */
+    static String committedVersion(String content, String artifactId) {
+<span class="pc bpc" id="L166" title="1 of 2 branches missed.">        if (content == null) {</span>
+<span class="nc" id="L167">            return null;</span>
+        }
+<span class="fc" id="L169">        java.util.regex.Matcher m = java.util.regex.Pattern.compile(</span>
+<span class="fc" id="L170">                &quot;&lt;artifactId&gt;&quot; + java.util.regex.Pattern.quote(artifactId) + &quot;&lt;/artifactId&gt;\\s*&lt;version&gt;([^&lt;]+)&lt;/version&gt;&quot;)</span>
+<span class="fc" id="L171">                .matcher(content);</span>
+<span class="fc bfc" id="L172" title="All 2 branches covered.">        return m.find() ? m.group(1).trim() : null;</span>
+    }
+
+    /** Integers numerically (the extensions' versions are build numbers), anything else as text. */
+    static int compareVersions(String a, String b) {
+        try {
+<span class="fc" id="L178">            return Integer.compare(Integer.parseInt(a), Integer.parseInt(b));</span>
+<span class="nc" id="L179">        } catch (NumberFormatException e) {</span>
+<span class="nc" id="L180">            return a.compareTo(b);</span>
+        }
+    }
+
+    /** The version the plugin was built against, from its filtered properties; the fallback on an unfiltered classpath. */
+    static String resolveVersion(String key, String fallback) {
+<span class="fc" id="L186">        try (InputStream is = ExtensionsXmlReconciler.class</span>
+<span class="fc" id="L187">                .getResourceAsStream(PROPERTIES_RESOURCE)) {</span>
+<span class="pc bpc" id="L188" title="1 of 2 branches missed.">            if (is != null) {</span>
+<span class="fc" id="L189">                Properties props = new Properties();</span>
+<span class="fc" id="L190">                props.load(is);</span>
+<span class="fc" id="L191">                String v = props.getProperty(key);</span>
+<span class="pc bpc" id="L192" title="3 of 6 branches missed.">                if (v != null &amp;&amp; !v.isBlank() &amp;&amp; !v.startsWith(&quot;${&quot;)) {</span>
+<span class="fc" id="L193">                    return v;</span>
+                }
+            }
+<span class="pc bpc" id="L196" title="1 of 2 branches missed.">        } catch (IOException e) {</span>
+            // Fall through to fallback.
+<span class="nc" id="L198">        }</span>
+        // Fallback for tests / unfiltered classpath.
+<span class="nc" id="L200">        return fallback;</span>
+    }
+}
+</pre><div class="footer"><span class="right">Created with <a href="http://www.jacoco.org/jacoco">JaCoCo</a> 0.8.15.202606040825</span></div></body></html>

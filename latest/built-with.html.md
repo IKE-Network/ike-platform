@@ -1,12 +1,12 @@
 ---
-date_published: 2026-11-12
-date_modified: 2026-11-12
+date_published: 2026-11-15
+date_modified: 2026-11-15
 canonical_url: https://ike.network/ike-platform/built-with.html
 ---
 
 # Built With
 
-Open-source software that `ike-platform` 228 depends on, links against, ships within, or invokes at runtime.
+Open-source software that `ike-platform` 229 depends on, links against, ships within, or invokes at runtime.
 
 Three layers of attribution ship with each release:
 

@@ -142,8 +142,8 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
 <span class="fc" id="L142">    record DerivedDep(String subproject, String versionProperty,</span>
                       String relationship) {
         DerivedDep(String subproject, String versionProperty) {
-<span class="nc" id="L145">            this(subproject, versionProperty, &quot;build&quot;);</span>
-<span class="nc" id="L146">        }</span>
+<span class="fc" id="L145">            this(subproject, versionProperty, &quot;build&quot;);</span>
+<span class="fc" id="L146">        }</span>
     }
 
     /**
@@ -1360,43 +1360,30 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
 
     /**
      * Add a depends-on edge for an existing subproject in workspace.yaml.
-     * Converts {@code depends-on: []} to a populated list, or appends
-     * to an existing list.
+     * Converts {@code depends-on: []} to a populated list, appends to an
+     * existing list, or — for a subproject with no {@code depends-on:}
+     * key — creates the block at the end of the subproject's section.
+     *
+     * &lt;p&gt;The edge is written to the block in the named subproject's own
+     * section and nowhere else (IKE-Network/ike-issues#1387). The search
+     * once ran from the name to the next {@code depends-on:} anywhere
+     * later in the manifest, so the edge of a subproject with no block
+     * landed in a later subproject's block — for a backfill, in the
+     * block of the subproject being added, as an edge on itself.
+     *
+     * @param yaml            the full workspace.yaml content
+     * @param subprojectName  the subproject that depends on
+     *                        {@code dependsOnName}
+     * @param dependsOnName   the subproject depended on
+     * @param versionProperty the property that versions the dependency,
+     *                        or null when there is none
+     * @return the updated content; {@code yaml} itself when the edge is
+     *         already recorded or the subproject cannot be located
      */
     static String addDependencyEdge(String yaml, String subprojectName,
                                     String dependsOnName, String versionProperty) {
-<span class="pc bpc" id="L1368" title="1 of 2 branches missed.">        String versionPropertyLine = (versionProperty != null)</span>
-<span class="pc" id="L1369">                ? &quot;        version-property: &quot; + versionProperty + &quot;\n&quot; : &quot;&quot;;</span>
-
-        // Case 1: depends-on: [] — replace with populated entry
-<span class="fc" id="L1372">        String emptyDeps = &quot;(&quot; + subprojectName + &quot;:[\\s\\S]*?)(depends-on:\\s*\\[])&quot;;</span>
-<span class="fc" id="L1373">        Pattern emptyPattern = Pattern.compile(emptyDeps);</span>
-<span class="fc" id="L1374">        Matcher emptyMatcher = emptyPattern.matcher(yaml);</span>
-<span class="fc bfc" id="L1375" title="All 2 branches covered.">        if (emptyMatcher.find()) {</span>
-<span class="fc" id="L1376">            String replacement = emptyMatcher.group(1)</span>
-                    + &quot;depends-on:\n&quot;
-                    + &quot;      - subproject: &quot; + dependsOnName + &quot;\n&quot;
-                    + &quot;        relationship: build\n&quot;
-                    + versionPropertyLine;
-<span class="fc" id="L1381">            return emptyMatcher.replaceFirst(Matcher.quoteReplacement(replacement));</span>
-        }
-
-        // Case 2: existing depends-on list — append before next subproject
-        // or section. Find the subproject's depends-on block and add an entry.
-<span class="fc" id="L1386">        String existingDeps = &quot;(&quot; + subprojectName</span>
-                + &quot;:[\\s\\S]*?depends-on:\\n)((?:\\s+- subproject:.*\\n(?:\\s+relationship:.*\\n)(?:\\s+version-property:.*\\n)?)*)&quot;;
-<span class="fc" id="L1388">        Pattern existingPattern = Pattern.compile(existingDeps);</span>
-<span class="fc" id="L1389">        Matcher existingMatcher = existingPattern.matcher(yaml);</span>
-<span class="pc bpc" id="L1390" title="1 of 2 branches missed.">        if (existingMatcher.find()) {</span>
-<span class="fc" id="L1391">            String replacement = existingMatcher.group(1)</span>
-<span class="fc" id="L1392">                    + existingMatcher.group(2)</span>
-                    + &quot;      - subproject: &quot; + dependsOnName + &quot;\n&quot;
-                    + &quot;        relationship: build\n&quot;
-                    + versionPropertyLine;
-<span class="fc" id="L1396">            return existingMatcher.replaceFirst(Matcher.quoteReplacement(replacement));</span>
-        }
-
-<span class="nc" id="L1399">        return yaml;</span>
+<span class="fc" id="L1385">        return DependsOnMerge.addBuildEdge(</span>
+                yaml, subprojectName, dependsOnName, versionProperty);
     }
 
     /**
@@ -1420,9 +1407,9 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
      * @return set of &quot;groupId:artifactId&quot; strings
      */
     static Set&lt;String&gt; extractReferencedArtifacts(Path pomFile) throws IOException {
-<span class="nc" id="L1423">        Set&lt;String&gt; artifacts = new LinkedHashSet&lt;&gt;();</span>
-<span class="nc" id="L1424">        scanPomForArtifacts(pomFile, artifacts);</span>
-<span class="nc" id="L1425">        return artifacts;</span>
+<span class="nc" id="L1410">        Set&lt;String&gt; artifacts = new LinkedHashSet&lt;&gt;();</span>
+<span class="nc" id="L1411">        scanPomForArtifacts(pomFile, artifacts);</span>
+<span class="nc" id="L1412">        return artifacts;</span>
     }
 
     /**
@@ -1432,8 +1419,8 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
      */
     static void scanPomForArtifacts(Path pomFile, Set&lt;String&gt; artifacts)
             throws IOException {
-<span class="nc" id="L1435">        scanPomForArtifacts(pomFile, artifacts, null);</span>
-<span class="nc" id="L1436">    }</span>
+<span class="nc" id="L1422">        scanPomForArtifacts(pomFile, artifacts, null);</span>
+<span class="nc" id="L1423">    }</span>
 
     /**
      * As {@link #scanPomForArtifacts(Path, Set)}, additionally recording
@@ -1452,9 +1439,9 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
     static void scanPomForArtifacts(Path pomFile, Set&lt;String&gt; artifacts,
                                     Map&lt;String, Set&lt;Path&gt;&gt; sources)
             throws IOException {
-<span class="nc" id="L1455">        scanPomForArtifacts(pomFile, artifacts, new LinkedHashSet&lt;&gt;(),</span>
+<span class="nc" id="L1442">        scanPomForArtifacts(pomFile, artifacts, new LinkedHashSet&lt;&gt;(),</span>
                 sources);
-<span class="nc" id="L1457">    }</span>
+<span class="nc" id="L1444">    }</span>
 
     /**
      * Full classified scan: build-strength references (parent,
@@ -1473,72 +1460,72 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
                                     Set&lt;String&gt; bundleArtifacts,
                                     Map&lt;String, Set&lt;Path&gt;&gt; sources)
             throws IOException {
-<span class="pc bpc" id="L1476" title="1 of 2 branches missed.">        if (!Files.exists(pomFile)) return;</span>
+<span class="pc bpc" id="L1463" title="1 of 2 branches missed.">        if (!Files.exists(pomFile)) return;</span>
 
         Document doc;
         try {
-<span class="fc" id="L1480">            DocumentBuilder db = DBF.newDocumentBuilder();</span>
-<span class="fc" id="L1481">            doc = db.parse(pomFile.toFile());</span>
-<span class="nc" id="L1482">        } catch (Exception e) {</span>
+<span class="fc" id="L1467">            DocumentBuilder db = DBF.newDocumentBuilder();</span>
+<span class="fc" id="L1468">            doc = db.parse(pomFile.toFile());</span>
+<span class="nc" id="L1469">        } catch (Exception e) {</span>
             // If we can't parse, skip this POM
-<span class="nc" id="L1484">            return;</span>
-<span class="fc" id="L1485">        }</span>
+<span class="nc" id="L1471">            return;</span>
+<span class="fc" id="L1472">        }</span>
 
-<span class="fc" id="L1487">        Element project = doc.getDocumentElement();</span>
+<span class="fc" id="L1474">        Element project = doc.getDocumentElement();</span>
 
         // Read &lt;properties&gt; for ${...} resolution
-<span class="fc" id="L1490">        Map&lt;String, String&gt; properties = readProperties(project);</span>
+<span class="fc" id="L1477">        Map&lt;String, String&gt; properties = readProperties(project);</span>
 
         // Scan the project root for parent/deps/BOMs/plugins, keeping
         // this file's finds separate so they can be attributed to it.
-<span class="fc" id="L1494">        Set&lt;String&gt; found = new LinkedHashSet&lt;&gt;();</span>
-<span class="fc" id="L1495">        Set&lt;String&gt; foundStaged = new LinkedHashSet&lt;&gt;();</span>
-<span class="fc" id="L1496">        collectArtifactsFromContainer(project, properties, found, foundStaged);</span>
+<span class="fc" id="L1481">        Set&lt;String&gt; found = new LinkedHashSet&lt;&gt;();</span>
+<span class="fc" id="L1482">        Set&lt;String&gt; foundStaged = new LinkedHashSet&lt;&gt;();</span>
+<span class="fc" id="L1483">        collectArtifactsFromContainer(project, properties, found, foundStaged);</span>
 
         // Scan each profile body — a profile's deps/plugins become real
         // when it activates, so they're legitimate build edges.
-<span class="fc" id="L1500">        Element profilesEl = firstChild(project, &quot;profiles&quot;);</span>
-<span class="fc bfc" id="L1501" title="All 2 branches covered.">        if (profilesEl != null) {</span>
-<span class="fc bfc" id="L1502" title="All 2 branches covered.">            for (Element profile : children(profilesEl, &quot;profile&quot;)) {</span>
-<span class="fc" id="L1503">                collectArtifactsFromContainer(</span>
+<span class="fc" id="L1487">        Element profilesEl = firstChild(project, &quot;profiles&quot;);</span>
+<span class="fc bfc" id="L1488" title="All 2 branches covered.">        if (profilesEl != null) {</span>
+<span class="fc bfc" id="L1489" title="All 2 branches covered.">            for (Element profile : children(profilesEl, &quot;profile&quot;)) {</span>
+<span class="fc" id="L1490">                collectArtifactsFromContainer(</span>
                         profile, properties, found, foundStaged);
+<span class="fc" id="L1492">            }</span>
+        }
+
+<span class="fc" id="L1495">        artifacts.addAll(found);</span>
+<span class="fc" id="L1496">        bundleArtifacts.addAll(foundStaged);</span>
+<span class="pc bpc" id="L1497" title="1 of 2 branches missed.">        if (sources != null) {</span>
+<span class="fc bfc" id="L1498" title="All 2 branches covered.">            for (String coord : found) {</span>
+<span class="fc" id="L1499">                sources.computeIfAbsent(coord, k -&gt; new LinkedHashSet&lt;&gt;())</span>
+<span class="fc" id="L1500">                        .add(pomFile);</span>
+<span class="fc" id="L1501">            }</span>
+<span class="fc bfc" id="L1502" title="All 2 branches covered.">            for (String coord : foundStaged) {</span>
+<span class="fc" id="L1503">                sources.computeIfAbsent(coord, k -&gt; new LinkedHashSet&lt;&gt;())</span>
+<span class="fc" id="L1504">                        .add(pomFile);</span>
 <span class="fc" id="L1505">            }</span>
         }
 
-<span class="fc" id="L1508">        artifacts.addAll(found);</span>
-<span class="fc" id="L1509">        bundleArtifacts.addAll(foundStaged);</span>
-<span class="pc bpc" id="L1510" title="1 of 2 branches missed.">        if (sources != null) {</span>
-<span class="fc bfc" id="L1511" title="All 2 branches covered.">            for (String coord : found) {</span>
-<span class="fc" id="L1512">                sources.computeIfAbsent(coord, k -&gt; new LinkedHashSet&lt;&gt;())</span>
-<span class="fc" id="L1513">                        .add(pomFile);</span>
-<span class="fc" id="L1514">            }</span>
-<span class="fc bfc" id="L1515" title="All 2 branches covered.">            for (String coord : foundStaged) {</span>
-<span class="fc" id="L1516">                sources.computeIfAbsent(coord, k -&gt; new LinkedHashSet&lt;&gt;())</span>
-<span class="fc" id="L1517">                        .add(pomFile);</span>
-<span class="fc" id="L1518">            }</span>
-        }
-
         // Recurse into subprojects (Maven 4.1.0) and modules (Maven 4.0.0)
-<span class="fc" id="L1522">        Path pomDir = pomFile.getParent();</span>
+<span class="fc" id="L1509">        Path pomDir = pomFile.getParent();</span>
 
-<span class="fc" id="L1524">        Element subprojects = firstChild(project, &quot;subprojects&quot;);</span>
-<span class="pc bpc" id="L1525" title="1 of 2 branches missed.">        if (subprojects != null) {</span>
-<span class="nc bnc" id="L1526" title="All 2 branches missed.">            for (Element sub : children(subprojects, &quot;subproject&quot;)) {</span>
-<span class="nc" id="L1527">                String name = sub.getTextContent().trim();</span>
-<span class="nc" id="L1528">                scanPomForArtifacts(pomDir.resolve(name).resolve(&quot;pom.xml&quot;),</span>
+<span class="fc" id="L1511">        Element subprojects = firstChild(project, &quot;subprojects&quot;);</span>
+<span class="pc bpc" id="L1512" title="1 of 2 branches missed.">        if (subprojects != null) {</span>
+<span class="nc bnc" id="L1513" title="All 2 branches missed.">            for (Element sub : children(subprojects, &quot;subproject&quot;)) {</span>
+<span class="nc" id="L1514">                String name = sub.getTextContent().trim();</span>
+<span class="nc" id="L1515">                scanPomForArtifacts(pomDir.resolve(name).resolve(&quot;pom.xml&quot;),</span>
                         artifacts, bundleArtifacts, sources);
-<span class="nc" id="L1530">            }</span>
+<span class="nc" id="L1517">            }</span>
         }
 
-<span class="fc" id="L1533">        Element modules = firstChild(project, &quot;modules&quot;);</span>
-<span class="fc bfc" id="L1534" title="All 2 branches covered.">        if (modules != null) {</span>
-<span class="fc bfc" id="L1535" title="All 2 branches covered.">            for (Element mod : children(modules, &quot;module&quot;)) {</span>
-<span class="fc" id="L1536">                String name = mod.getTextContent().trim();</span>
-<span class="fc" id="L1537">                scanPomForArtifacts(pomDir.resolve(name).resolve(&quot;pom.xml&quot;),</span>
+<span class="fc" id="L1520">        Element modules = firstChild(project, &quot;modules&quot;);</span>
+<span class="fc bfc" id="L1521" title="All 2 branches covered.">        if (modules != null) {</span>
+<span class="fc bfc" id="L1522" title="All 2 branches covered.">            for (Element mod : children(modules, &quot;module&quot;)) {</span>
+<span class="fc" id="L1523">                String name = mod.getTextContent().trim();</span>
+<span class="fc" id="L1524">                scanPomForArtifacts(pomDir.resolve(name).resolve(&quot;pom.xml&quot;),</span>
                         artifacts, bundleArtifacts, sources);
-<span class="fc" id="L1539">            }</span>
+<span class="fc" id="L1526">            }</span>
         }
-<span class="fc" id="L1541">    }</span>
+<span class="fc" id="L1528">    }</span>
 
     /**
      * Pull groupId:artifactId pairs out of a container element — either
@@ -1572,30 +1559,30 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
             Set&lt;String&gt; stagedArtifacts) {
 
         // &lt;parent&gt; — present on project root; profiles don't allow it.
-<span class="fc" id="L1575">        addArtifactCoords(firstChild(container, &quot;parent&quot;), properties, artifacts);</span>
+<span class="fc" id="L1562">        addArtifactCoords(firstChild(container, &quot;parent&quot;), properties, artifacts);</span>
 
         // Direct build dependencies.
-<span class="fc" id="L1578">        Element depsEl = firstChild(container, &quot;dependencies&quot;);</span>
-<span class="fc bfc" id="L1579" title="All 2 branches covered.">        if (depsEl != null) {</span>
-<span class="fc bfc" id="L1580" title="All 2 branches covered.">            for (Element dep : children(depsEl, &quot;dependency&quot;)) {</span>
-<span class="fc" id="L1581">                addArtifactCoords(dep, properties, artifacts);</span>
-<span class="fc" id="L1582">            }</span>
+<span class="fc" id="L1565">        Element depsEl = firstChild(container, &quot;dependencies&quot;);</span>
+<span class="fc bfc" id="L1566" title="All 2 branches covered.">        if (depsEl != null) {</span>
+<span class="fc bfc" id="L1567" title="All 2 branches covered.">            for (Element dep : children(depsEl, &quot;dependency&quot;)) {</span>
+<span class="fc" id="L1568">                addArtifactCoords(dep, properties, artifacts);</span>
+<span class="fc" id="L1569">            }</span>
         }
 
         // BOM imports — entries declared with scope=import + type=pom.
         // Plain version-constraint entries are skipped (they don't bind
         // anything until something else declares the dep).
-<span class="fc" id="L1588">        Element depMgmt = firstChild(container, &quot;dependencyManagement&quot;);</span>
-<span class="fc bfc" id="L1589" title="All 2 branches covered.">        if (depMgmt != null) {</span>
-<span class="fc" id="L1590">            Element dmDeps = firstChild(depMgmt, &quot;dependencies&quot;);</span>
-<span class="pc bpc" id="L1591" title="1 of 2 branches missed.">            if (dmDeps != null) {</span>
-<span class="fc bfc" id="L1592" title="All 2 branches covered.">                for (Element dep : children(dmDeps, &quot;dependency&quot;)) {</span>
-<span class="fc" id="L1593">                    String scope = resolve(childText(dep, &quot;scope&quot;), properties);</span>
-<span class="fc" id="L1594">                    String type = resolve(childText(dep, &quot;type&quot;), properties);</span>
-<span class="pc bpc" id="L1595" title="1 of 4 branches missed.">                    if (&quot;import&quot;.equals(scope) &amp;&amp; &quot;pom&quot;.equals(type)) {</span>
-<span class="fc" id="L1596">                        addArtifactCoords(dep, properties, artifacts);</span>
+<span class="fc" id="L1575">        Element depMgmt = firstChild(container, &quot;dependencyManagement&quot;);</span>
+<span class="fc bfc" id="L1576" title="All 2 branches covered.">        if (depMgmt != null) {</span>
+<span class="fc" id="L1577">            Element dmDeps = firstChild(depMgmt, &quot;dependencies&quot;);</span>
+<span class="pc bpc" id="L1578" title="1 of 2 branches missed.">            if (dmDeps != null) {</span>
+<span class="fc bfc" id="L1579" title="All 2 branches covered.">                for (Element dep : children(dmDeps, &quot;dependency&quot;)) {</span>
+<span class="fc" id="L1580">                    String scope = resolve(childText(dep, &quot;scope&quot;), properties);</span>
+<span class="fc" id="L1581">                    String type = resolve(childText(dep, &quot;type&quot;), properties);</span>
+<span class="pc bpc" id="L1582" title="1 of 4 branches missed.">                    if (&quot;import&quot;.equals(scope) &amp;&amp; &quot;pom&quot;.equals(type)) {</span>
+<span class="fc" id="L1583">                        addArtifactCoords(dep, properties, artifacts);</span>
                     }
-<span class="fc" id="L1598">                }</span>
+<span class="fc" id="L1585">                }</span>
             }
         }
 
@@ -1603,20 +1590,20 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
         // Plugin GAVs are build-strength (a workspace-produced Maven
         // plugin must exist before its consumer builds); the plugin's
         // own &lt;dependencies&gt; and &lt;artifactItem&gt;s are staged (#965).
-<span class="fc" id="L1606">        Element build = firstChild(container, &quot;build&quot;);</span>
-<span class="fc bfc" id="L1607" title="All 2 branches covered.">        if (build != null) {</span>
-<span class="fc" id="L1608">            Element pluginsEl = firstChild(build, &quot;plugins&quot;);</span>
-<span class="fc" id="L1609">            addPluginCoords(pluginsEl, properties, artifacts);</span>
-<span class="fc" id="L1610">            addPluginStagedCoords(pluginsEl, properties, stagedArtifacts);</span>
-<span class="fc" id="L1611">            Element pluginMgmt = firstChild(build, &quot;pluginManagement&quot;);</span>
-<span class="pc bpc" id="L1612" title="1 of 2 branches missed.">            if (pluginMgmt != null) {</span>
-<span class="nc" id="L1613">                Element managedEl = firstChild(pluginMgmt, &quot;plugins&quot;);</span>
-<span class="nc" id="L1614">                addPluginCoords(managedEl, properties, artifacts);</span>
-<span class="nc" id="L1615">                addPluginStagedCoords(</span>
+<span class="fc" id="L1593">        Element build = firstChild(container, &quot;build&quot;);</span>
+<span class="fc bfc" id="L1594" title="All 2 branches covered.">        if (build != null) {</span>
+<span class="fc" id="L1595">            Element pluginsEl = firstChild(build, &quot;plugins&quot;);</span>
+<span class="fc" id="L1596">            addPluginCoords(pluginsEl, properties, artifacts);</span>
+<span class="fc" id="L1597">            addPluginStagedCoords(pluginsEl, properties, stagedArtifacts);</span>
+<span class="fc" id="L1598">            Element pluginMgmt = firstChild(build, &quot;pluginManagement&quot;);</span>
+<span class="pc bpc" id="L1599" title="1 of 2 branches missed.">            if (pluginMgmt != null) {</span>
+<span class="nc" id="L1600">                Element managedEl = firstChild(pluginMgmt, &quot;plugins&quot;);</span>
+<span class="nc" id="L1601">                addPluginCoords(managedEl, properties, artifacts);</span>
+<span class="nc" id="L1602">                addPluginStagedCoords(</span>
                         managedEl, properties, stagedArtifacts);
             }
         }
-<span class="fc" id="L1619">    }</span>
+<span class="fc" id="L1606">    }</span>
 
     /**
      * Add every {@code &lt;plugin&gt;} child of the given {@code &lt;plugins&gt;}
@@ -1630,11 +1617,11 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
     private static void addPluginCoords(Element pluginsEl,
                                         Map&lt;String, String&gt; properties,
                                         Set&lt;String&gt; artifacts) {
-<span class="pc bpc" id="L1633" title="1 of 2 branches missed.">        if (pluginsEl == null) return;</span>
-<span class="fc bfc" id="L1634" title="All 2 branches covered.">        for (Element plugin : children(pluginsEl, &quot;plugin&quot;)) {</span>
-<span class="fc" id="L1635">            addArtifactCoords(plugin, properties, artifacts);</span>
-<span class="fc" id="L1636">        }</span>
-<span class="fc" id="L1637">    }</span>
+<span class="pc bpc" id="L1620" title="1 of 2 branches missed.">        if (pluginsEl == null) return;</span>
+<span class="fc bfc" id="L1621" title="All 2 branches covered.">        for (Element plugin : children(pluginsEl, &quot;plugin&quot;)) {</span>
+<span class="fc" id="L1622">            addArtifactCoords(plugin, properties, artifacts);</span>
+<span class="fc" id="L1623">        }</span>
+<span class="fc" id="L1624">    }</span>
 
     /**
      * Harvest plugin-staged references from every {@code &lt;plugin&gt;}
@@ -1652,22 +1639,22 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
     private static void addPluginStagedCoords(Element pluginsEl,
                                               Map&lt;String, String&gt; properties,
                                               Set&lt;String&gt; stagedArtifacts) {
-<span class="pc bpc" id="L1655" title="1 of 2 branches missed.">        if (pluginsEl == null) return;</span>
-<span class="fc bfc" id="L1656" title="All 2 branches covered.">        for (Element plugin : children(pluginsEl, &quot;plugin&quot;)) {</span>
-<span class="fc" id="L1657">            Element depsEl = firstChild(plugin, &quot;dependencies&quot;);</span>
-<span class="fc bfc" id="L1658" title="All 2 branches covered.">            if (depsEl != null) {</span>
-<span class="fc bfc" id="L1659" title="All 2 branches covered.">                for (Element dep : children(depsEl, &quot;dependency&quot;)) {</span>
-<span class="fc" id="L1660">                    addArtifactCoords(dep, properties, stagedArtifacts);</span>
-<span class="fc" id="L1661">                }</span>
+<span class="pc bpc" id="L1642" title="1 of 2 branches missed.">        if (pluginsEl == null) return;</span>
+<span class="fc bfc" id="L1643" title="All 2 branches covered.">        for (Element plugin : children(pluginsEl, &quot;plugin&quot;)) {</span>
+<span class="fc" id="L1644">            Element depsEl = firstChild(plugin, &quot;dependencies&quot;);</span>
+<span class="fc bfc" id="L1645" title="All 2 branches covered.">            if (depsEl != null) {</span>
+<span class="fc bfc" id="L1646" title="All 2 branches covered.">                for (Element dep : children(depsEl, &quot;dependency&quot;)) {</span>
+<span class="fc" id="L1647">                    addArtifactCoords(dep, properties, stagedArtifacts);</span>
+<span class="fc" id="L1648">                }</span>
             }
-<span class="fc" id="L1663">            org.w3c.dom.NodeList items =</span>
-<span class="fc" id="L1664">                    plugin.getElementsByTagName(&quot;artifactItem&quot;);</span>
-<span class="fc bfc" id="L1665" title="All 2 branches covered.">            for (int i = 0; i &lt; items.getLength(); i++) {</span>
-<span class="fc" id="L1666">                addArtifactCoords((Element) items.item(i), properties,</span>
+<span class="fc" id="L1650">            org.w3c.dom.NodeList items =</span>
+<span class="fc" id="L1651">                    plugin.getElementsByTagName(&quot;artifactItem&quot;);</span>
+<span class="fc bfc" id="L1652" title="All 2 branches covered.">            for (int i = 0; i &lt; items.getLength(); i++) {</span>
+<span class="fc" id="L1653">                addArtifactCoords((Element) items.item(i), properties,</span>
                         stagedArtifacts);
             }
-<span class="fc" id="L1669">        }</span>
-<span class="fc" id="L1670">    }</span>
+<span class="fc" id="L1656">        }</span>
+<span class="fc" id="L1657">    }</span>
 
     /**
      * Resolve an element's {@code &lt;groupId&gt;}/{@code &lt;artifactId&gt;} pair
@@ -1681,26 +1668,26 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
     private static void addArtifactCoords(Element el,
                                           Map&lt;String, String&gt; properties,
                                           Set&lt;String&gt; artifacts) {
-<span class="fc bfc" id="L1684" title="All 2 branches covered.">        if (el == null) return;</span>
-<span class="fc" id="L1685">        String gid = resolve(childText(el, &quot;groupId&quot;), properties);</span>
-<span class="fc" id="L1686">        String aid = resolve(childText(el, &quot;artifactId&quot;), properties);</span>
-<span class="pc bpc" id="L1687" title="2 of 4 branches missed.">        if (gid != null &amp;&amp; aid != null) {</span>
-<span class="fc" id="L1688">            artifacts.add(gid + &quot;:&quot; + aid);</span>
+<span class="fc bfc" id="L1671" title="All 2 branches covered.">        if (el == null) return;</span>
+<span class="fc" id="L1672">        String gid = resolve(childText(el, &quot;groupId&quot;), properties);</span>
+<span class="fc" id="L1673">        String aid = resolve(childText(el, &quot;artifactId&quot;), properties);</span>
+<span class="pc bpc" id="L1674" title="2 of 4 branches missed.">        if (gid != null &amp;&amp; aid != null) {</span>
+<span class="fc" id="L1675">            artifacts.add(gid + &quot;:&quot; + aid);</span>
         }
-<span class="fc" id="L1690">    }</span>
+<span class="fc" id="L1677">    }</span>
 
     // ── DOM helpers ─────────────────────────────────────────────
 
     private static final javax.xml.parsers.DocumentBuilderFactory DBF;
     static {
-<span class="fc" id="L1696">        DBF = javax.xml.parsers.DocumentBuilderFactory.newInstance();</span>
+<span class="fc" id="L1683">        DBF = javax.xml.parsers.DocumentBuilderFactory.newInstance();</span>
         try {
-<span class="fc" id="L1698">            DBF.setFeature(&quot;http://apache.org/xml/features/nonvalidating/load-external-dtd&quot;, false);</span>
-<span class="fc" id="L1699">            DBF.setFeature(&quot;http://xml.org/sax/features/external-general-entities&quot;, false);</span>
-<span class="fc" id="L1700">            DBF.setFeature(&quot;http://xml.org/sax/features/external-parameter-entities&quot;, false);</span>
-<span class="nc" id="L1701">        } catch (javax.xml.parsers.ParserConfigurationException e) {</span>
+<span class="fc" id="L1685">            DBF.setFeature(&quot;http://apache.org/xml/features/nonvalidating/load-external-dtd&quot;, false);</span>
+<span class="fc" id="L1686">            DBF.setFeature(&quot;http://xml.org/sax/features/external-general-entities&quot;, false);</span>
+<span class="fc" id="L1687">            DBF.setFeature(&quot;http://xml.org/sax/features/external-parameter-entities&quot;, false);</span>
+<span class="nc" id="L1688">        } catch (javax.xml.parsers.ParserConfigurationException e) {</span>
             // Non-fatal
-<span class="fc" id="L1703">        }</span>
+<span class="fc" id="L1690">        }</span>
     }
 
     /**
@@ -1708,21 +1695,21 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
      * a map for {@code ${...}} resolution.
      */
     private static Map&lt;String, String&gt; readProperties(Element project) {
-<span class="fc" id="L1711">        Map&lt;String, String&gt; props = new LinkedHashMap&lt;&gt;();</span>
-<span class="fc" id="L1712">        Element propsEl = firstChild(project, &quot;properties&quot;);</span>
-<span class="fc bfc" id="L1713" title="All 2 branches covered.">        if (propsEl != null) {</span>
-<span class="fc" id="L1714">            org.w3c.dom.NodeList children = propsEl.getChildNodes();</span>
-<span class="fc bfc" id="L1715" title="All 2 branches covered.">            for (int i = 0; i &lt; children.getLength(); i++) {</span>
-<span class="fc" id="L1716">                org.w3c.dom.Node node = children.item(i);</span>
-<span class="fc bfc" id="L1717" title="All 2 branches covered.">                if (node.getNodeType() == org.w3c.dom.Node.ELEMENT_NODE) {</span>
-<span class="fc" id="L1718">                    String value = node.getTextContent().trim();</span>
-<span class="pc bpc" id="L1719" title="1 of 2 branches missed.">                    if (!value.isEmpty()) {</span>
-<span class="fc" id="L1720">                        props.put(node.getNodeName(), value);</span>
+<span class="fc" id="L1698">        Map&lt;String, String&gt; props = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc" id="L1699">        Element propsEl = firstChild(project, &quot;properties&quot;);</span>
+<span class="fc bfc" id="L1700" title="All 2 branches covered.">        if (propsEl != null) {</span>
+<span class="fc" id="L1701">            org.w3c.dom.NodeList children = propsEl.getChildNodes();</span>
+<span class="fc bfc" id="L1702" title="All 2 branches covered.">            for (int i = 0; i &lt; children.getLength(); i++) {</span>
+<span class="fc" id="L1703">                org.w3c.dom.Node node = children.item(i);</span>
+<span class="fc bfc" id="L1704" title="All 2 branches covered.">                if (node.getNodeType() == org.w3c.dom.Node.ELEMENT_NODE) {</span>
+<span class="fc" id="L1705">                    String value = node.getTextContent().trim();</span>
+<span class="pc bpc" id="L1706" title="1 of 2 branches missed.">                    if (!value.isEmpty()) {</span>
+<span class="fc" id="L1707">                        props.put(node.getNodeName(), value);</span>
                     }
                 }
             }
         }
-<span class="fc" id="L1725">        return props;</span>
+<span class="fc" id="L1712">        return props;</span>
     }
 
     /**
@@ -1731,53 +1718,53 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
      * property reference is present or if the property is not found.
      */
     private static String resolve(String value, Map&lt;String, String&gt; properties) {
-<span class="pc bpc" id="L1734" title="1 of 4 branches missed.">        if (value == null || !value.contains(&quot;${&quot;)) return value;</span>
-<span class="nc bnc" id="L1735" title="All 2 branches missed.">        for (Map.Entry&lt;String, String&gt; entry : properties.entrySet()) {</span>
-<span class="nc" id="L1736">            value = value.replace(&quot;${&quot; + entry.getKey() + &quot;}&quot;, entry.getValue());</span>
-<span class="nc" id="L1737">        }</span>
+<span class="pc bpc" id="L1721" title="1 of 4 branches missed.">        if (value == null || !value.contains(&quot;${&quot;)) return value;</span>
+<span class="nc bnc" id="L1722" title="All 2 branches missed.">        for (Map.Entry&lt;String, String&gt; entry : properties.entrySet()) {</span>
+<span class="nc" id="L1723">            value = value.replace(&quot;${&quot; + entry.getKey() + &quot;}&quot;, entry.getValue());</span>
+<span class="nc" id="L1724">        }</span>
         // If still contains unresolved references, return as-is
-<span class="nc" id="L1739">        return value;</span>
+<span class="nc" id="L1726">        return value;</span>
     }
 
     /**
      * Get the text content of a direct child element, or null.
      */
     private static String childText(Element parent, String tagName) {
-<span class="fc" id="L1746">        Element child = firstChild(parent, tagName);</span>
-<span class="fc bfc" id="L1747" title="All 2 branches covered.">        if (child == null) return null;</span>
-<span class="fc" id="L1748">        String text = child.getTextContent().trim();</span>
-<span class="pc bpc" id="L1749" title="1 of 2 branches missed.">        return text.isEmpty() ? null : text;</span>
+<span class="fc" id="L1733">        Element child = firstChild(parent, tagName);</span>
+<span class="fc bfc" id="L1734" title="All 2 branches covered.">        if (child == null) return null;</span>
+<span class="fc" id="L1735">        String text = child.getTextContent().trim();</span>
+<span class="pc bpc" id="L1736" title="1 of 2 branches missed.">        return text.isEmpty() ? null : text;</span>
     }
 
     /**
      * Get the first direct child element with the given tag name.
      */
     private static Element firstChild(Element parent, String tagName) {
-<span class="fc" id="L1756">        org.w3c.dom.NodeList children = parent.getChildNodes();</span>
-<span class="fc bfc" id="L1757" title="All 2 branches covered.">        for (int i = 0; i &lt; children.getLength(); i++) {</span>
-<span class="fc" id="L1758">            org.w3c.dom.Node node = children.item(i);</span>
-<span class="fc bfc" id="L1759" title="All 2 branches covered.">            if (node.getNodeType() == org.w3c.dom.Node.ELEMENT_NODE</span>
-<span class="fc bfc" id="L1760" title="All 2 branches covered.">                    &amp;&amp; tagName.equals(node.getNodeName())) {</span>
-<span class="fc" id="L1761">                return (Element) node;</span>
+<span class="fc" id="L1743">        org.w3c.dom.NodeList children = parent.getChildNodes();</span>
+<span class="fc bfc" id="L1744" title="All 2 branches covered.">        for (int i = 0; i &lt; children.getLength(); i++) {</span>
+<span class="fc" id="L1745">            org.w3c.dom.Node node = children.item(i);</span>
+<span class="fc bfc" id="L1746" title="All 2 branches covered.">            if (node.getNodeType() == org.w3c.dom.Node.ELEMENT_NODE</span>
+<span class="fc bfc" id="L1747" title="All 2 branches covered.">                    &amp;&amp; tagName.equals(node.getNodeName())) {</span>
+<span class="fc" id="L1748">                return (Element) node;</span>
             }
         }
-<span class="fc" id="L1764">        return null;</span>
+<span class="fc" id="L1751">        return null;</span>
     }
 
     /**
      * Get all direct child elements with the given tag name.
      */
     private static List&lt;Element&gt; children(Element parent, String tagName) {
-<span class="fc" id="L1771">        List&lt;Element&gt; result = new ArrayList&lt;&gt;();</span>
-<span class="fc" id="L1772">        org.w3c.dom.NodeList children = parent.getChildNodes();</span>
-<span class="fc bfc" id="L1773" title="All 2 branches covered.">        for (int i = 0; i &lt; children.getLength(); i++) {</span>
-<span class="fc" id="L1774">            org.w3c.dom.Node node = children.item(i);</span>
-<span class="fc bfc" id="L1775" title="All 2 branches covered.">            if (node.getNodeType() == org.w3c.dom.Node.ELEMENT_NODE</span>
-<span class="pc bpc" id="L1776" title="1 of 2 branches missed.">                    &amp;&amp; tagName.equals(node.getNodeName())) {</span>
-<span class="fc" id="L1777">                result.add((Element) node);</span>
+<span class="fc" id="L1758">        List&lt;Element&gt; result = new ArrayList&lt;&gt;();</span>
+<span class="fc" id="L1759">        org.w3c.dom.NodeList children = parent.getChildNodes();</span>
+<span class="fc bfc" id="L1760" title="All 2 branches covered.">        for (int i = 0; i &lt; children.getLength(); i++) {</span>
+<span class="fc" id="L1761">            org.w3c.dom.Node node = children.item(i);</span>
+<span class="fc bfc" id="L1762" title="All 2 branches covered.">            if (node.getNodeType() == org.w3c.dom.Node.ELEMENT_NODE</span>
+<span class="pc bpc" id="L1763" title="1 of 2 branches missed.">                    &amp;&amp; tagName.equals(node.getNodeName())) {</span>
+<span class="fc" id="L1764">                result.add((Element) node);</span>
             }
         }
-<span class="fc" id="L1780">        return result;</span>
+<span class="fc" id="L1767">        return result;</span>
     }
 
     // ── Version alignment ───────────────────────────────────────
@@ -1795,10 +1782,10 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
     private int alignVersions(Path wsDir, Path subprojectDir,
                                String subprojectName, Manifest manifest)
             throws IOException {
-<span class="nc" id="L1798">        Map&lt;String, String&gt; artifactVersions =</span>
-<span class="nc" id="L1799">                collectWorkspaceArtifactVersions(wsDir, subprojectName, manifest);</span>
-<span class="nc bnc" id="L1800" title="All 2 branches missed.">        if (artifactVersions.isEmpty()) return 0;</span>
-<span class="nc" id="L1801">        return alignSubprojectPoms(subprojectDir, artifactVersions, getLog());</span>
+<span class="nc" id="L1785">        Map&lt;String, String&gt; artifactVersions =</span>
+<span class="nc" id="L1786">                collectWorkspaceArtifactVersions(wsDir, subprojectName, manifest);</span>
+<span class="nc bnc" id="L1787" title="All 2 branches missed.">        if (artifactVersions.isEmpty()) return 0;</span>
+<span class="nc" id="L1788">        return alignSubprojectPoms(subprojectDir, artifactVersions, getLog());</span>
     }
 
     /**
@@ -1825,34 +1812,34 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
     static Map&lt;String, String&gt; collectWorkspaceArtifactVersions(
             Path wsDir, String subprojectName, Manifest manifest)
             throws IOException {
-<span class="fc" id="L1828">        Map&lt;String, String&gt; artifactVersions = new LinkedHashMap&lt;&gt;();</span>
-<span class="fc bfc" id="L1829" title="All 2 branches covered.">        for (Map.Entry&lt;String, Subproject&gt; entry : manifest.subprojects().entrySet()) {</span>
-<span class="fc bfc" id="L1830" title="All 2 branches covered.">            if (entry.getKey().equals(subprojectName)) continue;</span>
+<span class="fc" id="L1815">        Map&lt;String, String&gt; artifactVersions = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc bfc" id="L1816" title="All 2 branches covered.">        for (Map.Entry&lt;String, Subproject&gt; entry : manifest.subprojects().entrySet()) {</span>
+<span class="fc bfc" id="L1817" title="All 2 branches covered.">            if (entry.getKey().equals(subprojectName)) continue;</span>
 
-<span class="fc" id="L1832">            Path subDir = wsDir.resolve(entry.getKey());</span>
-<span class="fc" id="L1833">            Path memberPom = subDir.resolve(&quot;pom.xml&quot;);</span>
-<span class="pc bpc" id="L1834" title="1 of 2 branches missed.">            if (!Files.exists(memberPom)) continue;</span>
+<span class="fc" id="L1819">            Path subDir = wsDir.resolve(entry.getKey());</span>
+<span class="fc" id="L1820">            Path memberPom = subDir.resolve(&quot;pom.xml&quot;);</span>
+<span class="pc bpc" id="L1821" title="1 of 2 branches missed.">            if (!Files.exists(memberPom)) continue;</span>
 
-<span class="fc" id="L1836">            String memberVersion = null;</span>
+<span class="fc" id="L1823">            String memberVersion = null;</span>
             try {
-<span class="fc" id="L1838">                memberVersion = ReleaseSupport.readPomVersion(memberPom.toFile());</span>
-<span class="nc" id="L1839">            } catch (MojoException e) {</span>
+<span class="fc" id="L1825">                memberVersion = ReleaseSupport.readPomVersion(memberPom.toFile());</span>
+<span class="nc" id="L1826">            } catch (MojoException e) {</span>
                 // Unreadable POM — fall back to the manifest version below.
-<span class="fc" id="L1841">            }</span>
-<span class="pc bpc" id="L1842" title="2 of 4 branches missed.">            if (memberVersion == null || memberVersion.isBlank()) {</span>
-<span class="nc" id="L1843">                memberVersion = entry.getValue().version();</span>
+<span class="fc" id="L1828">            }</span>
+<span class="pc bpc" id="L1829" title="2 of 4 branches missed.">            if (memberVersion == null || memberVersion.isBlank()) {</span>
+<span class="nc" id="L1830">                memberVersion = entry.getValue().version();</span>
             }
-<span class="pc bpc" id="L1845" title="2 of 4 branches missed.">            if (memberVersion == null || memberVersion.isBlank()) continue;</span>
+<span class="pc bpc" id="L1832" title="2 of 4 branches missed.">            if (memberVersion == null || memberVersion.isBlank()) continue;</span>
 
-<span class="fc" id="L1847">            Set&lt;PublishedArtifactSet.Artifact&gt; published =</span>
-<span class="fc" id="L1848">                    PublishedArtifactSet.scan(subDir);</span>
-<span class="fc bfc" id="L1849" title="All 2 branches covered.">            for (PublishedArtifactSet.Artifact artifact : published) {</span>
-<span class="fc" id="L1850">                artifactVersions.put(</span>
-<span class="fc" id="L1851">                        artifact.groupId() + &quot;:&quot; + artifact.artifactId(),</span>
+<span class="fc" id="L1834">            Set&lt;PublishedArtifactSet.Artifact&gt; published =</span>
+<span class="fc" id="L1835">                    PublishedArtifactSet.scan(subDir);</span>
+<span class="fc bfc" id="L1836" title="All 2 branches covered.">            for (PublishedArtifactSet.Artifact artifact : published) {</span>
+<span class="fc" id="L1837">                artifactVersions.put(</span>
+<span class="fc" id="L1838">                        artifact.groupId() + &quot;:&quot; + artifact.artifactId(),</span>
                         memberVersion);
-<span class="fc" id="L1853">            }</span>
-<span class="fc" id="L1854">        }</span>
-<span class="fc" id="L1855">        return artifactVersions;</span>
+<span class="fc" id="L1840">            }</span>
+<span class="fc" id="L1841">        }</span>
+<span class="fc" id="L1842">        return artifactVersions;</span>
     }
 
     /**
@@ -1875,56 +1862,56 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
                                    Map&lt;String, String&gt; artifactVersions,
                                    org.apache.maven.api.plugin.Log log)
             throws IOException {
-<span class="fc" id="L1878">        List&lt;Path&gt; pomFiles = findAllPomFiles(subprojectDir);</span>
+<span class="fc" id="L1865">        List&lt;Path&gt; pomFiles = findAllPomFiles(subprojectDir);</span>
 
-<span class="fc" id="L1880">        Map&lt;String, String&gt; rootProperties = Map.of();</span>
-<span class="fc" id="L1881">        Path rootPom = subprojectDir.resolve(&quot;pom.xml&quot;);</span>
-<span class="pc bpc" id="L1882" title="1 of 2 branches missed.">        if (Files.exists(rootPom)) {</span>
-<span class="fc" id="L1883">            rootProperties = PomRewriter.listProperties(</span>
-<span class="fc" id="L1884">                    Files.readString(rootPom, StandardCharsets.UTF_8));</span>
+<span class="fc" id="L1867">        Map&lt;String, String&gt; rootProperties = Map.of();</span>
+<span class="fc" id="L1868">        Path rootPom = subprojectDir.resolve(&quot;pom.xml&quot;);</span>
+<span class="pc bpc" id="L1869" title="1 of 2 branches missed.">        if (Files.exists(rootPom)) {</span>
+<span class="fc" id="L1870">            rootProperties = PomRewriter.listProperties(</span>
+<span class="fc" id="L1871">                    Files.readString(rootPom, StandardCharsets.UTF_8));</span>
         }
 
-<span class="fc" id="L1887">        Set&lt;Path&gt; modified = new LinkedHashSet&lt;&gt;();</span>
-<span class="fc" id="L1888">        Map&lt;String, String&gt; propertyUpdates = new LinkedHashMap&lt;&gt;();</span>
+<span class="fc" id="L1874">        Set&lt;Path&gt; modified = new LinkedHashSet&lt;&gt;();</span>
+<span class="fc" id="L1875">        Map&lt;String, String&gt; propertyUpdates = new LinkedHashMap&lt;&gt;();</span>
 
-<span class="fc bfc" id="L1890" title="All 2 branches covered.">        for (Path pomFile : pomFiles) {</span>
-<span class="fc" id="L1891">            String original = Files.readString(pomFile, StandardCharsets.UTF_8);</span>
+<span class="fc bfc" id="L1877" title="All 2 branches covered.">        for (Path pomFile : pomFiles) {</span>
+<span class="fc" id="L1878">            String original = Files.readString(pomFile, StandardCharsets.UTF_8);</span>
             // Module properties override the root's, mirroring Maven's
             // inheritance for the ${...} references this module declares.
-<span class="fc" id="L1894">            Map&lt;String, String&gt; effective = new LinkedHashMap&lt;&gt;(rootProperties);</span>
-<span class="fc" id="L1895">            effective.putAll(PomRewriter.listProperties(original));</span>
+<span class="fc" id="L1881">            Map&lt;String, String&gt; effective = new LinkedHashMap&lt;&gt;(rootProperties);</span>
+<span class="fc" id="L1882">            effective.putAll(PomRewriter.listProperties(original));</span>
 
-<span class="fc" id="L1897">            DependencyVersionAligner.Result result =</span>
-<span class="fc" id="L1898">                    DependencyVersionAligner.align(</span>
+<span class="fc" id="L1884">            DependencyVersionAligner.Result result =</span>
+<span class="fc" id="L1885">                    DependencyVersionAligner.align(</span>
                             original, artifactVersions, effective);
-<span class="fc bfc" id="L1900" title="All 2 branches covered.">            if (!result.pom().equals(original)) {</span>
-<span class="fc" id="L1901">                Files.writeString(pomFile, result.pom(), StandardCharsets.UTF_8);</span>
-<span class="fc" id="L1902">                modified.add(pomFile);</span>
-<span class="fc" id="L1903">                log.info(&quot;  Version alignment: &quot;</span>
-<span class="fc" id="L1904">                        + relativeToWorkspace(subprojectDir, pomFile));</span>
+<span class="fc bfc" id="L1887" title="All 2 branches covered.">            if (!result.pom().equals(original)) {</span>
+<span class="fc" id="L1888">                Files.writeString(pomFile, result.pom(), StandardCharsets.UTF_8);</span>
+<span class="fc" id="L1889">                modified.add(pomFile);</span>
+<span class="fc" id="L1890">                log.info(&quot;  Version alignment: &quot;</span>
+<span class="fc" id="L1891">                        + relativeToWorkspace(subprojectDir, pomFile));</span>
             }
-<span class="fc" id="L1906">            result.propertyUpdates().forEach(propertyUpdates::putIfAbsent);</span>
-<span class="fc" id="L1907">        }</span>
+<span class="fc" id="L1893">            result.propertyUpdates().forEach(propertyUpdates::putIfAbsent);</span>
+<span class="fc" id="L1894">        }</span>
 
         // Apply stale-property updates wherever the property is declared
         // (usually the subproject root). The ${...} references themselves
         // were left untouched above.
-<span class="fc bfc" id="L1912" title="All 2 branches covered.">        for (Map.Entry&lt;String, String&gt; update : propertyUpdates.entrySet()) {</span>
-<span class="fc bfc" id="L1913" title="All 2 branches covered.">            for (Path pomFile : pomFiles) {</span>
-<span class="fc" id="L1914">                String content = Files.readString(pomFile, StandardCharsets.UTF_8);</span>
-<span class="fc" id="L1915">                String updated = PomRewriter.updateProperty(</span>
-<span class="fc" id="L1916">                        content, update.getKey(), update.getValue());</span>
-<span class="fc bfc" id="L1917" title="All 2 branches covered.">                if (!updated.equals(content)) {</span>
-<span class="fc" id="L1918">                    Files.writeString(pomFile, updated, StandardCharsets.UTF_8);</span>
-<span class="fc" id="L1919">                    modified.add(pomFile);</span>
-<span class="fc" id="L1920">                    log.info(&quot;  Version alignment (property &quot;</span>
-<span class="fc" id="L1921">                            + update.getKey() + &quot;): &quot;</span>
-<span class="fc" id="L1922">                            + relativeToWorkspace(subprojectDir, pomFile));</span>
+<span class="fc bfc" id="L1899" title="All 2 branches covered.">        for (Map.Entry&lt;String, String&gt; update : propertyUpdates.entrySet()) {</span>
+<span class="fc bfc" id="L1900" title="All 2 branches covered.">            for (Path pomFile : pomFiles) {</span>
+<span class="fc" id="L1901">                String content = Files.readString(pomFile, StandardCharsets.UTF_8);</span>
+<span class="fc" id="L1902">                String updated = PomRewriter.updateProperty(</span>
+<span class="fc" id="L1903">                        content, update.getKey(), update.getValue());</span>
+<span class="fc bfc" id="L1904" title="All 2 branches covered.">                if (!updated.equals(content)) {</span>
+<span class="fc" id="L1905">                    Files.writeString(pomFile, updated, StandardCharsets.UTF_8);</span>
+<span class="fc" id="L1906">                    modified.add(pomFile);</span>
+<span class="fc" id="L1907">                    log.info(&quot;  Version alignment (property &quot;</span>
+<span class="fc" id="L1908">                            + update.getKey() + &quot;): &quot;</span>
+<span class="fc" id="L1909">                            + relativeToWorkspace(subprojectDir, pomFile));</span>
                 }
-<span class="fc" id="L1924">            }</span>
-<span class="fc" id="L1925">        }</span>
+<span class="fc" id="L1911">            }</span>
+<span class="fc" id="L1912">        }</span>
 
-<span class="fc" id="L1927">        return modified.size();</span>
+<span class="fc" id="L1914">        return modified.size();</span>
     }
 
     /**
@@ -1937,20 +1924,20 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
      *         path when the subproject has no parent directory
      */
     private static Path relativeToWorkspace(Path subprojectDir, Path pomFile) {
-<span class="pc bpc" id="L1940" title="1 of 2 branches missed.">        Path base = (subprojectDir.getParent() != null)</span>
-<span class="pc" id="L1941">                ? subprojectDir.getParent() : subprojectDir;</span>
-<span class="fc" id="L1942">        return base.relativize(pomFile);</span>
+<span class="pc bpc" id="L1927" title="1 of 2 branches missed.">        Path base = (subprojectDir.getParent() != null)</span>
+<span class="pc" id="L1928">                ? subprojectDir.getParent() : subprojectDir;</span>
+<span class="fc" id="L1929">        return base.relativize(pomFile);</span>
     }
 
     /**
      * Find all pom.xml files in a subproject directory (root + submodules).
      */
     private static List&lt;Path&gt; findAllPomFiles(Path subprojectDir) throws IOException {
-<span class="fc" id="L1949">        try (Stream&lt;Path&gt; stream = Files.walk(subprojectDir)) {</span>
-<span class="fc" id="L1950">            return stream</span>
-<span class="fc" id="L1951">                    .filter(p -&gt; p.getFileName().toString().equals(&quot;pom.xml&quot;))</span>
-<span class="pc bpc" id="L1952" title="1 of 2 branches missed.">                    .filter(p -&gt; !p.toString().contains(&quot;/target/&quot;))</span>
-<span class="fc" id="L1953">                    .toList();</span>
+<span class="fc" id="L1936">        try (Stream&lt;Path&gt; stream = Files.walk(subprojectDir)) {</span>
+<span class="fc" id="L1937">            return stream</span>
+<span class="fc" id="L1938">                    .filter(p -&gt; p.getFileName().toString().equals(&quot;pom.xml&quot;))</span>
+<span class="pc bpc" id="L1939" title="1 of 2 branches missed.">                    .filter(p -&gt; !p.toString().contains(&quot;/target/&quot;))</span>
+<span class="fc" id="L1940">                    .toList();</span>
         }
     }
 
@@ -1960,33 +1947,33 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
      * outside parent, falls back to the parent's groupId.
      */
     private String deriveGroupId(Path subprojectDir) {
-<span class="nc" id="L1963">        Path pomFile = subprojectDir.resolve(&quot;pom.xml&quot;);</span>
-<span class="nc bnc" id="L1964" title="All 2 branches missed.">        if (!Files.exists(pomFile)) return null;</span>
+<span class="nc" id="L1950">        Path pomFile = subprojectDir.resolve(&quot;pom.xml&quot;);</span>
+<span class="nc bnc" id="L1951" title="All 2 branches missed.">        if (!Files.exists(pomFile)) return null;</span>
 
         try {
-<span class="nc" id="L1967">            String content = Files.readString(pomFile, StandardCharsets.UTF_8);</span>
+<span class="nc" id="L1954">            String content = Files.readString(pomFile, StandardCharsets.UTF_8);</span>
 
             // Try groupId outside parent block first
-<span class="nc" id="L1970">            String stripped = PARENT_BLOCK.matcher(content).replaceFirst(&quot;&quot;);</span>
-<span class="nc" id="L1971">            Matcher gm = GROUP_ID_PATTERN.matcher(stripped);</span>
-<span class="nc bnc" id="L1972" title="All 2 branches missed.">            if (gm.find()) return gm.group(1).trim();</span>
+<span class="nc" id="L1957">            String stripped = PARENT_BLOCK.matcher(content).replaceFirst(&quot;&quot;);</span>
+<span class="nc" id="L1958">            Matcher gm = GROUP_ID_PATTERN.matcher(stripped);</span>
+<span class="nc bnc" id="L1959" title="All 2 branches missed.">            if (gm.find()) return gm.group(1).trim();</span>
 
             // Fall back to parent groupId
-<span class="nc" id="L1975">            Matcher parentBlock = PARENT_BLOCK.matcher(content);</span>
-<span class="nc bnc" id="L1976" title="All 2 branches missed.">            if (parentBlock.find()) {</span>
-<span class="nc" id="L1977">                gm = GROUP_ID_PATTERN.matcher(parentBlock.group());</span>
-<span class="nc bnc" id="L1978" title="All 2 branches missed.">                if (gm.find()) return gm.group(1).trim();</span>
+<span class="nc" id="L1962">            Matcher parentBlock = PARENT_BLOCK.matcher(content);</span>
+<span class="nc bnc" id="L1963" title="All 2 branches missed.">            if (parentBlock.find()) {</span>
+<span class="nc" id="L1964">                gm = GROUP_ID_PATTERN.matcher(parentBlock.group());</span>
+<span class="nc bnc" id="L1965" title="All 2 branches missed.">                if (gm.find()) return gm.group(1).trim();</span>
             }
-<span class="nc" id="L1980">        } catch (IOException e) {</span>
+<span class="nc" id="L1967">        } catch (IOException e) {</span>
             // Non-fatal — groupId will be null in manifest
-<span class="nc" id="L1982">        }</span>
-<span class="nc" id="L1983">        return null;</span>
+<span class="nc" id="L1969">        }</span>
+<span class="nc" id="L1970">        return null;</span>
     }
 
-<span class="fc" id="L1986">    private static final Pattern PARENT_BLOCK =</span>
-<span class="fc" id="L1987">            Pattern.compile(&quot;(?s)&lt;parent&gt;.*?&lt;/parent&gt;&quot;);</span>
-<span class="fc" id="L1988">    private static final Pattern GROUP_ID_PATTERN =</span>
-<span class="fc" id="L1989">            Pattern.compile(&quot;&lt;groupId&gt;([^&lt;]+)&lt;/groupId&gt;&quot;);</span>
+<span class="fc" id="L1973">    private static final Pattern PARENT_BLOCK =</span>
+<span class="fc" id="L1974">            Pattern.compile(&quot;(?s)&lt;parent&gt;.*?&lt;/parent&gt;&quot;);</span>
+<span class="fc" id="L1975">    private static final Pattern GROUP_ID_PATTERN =</span>
+<span class="fc" id="L1976">            Pattern.compile(&quot;&lt;groupId&gt;([^&lt;]+)&lt;/groupId&gt;&quot;);</span>
 
     // ── Helpers ──────────────────────────────────────────────────
 
@@ -1995,28 +1982,28 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
      * {@code https://github.com/ikmdev/tinkar-core.git} → {@code tinkar-core}
      */
     static String deriveSubprojectName(String repoUrl) {
-<span class="fc" id="L1998">        String name = repoUrl;</span>
+<span class="fc" id="L1985">        String name = repoUrl;</span>
         // Strip trailing .git
-<span class="fc bfc" id="L2000" title="All 2 branches covered.">        if (name.endsWith(&quot;.git&quot;)) {</span>
-<span class="fc" id="L2001">            name = name.substring(0, name.length() - 4);</span>
+<span class="fc bfc" id="L1987" title="All 2 branches covered.">        if (name.endsWith(&quot;.git&quot;)) {</span>
+<span class="fc" id="L1988">            name = name.substring(0, name.length() - 4);</span>
         }
         // Strip trailing slash
-<span class="fc bfc" id="L2004" title="All 2 branches covered.">        if (name.endsWith(&quot;/&quot;)) {</span>
-<span class="fc" id="L2005">            name = name.substring(0, name.length() - 1);</span>
+<span class="fc bfc" id="L1991" title="All 2 branches covered.">        if (name.endsWith(&quot;/&quot;)) {</span>
+<span class="fc" id="L1992">            name = name.substring(0, name.length() - 1);</span>
         }
         // Take last path segment
-<span class="fc" id="L2008">        int lastSlash = name.lastIndexOf('/');</span>
-<span class="pc bpc" id="L2009" title="1 of 2 branches missed.">        if (lastSlash &gt;= 0) {</span>
-<span class="fc" id="L2010">            name = name.substring(lastSlash + 1);</span>
+<span class="fc" id="L1995">        int lastSlash = name.lastIndexOf('/');</span>
+<span class="pc bpc" id="L1996" title="1 of 2 branches missed.">        if (lastSlash &gt;= 0) {</span>
+<span class="fc" id="L1997">            name = name.substring(lastSlash + 1);</span>
         }
-<span class="fc" id="L2012">        return name;</span>
+<span class="fc" id="L1999">        return name;</span>
     }
 
     private String readWorkspaceName(Path wsDir) {
         try {
-<span class="nc" id="L2017">            return ReleaseSupport.readPomArtifactId(wsDir.resolve(&quot;pom.xml&quot;).toFile());</span>
-<span class="nc" id="L2018">        } catch (MojoException e) {</span>
-<span class="nc" id="L2019">            return &quot;Workspace&quot;;</span>
+<span class="nc" id="L2004">            return ReleaseSupport.readPomArtifactId(wsDir.resolve(&quot;pom.xml&quot;).toFile());</span>
+<span class="nc" id="L2005">        } catch (MojoException e) {</span>
+<span class="nc" id="L2006">            return &quot;Workspace&quot;;</span>
         }
     }
 
@@ -2037,68 +2024,68 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
                                             PomParentSupport.ParentInfo parentInfo) {
         PomParentSupport.ParentInfo wsParent;
         try {
-<span class="nc" id="L2040">            wsParent = PomParentSupport.readParent(wsDir.resolve(&quot;pom.xml&quot;));</span>
-<span class="nc" id="L2041">        } catch (Exception e) {</span>
+<span class="nc" id="L2027">            wsParent = PomParentSupport.readParent(wsDir.resolve(&quot;pom.xml&quot;));</span>
+<span class="nc" id="L2028">        } catch (Exception e) {</span>
             // Workspace pom unreadable or no parent — nothing to enforce.
-<span class="nc" id="L2043">            return;</span>
-<span class="nc" id="L2044">        }</span>
-<span class="nc bnc" id="L2045" title="All 2 branches missed.">        if (wsParent == null</span>
-<span class="nc bnc" id="L2046" title="All 2 branches missed.">                || wsParent.groupId() == null</span>
-<span class="nc bnc" id="L2047" title="All 2 branches missed.">                || wsParent.artifactId() == null) {</span>
-<span class="nc" id="L2048">            return;</span>
+<span class="nc" id="L2030">            return;</span>
+<span class="nc" id="L2031">        }</span>
+<span class="nc bnc" id="L2032" title="All 2 branches missed.">        if (wsParent == null</span>
+<span class="nc bnc" id="L2033" title="All 2 branches missed.">                || wsParent.groupId() == null</span>
+<span class="nc bnc" id="L2034" title="All 2 branches missed.">                || wsParent.artifactId() == null) {</span>
+<span class="nc" id="L2035">            return;</span>
         }
 
         // Decision matrix gate: same GA as workspace's parent?
-<span class="nc bnc" id="L2052" title="All 2 branches missed.">        if (!java.util.Objects.equals(wsParent.groupId(), parentInfo.groupId())</span>
-<span class="nc bnc" id="L2053" title="All 2 branches missed.">                || !java.util.Objects.equals(wsParent.artifactId(),</span>
-<span class="nc" id="L2054">                        parentInfo.artifactId())) {</span>
-<span class="nc" id="L2055">            return;</span>
+<span class="nc bnc" id="L2039" title="All 2 branches missed.">        if (!java.util.Objects.equals(wsParent.groupId(), parentInfo.groupId())</span>
+<span class="nc bnc" id="L2040" title="All 2 branches missed.">                || !java.util.Objects.equals(wsParent.artifactId(),</span>
+<span class="nc" id="L2041">                        parentInfo.artifactId())) {</span>
+<span class="nc" id="L2042">            return;</span>
         }
 
-<span class="nc" id="L2058">        String coords = parentInfo.groupId() + &quot;:&quot; + parentInfo.artifactId();</span>
+<span class="nc" id="L2045">        String coords = parentInfo.groupId() + &quot;:&quot; + parentInfo.artifactId();</span>
 
         // Rule 2: version coherence
-<span class="nc bnc" id="L2061" title="All 2 branches missed.">        if (!java.util.Objects.equals(wsParent.version(), parentInfo.version())) {</span>
-<span class="nc" id="L2062">            getLog().warn(&quot;  WARN: &quot; + subprojectName + &quot; parent &quot;</span>
-<span class="nc" id="L2063">                    + coords + &quot;:&quot; + parentInfo.version()</span>
-<span class="nc" id="L2064">                    + &quot; != workspace &quot; + coords + &quot;:&quot; + wsParent.version()</span>
+<span class="nc bnc" id="L2048" title="All 2 branches missed.">        if (!java.util.Objects.equals(wsParent.version(), parentInfo.version())) {</span>
+<span class="nc" id="L2049">            getLog().warn(&quot;  WARN: &quot; + subprojectName + &quot; parent &quot;</span>
+<span class="nc" id="L2050">                    + coords + &quot;:&quot; + parentInfo.version()</span>
+<span class="nc" id="L2051">                    + &quot; != workspace &quot; + coords + &quot;:&quot; + wsParent.version()</span>
                     + &quot; (#324 coherence violation — fix before &quot;
-<span class="nc" id="L2066">                    + WsGoal.RELEASE_PUBLISH.qualified() + &quot; or expect &quot;</span>
-<span class="nc" id="L2067">                    + WsGoal.SCAFFOLD_DRAFT.qualified()</span>
+<span class="nc" id="L2053">                    + WsGoal.RELEASE_PUBLISH.qualified() + &quot; or expect &quot;</span>
+<span class="nc" id="L2054">                    + WsGoal.SCAFFOLD_DRAFT.qualified()</span>
                     + &quot; to flag it)&quot;);
-<span class="nc" id="L2069">            return;</span>
+<span class="nc" id="L2056">            return;</span>
         }
 
         // Rule 1: cycle prevention
         boolean hasEmptyRelativePath;
         try {
-<span class="nc" id="L2075">            hasEmptyRelativePath = PomParentSupport.hasEmptyRelativePath(</span>
-<span class="nc" id="L2076">                    subprojectDir.resolve(&quot;pom.xml&quot;));</span>
-<span class="nc" id="L2077">        } catch (Exception e) {</span>
-<span class="nc" id="L2078">            return;</span>
-<span class="nc" id="L2079">        }</span>
-<span class="nc bnc" id="L2080" title="All 2 branches missed.">        if (!hasEmptyRelativePath) {</span>
-<span class="nc" id="L2081">            getLog().warn(&quot;  WARN: &quot; + subprojectName + &quot; parent &quot;</span>
-<span class="nc" id="L2082">                    + coords + &quot;:&quot; + parentInfo.version()</span>
+<span class="nc" id="L2062">            hasEmptyRelativePath = PomParentSupport.hasEmptyRelativePath(</span>
+<span class="nc" id="L2063">                    subprojectDir.resolve(&quot;pom.xml&quot;));</span>
+<span class="nc" id="L2064">        } catch (Exception e) {</span>
+<span class="nc" id="L2065">            return;</span>
+<span class="nc" id="L2066">        }</span>
+<span class="nc bnc" id="L2067" title="All 2 branches missed.">        if (!hasEmptyRelativePath) {</span>
+<span class="nc" id="L2068">            getLog().warn(&quot;  WARN: &quot; + subprojectName + &quot; parent &quot;</span>
+<span class="nc" id="L2069">                    + coords + &quot;:&quot; + parentInfo.version()</span>
                     + &quot; matches workspace parent but is missing empty &quot;
                     + &quot;&lt;relativePath/&gt; (#324 cycle prevention — Maven 4 &quot;
                     + &quot;will fail with \&quot;parents form a cycle\&quot; once the &quot;
                     + &quot;subproject participates in the reactor; add &quot;
                     + &quot;&lt;relativePath/&gt; inside the &lt;parent&gt; block)&quot;);
         }
-<span class="nc" id="L2089">    }</span>
+<span class="nc" id="L2076">    }</span>
 
     private Path findWorkspaceRoot() throws MojoException {
-<span class="nc" id="L2092">        Path dir = Path.of(System.getProperty(&quot;user.dir&quot;));</span>
-<span class="nc bnc" id="L2093" title="All 2 branches missed.">        while (dir != null) {</span>
-<span class="nc bnc" id="L2094" title="All 2 branches missed.">            if (Manifests.exists(dir)) {</span>
-<span class="nc" id="L2095">                return dir;</span>
+<span class="nc" id="L2079">        Path dir = Path.of(System.getProperty(&quot;user.dir&quot;));</span>
+<span class="nc bnc" id="L2080" title="All 2 branches missed.">        while (dir != null) {</span>
+<span class="nc bnc" id="L2081" title="All 2 branches missed.">            if (Manifests.exists(dir)) {</span>
+<span class="nc" id="L2082">                return dir;</span>
             }
-<span class="nc" id="L2097">            dir = dir.getParent();</span>
+<span class="nc" id="L2084">            dir = dir.getParent();</span>
         }
-<span class="nc" id="L2099">        throw new MojoException(</span>
+<span class="nc" id="L2086">        throw new MojoException(</span>
                 &quot;Cannot find workspace.yaml. Run from within a workspace &quot;
-<span class="nc" id="L2101">                + &quot;directory or use &quot; + WsGoal.SCAFFOLD_INIT.qualified()</span>
+<span class="nc" id="L2088">                + &quot;directory or use &quot; + WsGoal.SCAFFOLD_INIT.qualified()</span>
                 + &quot; first.&quot;);
     }
 }

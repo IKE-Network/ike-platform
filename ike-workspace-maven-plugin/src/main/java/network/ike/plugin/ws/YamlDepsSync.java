@@ -42,6 +42,13 @@ import java.util.Set;
  * are never downgraded to {@code build}
  * (IKE-Network/ike-issues#963, #964). See {@link DependsOnMerge}.
  *
+ * <p><b>Each member in its own section.</b> A member's edges are written
+ * to the block in that member's own section of the manifest, and a
+ * member with no {@code depends-on:} key gains one there. The summary
+ * the sync returns is read back from the manifest it wrote, member by
+ * member, so the re-derivation commit describes its own diff
+ * (IKE-Network/ike-issues#1387).
+ *
  * <p><b>Acyclic by construction.</b> Contracting the module graph to
  * repo granularity can manufacture a cycle no module edge actually
  * forms. Before writing, the prospective repo-level ordering graph is
@@ -68,8 +75,9 @@ final class YamlDepsSync {
 
     /**
      * Outcome of a sync: whether {@code workspace.yaml} was rewritten,
-     * and one summary line per changed subproject for the re-derivation
-     * commit message (IKE-Network/ike-issues#964).
+     * and one summary line per subproject whose own block the rewrite
+     * changed, in manifest order, for the re-derivation commit message
+     * (IKE-Network/ike-issues#964, #1387).
      */
     record SyncResult(boolean changed, List<String> changeLines) {
 
@@ -175,72 +183,141 @@ final class YamlDepsSync {
 
             // ── Phase 3: apply the merges and write once ───────────
             String updated = yaml;
+            for (Map.Entry<String, List<WsAddMojo.DerivedDep>> entry
+                    : derivedByName.entrySet()) {
+                updated = DependsOnMerge.merge(
+                        updated, entry.getKey(), entry.getValue()).yaml();
+            }
+            if (updated.equals(yaml)) {
+                log.debug("yaml-deps-sync: workspace.yaml is up to date");
+                return SyncResult.UNCHANGED;
+            }
+            Files.writeString(manifestPath, updated, StandardCharsets.UTF_8);
+
+            // ── Phase 4: report what was written (#1387) ───────────
+            // Each line is read back from the two texts: what a
+            // member's own block recorded before against what it
+            // records now. A merge step's own account says what was
+            // asked of it, which is not what the file holds when the
+            // step landed in another member's block or a later step
+            // wrote over it.
             int totalAdded = 0;
             int totalRemoved = 0;
             List<String> changeLines = new ArrayList<>();
-            for (Map.Entry<String, List<WsAddMojo.DerivedDep>> entry
-                    : derivedByName.entrySet()) {
-                String name = entry.getKey();
-                DependsOnMerge.Result merged = DependsOnMerge.merge(
-                        updated, name, entry.getValue());
-                updated = merged.yaml();
-
-                List<String> added = new ArrayList<>(merged.addedBuild());
-                added.addAll(merged.addedBundle());
-                // A build edge whose derivation moved to bundle is a
-                // supersede (#965), not a discard — report it apart from
-                // true removals so the #964 hand-edit warning stays honest.
-                List<String> superseded =
-                        new ArrayList<>(merged.removedBuild());
-                superseded.retainAll(merged.addedBundle());
-                List<String> removed =
-                        new ArrayList<>(merged.removedBuild());
-                removed.removeAll(superseded);
-                totalAdded += added.size();
-                totalRemoved += removed.size();
-                List<String> versioned = merged.versionPropertySet();
-
-                if (added.isEmpty() && removed.isEmpty()
-                        && versioned.isEmpty()) {
-                    // Text-only change: managed-marker annotation.
-                    log.info("  workspace.yaml: " + name
-                            + " depends-on annotated as managed");
-                    changeLines.add(name + ": annotate managed block");
-                    continue;
-                }
-                String summary = name + " depends-on (+" + added.size()
-                        + ", -" + removed.size() + ")"
-                        + (added.isEmpty() ? "" : " added " + added)
-                        + (removed.isEmpty() ? "" : " removed " + removed)
-                        + (superseded.isEmpty()
-                                ? "" : " build→bundle " + superseded)
-                        + (versioned.isEmpty()
-                                ? "" : " version-property " + versioned);
-                changeLines.add(summary);
-                if (removed.isEmpty()) {
-                    log.info("  workspace.yaml: " + summary);
+            for (String name : manifest.subprojects().keySet()) {
+                BlockChange change = BlockChange.between(name,
+                        DependsOnMerge.recorded(yaml, name),
+                        DependsOnMerge.recorded(updated, name));
+                if (change == null) continue;
+                totalAdded += change.added();
+                totalRemoved += change.removed();
+                changeLines.add(change.summary());
+                if (change.removed() == 0) {
+                    log.info("  workspace.yaml: " + change.summary());
                 } else {
                     // Removals may be discarding a hand edit — say so
                     // where the user can see it (#964).
-                    log.warn("  workspace.yaml: " + summary
+                    log.warn("  workspace.yaml: " + change.summary()
                             + " — build edges are re-derived from POMs; "
                             + "a deliberately absent edge needs a non-build "
                             + "relationship (e.g. bundle) to survive");
                 }
             }
-
-            if (!updated.equals(yaml)) {
-                Files.writeString(manifestPath, updated, StandardCharsets.UTF_8);
-                log.info("  yaml-deps-sync: " + totalAdded + " edge(s) added, "
-                        + totalRemoved + " edge(s) removed");
-                return new SyncResult(true, List.copyOf(changeLines));
-            }
-            log.debug("yaml-deps-sync: workspace.yaml is up to date");
-            return SyncResult.UNCHANGED;
+            log.info("  yaml-deps-sync: " + totalAdded + " edge(s) added, "
+                    + totalRemoved + " edge(s) removed");
+            return new SyncResult(true, List.copyOf(changeLines));
         } catch (IOException | ManifestException e) {
             log.warn("yaml-deps-sync: cannot update workspace.yaml — "
                     + e.getMessage());
             return SyncResult.UNCHANGED;
+        }
+    }
+
+    /**
+     * What a sync wrote to one member's {@code depends-on} block, as the
+     * difference between the block read from the manifest text before
+     * and after (IKE-Network/ike-issues#1387).
+     *
+     * @param summary the member's line for the log and for the
+     *                re-derivation commit message
+     * @param added   the number of edges the block gained, counting an
+     *                edge re-recorded under another relationship
+     * @param removed the number of edges the block lost outright
+     */
+    private record BlockChange(String summary, int added, int removed) {
+
+        /**
+         * Compare one member's block before and after a sync.
+         *
+         * <p>An edge whose relationship moved — a {@code build} edge
+         * that derivation now reads as {@code bundle} (#965) — is a
+         * supersede, not a discard: it counts as added and is named
+         * apart from the removals, so the hand-edit warning on removals
+         * (#964) stays honest.
+         *
+         * @param name   the member
+         * @param before the block as the manifest recorded it
+         * @param after  the block as the manifest records it now
+         * @return the change, or null when the block is the same
+         */
+        static BlockChange between(String name,
+                                   DependsOnMerge.Recorded before,
+                                   DependsOnMerge.Recorded after) {
+            if (before.equals(after)) return null;
+
+            List<String> added = new ArrayList<>();
+            List<String> versioned = new ArrayList<>();
+            Map<String, List<String>> moved = new LinkedHashMap<>();
+            for (Map.Entry<String, DependsOnMerge.Edge> entry
+                    : after.edges().entrySet()) {
+                String target = entry.getKey();
+                DependsOnMerge.Edge now = entry.getValue();
+                DependsOnMerge.Edge was = before.edges().get(target);
+                if (was == null) {
+                    added.add(target);
+                } else if (!was.relationship()
+                        .equalsIgnoreCase(now.relationship())) {
+                    added.add(target);
+                    moved.computeIfAbsent(
+                            was.relationship() + "→" + now.relationship(),
+                            transition -> new ArrayList<>()).add(target);
+                } else if (now.versionProperty() != null
+                        && !now.versionProperty()
+                                .equals(was.versionProperty())) {
+                    versioned.add(target);
+                }
+            }
+            List<String> removed = new ArrayList<>();
+            for (String target : before.edges().keySet()) {
+                if (!after.edges().containsKey(target)) removed.add(target);
+            }
+
+            boolean created = !before.present() && after.present();
+            if (added.isEmpty() && removed.isEmpty() && versioned.isEmpty()) {
+                // No edge changed: a block written for a member that
+                // has no edges, or the managed marker on an existing one.
+                return new BlockChange(name + (created
+                        ? ": add managed block, no edges"
+                        : ": annotate managed block"), 0, 0);
+            }
+            StringBuilder summary = new StringBuilder(name)
+                    .append(" depends-on (+").append(added.size())
+                    .append(", -").append(removed.size()).append(')');
+            if (!added.isEmpty()) summary.append(" added ").append(added);
+            if (!removed.isEmpty()) {
+                summary.append(" removed ").append(removed);
+            }
+            for (Map.Entry<String, List<String>> transition
+                    : moved.entrySet()) {
+                summary.append(' ').append(transition.getKey())
+                        .append(' ').append(transition.getValue());
+            }
+            if (!versioned.isEmpty()) {
+                summary.append(" version-property ").append(versioned);
+            }
+            if (created) summary.append(" in a new block");
+            return new BlockChange(summary.toString(),
+                    added.size(), removed.size());
         }
     }
 

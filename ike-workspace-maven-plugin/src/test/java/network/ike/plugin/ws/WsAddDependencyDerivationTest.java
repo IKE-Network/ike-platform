@@ -264,6 +264,127 @@ class WsAddDependencyDerivationTest {
                 .contains("subproject: new-dep");
     }
 
+    // ── #1387: the edge belongs in the named member's own section ──
+
+    @Test
+    void addDependencyEdge_creates_the_block_in_the_members_own_section() {
+        // The backfill of the report's manifest shape: the existing
+        // member has no depends-on key, and the member being added sits
+        // after it with the empty block ws:add wrote. Searching from the
+        // name to the next "depends-on: []" recorded the new member as
+        // depending on itself.
+        String yaml = """
+                subprojects:
+
+                  old-lib:
+                    type: software
+                    groupId: com.example
+
+                  new-lib:
+                    type: software
+                    groupId: com.example
+                    depends-on: []
+                """;
+
+        String result = WsAddMojo.addDependencyEdge(
+                yaml, "old-lib", "new-lib", "new-lib.version");
+
+        assertThat(result).isEqualTo("""
+                subprojects:
+
+                  old-lib:
+                    type: software
+                    groupId: com.example
+                %s
+                    depends-on:
+                      - subproject: new-lib
+                        relationship: build
+                        version-property: new-lib.version
+
+                  new-lib:
+                    type: software
+                    groupId: com.example
+                    depends-on: []
+                """.formatted(DependsOnMerge.MARKER));
+    }
+
+    @Test
+    void addDependencyEdge_does_not_find_a_name_inside_a_longer_one() {
+        String yaml = """
+                subprojects:
+                  solor-gudid-kb:
+                    type: software
+                    depends-on: []
+                  gudid-kb:
+                    type: software
+                    depends-on: []
+                """;
+
+        String result = WsAddMojo.addDependencyEdge(
+                yaml, "gudid-kb", "base-kb", null);
+
+        assertThat(result).isEqualTo("""
+                subprojects:
+                  solor-gudid-kb:
+                    type: software
+                    depends-on: []
+                  gudid-kb:
+                    type: software
+                %s
+                    depends-on:
+                      - subproject: base-kb
+                        relationship: build
+                """.formatted(DependsOnMerge.MARKER));
+    }
+
+    @Test
+    void addDependencyEdge_keeps_existing_entries_and_their_comments() {
+        String yaml = """
+                subprojects:
+                  my-lib:
+                    type: software
+                    depends-on:
+                      # packaged at assembly time (#963)
+                      - subproject: bundled-dep
+                        relationship: bundle
+                      # nothing else is bundled
+                """;
+
+        String result = WsAddMojo.addDependencyEdge(
+                yaml, "my-lib", "new-dep", null);
+
+        assertThat(result).isEqualTo("""
+                subprojects:
+                  my-lib:
+                    type: software
+                %s
+                    depends-on:
+                      # packaged at assembly time (#963)
+                      - subproject: bundled-dep
+                        relationship: bundle
+                      - subproject: new-dep
+                        relationship: build
+                      # nothing else is bundled
+                """.formatted(DependsOnMerge.MARKER));
+        assertThat(WsAddMojo.addDependencyEdge(
+                result, "my-lib", "new-dep", null))
+                .as("an edge already recorded is not recorded twice")
+                .isEqualTo(result);
+    }
+
+    @Test
+    void addDependencyEdge_leaves_an_unknown_member_alone() {
+        String yaml = """
+                subprojects:
+                  my-lib:
+                    type: software
+                    depends-on: []
+                """;
+
+        assertThat(WsAddMojo.addDependencyEdge(
+                yaml, "lib", "new-dep", null)).isEqualTo(yaml);
+    }
+
     // ── #239: BOM imports and plugin coords count as build edges ──
 
     @Test

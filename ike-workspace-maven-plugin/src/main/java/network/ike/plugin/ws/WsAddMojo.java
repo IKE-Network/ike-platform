@@ -1360,43 +1360,30 @@ public class WsAddMojo extends AbstractWorkspaceMojo {
 
     /**
      * Add a depends-on edge for an existing subproject in workspace.yaml.
-     * Converts {@code depends-on: []} to a populated list, or appends
-     * to an existing list.
+     * Converts {@code depends-on: []} to a populated list, appends to an
+     * existing list, or — for a subproject with no {@code depends-on:}
+     * key — creates the block at the end of the subproject's section.
+     *
+     * <p>The edge is written to the block in the named subproject's own
+     * section and nowhere else (IKE-Network/ike-issues#1387). The search
+     * once ran from the name to the next {@code depends-on:} anywhere
+     * later in the manifest, so the edge of a subproject with no block
+     * landed in a later subproject's block — for a backfill, in the
+     * block of the subproject being added, as an edge on itself.
+     *
+     * @param yaml            the full workspace.yaml content
+     * @param subprojectName  the subproject that depends on
+     *                        {@code dependsOnName}
+     * @param dependsOnName   the subproject depended on
+     * @param versionProperty the property that versions the dependency,
+     *                        or null when there is none
+     * @return the updated content; {@code yaml} itself when the edge is
+     *         already recorded or the subproject cannot be located
      */
     static String addDependencyEdge(String yaml, String subprojectName,
                                     String dependsOnName, String versionProperty) {
-        String versionPropertyLine = (versionProperty != null)
-                ? "        version-property: " + versionProperty + "\n" : "";
-
-        // Case 1: depends-on: [] — replace with populated entry
-        String emptyDeps = "(" + subprojectName + ":[\\s\\S]*?)(depends-on:\\s*\\[])";
-        Pattern emptyPattern = Pattern.compile(emptyDeps);
-        Matcher emptyMatcher = emptyPattern.matcher(yaml);
-        if (emptyMatcher.find()) {
-            String replacement = emptyMatcher.group(1)
-                    + "depends-on:\n"
-                    + "      - subproject: " + dependsOnName + "\n"
-                    + "        relationship: build\n"
-                    + versionPropertyLine;
-            return emptyMatcher.replaceFirst(Matcher.quoteReplacement(replacement));
-        }
-
-        // Case 2: existing depends-on list — append before next subproject
-        // or section. Find the subproject's depends-on block and add an entry.
-        String existingDeps = "(" + subprojectName
-                + ":[\\s\\S]*?depends-on:\\n)((?:\\s+- subproject:.*\\n(?:\\s+relationship:.*\\n)(?:\\s+version-property:.*\\n)?)*)";
-        Pattern existingPattern = Pattern.compile(existingDeps);
-        Matcher existingMatcher = existingPattern.matcher(yaml);
-        if (existingMatcher.find()) {
-            String replacement = existingMatcher.group(1)
-                    + existingMatcher.group(2)
-                    + "      - subproject: " + dependsOnName + "\n"
-                    + "        relationship: build\n"
-                    + versionPropertyLine;
-            return existingMatcher.replaceFirst(Matcher.quoteReplacement(replacement));
-        }
-
-        return yaml;
+        return DependsOnMerge.addBuildEdge(
+                yaml, subprojectName, dependsOnName, versionProperty);
     }
 
     /**

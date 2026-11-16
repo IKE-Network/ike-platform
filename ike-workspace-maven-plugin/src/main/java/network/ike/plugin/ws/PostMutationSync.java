@@ -92,7 +92,10 @@ public final class PostMutationSync {
         }
         // Enumerate what changed in the commit itself, so a re-derivation
         // that reverses a hand edit is at least visible in history rather
-        // than hiding behind a generic subject (#964).
+        // than hiding behind a generic subject (#964). The lines are the
+        // sync's read-back of the manifest it wrote, one per member whose
+        // own block differs — so the message describes this commit's
+        // diff, member by member (#1387).
         StringBuilder changes = new StringBuilder();
         for (String line : result.changeLines()) {
             changes.append("- ").append(line).append('\n');
@@ -102,12 +105,16 @@ public final class PostMutationSync {
                         + changes
                         + "\nRe-derives workspace.yaml depends-on from POM "
                         + "reality after a workspace mutation, so the "
-                        + "manifest is never left uncommitted. Build edges "
-                        + "are machine-derived; bundle/content/tooling "
-                        + "edges are preserved as hand-declared.\n\n"
+                        + "manifest is never left uncommitted. Each line "
+                        + "above is read back from the manifest as "
+                        + "written: what that member's own block records "
+                        + "now, against what it recorded before. Build "
+                        + "edges are machine-derived; bundle/content/"
+                        + "tooling edges are preserved as hand-declared.\n\n"
                         + "Refs: IKE-Network/ike-issues#774\n"
                         + "Refs: IKE-Network/ike-issues#279\n"
-                        + "Refs: IKE-Network/ike-issues#964");
+                        + "Refs: IKE-Network/ike-issues#964\n"
+                        + "Refs: IKE-Network/ike-issues#1387");
         if (committed) {
             log.info("  workspace.yaml: committed re-derived depends-on edges");
         }

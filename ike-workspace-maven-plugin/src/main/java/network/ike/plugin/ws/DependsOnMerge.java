@@ -50,6 +50,16 @@ import java.util.regex.Pattern;
  * {@code depends-on:} in the style of the {@code ws:scaffold-init}
  * header block, making the ownership boundary visible in the file
  * itself. The marker is regenerated idempotently.
+ *
+ * <p><b>A member's block is looked for only in that member's own
+ * section</b> ({@link SubprojectSection}, IKE-Network/ike-issues#1387).
+ * The search once ran from the member's name to the next
+ * {@code depends-on:} anywhere later in the file, so a member with no
+ * block of its own matched the block of a later member, and the edges
+ * of every such member were merged, one over the other, into that one
+ * block. A member with no {@code depends-on:} key now gains a block at
+ * the end of its section, so a manifest written before blocks were
+ * recorded gains its derived edges.
  */
 final class DependsOnMerge {
 
@@ -63,21 +73,28 @@ final class DependsOnMerge {
 
     /**
      * Outcome of a merge: the updated YAML (identical to the input when
-     * nothing changed), the derived targets added per relationship, the
-     * build targets removed (a target in both {@code removedBuild} and
-     * {@code addedBundle} was superseded, not dropped), the surviving
-     * targets (any relationship) whose {@code version-property} was set, and each
-     * final entry's relationship (for ordering-graph construction by
-     * the acyclicity gate).
+     * nothing changed) and each final entry's relationship (for
+     * ordering-graph construction by the acyclicity gate).
+     *
+     * <p>What the merge added and removed is not part of the outcome.
+     * A caller that reports a change reads the member's block back from
+     * the text before and after ({@link #recorded}), so that the report
+     * is of what the file holds (IKE-Network/ike-issues#1387).
+     *
+     * @param yaml               the updated workspace.yaml content
+     * @param finalRelationships each final entry's relationship by
+     *                           target: surviving entries first, then
+     *                           added build edges, then added bundle
+     *                           edges
      */
-    record Result(
-            String yaml,
-            List<String> addedBuild,
-            List<String> addedBundle,
-            List<String> removedBuild,
-            List<String> versionPropertySet,
-            Map<String, String> finalRelationships) {
+    record Result(String yaml, Map<String, String> finalRelationships) {
 
+        /**
+         * Whether the merge changed the text.
+         *
+         * @param original the content the merge was given
+         * @return true when {@link #yaml} differs from {@code original}
+         */
         boolean changed(String original) {
             return !yaml.equals(original);
         }
@@ -91,22 +108,173 @@ final class DependsOnMerge {
     private record Entry(String target, String relationship, String text) {}
 
     /**
-     * Matches a subproject section up to and including its
-     * {@code depends-on} block — an optional managed marker line, the
-     * {@code depends-on:} line, and every 6-space-indented continuation
-     * (entries, their fields, and attached comments).
+     * One edge as a block records it.
+     *
+     * @param relationship    the entry's relationship; {@code build}
+     *                        when the entry names none
+     * @param versionProperty the entry's {@code version-property}, or
+     *                        null when it has none
      */
-    private static Pattern blockPattern(String subprojectName) {
-        return Pattern.compile(
-                "(" + Pattern.quote(subprojectName) + ":[\\s\\S]*?)"
-                        + "((?:    # ── managed: depends-on[^\n]*\n)?"
-                        + "    depends-on:.*(?:\n      .*)*\n)",
-                Pattern.MULTILINE);
+    record Edge(String relationship, String versionProperty) {}
+
+    /**
+     * What a member's {@code depends-on} block records, read back from
+     * manifest text.
+     *
+     * @param present whether the member has a block
+     * @param text    the block verbatim — marker, {@code depends-on:}
+     *                line, entries and comments; empty when there is
+     *                no block
+     * @param edges   the recorded edges by target, in block order
+     */
+    record Recorded(boolean present, String text, Map<String, Edge> edges) {}
+
+    /** The first line of a managed marker, whatever its wording. */
+    private static final String MARKER_PREFIX =
+            "    # ── managed: depends-on";
+
+    /** The {@code depends-on:} key at member-field indentation. */
+    private static final String KEY = "    depends-on:";
+
+    /**
+     * A {@code depends-on} block at member-field indentation — an
+     * optional managed marker line, the {@code depends-on:} line, and
+     * every 6-space-indented continuation (entries, their fields, and
+     * attached comments). Anchored at the start of a line, so the key's
+     * text inside a deeper-indented line, such as a folded description,
+     * is not the key.
+     */
+    private static final Pattern BLOCK = Pattern.compile(
+            "^(?:" + Pattern.quote(MARKER_PREFIX) + "[^\n]*\n)?"
+                    + Pattern.quote(KEY) + ".*(?:\n      .*)*(?:\n|\\z)",
+            Pattern.MULTILINE);
+
+    /**
+     * Where a member's {@code depends-on} block is in the manifest
+     * text or, for a member that has none, where it belongs.
+     *
+     * @param start offset of the block's first character, or the
+     *              insertion point
+     * @param end   offset just past the block; equal to {@code start}
+     *              when there is no block
+     * @param block the block verbatim; empty when there is none
+     */
+    private record Located(int start, int end, String block) {
+
+        /** Whether the member has a block, as opposed to a place for one. */
+        boolean present() {
+            return !block.isEmpty();
+        }
+    }
+
+    /**
+     * Locate a member's block within the member's own section
+     * (IKE-Network/ike-issues#1387).
+     *
+     * @param yaml           the full workspace.yaml content
+     * @param subprojectName the member whose block to locate
+     * @return the block, or the place for one at the end of the
+     *         member's section when it has no {@code depends-on:} key;
+     *         null when the member's section cannot be found, or when
+     *         it has a {@code depends-on:} key this class cannot read
+     *         (a manifest with carriage-return line endings) — such a
+     *         member is left alone rather than given a second key
+     */
+    private static Located locate(String yaml, String subprojectName) {
+        SubprojectSection section =
+                SubprojectSection.find(yaml, subprojectName).orElse(null);
+        if (section == null) return null;
+
+        Matcher m = BLOCK.matcher(yaml)
+                .region(section.bodyStart(), section.end());
+        if (m.find()) {
+            return new Located(m.start(), m.end(), m.group());
+        }
+        for (String line : yaml
+                .substring(section.bodyStart(), section.end())
+                .split("\n")) {
+            if (line.startsWith(KEY)) return null;
+        }
+        return new Located(section.contentEnd(), section.contentEnd(), "");
+    }
+
+    /**
+     * {@code yaml} with the located block replaced by {@code rendered},
+     * or with {@code rendered} inserted where a block belongs. A text
+     * whose last line has no line ending gets one before an insertion.
+     */
+    private static String splice(String yaml, Located at,
+                                 CharSequence rendered) {
+        String before = yaml.substring(0, at.start());
+        String separator =
+                before.isEmpty() || before.endsWith("\n") ? "" : "\n";
+        return before + separator + rendered + yaml.substring(at.end());
+    }
+
+    /**
+     * Read back what a member's block records.
+     *
+     * <p>This is how a re-derivation reports what it wrote: the same
+     * member read from the text before and the text after
+     * (IKE-Network/ike-issues#1387).
+     *
+     * @param yaml           the full workspace.yaml content
+     * @param subprojectName the member whose block to read
+     * @return the recorded block; not present when the member has no
+     *         block, or its section cannot be found
+     */
+    static Recorded recorded(String yaml, String subprojectName) {
+        Located located = locate(yaml, subprojectName);
+        if (located == null || !located.present()) {
+            return new Recorded(false, "", Map.of());
+        }
+        Map<String, Edge> edges = new LinkedHashMap<>();
+        for (Entry entry : parseEntries(located.block()).entries()) {
+            edges.put(entry.target(), new Edge(
+                    entry.relationship() == null
+                            ? "build" : entry.relationship(),
+                    versionPropertyOf(entry)));
+        }
+        return new Recorded(true, located.block(), edges);
+    }
+
+    /**
+     * Record one more build edge in a member's block, leaving every
+     * entry already there as written. A member with no block gains
+     * one. Used by {@code ws:add} to record that an existing member
+     * builds against the member being added.
+     *
+     * @param yaml            the full workspace.yaml content
+     * @param subprojectName  the member that depends on {@code target}
+     * @param target          the member depended on
+     * @param versionProperty the property that versions the dependency,
+     *                        or null when there is none
+     * @return the updated content; {@code yaml} itself when the block
+     *         already has an entry for {@code target}, or the member's
+     *         block cannot be located
+     */
+    static String addBuildEdge(String yaml, String subprojectName,
+                               String target, String versionProperty) {
+        Located located = locate(yaml, subprojectName);
+        if (located == null) return yaml;
+
+        ParsedBlock parsed = parseEntries(located.block());
+        StringBuilder rendered = new StringBuilder();
+        rendered.append(MARKER).append('\n');
+        rendered.append(KEY).append('\n');
+        for (Entry entry : parsed.entries()) {
+            if (target.equals(entry.target())) return yaml;
+            rendered.append(entry.text());
+        }
+        appendEntry(rendered, target, "build", versionProperty);
+        rendered.append(parsed.trailingComments());
+        return splice(yaml, located, rendered);
     }
 
     /**
      * Merge {@code derived} into {@code subprojectName}'s block within
-     * {@code yaml}.
+     * {@code yaml}. A member with no {@code depends-on:} key gains a
+     * block at the end of its section.
      *
      * @param yaml           the full workspace.yaml content
      * @param subprojectName the subproject whose block to merge
@@ -116,14 +284,12 @@ final class DependsOnMerge {
      */
     static Result merge(String yaml, String subprojectName,
                         List<WsAddMojo.DerivedDep> derived) {
-        Matcher m = blockPattern(subprojectName).matcher(yaml);
-        if (!m.find()) {
-            return new Result(yaml, List.of(), List.of(), List.of(),
-                    List.of(), Map.of());
+        Located located = locate(yaml, subprojectName);
+        if (located == null) {
+            return new Result(yaml, Map.of());
         }
-        String block = m.group(2);
 
-        ParsedBlock parsed = parseEntries(block);
+        ParsedBlock parsed = parseEntries(located.block());
         List<Entry> current = parsed.entries();
         Set<String> derivedTargets = new LinkedHashSet<>();
         Map<String, String> derivedVersionProperty = new LinkedHashMap<>();
@@ -143,8 +309,6 @@ final class DependsOnMerge {
         // entry whose derivation moved to bundle is superseded: dropped
         // here and re-added below with the derived relationship (#965).
         List<Entry> kept = new ArrayList<>();
-        List<String> removedBuild = new ArrayList<>();
-        List<String> versionPropertySet = new ArrayList<>();
         Set<String> covered = new LinkedHashSet<>();
         for (Entry entry : current) {
             boolean build = isBuild(entry.relationship());
@@ -157,16 +321,9 @@ final class DependsOnMerge {
                 // retarget the edge — a staged bundle pin included
                 // (IKE-Network/ike-issues#1352). The relationship of a
                 // non-build entry stays as declared.
-                Entry aligned = withVersionProperty(entry,
-                        derivedVersionProperty.get(entry.target()));
-                if (aligned != entry) {
-                    versionPropertySet.add(entry.target());
-                    entry = aligned;
-                }
-                kept.add(entry);
+                kept.add(withVersionProperty(entry,
+                        derivedVersionProperty.get(entry.target())));
                 covered.add(entry.target());
-            } else {
-                removedBuild.add(entry.target());
             }
         }
 
@@ -180,9 +337,9 @@ final class DependsOnMerge {
         StringBuilder rendered = new StringBuilder();
         rendered.append(MARKER).append('\n');
         if (kept.isEmpty() && toAdd.isEmpty()) {
-            rendered.append("    depends-on: []\n");
+            rendered.append(KEY).append(" []\n");
         } else {
-            rendered.append("    depends-on:\n");
+            rendered.append(KEY).append('\n');
             for (Entry entry : kept) {
                 rendered.append(entry.text());
             }
@@ -194,15 +351,8 @@ final class DependsOnMerge {
                 } else {
                     addedBuild.add(target);
                 }
-                rendered.append("      - subproject: ").append(target)
-                        .append('\n');
-                rendered.append("        relationship: ")
-                        .append(relationship).append('\n');
-                String property = derivedVersionProperty.get(target);
-                if (property != null) {
-                    rendered.append("        version-property: ")
-                            .append(property).append('\n');
-                }
+                appendEntry(rendered, target, relationship,
+                        derivedVersionProperty.get(target));
             }
         }
         // Comments trailing the last entry (or standing in for a
@@ -223,15 +373,50 @@ final class DependsOnMerge {
             finalRelationships.put(target, "bundle");
         }
 
-        String updated = yaml.substring(0, m.start(2))
-                + rendered
-                + yaml.substring(m.end(2));
-        return new Result(updated, addedBuild, addedBundle, removedBuild,
-                versionPropertySet, finalRelationships);
+        return new Result(splice(yaml, located, rendered),
+                finalRelationships);
     }
 
     private static boolean isBuild(String relationship) {
         return relationship == null || "build".equalsIgnoreCase(relationship);
+    }
+
+    /**
+     * Append a freshly written entry to a block being rendered.
+     *
+     * @param rendered        the block text so far
+     * @param target          the member depended on
+     * @param relationship    the entry's relationship
+     * @param versionProperty the entry's {@code version-property}, or
+     *                        null to write none
+     */
+    private static void appendEntry(StringBuilder rendered, String target,
+                                    String relationship,
+                                    String versionProperty) {
+        rendered.append("      - subproject: ").append(target).append('\n');
+        rendered.append("        relationship: ").append(relationship)
+                .append('\n');
+        if (versionProperty != null) {
+            rendered.append("        version-property: ")
+                    .append(versionProperty).append('\n');
+        }
+    }
+
+    /**
+     * The {@code version-property} an entry records.
+     *
+     * @param entry the entry to read
+     * @return the property, or null when the entry has none
+     */
+    private static String versionPropertyOf(Entry entry) {
+        for (String line : entry.text().split("\n")) {
+            String stripped = line.stripLeading();
+            if (stripped.startsWith("version-property:")) {
+                return stripped
+                        .substring("version-property:".length()).trim();
+            }
+        }
+        return null;
     }
 
     /**

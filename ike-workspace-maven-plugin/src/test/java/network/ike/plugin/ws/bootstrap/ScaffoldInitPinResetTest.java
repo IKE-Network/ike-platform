@@ -358,12 +358,14 @@ class ScaffoldInitPinResetTest {
     private void rewritePinnedSha(String sha) throws Exception {
         Path yaml = tempDir.resolve("workspace.yaml");
         String content = Files.readString(yaml, StandardCharsets.UTF_8);
-        // lib-a is the first subproject; its version line is immediately
-        // followed by the lib-b: key — an unambiguous anchor.
-        String anchor = "    version: \"1.0.0-SNAPSHOT\"\n  lib-b:";
+        // lib-a is the only subproject at this version, so its version
+        // line is an unambiguous anchor whatever follows it: the lib-b:
+        // key, or the depends-on block the first scaffold-init pass
+        // derives for a member that had none
+        // (IKE-Network/ike-issues#1387).
+        String anchor = "    version: \"1.0.0-SNAPSHOT\"\n";
         String shaLine = "    sha: \"" + sha + "\"\n";
-        String replacement = "    version: \"1.0.0-SNAPSHOT\"\n"
-                + shaLine + "  lib-b:";
+        String replacement = anchor + shaLine;
         String updated;
         if (content.contains("    sha: \"")) {
             // Repeat call (fail-loud test): replace the existing pin value.
@@ -372,8 +374,8 @@ class ScaffoldInitPinResetTest {
                     java.util.regex.Matcher.quoteReplacement(shaLine));
         } else {
             assertThat(content)
-                    .as("expected the lib-a version/lib-b anchor in workspace.yaml")
-                    .contains(anchor);
+                    .as("expected exactly one lib-a version line in workspace.yaml")
+                    .containsOnlyOnce(anchor);
             updated = content.replace(anchor, replacement);
         }
         Files.writeString(yaml, updated, StandardCharsets.UTF_8);
